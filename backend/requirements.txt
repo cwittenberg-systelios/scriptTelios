@@ -1,0 +1,31 @@
+# ── Web-Framework ────────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12         # multipart/form-data (Datei-Uploads)
+
+# ── Konfiguration ─────────────────────────────────────────────────
+pydantic==2.10.3
+pydantic-settings==2.7.0
+
+# ── Datenbank ─────────────────────────────────────────────────────
+sqlalchemy==2.0.36
+aiosqlite==0.20.0                # SQLite async (Entwicklung)
+# asyncpg==0.30.0               # PostgreSQL async (Produktion – auskommentieren)
+
+# ── HTTP-Client ───────────────────────────────────────────────────
+httpx==0.28.1
+
+# ── Transkription (lokal) ─────────────────────────────────────────
+faster-whisper==1.1.0
+
+# ── Dokument-Verarbeitung ─────────────────────────────────────────
+pdfplumber==0.11.4               # PDF-Textextraktion
+python-docx==1.1.2               # DOCX lesen & schreiben
+Pillow==11.1.0                   # Bild-Vorverarbeitung fuer OCR
+pytesseract==0.3.13              # OCR (Wrapper fuer Tesseract)
+pdf2image==1.17.0                # PDF → Bild (fuer OCR-Fallback)
+
+# ── Tests ──────────────────────────────────────────────────────────
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1                    # TestClient

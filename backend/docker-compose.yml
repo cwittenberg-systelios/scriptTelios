@@ -1,0 +1,62 @@
+# ════════════════════════════════════════════════════════════════
+#  sysTelios KI-Dokumentation – Docker Compose
+#
+#  Services:
+#    backend  – FastAPI (Port 8000)
+#    ollama   – Lokales LLM (Port 11434)
+#
+#  Starten:
+#    docker compose up -d
+#
+#  Modell laden (einmalig nach erstem Start):
+#    docker compose exec ollama ollama pull llama3.2
+# ════════════════════════════════════════════════════════════════
+
+services:
+
+  backend:
+    build: .
+    container_name: systelios-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Ollama im selben Docker-Netz erreichbar
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      # Uploads und Outputs persistent speichern
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+      - ./systelios.db:/app/systelios.db
+      - ./systelios.log:/app/systelios.log
+    depends_on:
+      - ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: systelios-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      # Modelle persistent speichern (~4-8 GB)
+      - ollama_models:/root/.ollama
+
+    # GPU-Support (auskommentieren wenn NVIDIA-GPU vorhanden):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  ollama_models:
