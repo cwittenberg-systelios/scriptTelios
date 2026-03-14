@@ -3,19 +3,19 @@
 #
 #  Unterschiede zu docker-compose.yml (lokale Entwicklung):
 #    - GPU-Support aktiviert (NVIDIA RTX 4090)
-#    - Alle Daten auf Network Volume (/workspace)
+#    - Alle Daten auf Network Volume (/runpod-volume)
 #    - PostgreSQL-Daten persistent
 #    - Ollama-Modelle persistent
 #    - Uploads/Outputs/Logs persistent
 #
 #  Voraussetzung:
-#    Network Volume unter /workspace eingebunden
+#    Network Volume unter /runpod-volume eingebunden
 #
 #  Starten:
 #    docker compose -f docker-compose.runpod.yml up -d
 #
 #  Kurzform (einmalig als Alias setzen):
-#    alias dcu='docker compose -f /workspace/scriptTelios-updated/backend/docker-compose.runpod.yml'
+#    alias dcu='docker compose -f /runpod-volume/scriptTelios-updated/backend/docker-compose.runpod.yml'
 #    dcu up -d
 #    dcu logs -f backend
 #
@@ -43,9 +43,9 @@ services:
       OLLAMA_HOST: http://ollama:11434
       DATABASE_URL: postgresql+asyncpg://systelios:systelios@db:5432/systelios
     volumes:
-      - /workspace/uploads:/app/uploads
-      - /workspace/outputs:/app/outputs
-      - /workspace/systelios.log:/app/systelios.log
+      - /runpod-volume/uploads:/app/uploads
+      - /runpod-volume/outputs:/app/outputs
+      - /runpod-volume/systelios.log:/app/systelios.log
     depends_on:
       db:
         condition: service_healthy
@@ -68,7 +68,7 @@ services:
       POSTGRES_PASSWORD: systelios
       POSTGRES_DB: systelios
     volumes:
-      - /workspace/postgres:/var/lib/postgresql/data
+      - /runpod-volume/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U systelios"]
       interval: 10s
@@ -82,7 +82,7 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      - /workspace/ollama:/root/.ollama
+      - /runpod-volume/ollama:/root/.ollama
     deploy:
       resources:
         reservations:
@@ -91,4 +91,4 @@ services:
               count: 1
               capabilities: [gpu]
 
-# Keine named volumes – alles auf /workspace
+# Keine named volumes – alles auf /runpod-volume

@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     DELETE_AUDIO_AFTER_TRANSCRIPTION: bool = True
 
     # ── Datenbank ─────────────────────────────────────────────────
-    DATABASE_URL: str = "postgresql+asyncpg://systelios:systelios@db:5432/systelios"
+    DATABASE_URL: str = "postgresql+asyncpg://systelios:systelios@127.0.0.1:5432/systelios?sslmode=disable"
 
     # ── Sicherheit ────────────────────────────────────────────────
     SECRET_KEY:                    str = "BITTE-AENDERN-IN-PRODUKTION"

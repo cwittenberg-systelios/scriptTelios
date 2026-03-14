@@ -36,7 +36,6 @@ echo ""
 
 # 0. Verzeichnisse
 echo "${GO}Verzeichnisse anlegen..."
-# PG_DATA liegt im Home des pg_systelios-Users – wird im PostgreSQL-Abschnitt angelegt
 mkdir -p "$OLLAMA_MODELS_DIR"
 mkdir -p /workspace/uploads
 mkdir -p /workspace/outputs
@@ -47,11 +46,14 @@ echo "${OK}Verzeichnisse bereit"
 echo ""
 echo "${GO}System-Pakete pruefen..."
 PKGS_NEEDED=""
-dpkg -l postgresql    >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED postgresql"
-dpkg -l tesseract-ocr >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED tesseract-ocr tesseract-ocr-deu"
-dpkg -l poppler-utils >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED poppler-utils"
-dpkg -l ffmpeg        >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED ffmpeg"
-dpkg -l libpq-dev     >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED libpq-dev"
+dpkg -l postgresql             >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED postgresql"
+dpkg -l tesseract-ocr          >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED tesseract-ocr tesseract-ocr-deu"
+dpkg -l poppler-utils          >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED poppler-utils"
+dpkg -l ffmpeg                 >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED ffmpeg"
+dpkg -l libpq-dev              >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED libpq-dev"
+dpkg -l zstd                   >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED zstd"
+dpkg -l curl                   >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED curl"
+dpkg -l gpg                    >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED gpg"
 
 if [ -n "$PKGS_NEEDED" ]; then
     echo "${GO}Installiere: $PKGS_NEEDED"
@@ -60,6 +62,20 @@ if [ -n "$PKGS_NEEDED" ]; then
     echo "${OK}System-Pakete installiert"
 else
     echo "${OK}System-Pakete bereits vorhanden"
+fi
+
+# pgvector – braucht offizielles PostgreSQL-Repo
+if ! dpkg -l postgresql-14-pgvector >/dev/null 2>&1; then
+    echo "${GO}pgvector installieren..."
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        | gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+    echo "deb https://apt.postgresql.org/pub/repos/apt jammy-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-14-pgvector
+    echo "${OK}pgvector installiert"
+else
+    echo "${OK}pgvector bereits vorhanden"
 fi
 
 # 2. PostgreSQL
@@ -73,12 +89,18 @@ if [ -z "$PG_BIN" ]; then
 fi
 echo "${OK}PostgreSQL Binary: $PG_BIN"
 
-# PostgreSQL kann nicht als root laufen - eigenen User anlegen
+# Lock-File-Verzeichnis muss dem PG_USER gehoeren
+mkdir -p /var/run/postgresql
+chown "$PG_USER" /var/run/postgresql 2>/dev/null || true
+
+# PostgreSQL kann nicht als root laufen – eigenen User anlegen
 if ! id "$PG_USER" >/dev/null 2>&1; then
     echo "${GO}User '$PG_USER' anlegen..."
     useradd -m "$PG_USER"
-    mkdir -p "$PG_DATA"
 fi
+
+# Verzeichnis immer als PG_USER anlegen (nie als root)
+su -m "$PG_USER" -c "mkdir -p $PG_DATA"
 
 # Pruefen ob Postgres schon laeuft
 if su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA status" 2>/dev/null | grep -q "server is running"; then
@@ -117,7 +139,7 @@ else
         | grep -q 1 \
         || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE DATABASE systelios OWNER systelios;\""
 
-    # pgvector Extension
+    # pgvector Extension aktivieren
     su -m "$PG_USER" -c "psql -d systelios -c \"CREATE EXTENSION IF NOT EXISTS vector;\"" 2>/dev/null \
         && echo "${OK}pgvector aktiviert" \
         || echo "${WARN}pgvector konnte nicht aktiviert werden"
@@ -154,8 +176,7 @@ done
 
 # Modelle pruefen und laden
 echo "${GO}Modelle pruefen..."
-MODELS=("mistral-nemo" "nomic-embed-text" "llava")
-for model in "${MODELS[@]}"; do
+for model in "mistral-nemo" "nomic-embed-text" "llava"; do
     if OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama list 2>/dev/null | grep -q "$model"; then
         echo "${OK}$model vorhanden"
     else
@@ -197,7 +218,7 @@ OLLAMA_MODEL=mistral-nemo
 WHISPER_MODEL=large-v3
 WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16
-DATABASE_URL=postgresql+asyncpg://systelios:systelios@localhost:5432/systelios
+DATABASE_URL=postgresql+asyncpg://systelios:systelios@127.0.0.1:5432/systelios
 SECRET_KEY=${SECRET}
 DELETE_AUDIO_AFTER_TRANSCRIPTION=true
 LOG_LEVEL=INFO
@@ -207,8 +228,11 @@ LOG_FILE=/workspace/systelios.log
 ENVEOF
     echo "${OK}.env erstellt (SECRET_KEY automatisch generiert)"
 else
-    # Sicherstellen dass localhost statt 'db' verwendet wird
-    sed -i 's|@db:5432|@localhost:5432|g' "$BACKEND_DIR/.env"
+    # Sicherstellen dass korrekte DATABASE_URL gesetzt ist
+    sed -i 's|@db:5432|@127.0.0.1:5432|g'        "$BACKEND_DIR/.env"
+    sed -i 's|@localhost:5432|@127.0.0.1:5432|g'   "$BACKEND_DIR/.env"
+    sed -i 's|?ssl=false||g'                        "$BACKEND_DIR/.env"
+    sed -i 's|?sslmode=disable||g'                  "$BACKEND_DIR/.env"
     echo "${OK}.env vorhanden"
 fi
 
@@ -220,6 +244,9 @@ sleep 2
 
 cd "$BACKEND_DIR"
 source "$VENV_DIR/bin/activate"
+
+# Umgebungsvariablen sauber laden
+unset DATABASE_URL
 export $(grep -v '^#' .env | xargs) 2>/dev/null || true
 
 nohup python -m uvicorn app.main:app \
@@ -241,7 +268,7 @@ for i in $(seq 1 $MAX); do
         break
     fi
     if [ "$i" = "$MAX" ]; then
-        echo "${WARN}Backend antwortet noch nicht - Log pruefen:"
+        echo "${WARN}Backend antwortet nicht - Log pruefen:"
         echo "       tail -50 $LOG_DIR/backend.log"
     else
         printf "       Warte... (%d/%d)\r" "$i" "$MAX"
@@ -257,9 +284,9 @@ echo "  API-Docs:  http://localhost:8000/docs"
 echo "  Ollama:    http://localhost:11434"
 echo ""
 echo "  Logs:"
-echo "    Backend:    tail -f $LOG_DIR/backend.log"
-echo "    Ollama:     tail -f $LOG_DIR/ollama.log"
-echo "    PostgreSQL: tail -f $LOG_DIR/postgres.log"
+echo "    tail -f $LOG_DIR/backend.log"
+echo "    tail -f $LOG_DIR/ollama.log"
+echo "    tail -f $LOG_DIR/postgres.log"
 echo ""
 echo "  Stop:  pkill -f uvicorn; pkill ollama"
 echo "  Stop PostgreSQL:"
