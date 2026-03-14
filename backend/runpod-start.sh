@@ -1,12 +1,12 @@
 #!/bin/bash
 # ════════════════════════════════════════════════════════════════
 #  sysTelios – RunPod Start-Script
-#  Aufruf: bash /runpod-volume/scriptTelios-updated/backend/runpod-start.sh
+#  Aufruf: bash /workspace/scriptTelios/backend/runpod-start.sh
 # ════════════════════════════════════════════════════════════════
 
 set -e
-COMPOSE="docker compose -f /runpod-volume/scriptTelios-updated/backend/docker-compose.runpod.yml"
-BACKEND_DIR="/runpod-volume/scriptTelios-updated/backend"
+COMPOSE="docker compose -f /workspace/scriptTelios/backend/docker-compose.runpod.yml"
+BACKEND_DIR="/workspace/scriptTelios/backend"
 
 echo ""
 echo "================================================"
@@ -16,11 +16,11 @@ echo ""
 
 # Verzeichnisse anlegen
 echo "-> Verzeichnisse pruefen..."
-mkdir -p /runpod-volume/ollama
-mkdir -p /runpod-volume/postgres
-mkdir -p /runpod-volume/uploads
-mkdir -p /runpod-volume/outputs
-touch /runpod-volume/systelios.log
+mkdir -p /workspace/ollama
+mkdir -p /workspace/postgres
+mkdir -p /workspace/uploads
+mkdir -p /workspace/outputs
+touch /workspace/systelios.log
 
 # .env pruefen
 if [ ! -f "$BACKEND_DIR/.env" ]; then
