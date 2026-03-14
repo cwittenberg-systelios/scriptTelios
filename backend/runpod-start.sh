@@ -18,9 +18,9 @@ set -e
 BACKEND_DIR="/workspace/scriptTelios/backend"
 VENV_DIR="/workspace/venv"
 LOG_DIR="/workspace"
-PG_DATA="/home/pg_systelios/postgres"
+PG_DATA="/home/systelios_pg/postgres"
 OLLAMA_MODELS_DIR="/workspace/ollama"
-PG_USER="pg_systelios"
+PG_USER="systelios_pg"
 
 OK="[OK]    "
 GO="[.....] "
