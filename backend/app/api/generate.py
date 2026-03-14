@@ -10,11 +10,14 @@ Workflow 4 – Entlassbericht:           (Vorlage + Verlauf → via /api/documen
 import logging
 import uuid
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from typing import Annotated, Optional
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
 from app.core.files import save_upload, ALLOWED_DOCS, ALLOWED_IMAGES, ALLOWED_AUDIO
 from app.models.schemas import GenerateRequest, GenerateResponse
+from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_text, extract_style_context
 from app.services.llm import generate_text
 from app.services.prompts import build_system_prompt, build_user_content
@@ -25,15 +28,28 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/generate", response_model=GenerateResponse)
-async def generate(req: GenerateRequest):
+async def generate(req: GenerateRequest, db: AsyncSession = Depends(get_db)):
     """
     Einfache Text-Generierung ohne Datei-Upload.
     Fuer Faelle, in denen Transkript und Texte bereits im Frontend vorliegen.
     """
+    # Semantisches Retrieval wenn therapeut_id vorhanden, sonst direkter style_context
+    style_context = req.style_context or ""
+    if req.therapeut_id and not style_context:
+        query = req.transcript or req.bullets or ""
+        style_context = await retrieve_style_examples(
+            db, req.therapeut_id, req.workflow, query
+        )
+        if style_context:
+            logger.info(
+                "Stilprofil per pgvector geladen: Therapeut='%s', Typ='%s'",
+                req.therapeut_id, req.workflow,
+            )
+
     system = build_system_prompt(
         workflow=req.workflow,
         custom_prompt=req.prompt,
-        style_context=req.style_context,
+        style_context=style_context,
         diagnosen=req.diagnosen,
     )
     user = build_user_content(
@@ -62,23 +78,30 @@ async def generate(req: GenerateRequest):
 
 @router.post("/generate/with-files", response_model=GenerateResponse)
 async def generate_with_files(
-    workflow:   Annotated[str,  Form()],
-    prompt:     Annotated[str,  Form()],
-    diagnosen:  Annotated[Optional[str], Form()] = None,   # kommagetrennt
-    transcript: Annotated[Optional[str], Form()] = None,
-    bullets:    Annotated[Optional[str], Form()] = None,
-    audio:      Optional[UploadFile] = File(None),
+    workflow:       Annotated[str,  Form()],
+    prompt:         Annotated[str,  Form()],
+    therapeut_id:   Annotated[Optional[str], Form(description="Therapeuten-ID fuer pgvector-Retrieval")] = None,
+    diagnosen:      Annotated[Optional[str], Form()] = None,   # kommagetrennt
+    transcript:     Annotated[Optional[str], Form()] = None,
+    bullets:        Annotated[Optional[str], Form()] = None,
+    audio:          Optional[UploadFile] = File(None),
     selbstauskunft: Optional[UploadFile] = File(None),
-    vorbefunde: Optional[UploadFile] = File(None),
-    style_file: Optional[UploadFile] = File(None),
+    vorbefunde:     Optional[UploadFile] = File(None),
+    style_file:     Optional[UploadFile] = File(None),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Text-Generierung mit optionalen Datei-Uploads.
 
+    Stilprofil-Strategie (Prioritaet):
+    1. style_file (direkter Upload, einmaliger Gebrauch)
+    2. therapeut_id → pgvector-Retrieval aus gespeicherten Beispielen
+    3. Kein Stilprofil
+
     Verarbeitungsreihenfolge:
     1. Audio  → Transkription (faster-whisper)
     2. PDFs   → Textextraktion (pdfplumber / OCR)
-    3. Stil   → Stilprofil-Extraktion per LLM
+    3. Stil   → pgvector-Retrieval ODER einmaliger style_file-Upload
     4. Text   → Generierung per LLM
     """
     dx_list = [d.strip() for d in diagnosen.split(",") if d.strip()] if diagnosen else []
@@ -112,15 +135,27 @@ async def generate_with_files(
         except Exception as e:
             logger.warning("Vorbefunde-Extraktion fehlgeschlagen: %s", e)
 
-    # ── 3. Stilprofil extrahieren ────────────────────────────────
+    # ── 3. Stilprofil: direkter Upload hat Vorrang ───────────────
     style_context = ""
     if style_file and style_file.filename:
         path = await save_upload(style_file, ALLOWED_DOCS)
         try:
             style_context = await extract_style_context(path, generate_text)
-            logger.info("Stilprofil extrahiert: %d Zeichen", len(style_context))
+            logger.info("Stilprofil aus Datei extrahiert: %d Zeichen", len(style_context))
         except Exception as e:
             logger.warning("Stilprofil-Extraktion fehlgeschlagen: %s", e)
+
+    elif therapeut_id and therapeut_id.strip():
+        # pgvector-Retrieval: passendste Beispiele fuer diesen Therapeuten + Typ
+        query_text = audio_transcript or transcript or bullets or ""
+        style_context = await retrieve_style_examples(
+            db, therapeut_id.strip(), workflow, query_text
+        )
+        if style_context:
+            logger.info(
+                "Stilprofil per pgvector geladen: Therapeut='%s', Typ='%s'",
+                therapeut_id, workflow,
+            )
 
     # ── 4. Prompts bauen und generieren ─────────────────────────
     system = build_system_prompt(

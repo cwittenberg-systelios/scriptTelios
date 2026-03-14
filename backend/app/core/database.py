@@ -4,6 +4,7 @@ Fuer Produktion: DATABASE_URL auf PostgreSQL umstellen.
 """
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import text
 
 from app.core.config import settings
 
@@ -30,6 +31,11 @@ async def get_db() -> AsyncSession:  # type: ignore[return]
 
 
 async def init_db() -> None:
-    """Tabellen anlegen (beim ersten Start)."""
+    """Tabellen anlegen (beim ersten Start). pgvector-Extension aktivieren."""
     async with engine.begin() as conn:
+        # pgvector Extension aktivieren (wird bei SQLite ignoriert)
+        try:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        except Exception:
+            pass  # SQLite oder Extension bereits vorhanden
         await conn.run_sync(Base.metadata.create_all)

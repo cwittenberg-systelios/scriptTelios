@@ -1,13 +1,17 @@
 """
 LLM-Generierungs-Service.
 
-Backends:
-  ollama    – lokales Modell ueber Ollama (On-Premise, Produktion)
-  anthropic – Claude API (Testphase)
+Ausschliesslich Ollama (lokales Modell, On-Premise).
+Kein externer API-Aufruf – alle Daten bleiben im internen Netz.
+
+Hinweis zur Testphase: Auch in der Testphase laeuft Ollama lokal auf dem
+Miet-Server (Hetzner/RunPod). Es werden keine Patientendaten an externe
+Dienste gesendet.
 """
 import logging
 import time
-from typing import Optional
+
+import httpx
 
 from app.core.config import settings
 
@@ -20,27 +24,21 @@ async def generate_text(
     max_tokens: int = 2048,
 ) -> dict:
     """
-    Generiert Text per LLM.
+    Generiert Text ausschliesslich via lokalem Ollama-Modell.
 
     Gibt zurueck:
       text          – generierter Text
-      model_used    – tatsaechlich verwendetes Modell
+      model_used    – verwendetes Modell
       duration_s    – Generierungsdauer in Sekunden
       token_count   – Anzahl Output-Tokens (falls verfuegbar)
     """
     t0 = time.time()
-
-    if settings.LLM_BACKEND == "anthropic":
-        result = await _generate_anthropic(system_prompt, user_content, max_tokens)
-    else:
-        result = await _generate_ollama(system_prompt, user_content, max_tokens)
-
+    result = await _generate_ollama(system_prompt, user_content, max_tokens)
     result["duration_s"] = round(time.time() - t0, 1)
     logger.info(
-        "Generierung: %d Tokens in %.1fs (Backend: %s, Modell: %s)",
+        "Generierung: %d Tokens in %.1fs (Modell: %s)",
         result.get("token_count", 0),
         result["duration_s"],
-        settings.LLM_BACKEND,
         result["model_used"],
     )
     return result
@@ -51,9 +49,7 @@ async def _generate_ollama(
     user_content: str,
     max_tokens: int,
 ) -> dict:
-    """Ollama REST API (lokal)."""
-    import httpx
-
+    """Ollama REST API (lokal, kein externer Aufruf)."""
     payload = {
         "model": settings.OLLAMA_MODEL,
         "system": system_prompt,
@@ -76,7 +72,8 @@ async def _generate_ollama(
         except httpx.ConnectError:
             raise RuntimeError(
                 f"Ollama nicht erreichbar unter {settings.OLLAMA_HOST}. "
-                "Bitte sicherstellen, dass Ollama laeuft: 'ollama serve'"
+                "Bitte sicherstellen, dass Ollama laeuft: 'ollama serve' "
+                "oder 'docker compose up ollama'."
             )
         except httpx.HTTPStatusError as e:
             raise RuntimeError(f"Ollama Fehler {e.response.status_code}: {e.response.text}")
@@ -87,54 +84,4 @@ async def _generate_ollama(
         "text": text,
         "model_used": f"ollama/{settings.OLLAMA_MODEL}",
         "token_count": data.get("eval_count"),
-    }
-
-
-async def _generate_anthropic(
-    system_prompt: str,
-    user_content: str,
-    max_tokens: int,
-) -> dict:
-    """Anthropic Claude API (Testphase)."""
-    if not settings.ANTHROPIC_API_KEY:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY nicht gesetzt. "
-            "Bitte in .env eintragen oder LLM_BACKEND=ollama verwenden."
-        )
-
-    import httpx
-
-    headers = {
-        "x-api-key": settings.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    payload = {
-        "model": settings.ANTHROPIC_MODEL,
-        "max_tokens": max_tokens,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": user_content}],
-    }
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        r = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json=payload,
-        )
-
-    if r.status_code != 200:
-        raise RuntimeError(f"Anthropic API Fehler {r.status_code}: {r.text}")
-
-    data = r.json()
-    text = "".join(
-        block.get("text", "")
-        for block in data.get("content", [])
-        if block.get("type") == "text"
-    )
-    usage = data.get("usage", {})
-    return {
-        "text": text.strip(),
-        "model_used": f"anthropic/{settings.ANTHROPIC_MODEL}",
-        "token_count": usage.get("output_tokens"),
     }

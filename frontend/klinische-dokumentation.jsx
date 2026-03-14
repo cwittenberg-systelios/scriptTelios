@@ -3,7 +3,7 @@ import { useState, useRef, useCallback } from "react";
 // sysTelios CI – exakt vom Website abgeleitet:
 // Dunkelgrün Nav: #1e3d20 / Akzentrot: #c0392b / Weiss/Creme Flächen / Serifenlose klare Type
 const S = `
-  @import url('https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,300;0,400;0,700;1,300&family=Playfair+Display:wght@400;700&display=swap');
+  /* Schriften werden lokal via Confluence/Intranet bereitgestellt – kein Google Fonts */
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -595,20 +595,24 @@ function Tags({ list, onChange }) {
   );
 }
 
-async function claude(system, user) {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+// Ruft das sysTelios Backend auf (nicht Anthropic direkt).
+// therapeut_id wird automatisch aus Confluence übernommen –
+// das Backend lädt dann die passenden Stilbeispiele per pgvector.
+async function generate(workflow, prompt, userContent) {
+  const therapeutId = getConfluenceUser();
+  const fd = new FormData();
+  fd.append("workflow",      workflow);
+  fd.append("prompt",        prompt);
+  fd.append("transcript",    userContent);
+  if (therapeutId) fd.append("therapeut_id", therapeutId);
+
+  const r = await fetch(`${API_BASE}/generate/with-files`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      system,
-      messages: [{ role: "user", content: user }]
-    })
+    body: fd,
   });
   const d = await r.json();
-  if (d.content) return d.content.map((b) => b.text || "").join("");
-  throw new Error(JSON.stringify(d.error));
+  if (!r.ok) throw new Error(d.detail || r.statusText);
+  return d.text;
 }
 
 // ── Pages ────────────────────────────────────────────────────────
@@ -627,7 +631,7 @@ function P1({ toast }) {
     const u = (audio ? "[Audio: " + audio.name + " - wird transkribiert]\n\n" : "")
             + (text  ? "TRANSKRIPT:\n" + text + "\n\n" : "")
             + (bullets ? "STICHPUNKTE:\n" + bullets + "\n" : "");
-    try { setOut(await claude(prompt, u || "Verlaufsnotiz erstellen.")); }
+    try { setOut(await generate("dokumentation", prompt, u || "Verlaufsnotiz erstellen.")); }
     catch (e) { setOut("Fehler: " + e.message); }
     setBusy(false);
   }
@@ -708,7 +712,7 @@ function P2({ toast }) {
     const sys = prompt.replace("{diagnosen}", dxStr);
     const u = (text ? "AUFNAHMEGESPRAECH:\n" + text + "\n\n" : "")
             + "DIAGNOSEN: " + dxStr + "\n\nAnamnese und psychopathologischen Befund erstellen.";
-    try { setOut(await claude(sys, u)); }
+    try { setOut(await generate("anamnese", sys, u)); }
     catch (e) { setOut("Fehler: " + e.message); }
     setBusy(false);
   }
@@ -897,12 +901,259 @@ function P4({ toast }) {
   );
 }
 
+// ── Stilprofil-Verwaltung ─────────────────────────────────────────
+const DOKUMENTTYPEN = [
+  { value: "dokumentation",  label: "Gesprächsdokumentation" },
+  { value: "anamnese",       label: "Anamnese" },
+  { value: "verlaengerung",  label: "Verlängerungsantrag" },
+  { value: "entlassbericht", label: "Entlassbericht" },
+];
+
+// ── Confluence-Konfiguration ─────────────────────────────────────
+// API_BASE: aus window.SYSTELIOS_API_BASE (gesetzt im Confluence User Macro)
+//           Fallback auf localhost für lokale Entwicklung
+const API_BASE = (typeof window !== "undefined" && window.SYSTELIOS_API_BASE)
+  ? window.SYSTELIOS_API_BASE.replace(/\/$/, "")
+  : "http://localhost:8000/api";
+
+// Therapeuten-Name aus Confluence AJS (gesetzt im Macro vor dem Bundle)
+function getConfluenceUser() {
+  if (typeof window !== "undefined" && window.SYSTELIOS_USER) {
+    return window.SYSTELIOS_USER;
+  }
+  return "";
+}
+
+function P5({ toast }) {
+  const [therapeutId] = useState(getConfluenceUser);  // read-only aus Confluence
+  const [dokumenttyp, setDokumenttyp] = useState("dokumentation");
+  const [istStatisch, setIstStatisch] = useState(false);
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [liste, setListe] = useState(null);
+  const [ladebusy, setLadebusy] = useState(false);
+
+  // Bibliothek automatisch laden beim ersten Render
+  const didMount = useRef(false);
+  if (!didMount.current) {
+    didMount.current = true;
+    if (therapeutId) Promise.resolve().then(() => ladeListe());
+  }
+
+  async function hochladen() {
+    if (!therapeutId.trim() || !file) return;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("therapeut_id",  therapeutId.trim());
+      fd.append("dokumenttyp",   dokumenttyp);
+      fd.append("ist_statisch",  istStatisch ? "true" : "false");
+      fd.append("beispiel_file", file);
+
+      const r = await fetch(`${API_BASE}/style/upload`, { method: "POST", body: fd });
+      if (!r.ok) {
+        const err = await r.json();
+        throw new Error(err.detail || r.statusText);
+      }
+      const data = await r.json();
+      toast(`✓ Gespeichert: ${data.dokumenttyp_label} · ${data.word_count} Wörter${data.ist_statisch ? " · Anker" : ""}`);
+      setFile(null);
+      await ladeListe();
+    } catch (e) {
+      toast("Fehler: " + e.message);
+    }
+    setBusy(false);
+  }
+
+  async function ladeListe() {
+    if (!therapeutId.trim()) return;
+    setLadebusy(true);
+    try {
+      const r = await fetch(`${API_BASE}/style/${encodeURIComponent(therapeutId.trim())}`);
+      if (!r.ok) throw new Error(r.statusText);
+      setListe(await r.json());
+    } catch (e) {
+      toast("Fehler beim Laden: " + e.message);
+    }
+    setLadebusy(false);
+  }
+
+  async function loeschen(id) {
+    try {
+      const r = await fetch(`${API_BASE}/style/embedding/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error((await r.json()).detail);
+      toast("Beispiel gelöscht");
+      await ladeListe();
+    } catch (e) {
+      toast("Fehler: " + e.message);
+    }
+  }
+
+  // Gruppiere Liste nach Dokumenttyp
+  const grouped = liste ? DOKUMENTTYPEN.map(dt => ({
+    ...dt,
+    items: (liste.embeddings || []).filter(e => e.dokumenttyp === dt.value),
+  })).filter(g => g.items.length > 0) : [];
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-eyebrow">Verwaltung</div>
+        <h2>Stilprofil-Bibliothek</h2>
+        <p>
+          Beispieltexte hochladen · werden automatisch vektorisiert und beim Generieren verwendet
+          {therapeutId ? (
+            <span style={{ marginLeft: 10, padding: "2px 10px",
+                           background: "var(--st-green-pale)", color: "var(--st-green)",
+                           borderRadius: 20, fontSize: 12, fontWeight: 700 }}>
+              {therapeutId}
+            </span>
+          ) : null}
+        </p>
+      </div>
+      <div className="page-body">
+        <div className="workflow">
+
+          {/* Kein Therapeuten-Input – Name kommt aus Confluence */}
+          {!therapeutId && (
+            <Card num="!" title="Benutzername nicht erkannt">
+              <p style={{ color: "var(--st-red)", fontSize: 13 }}>
+                Der Benutzername konnte nicht aus Confluence gelesen werden.
+                Bitte sicherstellen, dass <code>window.SYSTELIOS_USER</code> im
+                Confluence User Macro gesetzt ist.
+              </p>
+            </Card>
+          )}
+
+          {/* ── Neues Beispiel hochladen ── */}
+          <Card num="B" title="Neues Beispiel hochladen">
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+              <div>
+                <label className="field-label">Dokumenttyp <span style={{ color: "var(--st-red)" }}>*</span></label>
+                <select
+                  value={dokumenttyp}
+                  onChange={e => setDokumenttyp(e.target.value)}
+                  style={{ width: "100%", padding: "8px 10px", border: "1px solid var(--st-gray-border)",
+                           borderRadius: "var(--radius)", fontFamily: "inherit", fontSize: 14,
+                           background: "white", cursor: "pointer" }}
+                >
+                  {DOKUMENTTYPEN.map(dt => (
+                    <option key={dt.value} value={dt.value}>{dt.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-end" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer",
+                                fontSize: 14, color: "var(--st-text-mid)", paddingBottom: 2 }}>
+                  <input
+                    type="checkbox"
+                    checked={istStatisch}
+                    onChange={e => setIstStatisch(e.target.checked)}
+                    style={{ width: 16, height: 16, cursor: "pointer" }}
+                  />
+                  <span>
+                    <strong>Anker-Beispiel</strong>
+                    <span style={{ color: "var(--st-text-soft)", marginLeft: 4 }}>
+                      (wird immer eingeschlossen)
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <Dropzone
+              label="Beispieltext hochladen"
+              hint="PDF, DOCX oder TXT · typischer Text dieses Therapeuten für diesen Dokumenttyp"
+              accept=".pdf,.docx,.txt"
+              icon="📝"
+              file={file}
+              onFile={setFile}
+            />
+
+            <div className="info-note" style={{ marginTop: 10 }}>
+              Das Dokument wird automatisch vektorisiert. Beim nächsten Generieren sucht das System
+              die passendsten Beispiele heraus — kein manuelles Zuweisen nötig.
+            </div>
+
+            <div className="action-bar" style={{ marginTop: 14 }}>
+              <button
+                className="btn-primary"
+                onClick={hochladen}
+                disabled={busy || !file || !therapeutId.trim()}
+              >
+                {busy ? <span className="spin" /> : null}
+                {busy ? "Wird gespeichert …" : "Beispiel speichern"}
+              </button>
+            </div>
+          </Card>
+
+          {/* ── Bibliothek anzeigen ── */}
+          {liste && (
+            <Card num="C" title={`Bibliothek: ${liste.therapeut_id} · ${liste.total} Beispiel${liste.total !== 1 ? "e" : ""}`}>
+              {grouped.length === 0 ? (
+                <p style={{ color: "var(--st-text-soft)", fontStyle: "italic", fontSize: 13 }}>
+                  Noch keine Beispiele vorhanden.
+                </p>
+              ) : grouped.map(group => (
+                <div key={group.value} style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em",
+                                textTransform: "uppercase", color: "var(--st-green)",
+                                borderBottom: "1px solid var(--st-gray-border)",
+                                paddingBottom: 4, marginBottom: 8 }}>
+                    {group.label} · {group.items.length} Beispiel{group.items.length !== 1 ? "e" : ""}
+                  </div>
+                  {group.items.map(item => (
+                    <div key={item.embedding_id} style={{
+                      display: "flex", alignItems: "flex-start", gap: 10,
+                      padding: "8px 10px", marginBottom: 6,
+                      background: item.ist_statisch ? "var(--st-green-pale)" : "var(--st-gray-light)",
+                      borderRadius: "var(--radius)",
+                      border: item.ist_statisch ? "1px solid var(--st-green-light)" : "1px solid var(--st-gray-border)",
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, color: "var(--st-text-soft)", marginBottom: 3 }}>
+                          {item.ist_statisch && (
+                            <span style={{ background: "var(--st-green)", color: "white",
+                                           fontSize: 10, padding: "1px 5px", borderRadius: 3,
+                                           marginRight: 6, fontWeight: 700 }}>ANKER</span>
+                          )}
+                          {item.word_count} Wörter ·{" "}
+                          {new Date(item.created_at).toLocaleDateString("de-DE")}
+                        </div>
+                        <div style={{ fontSize: 13, color: "var(--st-text-mid)",
+                                      overflow: "hidden", textOverflow: "ellipsis",
+                                      display: "-webkit-box", WebkitLineClamp: 2,
+                                      WebkitBoxOrient: "vertical" }}>
+                          {item.text_preview}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => loeschen(item.embedding_id)}
+                        style={{ flexShrink: 0, background: "none", border: "none",
+                                 color: "var(--st-text-soft)", cursor: "pointer",
+                                 fontSize: 16, padding: "2px 4px", lineHeight: 1 }}
+                        title="Löschen"
+                      >×</button>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </Card>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── App ──────────────────────────────────────────────────────────
 const NAVS = [
   { id: "p1", n: "1", title: "Gesprächsdokumentation", sub: "Verlaufsnotiz" },
   { id: "p2", n: "2", title: "Anamnese & Befund",       sub: "Aufnahmegespräch" },
   { id: "p3", n: "3", title: "Verlängerungsantrag",     sub: "Kostenübernahme" },
   { id: "p4", n: "4", title: "Entlassbericht",          sub: "Abschlussbericht" },
+  { id: "p5", n: "✦", title: "Stilprofil-Bibliothek",   sub: "Beispiele verwalten" },
 ];
 
 export default function App() {
@@ -953,6 +1204,7 @@ export default function App() {
         {page === "p2" && <P2 toast={toast} />}
         {page === "p3" && <P3 toast={toast} />}
         {page === "p4" && <P4 toast={toast} />}
+        {page === "p5" && <P5 toast={toast} />}
       </main>
 
       {msg && (

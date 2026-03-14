@@ -42,10 +42,11 @@ class TranscribeResponse(BaseModel):
 class GenerateRequest(BaseModel):
     workflow: Literal["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]
     prompt: str = Field(..., description="Angepasster System-Prompt")
+    therapeut_id: Optional[str] = Field(None, description="Therapeuten-ID fuer pgvector-Retrieval")
     transcript: Optional[str] = Field(None, description="Transkripttext (optional)")
     bullets: Optional[str] = Field(None, description="Stichpunkte (optional, Workflow 1)")
     diagnosen: Optional[list[str]] = Field(None, description="ICD-Codes (Workflow 2)")
-    style_context: Optional[str] = Field(None, description="Stilkontext aus Beispieltext")
+    style_context: Optional[str] = Field(None, description="Direkter Stilkontext (ueberschreibt pgvector)")
 
 
 class GenerateResponse(BaseModel):
@@ -54,6 +55,24 @@ class GenerateResponse(BaseModel):
     model_used: str
     duration_seconds: float
     token_count: Optional[int] = None
+
+
+# ── OCR / Dokumentenextraktion ────────────────────────────────────
+class ExtractionInfo(BaseModel):
+    """Metadaten einer Dokumenten-Extraktion – fuer Transparenz im Frontend."""
+    method: str          # pdfplumber | tesseract | ollama_vision | docx | txt | image_tess | image_vision
+    quality: float       # 0.0-1.0 geschaetzte Qualitaet
+    pages: int
+    warnings: list[str] = []
+
+
+class ExtractionResponse(BaseModel):
+    """Response fuer POST /api/documents/extract (Vorschau ohne Generierung)."""
+    filename: str
+    text: str
+    char_count: int
+    word_count: int
+    extraction: ExtractionInfo
 
 
 # ── Dokument-Verarbeitung (Workflow 3 & 4) ────────────────────────
@@ -71,3 +90,31 @@ class StyleProfileResponse(BaseModel):
     style_context: str
     word_count: Optional[int] = None
     created_at: datetime
+
+
+# ── Stil-Embedding (pgvector) ─────────────────────────────────────
+class StyleEmbeddingUploadResponse(BaseModel):
+    embedding_id: str
+    therapeut_id: str
+    dokumenttyp: str
+    dokumenttyp_label: str
+    word_count: int
+    ist_statisch: bool
+    created_at: datetime
+
+
+class StyleEmbeddingInfo(BaseModel):
+    embedding_id: str
+    dokumenttyp: str
+    dokumenttyp_label: str
+    word_count: Optional[int]
+    ist_statisch: bool
+    created_at: datetime
+    # Vorschau der ersten 200 Zeichen
+    text_preview: str
+
+
+class StyleEmbeddingListResponse(BaseModel):
+    therapeut_id: str
+    total: int
+    embeddings: list[StyleEmbeddingInfo]

@@ -10,7 +10,8 @@ pydantic-settings==2.7.0
 # ── Datenbank ─────────────────────────────────────────────────────
 sqlalchemy==2.0.36
 aiosqlite==0.20.0                # SQLite async (Entwicklung)
-# asyncpg==0.30.0               # PostgreSQL async (Produktion – auskommentieren)
+asyncpg==0.30.0                  # PostgreSQL async (Produktion)
+pgvector==0.3.6                  # pgvector SQLAlchemy-Integration
 
 # ── HTTP-Client ───────────────────────────────────────────────────
 httpx==0.28.1
@@ -19,11 +20,14 @@ httpx==0.28.1
 faster-whisper==1.1.0
 
 # ── Dokument-Verarbeitung ─────────────────────────────────────────
-pdfplumber==0.11.4               # PDF-Textextraktion
+pdfplumber==0.11.4               # PDF-Textextraktion (Stufe 1)
 python-docx==1.1.2               # DOCX lesen & schreiben
 Pillow==11.1.0                   # Bild-Vorverarbeitung fuer OCR
-pytesseract==0.3.13              # OCR (Wrapper fuer Tesseract)
-pdf2image==1.17.0                # PDF → Bild (fuer OCR-Fallback)
+pytesseract==0.3.13              # OCR Wrapper fuer Tesseract (Stufe 2)
+pdf2image==1.17.0                # PDF zu Bild fuer OCR-Fallback
+# Stufe 3 (Ollama Vision) braucht kein eigenes Package –
+# laeuft ueber httpx gegen lokalen Ollama-Dienst.
+# Modell einmalig laden: ollama pull llava  (~4.5 GB)
 
 # ── Tests ──────────────────────────────────────────────────────────
 pytest==8.3.4

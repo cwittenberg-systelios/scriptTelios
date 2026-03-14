@@ -13,7 +13,7 @@ from typing import Annotated, Optional
 
 from app.core.config import settings
 from app.core.files import save_upload, ALLOWED_DOCS, output_dir
-from app.models.schemas import DocProcessResponse, StyleProfileResponse
+from app.models.schemas import DocProcessResponse, ExtractionInfo, ExtractionResponse, StyleProfileResponse
 from app.services.docx_fill import fill_docx_template
 from app.services.extraction import extract_text, extract_style_context
 from app.services.llm import generate_text
@@ -159,4 +159,40 @@ async def download_document(filename: str):
         path=str(path),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=filename,
+    )
+
+@router.post("/documents/extract", response_model=ExtractionResponse)
+async def extract_document(
+    file: UploadFile = File(..., description="PDF, DOCX, TXT oder Bild"),
+):
+    """
+    Extrahiert Text aus einem Dokument und gibt Metadaten zurueck.
+    Nuetzlich fuer:
+    - Vorab-Vorschau vor der Generierung
+    - Debugging: welche OCR-Stufe wurde verwendet?
+    - Qualitaetspruefung: wie gut war die Extraktion?
+    """
+    from app.services.extraction import extract_text_with_meta
+
+    allowed = ALLOWED_DOCS | ALLOWED_IMAGES
+    path = await save_upload(file, allowed)
+
+    try:
+        result = await extract_text_with_meta(path)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return ExtractionResponse(
+        filename=file.filename or path.name,
+        text=result.text,
+        char_count=len(result.text),
+        word_count=len(result.text.split()),
+        extraction=ExtractionInfo(
+            method=result.method,
+            quality=round(result.quality, 3),
+            pages=result.pages,
+            warnings=result.warnings,
+        ),
     )

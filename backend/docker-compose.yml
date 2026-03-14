@@ -3,13 +3,19 @@
 #
 #  Services:
 #    backend  – FastAPI (Port 8000)
-#    ollama   – Lokales LLM (Port 11434)
+#    db       – PostgreSQL + pgvector (Port 5432)
+#    ollama   – Lokales LLM + Embedding-Modell (Port 11434)
 #
 #  Starten:
 #    docker compose up -d
 #
-#  Modell laden (einmalig nach erstem Start):
-#    docker compose exec ollama ollama pull llama3.2
+#  Einmalige Einrichtung nach erstem Start:
+#    docker compose exec ollama ollama pull mistral-nemo        # LLM (~7.5 GB)
+#    docker compose exec ollama ollama pull nomic-embed-text    # Embeddings (~0.3 GB)
+#    docker compose exec ollama ollama pull llava               # OCR Vision-Fallback (~4.5 GB)
+#
+#  Optional (RTX 4090 / 5090):
+#    docker compose exec ollama ollama pull llama3.1:70b-instruct-q4_K_M
 # ════════════════════════════════════════════════════════════════
 
 services:
@@ -23,21 +29,40 @@ services:
     env_file:
       - .env
     environment:
-      # Ollama im selben Docker-Netz erreichbar
       OLLAMA_HOST: http://ollama:11434
+      DATABASE_URL: postgresql+asyncpg://systelios:systelios@db:5432/systelios
     volumes:
-      # Uploads und Outputs persistent speichern
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
-      - ./systelios.db:/app/systelios.db
       - ./systelios.log:/app/systelios.log
     depends_on:
-      - ollama
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: systelios-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: systelios
+      POSTGRES_PASSWORD: systelios
+      POSTGRES_DB: systelios
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U systelios"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   ollama:
     image: ollama/ollama:latest
@@ -46,7 +71,6 @@ services:
     ports:
       - "11434:11434"
     volumes:
-      # Modelle persistent speichern (~4-8 GB)
       - ollama_models:/root/.ollama
 
     # GPU-Support (auskommentieren wenn NVIDIA-GPU vorhanden):
@@ -59,4 +83,5 @@ services:
     #           capabilities: [gpu]
 
 volumes:
+  postgres_data:
   ollama_models:
