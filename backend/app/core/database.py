@@ -11,7 +11,7 @@ from app.core.config import settings
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
-    connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {},
+    connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {"ssl": False},
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -32,10 +32,14 @@ async def get_db() -> AsyncSession:  # type: ignore[return]
 
 async def init_db() -> None:
     """Tabellen anlegen (beim ersten Start). pgvector-Extension aktivieren."""
-    async with engine.begin() as conn:
-        # pgvector Extension aktivieren (wird bei SQLite ignoriert)
+    # pgvector in eigener Transaktion – Fehler darf init_db nicht abbrechen
+    if "postgresql" in settings.DATABASE_URL:
         try:
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            async with engine.connect() as conn:
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                await conn.commit()
         except Exception:
-            pass  # SQLite oder Extension bereits vorhanden
+            pass  # Extension bereits vorhanden oder nicht verfuegbar
+    # Tabellen anlegen
+    async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
