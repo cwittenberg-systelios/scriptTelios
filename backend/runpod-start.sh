@@ -18,7 +18,7 @@ set -e
 BACKEND_DIR="/workspace/scriptTelios/backend"
 VENV_DIR="/workspace/venv"
 LOG_DIR="/workspace"
-PG_DATA="/workspace/postgres"
+PG_DATA="/home/pg_systelios/postgres"
 OLLAMA_MODELS_DIR="/workspace/ollama"
 PG_USER="pg_systelios"
 
@@ -36,7 +36,7 @@ echo ""
 
 # 0. Verzeichnisse
 echo "${GO}Verzeichnisse anlegen..."
-mkdir -p "$PG_DATA"
+# PG_DATA liegt im Home des pg_systelios-Users – wird im PostgreSQL-Abschnitt angelegt
 mkdir -p "$OLLAMA_MODELS_DIR"
 mkdir -p /workspace/uploads
 mkdir -p /workspace/outputs
@@ -77,8 +77,8 @@ echo "${OK}PostgreSQL Binary: $PG_BIN"
 if ! id "$PG_USER" >/dev/null 2>&1; then
     echo "${GO}User '$PG_USER' anlegen..."
     useradd -m "$PG_USER"
+    mkdir -p "$PG_DATA"
 fi
-chown -R "$PG_USER" "$PG_DATA"
 
 # Pruefen ob Postgres schon laeuft
 if su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA status" 2>/dev/null | grep -q "server is running"; then
