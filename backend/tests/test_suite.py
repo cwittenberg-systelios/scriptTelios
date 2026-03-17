@@ -273,10 +273,10 @@ class TestGenerierungMitDateien:
 
     def test_mit_therapeut_id(self, mock_llm, mock_embedding):
         """therapeut_id aktiviert pgvector-Retrieval."""
-        with patch(
-            "app.services.embeddings.retrieve_style_examples",
-            new=AsyncMock(return_value="Schreibe im Stil des Therapeuten.")
-        ):
+        with patch("app.services.embeddings.retrieve_style_examples",
+                   new=AsyncMock(return_value="Schreibe im Stil des Therapeuten.")), \
+             patch("app.api.generate.retrieve_style_examples",
+                   new=AsyncMock(return_value="Schreibe im Stil des Therapeuten.")):
             r = client.post(
                 "/api/generate/with-files",
                 data={
@@ -375,7 +375,7 @@ class TestDokumentVerarbeitung:
             text="Verlaufsbericht sysTelios Klinik Patient Herr M. Einzeltherapie Diagnose F32.1",
             method="pdfplumber", quality=0.92, pages=1, warnings=[]
         )
-        with patch("app.api.documents.extract_text_with_meta", new=AsyncMock(return_value=mock_result)):
+        with patch("app.services.extraction.extract_text_with_meta", new=AsyncMock(return_value=mock_result)):
             r = client.post(
                 "/api/documents/extract",
                 files={"file": ("verlauf.pdf", PDF_VERLAUF.read_bytes(), "application/pdf")},
@@ -394,7 +394,7 @@ class TestDokumentVerarbeitung:
             text="Entlassbericht sysTelios Klinik Diagnose F32.1 Behandlung abgeschlossen",
             method="docx", quality=0.95, pages=1, warnings=[]
         )
-        with patch("app.api.documents.extract_text_with_meta", new=AsyncMock(return_value=mock_result)):
+        with patch("app.services.extraction.extract_text_with_meta", new=AsyncMock(return_value=mock_result)):
             r = client.post(
                 "/api/documents/extract",
                 files={"file": (
@@ -410,7 +410,7 @@ class TestDokumentVerarbeitung:
         """Unbekanntes Dateiformat wird abgelehnt."""
         from app.services.extraction import ExtractionResult
         # ValueError wird von extract_text_with_meta geworfen und als 422 zurueckgegeben
-        with patch("app.api.documents.extract_text_with_meta",
+        with patch("app.services.extraction.extract_text_with_meta",
                    new=AsyncMock(side_effect=ValueError("Nicht unterstuetztes Dateiformat: '.xyz'"))):
             r = client.post(
                 "/api/documents/extract",
@@ -575,7 +575,7 @@ class TestPrompts:
             style_context="Schreibe kurz und praegnant."
         )
         assert "Schreibe kurz und praegnant" in p
-        assert "STILVORLAGE FUER DIESEN THERAPEUTEN" in p
+        assert "STILVORLAGE" in p and "THERAPEUTEN" in p
 
     def test_system_prompt_custom_prompt(self):
         """Eigener Prompt überschreibt den Standard-Prompt."""

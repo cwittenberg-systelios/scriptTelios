@@ -31,7 +31,10 @@
   window.SYSTELIOS_USER = AJS && AJS.Data ? (AJS.Data.get("current-user-fullname") || "") : "";
 
   // Backend-URL: Macro-Parameter hat Vorrang, dann localStorage, dann leer
-  var macroUrl = "$!{parambackendUrl}".trim();
+  var macroUrl = "$!{parambackendUrl}".trim().replace(/\/+$/, "");
+  if (macroUrl && !macroUrl.startsWith("http://") && !macroUrl.startsWith("https://")) {
+    macroUrl = "https://" + macroUrl;
+  }
   var storedUrl = localStorage.getItem("systelios_backend_url") || "";
   window.SYSTELIOS_API_BASE = macroUrl || storedUrl;
 

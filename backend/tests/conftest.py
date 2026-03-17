@@ -54,6 +54,14 @@ os.makedirs("/tmp/systelios_test_uploads", exist_ok=True)
 os.makedirs("/tmp/systelios_test_outputs", exist_ok=True)
 
 
+def real_file(key: str):
+    """Gibt pytest.mark.skip zurueck wenn echte Datei nicht vorhanden."""
+    path = REAL_FILES.get(key)
+    if path is None or not path.exists():
+        return pytest.mark.skip(reason=f"Echte Testdatei nicht vorhanden: {key}")
+    return pytest.mark.skipif(False, reason="")
+
+
 # ── Datenbank-Init (autouse) ──────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)

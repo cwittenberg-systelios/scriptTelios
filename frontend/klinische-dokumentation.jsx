@@ -1168,10 +1168,15 @@ export default function App() {
   );
 
   const saveUrl = () => {
-    const url = urlInput.replace(/\/+$/, ""); // trailing slash entfernen
+    let url = urlInput.trim().replace(/\/+$/, ""); // trailing slash entfernen
+    // https:// ergänzen falls kein Protokoll angegeben
+    if (url && !url.startsWith("http://") && !url.startsWith("https://")) {
+      url = "https://" + url;
+    }
     localStorage.setItem("systelios_backend_url", url);
     window.SYSTELIOS_API_BASE = url;
     setBackendUrl(url);
+    setUrlInput(url);
     setShowSettings(false);
     toast("Backend-URL gespeichert");
   };
