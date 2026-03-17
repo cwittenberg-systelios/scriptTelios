@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # z.B. "http://confluence.intern:8090" oder "https://wiki.systelios.de"
     CONFLUENCE_URL: str = ""
 
+    # Zusaetzliche CORS-Origins (kommagetrennt, fuer weitere Clients):
+    # z.B. "https://mein-server.de,https://weiterer-client.de"
+    EXTRA_CORS_ORIGINS: str = ""
+
     @property
     def CORS_ORIGINS(self) -> List[str]:
         origins = [
@@ -59,7 +63,27 @@ class Settings(BaseSettings):
         ]
         if self.CONFLUENCE_URL:
             origins.append(self.CONFLUENCE_URL.rstrip("/"))
+        if self.EXTRA_CORS_ORIGINS:
+            for o in self.EXTRA_CORS_ORIGINS.split(","):
+                o = o.strip()
+                if o:
+                    origins.append(o)
         return origins
+
+    @property
+    def CORS_ALLOW_ORIGIN_REGEX(self) -> str:
+        """
+        Regex fuer dynamische Origins die nicht vorab bekannt sind.
+        RunPod-URLs aendern sich bei jedem Neustart (neue Pod-ID),
+        daher wird die gesamte proxy.runpod.net-Domain erlaubt.
+        Nur aktiv wenn ALLOW_RUNPOD_PROXY=true gesetzt ist.
+        """
+        if self.ALLOW_RUNPOD_PROXY:
+            return r"https://.*\.proxy\.runpod\.net"
+        return ""
+
+    # RunPod-Proxy-Domain erlauben (nur fuer Testphase – in Produktion deaktivieren)
+    ALLOW_RUNPOD_PROXY: bool = False
 
     # ── Logging ───────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"

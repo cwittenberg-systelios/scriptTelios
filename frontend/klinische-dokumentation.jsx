@@ -1157,13 +1157,32 @@ const NAVS = [
 ];
 
 export default function App() {
-  const [page, setPage]   = useState("p1");
-  const [msg, setMsg]     = useState(null);
+  const [page, setPage]       = useState("p1");
+  const [msg, setMsg]         = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [backendUrl, setBackendUrl] = useState(
+    () => localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""
+  );
+  const [urlInput, setUrlInput] = useState(
+    () => localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""
+  );
+
+  const saveUrl = () => {
+    const url = urlInput.replace(/\/+$/, ""); // trailing slash entfernen
+    localStorage.setItem("systelios_backend_url", url);
+    window.SYSTELIOS_API_BASE = url;
+    setBackendUrl(url);
+    setShowSettings(false);
+    toast("Backend-URL gespeichert");
+  };
 
   const toast = useCallback((t) => {
     setMsg(t);
     setTimeout(() => setMsg(null), 2400);
   }, []);
+
+  // Beim ersten Start ohne URL: Settings automatisch öffnen
+  const firstRun = !backendUrl;
 
   return (
     <>
@@ -1193,9 +1212,32 @@ export default function App() {
         ))}
 
         <div className="sidebar-footer">
-          sysTelios Klinik f&#252;r Psychosomatik<br />
-          und Psychotherapie<br />
-          Siedelsbrunn · v1.0
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",lineHeight:1.6,marginBottom:10}}>
+            sysTelios Klinik f&#252;r Psychosomatik<br />
+            und Psychotherapie · v1.0
+          </div>
+          <button
+            onClick={() => { setUrlInput(backendUrl); setShowSettings(true); }}
+            style={{
+              display:"flex", alignItems:"center", gap:7,
+              background: backendUrl ? "rgba(255,255,255,0.08)" : "rgba(168,40,30,0.6)",
+              border: backendUrl ? "1px solid rgba(255,255,255,0.15)" : "1px solid rgba(168,40,30,0.8)",
+              borderRadius:4, padding:"6px 12px", cursor:"pointer",
+              color:"rgba(255,255,255,0.75)", fontSize:11, fontWeight:600,
+              width:"100%", letterSpacing:"0.04em"
+            }}
+          >
+            <span style={{fontSize:14}}>⚙</span>
+            {backendUrl ? "Backend-URL ändern" : "⚠ Backend-URL fehlt"}
+          </button>
+          {backendUrl && (
+            <div style={{
+              marginTop:6, fontSize:10, color:"rgba(255,255,255,0.25)",
+              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"
+            }} title={backendUrl}>
+              {backendUrl.replace("https://","").replace("http://',"")}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1206,6 +1248,70 @@ export default function App() {
         {page === "p4" && <P4 toast={toast} />}
         {page === "p5" && <P5 toast={toast} />}
       </main>
+
+      {/* Settings Modal */}
+      {(showSettings || firstRun) && (
+        <div style={{
+          position:"fixed", inset:0, background:"rgba(0,0,0,0.55)",
+          display:"flex", alignItems:"center", justifyContent:"center",
+          zIndex:1000
+        }} onClick={(e) => { if(e.target===e.currentTarget && !firstRun) setShowSettings(false); }}>
+          <div style={{
+            background:"#fff", borderRadius:8, padding:"32px 28px", width:480,
+            boxShadow:"0 8px 40px rgba(0,0,0,0.25)"
+          }}>
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:18, fontWeight:700, color:"#1e3d20", marginBottom:6}}>
+                ⚙ Backend-URL einstellen
+              </div>
+              <div style={{fontSize:13, color:"#777c74", lineHeight:1.6}}>
+                Tragt hier die URL des sysTelios-Backends ein.<br />
+                Diese wird im Browser gespeichert und bleibt beim nächsten Aufruf erhalten.
+              </div>
+            </div>
+
+            <div style={{marginBottom:8, fontSize:12, fontWeight:600, color:"#444", textTransform:"uppercase", letterSpacing:"0.06em"}}>
+              Backend URL
+            </div>
+            <input
+              type="text"
+              value={urlInput}
+              onChange={e => setUrlInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && saveUrl()}
+              placeholder="https://abc123-8000.proxy.runpod.net"
+              autoFocus
+              style={{
+                width:"100%", padding:"10px 12px", borderRadius:4,
+                border:"1px solid #ccc", fontSize:13, fontFamily:"monospace",
+                boxSizing:"border-box", marginBottom:8
+              }}
+            />
+            <div style={{fontSize:11, color:"#a0a49e", marginBottom:20, lineHeight:1.6}}>
+              Testphase RunPod: <code style={{background:"#f0eeea",padding:"1px 5px",borderRadius:3}}>https://&lt;pod-id&gt;-8000.proxy.runpod.net</code><br />
+              Produktion: <code style={{background:"#f0eeea",padding:"1px 5px",borderRadius:3}}>http://systelios-server:8000</code>
+            </div>
+
+            <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>
+              {!firstRun && (
+                <button onClick={() => setShowSettings(false)} style={{
+                  padding:"8px 20px", borderRadius:4, border:"1px solid #ccc",
+                  background:"#fff", cursor:"pointer", fontSize:13, color:"#666"
+                }}>
+                  Abbrechen
+                </button>
+              )}
+              <button onClick={saveUrl} disabled={!urlInput.trim()} style={{
+                padding:"8px 24px", borderRadius:4, border:"none",
+                background: urlInput.trim() ? "#1e3d20" : "#ccc",
+                cursor: urlInput.trim() ? "pointer" : "not-allowed",
+                fontSize:13, fontWeight:600, color:"#fff"
+              }}>
+                Speichern
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {msg && (
         <div className="toast">

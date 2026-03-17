@@ -370,18 +370,12 @@ class TestDokumentVerarbeitung:
 
     def test_extract_pdf_maschinenlesbar(self):
         """Maschinenlesbares PDF wird korrekt extrahiert."""
-        with patch(
-            "app.services.extraction.extract_text_with_meta",
-            new=AsyncMock(return_value=__import__(
-                'app.services.extraction', fromlist=['ExtractionResult']
-            ).ExtractionResult(
-                text=PDF_VERLAUF.read_text(encoding='latin-1', errors='replace')[:200],
-                method="pdfplumber",
-                quality=0.92,
-                pages=1,
-                warnings=[]
-            ))
-        ):
+        from app.services.extraction import ExtractionResult
+        mock_result = ExtractionResult(
+            text="Verlaufsbericht sysTelios Klinik Patient Herr M. Einzeltherapie Diagnose F32.1",
+            method="pdfplumber", quality=0.92, pages=1, warnings=[]
+        )
+        with patch("app.api.documents.extract_text_with_meta", new=AsyncMock(return_value=mock_result)):
             r = client.post(
                 "/api/documents/extract",
                 files={"file": ("verlauf.pdf", PDF_VERLAUF.read_bytes(), "application/pdf")},
@@ -395,18 +389,12 @@ class TestDokumentVerarbeitung:
 
     def test_extract_docx(self):
         """DOCX wird korrekt extrahiert."""
-        with patch(
-            "app.services.extraction.extract_text_with_meta",
-            new=AsyncMock(return_value=__import__(
-                'app.services.extraction', fromlist=['ExtractionResult']
-            ).ExtractionResult(
-                text="Entlassbericht sysTelios Klinik Diagnose F32.1",
-                method="docx",
-                quality=0.95,
-                pages=1,
-                warnings=[]
-            ))
-        ):
+        from app.services.extraction import ExtractionResult
+        mock_result = ExtractionResult(
+            text="Entlassbericht sysTelios Klinik Diagnose F32.1 Behandlung abgeschlossen",
+            method="docx", quality=0.95, pages=1, warnings=[]
+        )
+        with patch("app.api.documents.extract_text_with_meta", new=AsyncMock(return_value=mock_result)):
             r = client.post(
                 "/api/documents/extract",
                 files={"file": (
@@ -420,10 +408,14 @@ class TestDokumentVerarbeitung:
 
     def test_extract_unbekanntes_format(self):
         """Unbekanntes Dateiformat wird abgelehnt."""
-        r = client.post(
-            "/api/documents/extract",
-            files={"file": ("test.xyz", b"Inhalt", "application/octet-stream")},
-        )
+        from app.services.extraction import ExtractionResult
+        # ValueError wird von extract_text_with_meta geworfen und als 422 zurueckgegeben
+        with patch("app.api.documents.extract_text_with_meta",
+                   new=AsyncMock(side_effect=ValueError("Nicht unterstuetztes Dateiformat: '.xyz'"))):
+            r = client.post(
+                "/api/documents/extract",
+                files={"file": ("test.xyz", b"Inhalt", "application/octet-stream")},
+            )
         assert r.status_code == 422
 
     def test_fill_entlassbericht(self, mock_llm, mock_extract_text):
@@ -491,22 +483,18 @@ class TestDokumentVerarbeitung:
 
     def test_style_extraktion(self, mock_llm):
         """Stilprofil wird aus Beispieltext extrahiert."""
-        with patch(
-            "app.services.extraction.extract_style_context",
-            new=AsyncMock(return_value="Schreibe in einem Stil der praegnant und ressourcenorientiert ist.")
-        ):
-            with patch("app.services.extraction.extract_text", new=AsyncMock(
-                return_value="Verlaufsnotiz Beispieltext " * 20
-            )):
-                r = client.post(
-                    "/api/documents/style",
-                    data={"therapeut_id": "Dr. Muster"},
-                    files={"style_file": (
-                        "stil.docx",
-                        DOCX_STILPROFIL.read_bytes(),
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    )},
-                )
+        style_text = "Schreibe in einem Stil der praegnant und ressourcenorientiert ist."
+        with patch("app.api.documents.extract_style_context", new=AsyncMock(return_value=style_text)), \
+             patch("app.api.documents.extract_text", new=AsyncMock(return_value="Verlaufsnotiz " * 30)):
+            r = client.post(
+                "/api/documents/style",
+                data={"therapeut_id": "Dr. Muster"},
+                files={"style_file": (
+                    "stil.docx",
+                    DOCX_STILPROFIL.read_bytes(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )},
+            )
         assert r.status_code == 200
         data = r.json()
         assert "style_context" in data
@@ -587,7 +575,7 @@ class TestPrompts:
             style_context="Schreibe kurz und praegnant."
         )
         assert "Schreibe kurz und praegnant" in p
-        assert "STILVORLAGE" in p
+        assert "STILVORLAGE FUER DIESEN THERAPEUTEN" in p
 
     def test_system_prompt_custom_prompt(self):
         """Eigener Prompt überschreibt den Standard-Prompt."""

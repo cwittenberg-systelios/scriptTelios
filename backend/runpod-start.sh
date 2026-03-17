@@ -207,7 +207,56 @@ else
     echo "${OK}Python-Pakete vorhanden"
 fi
 
-# 5. .env pruefen
+# 5. Frontend bauen
+echo ""
+echo "${GO}Frontend pruefen..."
+
+FRONTEND_DIR="/workspace/scriptTelios/frontend"
+STATIC_DIR="$BACKEND_DIR/static"
+BUNDLE="$STATIC_DIR/systelios.js"
+
+# Node.js pruefen / installieren
+if ! command -v node >/dev/null 2>&1; then
+    echo "${GO}Node.js installieren..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+    echo "${OK}Node.js $(node --version) installiert"
+else
+    echo "${OK}Node.js $(node --version) vorhanden"
+fi
+
+# Pruefen ob Bundle aktueller als Quellcode ist
+NEEDS_BUILD=false
+if [ ! -f "$BUNDLE" ]; then
+    NEEDS_BUILD=true
+    echo "${GO}Bundle nicht vorhanden – wird gebaut..."
+elif [ "$FRONTEND_DIR/klinische-dokumentation.jsx" -nt "$BUNDLE" ]; then
+    NEEDS_BUILD=true
+    echo "${GO}Quellcode neuer als Bundle – wird neu gebaut..."
+else
+    echo "${OK}Bundle aktuell – kein Rebuild noetig"
+fi
+
+if [ "$NEEDS_BUILD" = "true" ]; then
+    mkdir -p "$STATIC_DIR"
+    cd "$FRONTEND_DIR"
+    # node_modules nur bei Bedarf installieren
+    if [ ! -d "node_modules" ] || [ "package.json" -nt "node_modules/.package-lock.json" ]; then
+        echo "${GO}npm install..."
+        npm install --silent
+    fi
+    echo "${GO}npm run build..."
+    npm run build
+    if [ -f "$BUNDLE" ]; then
+        BUNDLE_KB=$(du -k "$BUNDLE" | cut -f1)
+        echo "${OK}Bundle erstellt: systelios.js (${BUNDLE_KB} KB)"
+    else
+        echo "${WARN}Bundle wurde nicht erstellt – Frontend evtl. nicht verfuegbar"
+    fi
+    cd "$BACKEND_DIR"
+fi
+
+# 6. .env pruefen
 echo ""
 if [ ! -f "$BACKEND_DIR/.env" ]; then
     echo "${WARN}Keine .env - erstelle automatisch..."
@@ -225,6 +274,8 @@ LOG_LEVEL=INFO
 UPLOAD_DIR=/workspace/uploads
 OUTPUT_DIR=/workspace/outputs
 LOG_FILE=/workspace/systelios.log
+# RunPod-Proxy-Domain fuer CORS erlauben (Testphase)
+ALLOW_RUNPOD_PROXY=true
 ENVEOF
     echo "${OK}.env erstellt (SECRET_KEY automatisch generiert)"
 else
@@ -236,7 +287,7 @@ else
     echo "${OK}.env vorhanden"
 fi
 
-# 6. Backend starten
+# 7. Backend starten
 echo ""
 echo "${GO}Backend starten..."
 pkill -f "uvicorn app.main:app" 2>/dev/null || true
@@ -258,7 +309,7 @@ nohup python -m uvicorn app.main:app \
 
 echo "${OK}Backend gestartet (PID: $!)"
 
-# 7. Health Check
+# 8. Health Check
 echo "${GO}Warte auf Backend..."
 MAX=20
 for i in $(seq 1 $MAX); do
@@ -276,7 +327,7 @@ for i in $(seq 1 $MAX); do
     fi
 done
 
-# 8. Zusammenfassung
+# 9. Zusammenfassung
 echo ""
 # RunPod-URL ermitteln
 POD_ID=$(hostname 2>/dev/null | tr -d '\n' || echo "")
