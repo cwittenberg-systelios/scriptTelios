@@ -278,11 +278,29 @@ done
 
 # 8. Zusammenfassung
 echo ""
+# RunPod-URL ermitteln
+POD_ID=$(hostname 2>/dev/null | tr -d '\n' || echo "")
+RUNPOD_URL=""
+if [ -n "$POD_ID" ]; then
+    RUNPOD_URL="https://${POD_ID}-8000.proxy.runpod.net"
+fi
+
 echo "================================================"
 echo "  Backend:   http://localhost:8000"
 echo "  API-Docs:  http://localhost:8000/docs"
 echo "  Ollama:    http://localhost:11434"
 echo ""
+if [ -n "$RUNPOD_URL" ]; then
+echo "  ╔══════════════════════════════════════════╗"
+echo "  ║  BACKEND-URL FUER CONFLUENCE / BROWSER:  ║"
+echo "  ║                                          ║"
+echo "  ║  $RUNPOD_URL"
+echo "  ║                                          ║"
+echo "  ║  Im Frontend oben links auf das          ║"
+echo "  ║  Zahnrad-Icon klicken und URL eintragen. ║"
+echo "  ╚══════════════════════════════════════════╝"
+echo ""
+fi
 echo "  Logs:"
 echo "    tail -f $LOG_DIR/backend.log"
 echo "    tail -f $LOG_DIR/ollama.log"
