@@ -1327,3 +1327,25 @@ export default function App() {
     </>
   );
 }
+
+// ── Auto-Mount ────────────────────────────────────────────────────────────────
+// Wird als IIFE gebaut – mountet sich selbst sobald DOM bereit ist.
+import { createRoot } from "react-dom/client";
+
+function mountApp() {
+  // Confluence-Macro-Container suchen
+  var container = document.querySelector('[id^="systelios-root-"]');
+  // Fallback: eigenen Container erstellen
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "systelios-root";
+    document.body.appendChild(container);
+  }
+  createRoot(container).render(<App />);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", mountApp);
+} else {
+  mountApp();
+}

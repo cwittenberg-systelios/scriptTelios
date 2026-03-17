@@ -44,31 +44,8 @@
   }
 </script>
 
-## Bundle laden – zuerst als Confluence-Attachment, dann vom Backend als Fallback
-<script>
-  (function() {
-    // Versuche zuerst als Confluence-Attachment auf dieser Seite
-    var attachmentUrl = AJS.contextPath() + "/download/attachments/$page.id/systelios.js";
-    var base = window.SYSTELIOS_API_BASE;
-
-    function loadScript(url, fallback) {
-      var s = document.createElement("script");
-      s.src = url;
-      s.onerror = function() {
-        if (fallback) loadScript(fallback, null);
-      };
-      document.head.appendChild(s);
-    }
-
-    // Attachment hat Vorrang (funktioniert im Intranet ohne externen Zugriff)
-    // Fallback: direkt vom Backend laden (fuer externe Zugriffe)
-    if (base) {
-      loadScript(attachmentUrl, base + "/static/systelios.js");
-    } else {
-      loadScript(attachmentUrl, null);
-    }
-  })();
-</script>
+## Bundle laden – direkt als script src Tag (Velocity wird serverseitig aufgeloest)
+<script src="$req.contextPath/download/attachments/$content.id/systelios.js" defer></script>
 
 ## Basis-Styling
 <style>
