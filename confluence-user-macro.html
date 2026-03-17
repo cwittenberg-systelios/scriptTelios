@@ -41,18 +41,25 @@
   }
 </script>
 
-## Bundle laden
-<script src="$!{request.contextPath}/download/attachments/$page.id/systelios.js" defer></script>
-
-## Fallback: Bundle vom Backend laden falls als Attachment nicht vorhanden
+## Bundle direkt vom Backend laden
 <script>
   (function() {
     var base = window.SYSTELIOS_API_BASE;
-    if (base && !document.querySelector('script[src*="systelios.js"]')) {
+    if (base) {
       var s = document.createElement("script");
       s.src = base + "/static/systelios.js";
-      s.defer = true;
       document.head.appendChild(s);
+    } else {
+      // Kein Backend konfiguriert – Hinweis im Container anzeigen
+      document.addEventListener("DOMContentLoaded", function() {
+        var el = document.getElementById("systelios-root-$action.hashCode()");
+        if (el) {
+          el.style.cssText = "padding:20px;font-family:sans-serif;color:#a00";
+          el.innerHTML = "<b>scriptTelios:</b> Keine Backend-URL konfiguriert. "
+            + "Bitte Macro-Parameter <em>backendUrl</em> setzen oder beim ersten "
+            + "Aufruf die URL im Einstellungs-Dialog eintragen.";
+        }
+      });
     }
   })();
 </script>
