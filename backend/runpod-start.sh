@@ -91,7 +91,8 @@ echo "${OK}PostgreSQL Binary: $PG_BIN"
 
 # Lock-File-Verzeichnis muss dem PG_USER gehoeren
 mkdir -p /var/run/postgresql
-chown "$PG_USER" /var/run/postgresql 2>/dev/null || true
+chown "$PG_USER" /var/run/postgresql
+chmod 775 /var/run/postgresql
 
 # PostgreSQL kann nicht als root laufen – eigenen User anlegen
 if ! id "$PG_USER" >/dev/null 2>&1; then
@@ -151,11 +152,25 @@ fi
 echo ""
 echo "${GO}Ollama pruefen..."
 
-if ! command -v ollama >/dev/null 2>&1; then
-    echo "${GO}Ollama installieren..."
-    curl -fsSL https://ollama.com/install.sh | sh
-    echo "${OK}Ollama installiert"
+OLLAMA_BIN="/workspace/bin/ollama"
+mkdir -p /workspace/bin
+
+# Ollama-Binary auf Network Volume installieren falls nicht vorhanden
+if [ ! -f "$OLLAMA_BIN" ]; then
+    echo "${GO}Ollama installieren (nach /workspace/bin)..."
+    # Offizielles Install-Script umgehen – Binary direkt herunterladen
+    OLLAMA_VERSION=$(curl -s https://api.github.com/repos/ollama/ollama/releases/latest \
+        | grep '"tag_name"' | cut -d'"' -f4 || echo "v0.6.2")
+    curl -fsSL "https://github.com/ollama/ollama/releases/download/${OLLAMA_VERSION}/ollama-linux-amd64" \
+        -o "$OLLAMA_BIN"
+    chmod +x "$OLLAMA_BIN"
+    echo "${OK}Ollama ${OLLAMA_VERSION} installiert"
+else
+    echo "${OK}Ollama vorhanden ($($OLLAMA_BIN --version 2>/dev/null || echo 'version unbekannt'))"
 fi
+
+# Symlink damit 'ollama' systemweit verfuegbar ist
+ln -sf "$OLLAMA_BIN" /usr/local/bin/ollama 2>/dev/null || true
 
 export OLLAMA_MODELS="$OLLAMA_MODELS_DIR"
 if ! pgrep -x ollama >/dev/null 2>&1; then
