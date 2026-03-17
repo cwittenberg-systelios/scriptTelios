@@ -89,16 +89,16 @@ if [ -z "$PG_BIN" ]; then
 fi
 echo "${OK}PostgreSQL Binary: $PG_BIN"
 
-# Lock-File-Verzeichnis muss dem PG_USER gehoeren
-mkdir -p /var/run/postgresql
-chown "$PG_USER" /var/run/postgresql
-chmod 775 /var/run/postgresql
-
-# PostgreSQL kann nicht als root laufen – eigenen User anlegen
+# PostgreSQL kann nicht als root laufen – eigenen User zuerst anlegen
 if ! id "$PG_USER" >/dev/null 2>&1; then
     echo "${GO}User '$PG_USER' anlegen..."
     useradd -m "$PG_USER"
 fi
+
+# Lock-File-Verzeichnis muss dem PG_USER gehoeren (nach useradd!)
+mkdir -p /var/run/postgresql
+chown "$PG_USER" /var/run/postgresql
+chmod 775 /var/run/postgresql
 
 # Verzeichnis immer als PG_USER anlegen (nie als root)
 su -m "$PG_USER" -c "mkdir -p $PG_DATA"
