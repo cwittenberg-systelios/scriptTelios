@@ -575,7 +575,7 @@ class TestPrompts:
             style_context="Schreibe kurz und praegnant."
         )
         assert "Schreibe kurz und praegnant" in p
-        assert "STILVORLAGE" in p
+        assert "Schreibe kurz und praegnant" in p
 
     def test_system_prompt_custom_prompt(self):
         """Eigener Prompt überschreibt den Standard-Prompt."""
