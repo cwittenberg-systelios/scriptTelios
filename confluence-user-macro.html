@@ -44,25 +44,28 @@
   }
 </script>
 
-## Bundle direkt vom Backend laden
+## Bundle laden – zuerst als Confluence-Attachment, dann vom Backend als Fallback
 <script>
   (function() {
+    // Versuche zuerst als Confluence-Attachment auf dieser Seite
+    var attachmentUrl = AJS.contextPath() + "/download/attachments/$page.id/systelios.js";
     var base = window.SYSTELIOS_API_BASE;
-    if (base) {
+
+    function loadScript(url, fallback) {
       var s = document.createElement("script");
-      s.src = base + "/static/systelios.js";
+      s.src = url;
+      s.onerror = function() {
+        if (fallback) loadScript(fallback, null);
+      };
       document.head.appendChild(s);
+    }
+
+    // Attachment hat Vorrang (funktioniert im Intranet ohne externen Zugriff)
+    // Fallback: direkt vom Backend laden (fuer externe Zugriffe)
+    if (base) {
+      loadScript(attachmentUrl, base + "/static/systelios.js");
     } else {
-      // Kein Backend konfiguriert – Hinweis im Container anzeigen
-      document.addEventListener("DOMContentLoaded", function() {
-        var el = document.getElementById("systelios-root-$action.hashCode()");
-        if (el) {
-          el.style.cssText = "padding:20px;font-family:sans-serif;color:#a00";
-          el.innerHTML = "<b>scriptTelios:</b> Keine Backend-URL konfiguriert. "
-            + "Bitte Macro-Parameter <em>backendUrl</em> setzen oder beim ersten "
-            + "Aufruf die URL im Einstellungs-Dialog eintragen.";
-        }
-      });
+      loadScript(attachmentUrl, null);
     }
   })();
 </script>
