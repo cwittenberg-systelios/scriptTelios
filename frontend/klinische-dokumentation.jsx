@@ -1235,7 +1235,7 @@ export default function App() {
               marginTop:6, fontSize:10, color:"rgba(255,255,255,0.25)",
               overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"
             }} title={backendUrl}>
-              {backendUrl.replace("https://","").replace("http://',"")}
+              {backendUrl.replace("https://","").replace("http://","")}
             </div>
           )}
         </div>
