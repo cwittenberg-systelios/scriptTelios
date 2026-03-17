@@ -158,15 +158,12 @@ mkdir -p /workspace/bin
 # Ollama-Binary auf Network Volume installieren falls nicht vorhanden
 if [ ! -f "$OLLAMA_BIN" ]; then
     echo "${GO}Ollama installieren (nach /workspace/bin)..."
-    # Offizielles Install-Script umgehen – Binary direkt herunterladen
-    OLLAMA_VERSION=$(curl -s https://api.github.com/repos/ollama/ollama/releases/latest \
-        | grep '"tag_name"' | cut -d'"' -f4 || echo "v0.6.2")
-    curl -fsSL "https://github.com/ollama/ollama/releases/download/${OLLAMA_VERSION}/ollama-linux-amd64" \
+    curl -fsSL "https://ollama.com/download/ollama-linux-amd64" \
         -o "$OLLAMA_BIN"
     chmod +x "$OLLAMA_BIN"
-    echo "${OK}Ollama ${OLLAMA_VERSION} installiert"
+    echo "${OK}Ollama installiert: $($OLLAMA_BIN --version 2>/dev/null || echo 'ok')"
 else
-    echo "${OK}Ollama vorhanden ($($OLLAMA_BIN --version 2>/dev/null || echo 'version unbekannt'))"
+    echo "${OK}Ollama vorhanden: $($OLLAMA_BIN --version 2>/dev/null || echo 'version unbekannt')"
 fi
 
 # Symlink damit 'ollama' systemweit verfuegbar ist
