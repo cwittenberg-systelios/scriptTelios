@@ -38,27 +38,16 @@ const S = `
     font-weight: 400;
   }
 
-  /* ── APP WRAPPER (flex row, enthaelt Sidebar + Main) ── */
-  #systelios-app,
-  #systelios-app > div:first-child {
-    display: flex;
-    flex-direction: row;
-    min-height: 600px;
-    position: relative;
-  }
-
   /* ── SIDEBAR ── */
   .sidebar {
-    position: sticky;
-    top: 0;
-    height: 100vh;
     width: 260px;
+    min-width: 260px;
     flex-shrink: 0;
     background: var(--st-green);
     display: flex;
     flex-direction: column;
     z-index: 200;
-    overflow-y: auto;
+    min-height: 100%;
   }
 
   .sidebar-brand {
@@ -1205,7 +1194,16 @@ export default function App() {
   const firstRun = !backendUrl;
 
   return (
-    <div style={{display:"flex", flexDirection:"row", minHeight:"600px", position:"relative"}}>
+    <div style={{
+      display:"flex",
+      flexDirection:"row",
+      minHeight:"600px",
+      width:"100%",
+      position:"relative",
+      overflow:"hidden",
+      border:"1px solid rgba(0,0,0,0.08)",
+      borderRadius:"8px"
+    }}>
       <style>{S}</style>
 
       <div className="sidebar">
