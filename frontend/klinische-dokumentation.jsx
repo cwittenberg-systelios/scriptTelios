@@ -917,7 +917,7 @@ const DOKUMENTTYPEN = [
 // API_BASE: aus window.SYSTELIOS_API_BASE (gesetzt im Confluence User Macro)
 //           Fallback auf localhost für lokale Entwicklung
 const API_BASE = (typeof window !== "undefined" && window.SYSTELIOS_API_BASE)
-  ? window.SYSTELIOS_API_BASE.replace(/\/$/, "")
+  ? window.SYSTELIOS_API_BASE.replace(/\/$/, "").replace(/\/api$/, "") + "/api"
   : "http://localhost:8000/api";
 
 // Therapeuten-Name aus Confluence AJS (gesetzt im Macro vor dem Bundle)

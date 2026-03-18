@@ -345,37 +345,71 @@ for i in $(seq 1 $MAX); do
     fi
 done
 
-# 9. Zusammenfassung
+# 9. Cloudflare Tunnel starten
 echo ""
-# RunPod-URL ermitteln
-POD_ID=$(hostname 2>/dev/null | tr -d '\n' || echo "")
-RUNPOD_URL=""
-if [ -n "$POD_ID" ]; then
-    RUNPOD_URL="https://${POD_ID}-8000.proxy.runpod.net"
+echo "${GO}Cloudflare Tunnel pruefen..."
+
+CLOUDFLARED_BIN="/workspace/bin/cloudflared"
+
+# cloudflared installieren falls nicht vorhanden
+if [ ! -f "$CLOUDFLARED_BIN" ]; then
+    echo "${GO}cloudflared installieren..."
+    curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+        -o "$CLOUDFLARED_BIN"
+    chmod +x "$CLOUDFLARED_BIN"
+    echo "${OK}cloudflared installiert"
 fi
 
+# Alten Tunnel stoppen
+pkill -f "cloudflared tunnel" 2>/dev/null || true
+sleep 2
+
+# Neuen Tunnel starten
+nohup "$CLOUDFLARED_BIN" tunnel --url http://localhost:8000 \
+    > "$LOG_DIR/cloudflared.log" 2>&1 &
+
+# Warten bis URL verfuegbar
+echo "${GO}Warte auf Tunnel-URL..."
+TUNNEL_URL=""
+MAX=20
+for i in $(seq 1 $MAX); do
+    TUNNEL_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' \
+        "$LOG_DIR/cloudflared.log" 2>/dev/null | tail -1)
+    if [ -n "$TUNNEL_URL" ]; then
+        echo "${OK}Tunnel aktiv"
+        break
+    fi
+    [ "$i" = "$MAX" ] && echo "${WARN}Tunnel-URL nicht gefunden - Log: $LOG_DIR/cloudflared.log"
+    sleep 2
+done
+
+# 10. Zusammenfassung
+echo ""
 echo "================================================"
 echo "  Backend:   http://localhost:8000"
 echo "  API-Docs:  http://localhost:8000/docs"
 echo "  Ollama:    http://localhost:11434"
 echo ""
-if [ -n "$RUNPOD_URL" ]; then
-echo "  ╔══════════════════════════════════════════╗"
-echo "  ║  BACKEND-URL FUER CONFLUENCE / BROWSER:  ║"
-echo "  ║                                          ║"
-echo "  ║  $RUNPOD_URL"
-echo "  ║                                          ║"
-echo "  ║  Im Frontend oben links auf das          ║"
-echo "  ║  Zahnrad-Icon klicken und URL eintragen. ║"
-echo "  ╚══════════════════════════════════════════╝"
-echo ""
+if [ -n "$TUNNEL_URL" ]; then
+echo "  ╔══════════════════════════════════════════════════╗"
+echo "  ║  BACKEND-URL FUER CONFLUENCE (Zahnrad-Icon):     ║"
+echo "  ║                                                  ║"
+echo "  ║  $TUNNEL_URL"
+echo "  ║                                                  ║"
+echo "  ║  Im Frontend unten links auf Zahnrad klicken     ║"
+echo "  ║  und diese URL eintragen → Speichern.            ║"
+echo "  ╚══════════════════════════════════════════════════╝"
+else
+echo "  Tunnel-URL:  siehe $LOG_DIR/cloudflared.log"
 fi
+echo ""
 echo "  Logs:"
 echo "    tail -f $LOG_DIR/backend.log"
+echo "    tail -f $LOG_DIR/cloudflared.log"
 echo "    tail -f $LOG_DIR/ollama.log"
 echo "    tail -f $LOG_DIR/postgres.log"
 echo ""
-echo "  Stop:  pkill -f uvicorn; pkill ollama"
+echo "  Stop:  pkill -f uvicorn; pkill cloudflared; pkill ollama"
 echo "  Stop PostgreSQL:"
 echo "    su -m $PG_USER -c '$PG_BIN/pg_ctl -D $PG_DATA stop'"
 echo "================================================"
