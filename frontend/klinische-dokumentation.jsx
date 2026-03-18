@@ -1327,15 +1327,8 @@ export default function App() {
     </>
   );
 }
-// ── Globale Mount-Funktion ────────────────────────────────────────────────────
-// Wird vom Confluence-Macro nach dem Laden aufgerufen
-window.SysTeliosMountApp = function(container) {
-  if (!container) return;
-  createRoot(container).render(<App />);
-};
 
-// Automatisch mounten falls Container bereits vorhanden
-(function() {
-  var c = document.getElementById("systelios-app");
-  if (c) window.SysTeliosMountApp(c);
-})();
+// ── Mount ─────────────────────────────────────────────────────────────────────
+import { createRoot } from "react-dom/client";
+const container = document.getElementById("systelios-app");
+if (container) createRoot(container).render(<App />);

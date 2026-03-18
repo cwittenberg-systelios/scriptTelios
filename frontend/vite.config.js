@@ -6,11 +6,13 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "../backend/static",
-    lib: {
-      entry:    "klinische-dokumentation.jsx",
-      name:     "SysTelios",
-      fileName: () => "systelios.js",
-      formats:  ["umd"],
+    rollupOptions: {
+      input: "index.html",
+      output: {
+        entryFileNames: "systelios.js",
+        chunkFileNames: "systelios-[hash].js",
+        assetFileNames: "systelios-[hash][extname]",
+      },
     },
   },
 });
