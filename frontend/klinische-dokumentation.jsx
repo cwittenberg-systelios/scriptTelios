@@ -1327,24 +1327,15 @@ export default function App() {
     </>
   );
 }
+// ── Globale Mount-Funktion ────────────────────────────────────────────────────
+// Wird vom Confluence-Macro nach dem Laden aufgerufen
+window.SysTeliosMountApp = function(container) {
+  if (!container) return;
+  createRoot(container).render(<App />);
+};
 
-// ── Auto-Mount ────────────────────────────────────────────────────────────────
+// Automatisch mounten falls Container bereits vorhanden
 (function() {
-  function tryMount() {
-    var container = document.getElementById("systelios-app")
-                    || document.querySelector('[id^="systelios-root-"]')
-                    || document.getElementById("systelios-root");
-    if (container && !container._rMounted) {
-      container._rMounted = true;
-      createRoot(container).render(<App />);
-      return true;
-    }
-    return false;
-  }
-  if (!tryMount()) {
-    var obs = new MutationObserver(function() {
-      if (tryMount()) obs.disconnect();
-    });
-    obs.observe(document.documentElement, { childList: true, subtree: true });
-  }
+  var c = document.getElementById("systelios-app");
+  if (c) window.SysTeliosMountApp(c);
 })();

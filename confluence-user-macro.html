@@ -46,8 +46,20 @@
   }
 </script>
 
-## Bundle laden – direkt als script src Tag (Velocity wird serverseitig aufgeloest)
+## Bundle laden und explizit mounten
 <script src="$req.contextPath/download/attachments/$content.id/systelios.js"></script>
+<script>
+  // Nach dem Laden explizit mounten
+  // UMD-Bundle macht SysTelios global verfuegbar
+  (function waitAndMount() {
+    var container = document.getElementById("systelios-app");
+    if (container && typeof window.SysTeliosMountApp === "function") {
+      window.SysTeliosMountApp(container);
+    } else {
+      setTimeout(waitAndMount, 50);
+    }
+  })();
+</script>
 
 ## Basis-Styling
 <style>
