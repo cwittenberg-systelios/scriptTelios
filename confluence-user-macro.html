@@ -46,8 +46,24 @@
   }
 </script>
 
-## Bundle laden und explizit mounten
-<script src="$req.contextPath/download/attachments/$content.id/systelios.js" type="module"></script>
+## Bundle laden - erst wenn Container im DOM ist
+<script>
+  (function() {
+    function loadBundle() {
+      var container = document.getElementById("systelios-app");
+      if (!container) return;
+      var s = document.createElement("script");
+      s.type = "module";
+      s.src = AJS.contextPath() + "/download/attachments/$content.id/systelios.js";
+      document.head.appendChild(s);
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", loadBundle);
+    } else {
+      loadBundle();
+    }
+  })();
+</script>
 
 ## Basis-Styling
 <style>

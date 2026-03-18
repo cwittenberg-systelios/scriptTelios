@@ -9,9 +9,10 @@ export default defineConfig({
     rollupOptions: {
       input: "index.html",
       output: {
+        // Alles in eine einzige Datei bündeln
+        inlineDynamicImports: true,
         entryFileNames: "systelios.js",
-        chunkFileNames: "systelios-[hash].js",
-        assetFileNames: "systelios-[hash][extname]",
+        assetFileNames: "systelios[extname]",
       },
     },
   },
