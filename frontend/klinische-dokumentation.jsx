@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from "react";
+import { createRoot } from "react-dom/client";
 
 // sysTelios CI – exakt vom Website abgeleitet:
 // Dunkelgrün Nav: #1e3d20 / Akzentrot: #c0392b / Weiss/Creme Flächen / Serifenlose klare Type
@@ -1329,13 +1330,9 @@ export default function App() {
 }
 
 // ── Auto-Mount ────────────────────────────────────────────────────────────────
-// Wird als IIFE gebaut – mountet sich selbst sobald DOM bereit ist.
-import { createRoot } from "react-dom/client";
-
 function mountApp() {
-  // Confluence-Macro-Container suchen
-  var container = document.querySelector('[id^="systelios-root-"]');
-  // Fallback: eigenen Container erstellen
+  var container = document.querySelector('[id^="systelios-root-"]')
+                  || document.getElementById("systelios-root");
   if (!container) {
     container = document.createElement("div");
     container.id = "systelios-root";
