@@ -22,8 +22,10 @@
 ## ════════════════════════════════════════════════════════════════════════
 ## @param backendUrl:title=Backend URL|type=string|required=false|default=
 
-## Container
-<div id="systelios-root-$action.hashCode()"></div>
+## Container – äusserer Wrapper (vom Macro befüllt) + innerer leerer Mount-Punkt
+<div id="systelios-root-$action.hashCode()">
+  <div id="systelios-app"></div>
+</div>
 
 ## Konfiguration
 <script>

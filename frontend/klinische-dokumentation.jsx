@@ -1,5 +1,4 @@
 import { useState, useRef, useCallback } from "react";
-import { createRoot } from "react-dom/client";
 
 // sysTelios CI – exakt vom Website abgeleitet:
 // Dunkelgrün Nav: #1e3d20 / Akzentrot: #c0392b / Weiss/Creme Flächen / Serifenlose klare Type
@@ -1330,27 +1329,22 @@ export default function App() {
 }
 
 // ── Auto-Mount ────────────────────────────────────────────────────────────────
-// MutationObserver wartet bis der Container im DOM erscheint
 (function() {
   function tryMount() {
-    var container = document.querySelector('[id^="systelios-root-"]')
+    var container = document.getElementById("systelios-app")
+                    || document.querySelector('[id^="systelios-root-"]')
                     || document.getElementById("systelios-root");
-    if (container && !container._mounted) {
-      container._mounted = true;
+    if (container && !container._rMounted) {
+      container._rMounted = true;
       createRoot(container).render(<App />);
       return true;
     }
     return false;
   }
-
-  // Sofort versuchen
   if (!tryMount()) {
-    // Container noch nicht da – MutationObserver beobachtet DOM-Änderungen
-    var observer = new MutationObserver(function() {
-      if (tryMount()) {
-        observer.disconnect();
-      }
+    var obs = new MutationObserver(function() {
+      if (tryMount()) obs.disconnect();
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 })();
