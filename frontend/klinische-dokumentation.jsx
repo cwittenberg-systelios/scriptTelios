@@ -1330,19 +1330,27 @@ export default function App() {
 }
 
 // ── Auto-Mount ────────────────────────────────────────────────────────────────
-function mountApp() {
-  var container = document.querySelector('[id^="systelios-root-"]')
-                  || document.getElementById("systelios-root");
-  if (!container) {
-    container = document.createElement("div");
-    container.id = "systelios-root";
-    document.body.appendChild(container);
+// MutationObserver wartet bis der Container im DOM erscheint
+(function() {
+  function tryMount() {
+    var container = document.querySelector('[id^="systelios-root-"]')
+                    || document.getElementById("systelios-root");
+    if (container && !container._mounted) {
+      container._mounted = true;
+      createRoot(container).render(<App />);
+      return true;
+    }
+    return false;
   }
-  createRoot(container).render(<App />);
-}
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", mountApp);
-} else {
-  mountApp();
-}
+  // Sofort versuchen
+  if (!tryMount()) {
+    // Container noch nicht da – MutationObserver beobachtet DOM-Änderungen
+    var observer = new MutationObserver(function() {
+      if (tryMount()) {
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+})();
