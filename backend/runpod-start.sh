@@ -177,9 +177,12 @@ ln -sf "$OLLAMA_BIN" /usr/local/bin/ollama 2>/dev/null || true
 
 export OLLAMA_MODELS="$OLLAMA_MODELS_DIR"
 if ! pgrep -x ollama >/dev/null 2>&1; then
-    echo "${GO}Ollama starten..."
-    OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama serve > "$LOG_DIR/ollama.log" 2>&1 &
-    sleep 5
+    echo "${GO}Ollama starten (GPU)..."
+    OLLAMA_MODELS="$OLLAMA_MODELS_DIR" \
+    CUDA_VISIBLE_DEVICES=0 \
+    LD_LIBRARY_PATH=/workspace/lib/ollama/cuda_v12:/workspace/lib/ollama:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
+    /workspace/bin/ollama serve > "$LOG_DIR/ollama.log" 2>&1 &
+    sleep 8
 fi
 
 MAX=12

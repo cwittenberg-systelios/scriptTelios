@@ -599,24 +599,39 @@ function Tags({ list, onChange }) {
   );
 }
 
-// Ruft das sysTelios Backend auf (nicht Anthropic direkt).
-// therapeut_id wird automatisch aus Confluence übernommen –
-// das Backend lädt dann die passenden Stilbeispiele per pgvector.
-async function generate(workflow, prompt, userContent) {
+// Ruft das sysTelios Backend asynchron auf (Job-Queue mit Polling).
+// Gibt Promise<string> zurueck – wartet bis Job fertig ist.
+async function generate(workflow, prompt, userContent, files = {}) {
   const therapeutId = getConfluenceUser();
   const fd = new FormData();
-  fd.append("workflow",      workflow);
-  fd.append("prompt",        prompt);
-  fd.append("transcript",    userContent);
-  if (therapeutId) fd.append("therapeut_id", therapeutId);
+  fd.append("workflow",   workflow);
+  fd.append("prompt",     prompt);
+  fd.append("transcript", userContent);
+  if (therapeutId)     fd.append("therapeut_id",  therapeutId);
+  if (files.audio)     fd.append("audio",          files.audio);
+  if (files.selbst)    fd.append("selbstauskunft", files.selbst);
+  if (files.vorbef)    fd.append("vorbefunde",     files.vorbef);
+  if (files.style)     fd.append("style_file",     files.style);
+  if (files.diagnosen) fd.append("diagnosen",      files.diagnosen);
 
-  const r = await fetch(`${API_BASE}/generate/with-files`, {
-    method: "POST",
-    body: fd,
-  });
+  // Job starten
+  const r = await fetch(`${API_BASE}/jobs/generate`, { method: "POST", body: fd });
   const d = await r.json();
   if (!r.ok) throw new Error(d.detail || r.statusText);
-  return d.text;
+
+  const jobId = d.job_id;
+
+  // Polling bis fertig (max. 10 Minuten)
+  const maxWait = 600;
+  const interval = 2;
+  for (let i = 0; i < maxWait / interval; i++) {
+    await new Promise(res => setTimeout(res, interval * 1000));
+    const poll = await fetch(`${API_BASE}/jobs/${jobId}`);
+    const job  = await poll.json();
+    if (job.status === "done")  return job.result_text || "";
+    if (job.status === "error") throw new Error(job.error_msg || "Job fehlgeschlagen");
+  }
+  throw new Error("Timeout: Job dauert zu lange");
 }
 
 // ── Pages ────────────────────────────────────────────────────────
@@ -632,10 +647,14 @@ function P1({ toast }) {
 
   async function run() {
     setBusy(true);
-    const u = (audio ? "[Audio: " + audio.name + " - wird transkribiert]\n\n" : "")
-            + (text  ? "TRANSKRIPT:\n" + text + "\n\n" : "")
+    const u = (text    ? "TRANSKRIPT:\n" + text + "\n\n" : "")
             + (bullets ? "STICHPUNKTE:\n" + bullets + "\n" : "");
-    try { setOut(await generate("dokumentation", prompt, u || "Verlaufsnotiz erstellen.")); }
+    try {
+      setOut(await generate("dokumentation", prompt, u || "Verlaufsnotiz erstellen.", {
+        audio: audio,
+        style: style,
+      }));
+    }
     catch (e) { setOut("Fehler: " + e.message); }
     setBusy(false);
   }

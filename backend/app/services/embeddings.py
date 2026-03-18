@@ -117,7 +117,7 @@ async def retrieve_style_examples(
                   AND dokumenttyp  = :dokumenttyp
                   AND embedding    IS NOT NULL
                   {exclude_clause}
-                ORDER BY embedding <=> :vec::vector
+                ORDER BY embedding <=> CAST(:vec AS vector)
                 LIMIT :k
             """)
             rows = await db.execute(

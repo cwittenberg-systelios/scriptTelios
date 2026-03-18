@@ -912,3 +912,165 @@ class TestEchteDateien:
                 },
             )
         assert r.status_code == 200
+
+# ══════════════════════════════════════════════════════════════════
+# 11. JOB-QUEUE
+# ══════════════════════════════════════════════════════════════════
+
+class TestJobQueue:
+    """Tests fuer den asynchronen Job-Queue-Endpunkt."""
+
+    def test_job_erstellen_dokumentation(self, mock_llm, mock_transcribe):
+        """POST /api/jobs/generate gibt sofort job_id zurueck."""
+        r = client.post(
+            "/api/jobs/generate",
+            data={
+                "workflow":   "dokumentation",
+                "prompt":     "Erstelle eine Verlaufsnotiz.",
+                "transcript": TXT_TRANSKRIPT.read_text(encoding="utf-8"),
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "job_id" in data
+        assert data["status"] == "pending"
+        assert len(data["job_id"]) == 32  # uuid hex
+
+    def test_job_status_abfragen(self, mock_llm):
+        """GET /api/jobs/{job_id} gibt Job-Status zurueck."""
+        # Job erstellen
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "dokumentation", "prompt": "test", "transcript": "test"},
+        )
+        job_id = r.json()["job_id"]
+
+        # Status abfragen
+        r2 = client.get(f"/api/jobs/{job_id}")
+        assert r2.status_code == 200
+        data = r2.json()
+        assert data["job_id"] == job_id
+        assert data["status"] in ("pending", "running", "done", "error")
+        assert "created_at" in data
+        assert "workflow" in data
+
+    def test_job_nicht_gefunden(self):
+        """GET /api/jobs/unbekannt gibt 404 zurueck."""
+        r = client.get("/api/jobs/nichtvorhandenejobid123")
+        assert r.status_code == 404
+
+    def test_job_liste(self, mock_llm):
+        """GET /api/jobs listet alle Jobs auf."""
+        # Mindestens einen Job erstellen
+        client.post(
+            "/api/jobs/generate",
+            data={"workflow": "dokumentation", "prompt": "test", "transcript": "test"},
+        )
+        r = client.get("/api/jobs")
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
+        assert len(r.json()) >= 1
+
+    def test_job_alle_workflows(self, mock_llm):
+        """Alle 4 Workflows koennen als Jobs gestartet werden."""
+        for workflow in ["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]:
+            r = client.post(
+                "/api/jobs/generate",
+                data={"workflow": workflow, "prompt": "test", "transcript": "test"},
+            )
+            assert r.status_code == 200, f"Workflow {workflow} fehlgeschlagen"
+            assert "job_id" in r.json()
+
+    def test_job_ungültiger_workflow(self):
+        """Ungültiger Workflow wird abgelehnt."""
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "unbekannt", "prompt": "test"},
+        )
+        assert r.status_code == 422
+
+    def test_job_mit_audio(self, mock_llm, mock_transcribe):
+        """Job mit Audio-Upload wird korrekt gestartet."""
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "dokumentation", "prompt": "test"},
+            files={"audio": ("test.wav", AUDIO_KURZ.read_bytes(), "audio/wav")},
+        )
+        assert r.status_code == 200
+        assert "job_id" in r.json()
+
+    def test_job_mit_selbstauskunft(self, mock_llm, mock_extract_text):
+        """Job mit Selbstauskunft-PDF wird korrekt gestartet."""
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "anamnese", "prompt": "test", "diagnosen": "F32.1"},
+            files={"selbstauskunft": (
+                "selbst.pdf", PDF_SELBST_DIG.read_bytes(), "application/pdf"
+            )},
+        )
+        assert r.status_code == 200
+        assert "job_id" in r.json()
+
+    def test_job_ergebnis_schema(self, mock_llm):
+        """Abgeschlossener Job enthaelt alle erwarteten Felder."""
+        import time
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "dokumentation", "prompt": "test", "transcript": "test"},
+        )
+        job_id = r.json()["job_id"]
+
+        # Kurz warten bis Job abgeschlossen
+        for _ in range(10):
+            time.sleep(0.5)
+            poll = client.get(f"/api/jobs/{job_id}")
+            if poll.json()["status"] in ("done", "error"):
+                break
+
+        data = poll.json()
+        expected_fields = [
+            "job_id", "workflow", "status", "created_at",
+            "started_at", "finished_at", "duration_s"
+        ]
+        for field in expected_fields:
+            assert field in data, f"Feld fehlt: {field}"
+
+    def test_job_queue_service_direkt(self):
+        """Job-Queue Service-Klasse direkt testen."""
+        from app.services.job_queue import job_queue, JobStatus
+
+        job = job_queue.create_job("dokumentation", "Test-Job")
+        assert job.status == JobStatus.PENDING
+        assert job.job_id is not None
+        assert len(job.job_id) == 32
+
+        # Job wiederfinden
+        found = job_queue.get_job(job.job_id)
+        assert found is not None
+        assert found.job_id == job.job_id
+
+        # to_dict
+        d = job.to_dict()
+        assert d["status"] == "pending"
+        assert d["workflow"] == "dokumentation"
+        assert d["description"] == "Test-Job"
+
+    def test_prompts_kein_gespraechspartner(self):
+        """System-Prompts enthalten keine Formulierung als Gespraechspartner."""
+        from app.services.prompts import BASE_PROMPTS
+        verboten = [
+            "Ich bin ein Computerprogramm",
+            "ich bin nicht in der Lage",
+            "kann ich nicht helfen",
+        ]
+        for workflow, prompt in BASE_PROMPTS.items():
+            for v in verboten:
+                assert v.lower() not in prompt.lower(), \
+                    f"Workflow '{workflow}' enthaelt verbotene Formulierung: '{v}'"
+
+    def test_prompts_dokumentationssystem(self):
+        """Alle Prompts bezeichnen das System als Dokumentationssystem."""
+        from app.services.prompts import BASE_PROMPTS
+        for workflow, prompt in BASE_PROMPTS.items():
+            assert "Dokumentationssystem" in prompt, \
+                f"Workflow '{workflow}' fehlt 'Dokumentationssystem' im Prompt"

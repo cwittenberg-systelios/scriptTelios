@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api import transcribe, generate, documents, health
-from app.api import style_embeddings
+from app.api import style_embeddings, jobs
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -48,6 +48,7 @@ app.include_router(transcribe.router,        prefix="/api", tags=["Transkription
 app.include_router(generate.router,          prefix="/api", tags=["Generierung"])
 app.include_router(documents.router,         prefix="/api", tags=["Dokumente"])
 app.include_router(style_embeddings.router,  prefix="/api", tags=["Stilprofil"])
+app.include_router(jobs.router,              prefix="/api", tags=["Jobs"])
 
 # Frontend-Bundle ausliefern (gebaut mit: cd frontend && npm run build)
 # Erreichbar unter: http://systelios-backend:8000/static/systelios.js
