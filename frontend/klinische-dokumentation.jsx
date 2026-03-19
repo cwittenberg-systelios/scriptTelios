@@ -51,39 +51,11 @@ const S = `
     min-height: 100%;
   }
 
-  .sidebar-brand {
-    padding: 24px 20px 20px;
-    border-bottom: 1px solid rgba(255,255,255,0.10);
-  }
-  .brand-logo-text {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-    font-size: 20px; font-weight: 700;
-    color: #fff; letter-spacing: 0.01em;
-    line-height: 1.1;
-  }
-  .brand-logo-text em {
-    font-style: normal;
-    color: rgba(255,255,255,0.50);
-    font-weight: 300;
-  }
-  .brand-sub {
-    font-size: 11px; font-weight: 300;
-    color: rgba(255,255,255,0.45);
-    margin-top: 6px; line-height: 1.5;
-    letter-spacing: 0.02em;
-  }
-  .brand-divider {
-    width: 28px; height: 2px;
-    background: var(--st-red);
-    margin: 8px 0 0;
-    border-radius: 1px;
-  }
-
   .sidebar-section-label {
     font-size: 10px; font-weight: 700;
     letter-spacing: 0.16em; text-transform: uppercase;
     color: rgba(255,255,255,0.28);
-    padding: 20px 20px 8px;
+    padding: 24px 20px 8px;
   }
 
   .nav-item {
@@ -1233,14 +1205,6 @@ export default function App() {
       <style>{S}</style>
 
       <div className="sidebar">
-        <div className="sidebar-brand">
-          <div className="brand-logo-text">sys<em>Telios</em></div>
-          <div className="brand-sub">
-            Klinik f&#252;r Psychosomatik<br />und Psychotherapie
-          </div>
-          <div className="brand-divider" />
-        </div>
-
         <div className="sidebar-section-label">KI-Dokumentation</div>
 
         {NAVS.map((n) => (
