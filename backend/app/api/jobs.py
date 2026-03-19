@@ -4,7 +4,7 @@ GET  /api/jobs            – Alle Jobs auflisten (optional)
 """
 import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -42,7 +42,7 @@ async def list_jobs():
 @router.post("/jobs/generate")
 async def create_generate_job(
     background_tasks: BackgroundTasks,
-    workflow:       Annotated[str,  Form()],
+    workflow:       Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "entlassbericht"], Form()],
     prompt:         Annotated[str,  Form()],
     therapeut_id:   Annotated[Optional[str], Form()] = None,
     diagnosen:      Annotated[Optional[str], Form()] = None,

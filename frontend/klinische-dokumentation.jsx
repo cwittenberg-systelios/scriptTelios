@@ -432,53 +432,59 @@ const S = `
 `;
 
 // ── Prompts ─────────────────────────────────────────────────────
-const P_DOKU = `Du bist ein erfahrener psychosomatischer Therapeut der sysTelios Klinik. Erstelle eine strukturierte Verlaufsnotiz aus dem Gespraechsinhalt.
+const P_DOKU = `Du bist systemischer Psychotherapeut in der sysTelios Klinik für Psychosomatik und Psychotherapie. Erstelle eine Gesprächsdokumentation in Fließtext mit folgenden Abschnitten:
 
-Struktur:
-1. Datum und Gespraechsart
-2. Hauptthemen des Gespraechs
-3. Therapeutische Interventionen und Haltung
-4. Reaktionen und Entwicklungsschritte des Klienten
-5. Vereinbarungen und naechste Schritte
+Auftragsklärung
+Thema und Ziele des Gesprächs – worum ging es, was sollte erreicht werden?
 
-Stil: Klar, praezise, fachlich korrekt, ressourcenorientiert.`;
+Relevante Gesprächsinhalte
+Wichtige Kontextinformationen über Symptome, dahinterliegende Bedürfnisse, beteiligte Personen und deren Verhaltensmuster.
 
-const P_ANAMNESE = `Du bist ein erfahrener Arzt der sysTelios Klinik. Erstelle Anamnese und AMDP-konformen psychopathologischen Befund.
+Hypothesen und Entwicklungsperspektiven
+Hypothesen über Sinnzusammenhänge und Ursachen, Lösungsideen und -optionen aus systemischer Sicht.
 
-ANAMNESE:
-- Vorstellungsanlass und Hauptbeschwerde
-- Aktuelle Erkrankung (Beginn, Verlauf, ausloesende Faktoren)
-- Psychiatrische Vorgeschichte
-- Somatische Vorgeschichte und Medikation
-- Familienanamnese
-- Sozialanamnese (Herkunft, Bildung, Beruf, Beziehung, Kinder)
-- Vegetativum / Suchtmittelanamnese
+Einladungen
+Todos, Aufgaben, Übungen oder Impulse, die der Klientin/dem Klienten mitgegeben wurden.
+
+Stil: Fließtext, professionell, systemisch-wertschätzend, ressourcenorientiert. Keine Aufzählungen außer bei den Einladungen.`;
+
+const P_ANAMNESE = `Du bist systemischer Psychotherapeut in der sysTelios Klinik für Psychosomatik und Psychotherapie. Erstelle Anamnese und psychopathologischen Befund aus systemischer Perspektive.
+
+ANAMNESE (Fließtext):
+Beschreibe den Vorstellungsanlass und die Hauptbeschwerden im Kontext des sozialen Systems der Klientin/des Klienten. Gehe ein auf: Beginn und Verlauf der Beschwerden, auslösende und aufrechterhaltende Faktoren im Familien- und Beziehungskontext, psychiatrische und somatische Vorgeschichte, Medikation, Familienanamnese mit Blick auf Muster und Überzeugungen, Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungen, Kinder), Schlaf, Ernährung, Bewegung, Suchtmittel.
 
 PSYCHOPATHOLOGISCHER BEFUND (AMDP):
-Bewusstsein | Orientierung | Aufmerksamkeit | Gedaechtnis | Formales Denken | Inhaltliches Denken | Wahrnehmung | Ich-Erleben | Affektivitaet | Antrieb | Psychomotorik | Suizidalitaet/Selbstverletzung
+Bewusstsein | Orientierung | Aufmerksamkeit | Gedächtnis | Formales Denken | Inhaltliches Denken | Wahrnehmung | Ich-Erleben | Affektivität | Antrieb | Psychomotorik | Suizidalität/Selbstverletzung
+
+SYSTEMISCHE EINSCHÄTZUNG:
+Hypothesen zu Sinnzusammenhängen, Funktionen der Symptome im System, relevante Beziehungsmuster und Ressourcen.
 
 Diagnosen: {diagnosen}`;
 
-const P_VERL = `Du bist ein erfahrener Arzt der sysTelios Klinik. Fuelle den Verlaengerungsantrag vollstaendig und begruendet aus.
+const P_VERL = `Du bist systemischer Psychotherapeut in der sysTelios Klinik für Psychosomatik und Psychotherapie. Verfasse die Begründung für eine Verlängerung des stationären Aufenthalts.
 
-Achte auf:
-- Medizinische Notwendigkeit der Verlaengerung
-- Bisheriger Behandlungsverlauf und erzielte Fortschritte
-- Noch ausstehende Therapieziele (konkret benennen)
-- Begruendung des weiteren stationaeren Behandlungsbedarfs
-- Verlauf und Prognose`;
+Beschreibe im Fließtext:
+– den bisherigen Behandlungsverlauf aus systemischer Sicht: welche Themen wurden bearbeitet, welche Veränderungen sind erkennbar, welche Muster haben sich gezeigt?
+– die medizinische und therapeutische Notwendigkeit der Verlängerung: was ist noch offen, welche Ziele wurden noch nicht erreicht?
+– konkrete ausstehende Therapieziele, insbesondere bezogen auf das soziale System, Beziehungsgestaltung und Alltagsintegration
+– die Begründung des weiteren stationären Bedarfs gegenüber ambulanter Versorgung
+– Prognose und voraussichtlicher weiterer Verlauf
 
-const P_ENTL = `Du bist ein erfahrener Arzt der sysTelios Klinik. Erstelle einen vollstaendigen Entlassbericht gemaess der Vorlage.
+Stil: Fachlich, klar begründet, systemisch-ressourcenorientiert.`;
+
+const P_ENTL = `Du bist systemischer Psychotherapeut in der sysTelios Klinik für Psychosomatik und Psychotherapie. Erstelle einen vollständigen Entlassbericht gemäß der vorliegenden Vorlage.
 
 Struktur:
 1. Aufnahme- und Entlassdaten, Verweildauer
 2. Aufnahmegrund und Hauptdiagnosen (ICD-10/11)
 3. Psychischer und somatischer Aufnahmebefund
-4. Behandlungsverlauf (Therapiemassnahmen, Verlauf, Krisen)
+4. Behandlungsverlauf – beschreibe die wesentlichen Themen, systemischen Hypothesen, therapeutischen Interventionen, erlebten Krisen und Entwicklungsschritte im Fließtext
 5. Psychischer Entlassbefund
-6. Epikrise und Beurteilung
-7. Empfehlungen und Weiteres Procedere
-8. Medikation bei Entlassung`;
+6. Systemische Epikrise – Einschätzung der Symptomfunktion im Familien- und Beziehungssystem, relevante Muster, Ressourcen und offene Fragen
+7. Empfehlungen und weiteres Procedere, insbesondere zur ambulanten Weiterbehandlung und Systemeinbindung
+8. Medikation bei Entlassung
+
+Stil: Fließtext, fachlich, systemisch-wertschätzend, ressourcenorientiert.`;
 
 // ── Helpers ──────────────────────────────────────────────────────
 function Dropzone({ label, hint, accept, file, onFile, icon }) {
@@ -669,7 +675,7 @@ function P1({ toast }) {
       </div>
       <div className="page-body">
         <div className="workflow">
-          <Card num="A" title="Gesprächsmaterial" badge="opt">
+          <Card num="A" title="Gesprächsmaterial" badge="opt" open={true}>
             <div className="upload-grid">
               <div>
                 <div className="upload-col-label">Audio-Aufnahme</div>
@@ -687,18 +693,18 @@ function P1({ toast }) {
             </div>
           </Card>
 
-          <Card num="B" title="Wichtige Inhalte als Stichpunkte" badge="opt">
+          <Card num="B" title="Stichpunkte" badge="opt" open={false}>
             <label className="field-label">Relevante Themen und Beobachtungen</label>
             <textarea rows={4} placeholder={"- Bericht ueber das Wochenende\n- Schlafprobleme anhaltend\n- Fortschritt bei Expositionsuebung ..."} value={bullets} onChange={(e) => setBullets(e.target.value)} />
             <div className="field-note">Ergaenzt oder ersetzt das Transkript bei Bedarf</div>
           </Card>
 
-          <Card num="C" title="Stilvorlage (Beispieltext des Therapeuten)" badge="opt">
+          <Card num="C" title="Stilvorlage" badge="opt" open={false}>
             <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
             <div className="info-note">Der Schreibstil des hochgeladenen Textes wird bei der Generierung beruecksichtigt.</div>
           </Card>
 
-          <Card num="D" title="Prompt anpassen">
+          <Card num="D" title="Prompt anpassen" open={false}>
             <PromptEditor value={prompt} onChange={setPrompt} def={P_DOKU} />
           </Card>
 
@@ -763,7 +769,7 @@ function P2({ toast }) {
             </div>
           </Card>
 
-          <Card num="B" title="Aufnahmegespraech" badge="opt">
+          <Card num="B" title="Aufnahmegespraech" badge="opt" open={false}>
             <div className="upload-grid">
               <div>
                 <div className="upload-col-label">Audio-Aufnahme</div>
@@ -787,11 +793,11 @@ function P2({ toast }) {
             <div className="field-note">Enter oder Komma zum Hinzufuegen — z.B. F32.1, F41.1, Z73.0</div>
           </Card>
 
-          <Card num="D" title="Stilvorlage (Beispieltext des Therapeuten)" badge="opt">
+          <Card num="D" title="Stilvorlage" badge="opt" open={false}>
             <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
           </Card>
 
-          <Card num="E" title="Prompt anpassen">
+          <Card num="E" title="Prompt anpassen" open={false}>
             <PromptEditor value={prompt} onChange={setPrompt} def={P_ANAMNESE} />
           </Card>
 
@@ -844,11 +850,11 @@ function P3({ toast }) {
             <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — alle Verlaufsnotizen des Aufenthalts" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
           </Card>
 
-          <Card num="C" title="Stilvorlage (Beispieltext des Therapeuten)" badge="opt">
+          <Card num="C" title="Stilvorlage" badge="opt" open={false}>
             <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
           </Card>
 
-          <Card num="D" title="Prompt anpassen">
+          <Card num="D" title="Prompt anpassen" open={false}>
             <PromptEditor value={prompt} onChange={setPrompt} def={P_VERL} />
           </Card>
 
@@ -901,11 +907,11 @@ function P4({ toast }) {
             <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — gesamte Dokumentation des Aufenthalts" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
           </Card>
 
-          <Card num="C" title="Stilvorlage (Beispieltext des Therapeuten)" badge="opt">
+          <Card num="C" title="Stilvorlage" badge="opt" open={false}>
             <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
           </Card>
 
-          <Card num="D" title="Prompt anpassen">
+          <Card num="D" title="Prompt anpassen" open={false}>
             <PromptEditor value={prompt} onChange={setPrompt} def={P_ENTL} />
           </Card>
 

@@ -157,7 +157,6 @@ def mock_transcribe():
         "word_count": 37,
     }
     with patch("app.services.transcription.transcribe_audio", new=AsyncMock(return_value=mock_result)), \
-         patch("app.api.transcribe.transcribe_audio",          new=AsyncMock(return_value=mock_result)), \
          patch("app.api.generate.transcribe_audio",            new=AsyncMock(return_value=mock_result)):
         yield
 
