@@ -54,6 +54,42 @@ os.makedirs("/tmp/systelios_test_uploads", exist_ok=True)
 os.makedirs("/tmp/systelios_test_outputs", exist_ok=True)
 
 
+# ── Ollama Vision Setup (session-scoped, einmalig) ────────────────────────────
+
+@pytest.fixture(scope="session", autouse=True)
+def ollama_vision_setup():
+    """
+    Zieht 'llava' einmalig pro Test-Session wenn Ollama erreichbar ist.
+    Wird automatisch vor allen Tests ausgefuehrt (autouse=True).
+    Schlaegt Ollama nicht erreichbar ist still fehl – Tests laufen trotzdem.
+    """
+    import subprocess
+    import urllib.request
+
+    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+    # Pruefen ob Ollama ueberhaupt laeuft
+    try:
+        urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=3)
+    except Exception:
+        # Ollama nicht erreichbar – kein Pull moeglich, Tests laufen mit Mocks
+        return
+
+    # llava laden falls nicht vorhanden
+    try:
+        result = subprocess.run(
+            ["ollama", "pull", "llava"],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            print(f"\n[WARN] ollama pull llava fehlgeschlagen: {result.stderr.strip()}")
+    except FileNotFoundError:
+        # ollama-Binary nicht im PATH
+        print("\n[WARN] ollama nicht im PATH – llava wird nicht geladen")
+    except subprocess.TimeoutExpired:
+        print("\n[WARN] ollama pull llava Timeout (>5 Min) – wird uebersprungen")
+
+
 def real_file(key: str):
     """Gibt pytest.mark.skip zurueck wenn echte Datei nicht vorhanden."""
     path = REAL_FILES.get(key)

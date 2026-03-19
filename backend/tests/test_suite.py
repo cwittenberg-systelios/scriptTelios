@@ -853,7 +853,6 @@ class TestEchteDateien:
                         reason="Echte Selbstauskunft nicht vorhanden")
     def test_echte_selbstauskunft_handschrift(self):
         """Handschriftlich ausgefüllte Selbstauskunft wird durch OCR-Kette verarbeitet."""
-        from app.services.extraction import _assess_quality
         import asyncio
         with patch("app.services.extraction._check_vision_model_available",
                    new=AsyncMock(return_value=False)):
@@ -869,7 +868,6 @@ class TestEchteDateien:
                         "bitte 'ollama pull llava' ausfuehren"
                     )
                 raise
-        # Mindestanforderung: irgendwas wurde extrahiert
         assert len(result.text) > 20
         print(f"\nOCR-Methode: {result.method}, Qualität: {result.quality:.2f}")
         print(f"Extrahierter Text (erste 200 Zeichen):\n{result.text[:200]}")
