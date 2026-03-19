@@ -14,7 +14,7 @@ from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_text, extract_style_context
 from app.services.llm import generate_text
 from app.services.prompts import build_system_prompt, build_user_content
-from app.services.transcription import transcribe_audio
+import app.services.transcription as _transcription
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ async def create_generate_job(
             suffix = Path(audio_name).suffix.lower()
             audio_path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
             audio_path.write_bytes(audio_bytes)
-            tr = await transcribe_audio(audio_path)
+            tr = await _transcription.transcribe_audio(audio_path)
             audio_transcript = tr["transcript"]
 
         # 2. Dokumente extrahieren

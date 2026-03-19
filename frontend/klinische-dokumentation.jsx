@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 
 // sysTelios CI – angepasst an Confluence-Intranet-Screenshot:
 // Sidebar: Dunkelgrau/Anthrazit (#2c2c2c) / Highlight: Dunkelrot #8b1a1a / Neutral Grau-Töne / System-Schrift
@@ -51,6 +52,8 @@ const S = `
     flex-direction: column;
     z-index: 200;
     min-height: 100%;
+    border-radius: 8px 0 0 8px;
+    overflow: hidden;
   }
 
   .sidebar-section-label {
@@ -114,7 +117,7 @@ const S = `
   }
 
   /* ── MAIN ── */
-  .main { flex: 1; min-height: 100vh; overflow-x: hidden; }
+  .main { flex: 1; min-height: 100vh; overflow-x: hidden; border-radius: 0 8px 8px 0; }
 
   .page-header {
     background: var(--st-sidebar);
@@ -1197,7 +1200,6 @@ export default function App() {
       minHeight:"600px",
       width:"100%",
       position:"relative",
-      overflow:"hidden",
       border:"1px solid rgba(0,0,0,0.08)",
       borderRadius:"8px"
     }}>
@@ -1319,11 +1321,12 @@ export default function App() {
         </div>
       )}
 
-      {msg && (
+      {msg && createPortal(
         <div className="toast">
           <span className="toast-dot" />
           {msg}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

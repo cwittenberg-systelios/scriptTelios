@@ -22,6 +22,7 @@ Ausfuehren:
 """
 import io
 import json
+import os
 import pytest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -852,22 +853,37 @@ class TestEchteDateien:
     @pytest.mark.skipif(not REAL_FILES["selbstauskunft_handschrift"].exists(),
                         reason="Echte Selbstauskunft nicht vorhanden")
     def test_echte_selbstauskunft_handschrift(self):
-        """Handschriftlich ausgefüllte Selbstauskunft wird durch OCR-Kette verarbeitet."""
+        """Handschriftlich ausgefüllte Selbstauskunft wird durch OCR-Kette verarbeitet.
+
+        Laeuft mit Tesseract-OCR wenn Ollama nicht verfuegbar ist.
+        Laeuft mit Ollama Vision (llava) wenn Ollama erreichbar ist.
+        """
         import asyncio
-        with patch("app.services.extraction._check_vision_model_available",
-                   new=AsyncMock(return_value=False)):
-            from app.services.extraction import extract_text_with_meta
-            try:
-                result = asyncio.run(extract_text_with_meta(
-                    REAL_FILES["selbstauskunft_handschrift"]
-                ))
-            except RuntimeError as e:
-                if "Alle Extraktionsstufen fehlgeschlagen" in str(e):
+        import urllib.request
+
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        ollama_available = False
+        try:
+            urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=3)
+            ollama_available = True
+        except Exception:
+            pass
+
+        from app.services.extraction import extract_text_with_meta
+        try:
+            result = asyncio.run(extract_text_with_meta(
+                REAL_FILES["selbstauskunft_handschrift"]
+            ))
+        except RuntimeError as e:
+            if "Alle Extraktionsstufen fehlgeschlagen" in str(e):
+                if not ollama_available:
                     pytest.skip(
-                        "OCR-Kette unzureichend (kein Ollama Vision verfuegbar) – "
-                        "bitte 'ollama pull llava' ausfuehren"
+                        "Tesseract-OCR unzureichend und Ollama nicht erreichbar – "
+                        "bitte Ollama starten und 'ollama pull llava' ausfuehren"
                     )
                 raise
+            raise
+
         assert len(result.text) > 20
         print(f"\nOCR-Methode: {result.method}, Qualität: {result.quality:.2f}")
         print(f"Extrahierter Text (erste 200 Zeichen):\n{result.text[:200]}")
