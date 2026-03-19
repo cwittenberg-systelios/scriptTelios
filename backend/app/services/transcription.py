@@ -210,8 +210,115 @@ async def _transcribe_local(file_path: Path) -> dict:
         raise RuntimeError(f"Transkription fehlgeschlagen: {e}") from e
 
 
+def _assign_speakers(segments) -> str:
+    """
+    Einfache Sprecher-Heuristik via Pausen zwischen Segmenten.
+
+    Strategie: Eine Pause > SPEAKER_CHANGE_PAUSE_S zwischen zwei Segmenten
+    signalisiert einen Sprecherwechsel. Zwei Sprecher werden abwechselnd
+    als [A] und [B] markiert.
+
+    Nicht perfekt – aber fuer Zweigespraeche (Therapeut/Klient) ausreichend
+    um dem LLM den Gespraechsverlauf zu strukturieren.
+    """
+    SPEAKER_CHANGE_PAUSE_S = 1.2  # Pause ab der ein Wechsel angenommen wird
+
+    result_lines = []
+    current_speaker = "A"
+    last_end = None
+
+    for seg in segments:
+        # Sprecherwechsel bei langer Pause
+        if last_end is not None:
+            pause = seg.start - last_end
+            if pause >= SPEAKER_CHANGE_PAUSE_S:
+                current_speaker = "B" if current_speaker == "A" else "A"
+
+        text = seg.text.strip()
+        if text:
+            result_lines.append(f"[{current_speaker}]: {text}")
+
+        last_end = seg.end
+
+    return "\n".join(result_lines)
+
+
+def _preprocess_transcript(text: str) -> str:
+    """
+    Bereinigt das Whisper-Transkript ohne inhaltliche Informationen zu verlieren.
+
+    Schritt 1 – Füllwörter entfernen:
+      Einzeln stehende Laute und Geraeusche die Whisper transkribiert
+      aber keine Information tragen: äh, ähm, hm, mhm, ja ja, genau genau ...
+      Nur wenn sie alleine in einem Segment stehen oder am Satzanfang/-ende.
+
+    Schritt 2 – Exakte Duplikat-Segmente entfernen:
+      Whisper halluziniert bei Stille manchmal denselben Satz mehrfach.
+      Aufeinanderfolgende identische Zeilen werden auf eine reduziert.
+
+    Schritt 3 – Sehr kurze bedeutungslose Segmente entfernen:
+      Einzel-Zeichen oder reine Interpunktion ohne Text.
+    """
+    import re
+
+    # Füllwörter die als komplettes Segment auftreten (case-insensitive)
+    FILLER_PATTERN = re.compile(
+        r"^(\[.\]:\s*)?"          # optionaler Sprecher-Marker
+        r"(äh+|ähm+|hm+|mhm+|mmh+|hmm+|uh+|uhm+|em+|"
+        r"ja\.?|nein\.?|okay\.?|ok\.?|"
+        r"genau\.?|richtig\.?|stimmt\.?|"
+        r"gut\.?|super\.?|alles klar\.?)"
+        r"\s*$",
+        re.IGNORECASE,
+    )
+
+    # Füllwörter am Satzanfang (nach Sprecher-Marker)
+    FILLER_START = re.compile(
+        r"(\[.\]:\s*)(äh+\s+|ähm+\s+|hm+\s+|mhm+\s+|mmh+\s+)",
+        re.IGNORECASE,
+    )
+
+    lines = text.splitlines()
+    result = []
+    prev_clean = None
+
+    for line in lines:
+        # Füllwort-Zeile komplett überspringen
+        if FILLER_PATTERN.match(line.strip()):
+            continue
+
+        # Füllwort am Satzanfang entfernen
+        line = FILLER_START.sub(r"\1", line)
+
+        # Sehr kurze Segmente überspringen (nur Satzzeichen, <3 Zeichen nach Marker)
+        content = re.sub(r"^\[.\]:\s*", "", line).strip()
+        if len(content) < 3:
+            continue
+
+        # Exakte Duplikate aufeinanderfolgender Zeilen entfernen
+        clean = line.strip()
+        if clean == prev_clean:
+            continue
+
+        result.append(clean)
+        prev_clean = clean
+
+    cleaned = "\n".join(result)
+
+    orig_chars = len(text)
+    new_chars  = len(cleaned)
+    if orig_chars > 0:
+        saved = (orig_chars - new_chars) / orig_chars * 100
+        logger.info(
+            "Transkript bereinigt: %d → %d Zeichen (%.1f%% reduziert)",
+            orig_chars, new_chars, saved,
+        )
+
+    return cleaned
+
+
 def _transcribe_single(file_path: Path, duration: float) -> dict:
-    """Einzelne Datei transkribieren."""
+    """Einzelne Datei transkribieren mit Sprecher-Heuristik und Vorverarbeitung."""
     model = _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
     segments, info = model.transcribe(
         str(file_path),
@@ -220,7 +327,9 @@ def _transcribe_single(file_path: Path, duration: float) -> dict:
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
     )
-    text = " ".join(s.text.strip() for s in segments)
+    segments = list(segments)
+    text = _assign_speakers(segments)
+    text = _preprocess_transcript(text)
     return {
         "transcript": text.strip(),
         "language": info.language,
@@ -233,6 +342,8 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
     """
     Lange Audiodatei in Chunks aufteilen und sequenziell transkribieren.
     Chunks werden an Stille-Grenzen geschnitten.
+    Sprecher-Zuordnung laeuft ueber alle Chunks konsistent durch.
+    Vorverarbeitung laeuft nach Zusammenfuehren aller Chunks.
     """
     logger.info(
         "Lange Aufnahme (%.1f Min) – splitte in %d-Min-Chunks",
@@ -247,8 +358,10 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
         logger.info("Audio aufgeteilt in %d Chunks", len(chunks))
 
         model = _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
-        all_texts = []
+        all_lines = []
         language = "de"
+        current_speaker = "A"
+        last_end_global = None
 
         for i, chunk_path in enumerate(chunks):
             logger.info("Transkribiere Chunk %d/%d ...", i + 1, len(chunks))
@@ -259,12 +372,30 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
                 vad_filter=True,
                 vad_parameters={"min_silence_duration_ms": 500},
             )
-            chunk_text = " ".join(s.text.strip() for s in segments)
-            if chunk_text.strip():
-                all_texts.append(chunk_text.strip())
+            segments = list(segments)
             language = info.language
 
-        full_text = " ".join(all_texts)
+            # Zeitoffset fuer diesen Chunk (aus splits berechnen)
+            chunk_offset = splits[i - 1] if i > 0 else 0.0
+
+            for seg in segments:
+                abs_start = chunk_offset + seg.start
+                abs_end   = chunk_offset + seg.end
+
+                # Sprecherwechsel bei langer Pause (auch zwischen Chunks)
+                if last_end_global is not None:
+                    pause = abs_start - last_end_global
+                    if pause >= 1.2:
+                        current_speaker = "B" if current_speaker == "A" else "A"
+
+                text = seg.text.strip()
+                if text:
+                    all_lines.append(f"[{current_speaker}]: {text}")
+
+                last_end_global = abs_end
+
+        full_text = "\n".join(all_lines)
+        full_text = _preprocess_transcript(full_text)
         return {
             "transcript": full_text.strip(),
             "language": language,
