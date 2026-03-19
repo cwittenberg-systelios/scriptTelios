@@ -11,7 +11,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 
 from app.core.files import save_upload, ALLOWED_AUDIO
 from app.models.schemas import TranscribeResponse
-from app.services.transcription import transcribe_audio
+import app.services.transcription as _transcription
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -29,9 +29,9 @@ async def transcribe(file: UploadFile = File(..., description="Audio-Datei (.mp3
     file_path = await save_upload(file, allowed_extensions=ALLOWED_AUDIO)
 
     try:
-        result = await transcribe_audio(file_path)
+        result = await _transcription.transcribe_audio(file_path)
     except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e))
 
     job_id = uuid.uuid4().hex
 
