@@ -406,7 +406,7 @@ const S = `
 `;
 
 // ── Prompts ─────────────────────────────────────────────────────
-const P_DOKU = `Du bist systemischer Psychotherapeut in der sysTelios Klinik für Psychosomatik und Psychotherapie. Erstelle eine Gesprächsdokumentation in Fließtext mit folgenden Abschnitten:
+const P_DOKU = `Erstelle eine systemische Gesprächsdokumentation in Fließtext aus dem vorliegenden Gesprächsmaterial. Strukturiere den Text in folgende Abschnitte:
 
 Auftragsklärung
 Thema und Ziele des Gesprächs – worum ging es, was sollte erreicht werden?
@@ -422,10 +422,10 @@ Todos, Aufgaben, Übungen oder Impulse, die der Klientin/dem Klienten mitgegeben
 
 Stil: Fließtext, professionell, systemisch-wertschätzend, ressourcenorientiert. Keine Aufzählungen außer bei den Einladungen.`;
 
-const P_ANAMNESE = `Du bist systemischer Psychotherapeut in der sysTelios Klinik für Psychosomatik und Psychotherapie. Erstelle Anamnese und psychopathologischen Befund aus systemischer Perspektive.
+const P_ANAMNESE = `Erstelle Anamnese und psychopathologischen Befund aus systemischer Perspektive auf Basis der vorliegenden Unterlagen.
 
 ANAMNESE (Fließtext):
-Beschreibe den Vorstellungsanlass und die Hauptbeschwerden im Kontext des sozialen Systems der Klientin/des Klienten. Gehe ein auf: Beginn und Verlauf der Beschwerden, auslösende und aufrechterhaltende Faktoren im Familien- und Beziehungskontext, psychiatrische und somatische Vorgeschichte, Medikation, Familienanamnese mit Blick auf Muster und Überzeugungen, Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungen, Kinder), Schlaf, Ernährung, Bewegung, Suchtmittel.
+Vorstellungsanlass und Hauptbeschwerden im Kontext des sozialen Systems. Beginn und Verlauf der Beschwerden, auslösende und aufrechterhaltende Faktoren im Familien- und Beziehungskontext, psychiatrische und somatische Vorgeschichte, Medikation, Familienanamnese mit Blick auf Muster und Überzeugungen, Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungen, Kinder), Schlaf, Ernährung, Bewegung, Suchtmittel.
 
 PSYCHOPATHOLOGISCHER BEFUND (AMDP):
 Bewusstsein | Orientierung | Aufmerksamkeit | Gedächtnis | Formales Denken | Inhaltliches Denken | Wahrnehmung | Ich-Erleben | Affektivität | Antrieb | Psychomotorik | Suizidalität/Selbstverletzung
@@ -435,7 +435,7 @@ Hypothesen zu Sinnzusammenhängen, Funktionen der Symptome im System, relevante 
 
 Diagnosen: {diagnosen}`;
 
-const P_VERL = `Du bist systemischer Psychotherapeut in der sysTelios Klinik für Psychosomatik und Psychotherapie. Verfasse die Begründung für eine Verlängerung des stationären Aufenthalts.
+const P_VERL = `Erstelle die Begründung für eine Verlängerung des stationären Aufenthalts auf Basis der Verlaufsdokumentation.
 
 Beschreibe im Fließtext:
 – den bisherigen Behandlungsverlauf aus systemischer Sicht: welche Themen wurden bearbeitet, welche Veränderungen sind erkennbar, welche Muster haben sich gezeigt?
@@ -446,15 +446,15 @@ Beschreibe im Fließtext:
 
 Stil: Fachlich, klar begründet, systemisch-ressourcenorientiert.`;
 
-const P_ENTL = `Du bist systemischer Psychotherapeut in der sysTelios Klinik für Psychosomatik und Psychotherapie. Erstelle einen vollständigen Entlassbericht gemäß der vorliegenden Vorlage.
+const P_ENTL = `Erstelle einen vollständigen Entlassbericht aus der vorliegenden Verlaufsdokumentation gemäß der bereitgestellten Vorlage.
 
 Struktur:
 1. Aufnahme- und Entlassdaten, Verweildauer
 2. Aufnahmegrund und Hauptdiagnosen (ICD-10/11)
 3. Psychischer und somatischer Aufnahmebefund
-4. Behandlungsverlauf – beschreibe die wesentlichen Themen, systemischen Hypothesen, therapeutischen Interventionen, erlebten Krisen und Entwicklungsschritte im Fließtext
+4. Behandlungsverlauf – wesentliche Themen, systemische Hypothesen, therapeutische Interventionen, Krisen und Entwicklungsschritte im Fließtext
 5. Psychischer Entlassbefund
-6. Systemische Epikrise – Einschätzung der Symptomfunktion im Familien- und Beziehungssystem, relevante Muster, Ressourcen und offene Fragen
+6. Systemische Epikrise – Symptomfunktion im Familien- und Beziehungssystem, relevante Muster, Ressourcen und offene Fragen
 7. Empfehlungen und weiteres Procedere, insbesondere zur ambulanten Weiterbehandlung und Systemeinbindung
 8. Medikation bei Entlassung
 

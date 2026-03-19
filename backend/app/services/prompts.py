@@ -100,11 +100,13 @@ def build_system_prompt(
 ) -> str:
     """
     Baut den finalen System-Prompt zusammen:
-    1. Basis-Prompt (Standard oder angepasst)
-    2. Stilprofil des Therapeuten (falls vorhanden)
-    3. Sprachliche Anweisung
+    1. Rolle-Präambel (verhindert persönliche Beratungsantworten)
+    2. Custom-Prompt des Therapeuten ODER Basis-Prompt des Workflows
+    3. Stilprofil des Therapeuten (falls vorhanden)
+    4. Abschliessende Anweisung
     """
-    base = ROLE_PREAMBLE + "\n\n" + (custom_prompt or BASE_PROMPTS.get(workflow, ""))
+    base = custom_prompt.strip() if custom_prompt and custom_prompt.strip() \
+        else BASE_PROMPTS.get(workflow, "")
 
     # Diagnosen einfuegen
     if diagnosen:
@@ -113,7 +115,7 @@ def build_system_prompt(
         diag_str = "noch nicht festgelegt"
     base = base.replace("{diagnosen}", diag_str)
 
-    parts = [base]
+    parts = [ROLE_PREAMBLE, base]
 
     # Stilprofil anhaengen
     if style_context and style_context.strip():

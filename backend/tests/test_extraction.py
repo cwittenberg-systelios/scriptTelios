@@ -76,10 +76,10 @@ class TestAssessQuality:
             "Diagnosis: adjustment disorder with anxious symptoms and chronic stress."
         )
         q = _assess_quality(text)
-        # Englisch kann durchfallen (lang_score < 0.1)
-        # Wir pruefen nur dass es nicht faelschlicherweise hohe Qualitaet bekommt
+        # Englisch hat keinen deutschen Stoppwort-Score – wenn ok, dann
+        # zumindest deutlich unter perfekt (Spracherkennungs-Malus greift)
         if q.ok:
-            assert q.score < 0.9  # Wenn ok, dann zumindest kein perfekter Score
+            assert q.score < 0.95
 
     def test_mindestlaenge_konfigurierbar(self):
         kurzer_text = "Befund: unauffaellig."

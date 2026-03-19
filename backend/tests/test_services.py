@@ -339,10 +339,13 @@ class TestEmbeddingsService:
         from app.core.database import engine
         from app.services.embeddings import retrieve_style_examples
 
-        async with AsyncSession(engine) as db:
-            result = await retrieve_style_examples(
-                db, "unbekannter_therapeut", "dokumentation", "Testtext"
-            )
+        # pgvector-Operator <=> nicht in SQLite verfuegbar –
+        # semantische Suche wird gemockt, nur der Fallback-Pfad getestet
+        with patch("app.services.embeddings.get_embedding", new=AsyncMock(return_value=None)):
+            async with AsyncSession(engine) as db:
+                result = await retrieve_style_examples(
+                    db, "unbekannter_therapeut", "dokumentation", "Testtext"
+                )
 
         assert result == ""
 

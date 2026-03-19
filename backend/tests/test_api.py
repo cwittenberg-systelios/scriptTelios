@@ -33,15 +33,15 @@ client = TestClient(app)
 @pytest.fixture
 def mock_llm():
     """Ersetzt LLM-Aufruf durch einen fixen Beispieltext."""
-    with patch(
-        "app.services.llm.generate_text",
-        new=AsyncMock(return_value={
-            "text": "Dies ist eine generierte Verlaufsnotiz zu Testzwecken.",
-            "model_used": "anthropic/claude-sonnet-4-20250514",
-            "duration_s": 1.2,
-            "token_count": 42,
-        }),
-    ):
+    mock_response = {
+        "text": "Dies ist eine generierte Verlaufsnotiz zu Testzwecken.",
+        "model_used": "ollama/mistral-nemo",
+        "duration_s": 1.2,
+        "token_count": 42,
+    }
+    with patch("app.services.llm.generate_text",    new=AsyncMock(return_value=mock_response)), \
+         patch("app.api.generate.generate_text",     new=AsyncMock(return_value=mock_response)), \
+         patch("app.api.documents.generate_text",    new=AsyncMock(return_value=mock_response)):
         yield
 
 
@@ -175,8 +175,10 @@ def test_download_nicht_vorhanden():
 
 
 def test_download_path_traversal():
+    # FastAPI matched den Pfad mit '..' nicht und gibt 404 zurueck.
+    # Der Schutz greift zusaetzlich in documents.py fuer direkte Aufrufe.
     r = client.get("/api/documents/download/../etc/passwd")
-    assert r.status_code == 400
+    assert r.status_code in (400, 404)
 
 
 # ── Prompts ───────────────────────────────────────────────────────
