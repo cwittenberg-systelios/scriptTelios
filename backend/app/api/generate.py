@@ -21,7 +21,7 @@ from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_text, extract_style_context
 from app.services.llm import generate_text
 from app.services.prompts import build_system_prompt, build_user_content
-from app.services.transcription import transcribe_audio
+import app.services.transcription as _transcription
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -112,7 +112,7 @@ async def generate_with_files(
         logger.info("Audio-Upload: %s", audio.filename)
         audio_path = await save_upload(audio, ALLOWED_AUDIO)
         try:
-            tr = await transcribe_audio(audio_path)
+            tr = await _transcription.transcribe_audio(audio_path)
             audio_transcript = tr["transcript"]
             logger.info("Transkription: %d Woerter", tr["word_count"])
         except RuntimeError as e:

@@ -3,9 +3,13 @@ import { useState, useRef, useCallback } from "react";
 // sysTelios CI – angepasst an Confluence-Intranet-Screenshot:
 // Sidebar: Dunkelgrau/Anthrazit (#2c2c2c) / Highlight: Dunkelrot #8b1a1a / Neutral Grau-Töne / System-Schrift
 const S = `
-  /* Confluence-kompatible System-Schriften – kein externer Font-Load */
-
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  /* Scoped auf #st-root – überschreibt Confluence-CSS zuverlässig */
+  #st-root, #st-root *, #st-root *::before, #st-root *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif !important;
+  }
 
   :root {
     --st-sidebar:      #2c2c2c;
@@ -30,7 +34,7 @@ const S = `
     --shadow-md:       0 4px 20px rgba(0,0,0,0.13);
   }
 
-  body {
+  #st-root {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     background: var(--st-cream);
     color: var(--st-text);
@@ -399,8 +403,8 @@ const S = `
   }
 
   /* scrollbar */
-  ::-webkit-scrollbar { width: 5px; }
-  ::-webkit-scrollbar-thumb { background: var(--st-gray-mid); border-radius: 3px; }
+  #st-root ::-webkit-scrollbar { width: 5px; }
+  #st-root ::-webkit-scrollbar-thumb { background: var(--st-gray-mid); border-radius: 3px; }
 `;
 
 // ── Prompts ─────────────────────────────────────────────────────
@@ -1192,7 +1196,7 @@ export default function App() {
   const firstRun = !backendUrl;
 
   return (
-    <div style={{
+    <div id="st-root" style={{
       display:"flex",
       flexDirection:"row",
       minHeight:"600px",
