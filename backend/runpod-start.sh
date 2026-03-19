@@ -295,8 +295,11 @@ LOG_LEVEL=INFO
 UPLOAD_DIR=/workspace/uploads
 OUTPUT_DIR=/workspace/outputs
 LOG_FILE=/workspace/systelios.log
-# RunPod-Proxy-Domain fuer CORS erlauben (Testphase)
+# Confluence-Intranet-URL fuer CORS (anpassen!):
+CONFLUENCE_URL=http://intranet.systelios.local
+# Cloudflare-Tunnel und RunPod-Proxy fuer Testphase erlauben:
 ALLOW_RUNPOD_PROXY=true
+ALLOW_CLOUDFLARE_TUNNEL=true
 ENVEOF
     echo "${OK}.env erstellt (SECRET_KEY automatisch generiert)"
 else

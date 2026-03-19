@@ -463,7 +463,6 @@ Stil: Fließtext, fachlich, systemisch-wertschätzend, ressourcenorientiert.`;
 // ── Helpers ──────────────────────────────────────────────────────
 function Dropzone({ label, hint, accept, file, onFile, icon }) {
   const [drag, setDrag] = useState(false);
-  const ref = useRef(null);
 
   function onDrop(e) {
     e.preventDefault(); setDrag(false);
@@ -480,7 +479,6 @@ function Dropzone({ label, hint, accept, file, onFile, icon }) {
       onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
       onDragLeave={() => setDrag(false)}
       onDrop={onDrop}
-      onClick={() => { if (!file && ref.current) ref.current.click(); }}
     >
       {file ? (
         <div className="dz-file">
@@ -493,7 +491,7 @@ function Dropzone({ label, hint, accept, file, onFile, icon }) {
           <div className="dz-icon">{icon}</div>
           <div className="dz-label">{label}</div>
           {hint && <div className="dz-hint">{hint}</div>}
-          <input ref={ref} type="file" accept={accept}
+          <input type="file" accept={accept}
             onChange={(e) => { if (e.target.files && e.target.files[0]) onFile(e.target.files[0]); }} />
         </>
       )}
@@ -596,7 +594,7 @@ async function generate(workflow, prompt, userContent, files = {}) {
   if (files.diagnosen) fd.append("diagnosen",      files.diagnosen);
 
   // Job starten
-  const r = await fetch(`${API_BASE}/jobs/generate`, { method: "POST", body: fd });
+  const r = await fetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
   const d = await r.json();
   if (!r.ok) throw new Error(d.detail || r.statusText);
 
@@ -607,7 +605,7 @@ async function generate(workflow, prompt, userContent, files = {}) {
   const interval = 2;
   for (let i = 0; i < maxWait / interval; i++) {
     await new Promise(res => setTimeout(res, interval * 1000));
-    const poll = await fetch(`${API_BASE}/jobs/${jobId}`);
+    const poll = await fetch(`${getApiBase()}/jobs/${jobId}`);
     const job  = await poll.json();
     if (job.status === "done")  return job.result_text || "";
     if (job.status === "error") throw new Error(job.error_msg || "Job fehlgeschlagen");
@@ -914,11 +912,15 @@ const DOKUMENTTYPEN = [
 ];
 
 // ── Confluence-Konfiguration ─────────────────────────────────────
-// API_BASE: aus window.SYSTELIOS_API_BASE (gesetzt im Confluence User Macro)
-//           Fallback auf localhost für lokale Entwicklung
-const API_BASE = (typeof window !== "undefined" && window.SYSTELIOS_API_BASE)
-  ? window.SYSTELIOS_API_BASE.replace(/\/$/, "").replace(/\/api$/, "") + "/api"
-  : "http://localhost:8000/api";
+// API_BASE: dynamisch aus localStorage/window lesen damit URL-Änderungen
+// sofort ohne Seitenneuladung greifen
+function getApiBase() {
+  const stored = localStorage.getItem("systelios_backend_url") || "";
+  const fromWindow = (typeof window !== "undefined" && window.SYSTELIOS_API_BASE) || "";
+  const raw = stored || fromWindow;
+  if (!raw) return "http://localhost:8000/api";
+  return raw.replace(/\/$/, "").replace(/\/api$/, "") + "/api";
+}
 
 // Therapeuten-Name aus Confluence AJS (gesetzt im Macro vor dem Bundle)
 function getConfluenceUser() {
@@ -954,7 +956,7 @@ function P5({ toast }) {
       fd.append("ist_statisch",  istStatisch ? "true" : "false");
       fd.append("beispiel_file", file);
 
-      const r = await fetch(`${API_BASE}/style/upload`, { method: "POST", body: fd });
+      const r = await fetch(`${getApiBase()}/style/upload`, { method: "POST", body: fd });
       if (!r.ok) {
         const err = await r.json();
         throw new Error(err.detail || r.statusText);
@@ -973,7 +975,7 @@ function P5({ toast }) {
     if (!therapeutId.trim()) return;
     setLadebusy(true);
     try {
-      const r = await fetch(`${API_BASE}/style/${encodeURIComponent(therapeutId.trim())}`);
+      const r = await fetch(`${getApiBase()}/style/${encodeURIComponent(therapeutId.trim())}`);
       if (!r.ok) throw new Error(r.statusText);
       setListe(await r.json());
     } catch (e) {
@@ -984,7 +986,7 @@ function P5({ toast }) {
 
   async function loeschen(id) {
     try {
-      const r = await fetch(`${API_BASE}/style/embedding/${id}`, { method: "DELETE" });
+      const r = await fetch(`${getApiBase()}/style/embedding/${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error((await r.json()).detail);
       toast("Beispiel gelöscht");
       await ladeListe();

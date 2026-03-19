@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     # ── CORS ──────────────────────────────────────────────────────
     # Confluence-Instanz eintragen (internes Netz):
-    # z.B. "http://confluence.intern:8090" oder "https://wiki.systelios.de"
+    # z.B. "http://intranet.systelios.local" oder "https://wiki.systelios.de"
     CONFLUENCE_URL: str = ""
 
     # Zusaetzliche CORS-Origins (kommagetrennt, fuer weitere Clients):
@@ -74,16 +74,28 @@ class Settings(BaseSettings):
     def CORS_ALLOW_ORIGIN_REGEX(self) -> str:
         """
         Regex fuer dynamische Origins die nicht vorab bekannt sind.
+
         RunPod-URLs aendern sich bei jedem Neustart (neue Pod-ID),
-        daher wird die gesamte proxy.runpod.net-Domain erlaubt.
-        Nur aktiv wenn ALLOW_RUNPOD_PROXY=true gesetzt ist.
+        Cloudflare-Tunnel-URLs aendern sich ebenfalls bei jedem Neustart.
+        Beide koennen per Flag aktiviert werden.
+        In Produktion (feste URL) beide Flags deaktivieren und
+        stattdessen CONFLUENCE_URL setzen.
         """
+        patterns = []
         if self.ALLOW_RUNPOD_PROXY:
-            return r"https://.*\.proxy\.runpod\.net"
+            patterns.append(r"https://[\w-]+\.proxy\.runpod\.net")
+        if self.ALLOW_CLOUDFLARE_TUNNEL:
+            patterns.append(r"https://[\w-]+\.trycloudflare\.com")
+        if patterns:
+            return "|".join(f"({p})" for p in patterns)
         return ""
 
-    # RunPod-Proxy-Domain erlauben (nur fuer Testphase – in Produktion deaktivieren)
+    # RunPod-Proxy-Domain erlauben (nur fuer Testphase)
     ALLOW_RUNPOD_PROXY: bool = False
+
+    # Cloudflare-Tunnel-Domain erlauben (nur fuer Testphase)
+    # Aktivieren wenn Backend per 'cloudflared tunnel' erreichbar ist
+    ALLOW_CLOUDFLARE_TUNNEL: bool = False
 
     # ── Logging ───────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
