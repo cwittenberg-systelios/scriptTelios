@@ -12,13 +12,51 @@ Speicherung: In-Memory (reicht fuer Testphase).
 Produktion: PostgreSQL-Tabelle jobs (Modell bereits in db.py vorhanden).
 """
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Coroutine, Optional
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
+
+# Separater Performance-Logger – schreibt JSON-Zeilen in eigene Datei
+perf_logger = logging.getLogger("systelios.performance")
+
+
+def _setup_perf_logger() -> None:
+    """Richtet den Performance-Logger mit eigenem Logfile ein."""
+    perf_log_path = Path(settings.LOG_FILE).parent / "performance.log"
+    try:
+        handler = logging.FileHandler(str(perf_log_path), encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(message)s"))  # nur die JSON-Zeile
+        perf_logger.addHandler(handler)
+        perf_logger.setLevel(logging.INFO)
+        perf_logger.propagate = False  # nicht ins Haupt-Log schreiben
+    except OSError:
+        pass
+
+
+_setup_perf_logger()
+
+
+def _log_performance(job: "Job", queue_size: int) -> None:
+    """Schreibt einen JSON-Eintrag ins Performance-Log."""
+    entry = {
+        "ts":           job.finished_at.isoformat() if job.finished_at else datetime.now(timezone.utc).isoformat(),
+        "job_id":       job.job_id,
+        "workflow":     job.workflow,
+        "status":       job.status.value,
+        "duration_s":   job.duration_s,
+        "queue_size":   queue_size,
+        "model":        job.model_used,
+        "error":        job.error_msg if job.status.value == "error" else None,
+    }
+    perf_logger.info(json.dumps(entry, ensure_ascii=False))
 
 
 class JobStatus(str, Enum):
@@ -72,7 +110,8 @@ class JobQueue:
         job = Job(job_id, workflow, description)
         self._jobs[job_id] = job
         self._cleanup_old_jobs()
-        logger.info("Job erstellt: %s (%s)", job_id, workflow)
+        queue_size = len([j for j in self._jobs.values() if j.status in (JobStatus.PENDING, JobStatus.RUNNING)])
+        logger.info("Job erstellt: %s (%s) | Warteschlange: %d", job_id, workflow, queue_size)
         return job
 
     def get_job(self, job_id: str) -> Optional[Job]:
@@ -99,15 +138,17 @@ class JobQueue:
             job.model_used  = result.get("model_used")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
             logger.info(
-                "Job abgeschlossen: %s in %.1fs", job.job_id, job.duration_s
+                "Job abgeschlossen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s
             )
         except Exception as e:
             job.status    = JobStatus.ERROR
             job.error_msg = str(e)
             job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
-            logger.error("Job fehlgeschlagen: %s – %s", job.job_id, e)
+            logger.error("Job fehlgeschlagen: %s (%s) in %.1fs – %s", job.job_id, job.workflow, job.duration_s, e)
         finally:
             job.finished_at = datetime.now(timezone.utc)
+            queue_size = len([j for j in self._jobs.values() if j.status in (JobStatus.PENDING, JobStatus.RUNNING)])
+            _log_performance(job, queue_size)
 
     def _cleanup_old_jobs(self):
         if len(self._jobs) > self._max_jobs:

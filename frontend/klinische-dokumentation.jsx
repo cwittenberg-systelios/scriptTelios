@@ -406,21 +406,21 @@ const S = `
 `;
 
 // ── Prompts ─────────────────────────────────────────────────────
-const P_DOKU = `Erstelle eine systemische Gesprächsdokumentation in Fließtext aus dem vorliegenden Gesprächsmaterial. Strukturiere den Text in folgende Abschnitte:
+const P_DOKU = `Erstelle eine systemische Gesprächsdokumentation in Fließtext. Schreibe aktiv aus der Perspektive der Klientin/des Klienten – nicht über das Gespräch, sondern über die Person und ihre Themen. Keine abschließende Sektion über den Gesprächsstil.
 
 Auftragsklärung
-Thema und Ziele des Gesprächs – worum ging es, was sollte erreicht werden?
+Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame Ziel des Gesprächs war. Beispiel: "Im Mittelpunkt stand..." oder "Frau X. kam mit dem Anliegen..."
 
 Relevante Gesprächsinhalte
-Wichtige Kontextinformationen über Symptome, dahinterliegende Bedürfnisse, beteiligte Personen und deren Verhaltensmuster.
+Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. Konkrete Formulierungen statt allgemeiner Beschreibungen. Systemische und IFS-Begriffe wo passend (Manager-Anteile, Exile, Self-Energy etc.).
 
 Hypothesen und Entwicklungsperspektiven
-Hypothesen über Sinnzusammenhänge und Ursachen, Lösungsideen und -optionen aus systemischer Sicht.
+Formuliere systemische Hypothesen über Sinnzusammenhänge. Zeige Entwicklungsperspektiven auf – was wird möglich, wenn... Ressourcenorientiert und konkret.
 
 Einladungen
-Todos, Aufgaben, Übungen oder Impulse, die der Klientin/dem Klienten mitgegeben wurden.
+Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden – aktiv formuliert: "Frau X. wurde eingeladen, ..." oder "Als Übung wurde vereinbart, ..."
 
-Stil: Fließtext, professionell, systemisch-wertschätzend, ressourcenorientiert. Keine Aufzählungen außer bei den Einladungen.`;
+Stil: Fließtext, aktiv, konkret, systemisch-wertschätzend. Keine Aufzählungszeichen außer bei den Einladungen. Keine Sektion über den Gesprächsstil.`;
 
 const P_ANAMNESE = `Erstelle Anamnese und psychopathologischen Befund aus systemischer Perspektive auf Basis der vorliegenden Unterlagen.
 
@@ -578,9 +578,47 @@ function Tags({ list, onChange }) {
   );
 }
 
+// ── Job-Persistenz ───────────────────────────────────────────────
+// Speichert laufende Jobs in localStorage damit Seitenreloads den Job
+// nicht verlieren. Wird beim App-Start automatisch wiederaufgenommen.
+
+const JOB_STORAGE_KEY = "systelios_active_job";
+
+function saveActiveJob(jobId, page) {
+  try {
+    localStorage.setItem(JOB_STORAGE_KEY, JSON.stringify({ jobId, page, startedAt: Date.now() }));
+  } catch (_) {}
+}
+
+function loadActiveJob() {
+  try {
+    const raw = localStorage.getItem(JOB_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (_) { return null; }
+}
+
+function clearActiveJob() {
+  try { localStorage.removeItem(JOB_STORAGE_KEY); } catch (_) {}
+}
+
+// Polling fuer eine bekannte job_id – wiederverwendbar fuer Resume
+async function pollJob(jobId, maxWaitSeconds = 1200) {
+  const interval = 2;
+  for (let i = 0; i < maxWaitSeconds / interval; i++) {
+    await new Promise(res => setTimeout(res, interval * 1000));
+    const poll = await fetch(`${getApiBase()}/jobs/${jobId}`);
+    if (!poll.ok) continue;
+    const job = await poll.json();
+    if (job.status === "done")  return job.result_text || "";
+    if (job.status === "error") throw new Error(job.error_msg || "Job fehlgeschlagen");
+  }
+  throw new Error("Timeout: Job dauert zu lange");
+}
+
 // Ruft das sysTelios Backend asynchron auf (Job-Queue mit Polling).
 // Gibt Promise<string> zurueck – wartet bis Job fertig ist.
-async function generate(workflow, prompt, userContent, files = {}) {
+async function generate(workflow, prompt, userContent, files = {}, page = null) {
   const therapeutId = getConfluenceUser();
   const fd = new FormData();
   fd.append("workflow",   workflow);
@@ -600,21 +638,21 @@ async function generate(workflow, prompt, userContent, files = {}) {
 
   const jobId = d.job_id;
 
-  // Polling bis fertig (max. 10 Minuten)
-  const maxWait = 600;
-  const interval = 2;
-  for (let i = 0; i < maxWait / interval; i++) {
-    await new Promise(res => setTimeout(res, interval * 1000));
-    const poll = await fetch(`${getApiBase()}/jobs/${jobId}`);
-    const job  = await poll.json();
-    if (job.status === "done")  return job.result_text || "";
-    if (job.status === "error") throw new Error(job.error_msg || "Job fehlgeschlagen");
+  // Job-ID in localStorage speichern damit Reload den Job nicht verliert
+  saveActiveJob(jobId, page);
+
+  try {
+    const result = await pollJob(jobId);
+    clearActiveJob();
+    return result;
+  } catch (e) {
+    clearActiveJob();
+    throw e;
   }
-  throw new Error("Timeout: Job dauert zu lange");
 }
 
 // ── Pages ────────────────────────────────────────────────────────
-function P1({ toast }) {
+function P1({ toast, resumeJob, onResumed }) {
   const [audio, setAudio]   = useState(null);
   const [txtFile, setTxtFile] = useState(null);
   const [text, setText]     = useState("");
@@ -623,16 +661,36 @@ function P1({ toast }) {
   const [prompt, setPrompt] = useState(P_DOKU);
   const [out, setOut]       = useState("");
   const [busy, setBusy]     = useState(false);
+  const [geschlecht, setGeschlecht] = useState("auto"); // "w" | "m" | "d" | "auto"
+
+  // Resume: laufenden Job nach Reload wieder aufnehmen
+  useEffect(() => {
+    if (!resumeJob || resumeJob.page !== "p1") return;
+    setBusy(true);
+    pollJob(resumeJob.jobId)
+      .then(result => { setOut(result); onResumed(); })
+      .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
+      .finally(() => setBusy(false));
+  }, [resumeJob]);
 
   async function run() {
     setBusy(true);
     const u = (text    ? "TRANSKRIPT:\n" + text + "\n\n" : "")
             + (bullets ? "STICHPUNKTE:\n" + bullets + "\n" : "");
+
+    const geschlechtHinweis = {
+      "w":    "\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen (die Klientin, sie, ihr).",
+      "m":    "\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen (der Klient, er, ihm).",
+      "auto": "\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus dem Transkript ab (Namen, Pronomen, Anreden). Falls nicht erkennbar, verwende neutrale Formen.",
+    }[geschlecht];
+
+    const promptMitGeschlecht = prompt + geschlechtHinweis;
+
     try {
-      setOut(await generate("dokumentation", prompt, u || "Verlaufsnotiz erstellen.", {
+      setOut(await generate("dokumentation", promptMitGeschlecht, u || "Verlaufsnotiz erstellen.", {
         audio: audio,
         style: style,
-      }));
+      }, "p1"));
     }
     catch (e) { setOut("Fehler: " + e.message); }
     setBusy(false);
@@ -681,6 +739,24 @@ function P1({ toast }) {
           </Card>
 
           <div className="action-bar">
+            {/* Geschlecht-Toggle */}
+            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto"}}>
+              <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
+              {[
+                { val:"w", label:"♀ weiblich" },
+                { val:"m", label:"♂ männlich" },
+                { val:"auto", label:"Auto"    },
+              ].map(({ val, label }) => (
+                <button key={val} onClick={() => setGeschlecht(val)} style={{
+                  padding:"4px 10px", borderRadius:3, cursor:"pointer",
+                  fontSize:12, fontWeight: geschlecht === val ? 700 : 400,
+                  background: geschlecht === val ? "var(--st-red)" : "var(--st-gray-light)",
+                  color: geschlecht === val ? "white" : "var(--st-text-soft)",
+                  border: geschlecht === val ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+                  transition:"all 0.12s",
+                }}>{label}</button>
+              ))}
+            </div>
             <button className="btn-primary" onClick={run} disabled={busy || (!audio && !txtFile && !text && !bullets)}>
               {busy ? <span className="spin" /> : null}
               {busy ? "Generiere ..." : "Verlaufsnotiz generieren"}
@@ -695,7 +771,7 @@ function P1({ toast }) {
   );
 }
 
-function P2({ toast }) {
+function P2({ toast, resumeJob, onResumed }) {
   const [selbst, setSelbst]   = useState(null);
   const [befunde, setBefunde] = useState(null);
   const [audio, setAudio]     = useState(null);
@@ -707,14 +783,32 @@ function P2({ toast }) {
   const [out, setOut]         = useState("");
   const [tab, setTab]         = useState("Anamnese");
   const [busy, setBusy]       = useState(false);
+  const [geschlecht, setGeschlecht] = useState("auto");
+
+  // Resume: laufenden Job nach Reload wieder aufnehmen
+  useEffect(() => {
+    if (!resumeJob || resumeJob.page !== "p2") return;
+    setBusy(true);
+    pollJob(resumeJob.jobId)
+      .then(result => { setOut(result); onResumed(); })
+      .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
+      .finally(() => setBusy(false));
+  }, [resumeJob]);
 
   async function run() {
     setBusy(true);
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
-    const sys = prompt.replace("{diagnosen}", dxStr);
+
+    const geschlechtHinweis = {
+      "w":    "\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen.",
+      "m":    "\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen.",
+      "auto": "\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus den Unterlagen ab. Falls nicht erkennbar, neutrale Formen verwenden.",
+    }[geschlecht];
+
+    const sys = prompt.replace("{diagnosen}", dxStr) + geschlechtHinweis;
     const u = (text ? "AUFNAHMEGESPRAECH:\n" + text + "\n\n" : "")
             + "DIAGNOSEN: " + dxStr + "\n\nAnamnese und psychopathologischen Befund erstellen.";
-    try { setOut(await generate("anamnese", sys, u)); }
+    try { setOut(await generate("anamnese", sys, u, {}, "p2")); }
     catch (e) { setOut("Fehler: " + e.message); }
     setBusy(false);
   }
@@ -774,6 +868,23 @@ function P2({ toast }) {
           </Card>
 
           <div className="action-bar">
+            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto"}}>
+              <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
+              {[
+                { val:"w", label:"♀ weiblich" },
+                { val:"m", label:"♂ männlich" },
+                { val:"auto", label:"Auto"    },
+              ].map(({ val, label }) => (
+                <button key={val} onClick={() => setGeschlecht(val)} style={{
+                  padding:"4px 10px", borderRadius:3, cursor:"pointer",
+                  fontSize:12, fontWeight: geschlecht === val ? 700 : 400,
+                  background: geschlecht === val ? "var(--st-red)" : "var(--st-gray-light)",
+                  color: geschlecht === val ? "white" : "var(--st-text-soft)",
+                  border: geschlecht === val ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+                  transition:"all 0.12s",
+                }}>{label}</button>
+              ))}
+            </div>
             <button className="btn-primary" onClick={run} disabled={busy || !selbst}>
               {busy ? <span className="spin" /> : null}
               {busy ? "Generiere ..." : "Anamnese und Befund generieren"}
@@ -1183,12 +1294,34 @@ export default function App() {
   const [page, setPage]       = useState("p1");
   const [msg, setMsg]         = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [resumeJob, setResumeJob] = useState(null); // { jobId, page } falls ein Job wiederhergestellt wird
   const [backendUrl, setBackendUrl] = useState(
     () => localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""
   );
   const [urlInput, setUrlInput] = useState(
     () => localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""
   );
+
+  // Beim Start: prüfen ob ein laufender Job existiert
+  useEffect(() => {
+    const saved = loadActiveJob();
+    if (!saved) return;
+
+    // Job-Status vom Server prüfen
+    fetch(`${getApiBase()}/jobs/${saved.jobId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(job => {
+        if (!job) { clearActiveJob(); return; }
+        if (job.status === "done" || job.status === "error") {
+          clearActiveJob();
+          return;
+        }
+        // Job läuft noch – zur richtigen Seite navigieren und Resume anzeigen
+        if (saved.page) setPage(saved.page);
+        setResumeJob(saved);
+      })
+      .catch(() => clearActiveJob());
+  }, []);
 
   const saveUrl = () => {
     let url = urlInput.trim().replace(/\/+$/, ""); // trailing slash entfernen
@@ -1267,8 +1400,23 @@ export default function App() {
       </div>
 
       <main className="main">
-        {page === "p1" && <P1 toast={toast} />}
-        {page === "p2" && <P2 toast={toast} />}
+        {/* Resume-Banner wenn ein laufender Job nach Reload wiederhergestellt wird */}
+        {resumeJob && (
+          <div style={{
+            background:"#fffbe6", borderBottom:"1px solid #f0d060",
+            padding:"10px 24px", fontSize:13, color:"#7a6000",
+            display:"flex", alignItems:"center", gap:10
+          }}>
+            <span style={{fontSize:16}}>⏳</span>
+            <span>Job läuft noch – Ergebnis erscheint automatisch wenn fertig.</span>
+            <button onClick={() => { clearActiveJob(); setResumeJob(null); }} style={{
+              marginLeft:"auto", background:"none", border:"1px solid #c0a030",
+              borderRadius:3, padding:"2px 10px", fontSize:12, cursor:"pointer", color:"#7a6000"
+            }}>Abbrechen</button>
+          </div>
+        )}
+        {page === "p1" && <P1 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
+        {page === "p2" && <P2 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
         {page === "p3" && <P3 toast={toast} />}
         {page === "p4" && <P4 toast={toast} />}
         {page === "p5" && <P5 toast={toast} />}
