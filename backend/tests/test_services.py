@@ -87,6 +87,137 @@ class TestLLMService:
 
         assert result["text"] == ""
 
+    @pytest.mark.asyncio
+    async def test_generate_text_oom_retry_mit_reduziertem_kontext(self):
+        """Bei VRAM-OOM: Modell entladen, zweiter Versuch mit 8192 Tokens erfolgreich."""
+        oom_response = MagicMock()
+        oom_response.status_code = 500
+        oom_response.text = "cuda out of memory"
+
+        ok_response = MagicMock()
+        ok_response.json.return_value = {"response": "Text mit kleinem Kontext.", "eval_count": 10}
+        ok_response.raise_for_status = MagicMock()
+
+        call_count = 0
+
+        async def mock_post(url, json=None, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Erster Aufruf: OOM
+                raise httpx.HTTPStatusError("500", request=MagicMock(), response=oom_response)
+            if call_count == 2:
+                # Unload-Aufruf (keep_alive=0)
+                return MagicMock(raise_for_status=MagicMock())
+            # Dritter Aufruf: Retry mit reduziertem Kontext → Erfolg
+            return ok_response
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.post = AsyncMock(side_effect=mock_post)
+            from app.services import llm as llm_module
+            import importlib
+            importlib.reload(llm_module)
+            result = await llm_module.generate_text("System", "User")
+
+        assert result["text"] == "Text mit kleinem Kontext."
+
+    @pytest.mark.asyncio
+    async def test_generate_text_oom_retry_schlaegt_auch_fehl(self):
+        """Bei OOM auf beiden Versuchen: klare Fehlermeldung mit Hinweis auf .env."""
+        oom_response = MagicMock()
+        oom_response.status_code = 500
+        oom_response.text = "cuda out of memory"
+
+        async def mock_post(url, json=None, **kwargs):
+            if json and json.get("keep_alive") == 0:
+                return MagicMock(raise_for_status=MagicMock())  # Unload gelingt
+            raise httpx.HTTPStatusError("500", request=MagicMock(), response=oom_response)
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.post = AsyncMock(side_effect=mock_post)
+            from app.services import llm as llm_module
+            import importlib
+            importlib.reload(llm_module)
+            with pytest.raises(RuntimeError, match="WHISPER_FREE_OLLAMA_VRAM"):
+                await llm_module.generate_text("System", "User")
+
+    def test_deduplicate_paragraphs_entfernt_wiederholungen(self):
+        """Doppelte Absätze werden aus dem LLM-Output entfernt."""
+        from app.services.llm import deduplicate_paragraphs
+        text = "Erster Absatz.\n\nZweiter Absatz.\n\nErster Absatz.\n\nDritter Absatz."
+        result = deduplicate_paragraphs(text)
+        assert result.count("Erster Absatz.") == 1
+        assert "Zweiter Absatz." in result
+        assert "Dritter Absatz." in result
+
+    def test_deduplicate_paragraphs_case_insensitive(self):
+        """Duplikat-Erkennung ist case-insensitiv."""
+        from app.services.llm import deduplicate_paragraphs
+        text = "Die Klientin kam mit dem Anliegen.\n\ndie klientin kam mit dem anliegen."
+        result = deduplicate_paragraphs(text)
+        assert result.count("Klientin") + result.count("klientin") == 1
+
+    def test_deduplicate_paragraphs_behaelt_einzigartigen_text(self):
+        """Unique Absätze bleiben vollständig erhalten."""
+        from app.services.llm import deduplicate_paragraphs
+        text = "Abschnitt A.\n\nAbschnitt B.\n\nAbschnitt C."
+        assert deduplicate_paragraphs(text) == text
+
+    def test_deduplicate_paragraphs_leerer_input(self):
+        """Leerer Input gibt leeren String zurück."""
+        from app.services.llm import deduplicate_paragraphs
+        assert deduplicate_paragraphs("") == ""
+
+    def test_truncate_style_context_kurzer_text_unveraendert(self):
+        """Texte unter dem Limit werden nicht gekürzt."""
+        from app.services.llm import truncate_style_context, MAX_STYLE_CONTEXT_CHARS
+        short = "Kurzer Stiltext." * 10
+        assert len(short) < MAX_STYLE_CONTEXT_CHARS
+        assert truncate_style_context(short) == short
+
+    def test_truncate_style_context_kuerzt_an_satzgrenze(self):
+        """Langer Text wird an einer Satzgrenze gekürzt, nicht mitten im Satz."""
+        from app.services.llm import truncate_style_context, MAX_STYLE_CONTEXT_CHARS
+        # Erzeuge Text der deutlich über dem Limit liegt
+        long_text = ("Dies ist ein Satz der Informationen enthält. " * 100)
+        result = truncate_style_context(long_text)
+        assert len(result) <= MAX_STYLE_CONTEXT_CHARS
+        # Muss mit Satzzeichen enden
+        assert result[-1] in ".!?"
+
+    def test_truncate_style_context_repetitiver_input(self):
+        """Repetitive C&P-Stilvorlage (wie im Bug-Report) wird auf Limit gekürzt."""
+        from app.services.llm import truncate_style_context, MAX_STYLE_CONTEXT_CHARS
+        # Simuliert die eingefügte Stilvorlage die 8x denselben Absatz enthielt
+        absatz = "Die Klientin kam mit dem Anliegen, ihre Schwierigkeiten zu bewältigen. " * 5
+        repetitiv = absatz * 8
+        result = truncate_style_context(repetitiv)
+        assert len(result) <= MAX_STYLE_CONTEXT_CHARS
+
+    @pytest.mark.asyncio
+    async def test_generate_text_dedupliziert_output(self):
+        """generate_text bereinigt automatisch doppelte Absätze im LLM-Output."""
+        wiederholter_output = (
+            "Erster Abschnitt mit Inhalt.\n\n"
+            "Zweiter Abschnitt.\n\n"
+            "Erster Abschnitt mit Inhalt.\n\n"  # Duplikat
+            "Dritter Abschnitt."
+        )
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"response": wiederholter_output, "eval_count": 50}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client:
+            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
+                return_value=mock_response
+            )
+            from app.services.llm import generate_text
+            result = await generate_text("System", "User")
+
+        assert result["text"].count("Erster Abschnitt") == 1
+        assert "Zweiter Abschnitt." in result["text"]
+        assert "Dritter Abschnitt." in result["text"]
+
 
 # ══════════════════════════════════════════════════════════════════
 # JOB QUEUE SERVICE

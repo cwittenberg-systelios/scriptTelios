@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     WHISPER_DEVICE:       str = "cpu"      # cpu | cuda
     WHISPER_COMPUTE_TYPE: str = "int8"     # int8 | float16 | float32
 
+    # Ollama vor Whisper aus VRAM entladen.
+    # Nur nötig wenn Whisper + Ollama nicht gleichzeitig in den VRAM passen.
+    # RTX 4090 (24GB): large-v3 (~3GB) + mistral-nemo (~5GB) passen gleichzeitig
+    # → False lassen, spart ~30s Kaltstart des LLM nach jeder Transkription.
+    # Kleinere GPUs (<12GB): auf True setzen.
+    WHISPER_FREE_OLLAMA_VRAM: bool = False
+
     # ── Dateien ───────────────────────────────────────────────────
     UPLOAD_DIR:    str = "uploads"
     OUTPUT_DIR:    str = "outputs"

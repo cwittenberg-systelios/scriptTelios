@@ -68,6 +68,7 @@ async def create_generate_job(
     diagnosen:      Annotated[Optional[str], Form()] = None,
     transcript:     Annotated[Optional[str], Form()] = None,
     bullets:        Annotated[Optional[str], Form()] = None,
+    style_text:     Annotated[Optional[str], Form()] = None,
     audio:          Optional[UploadFile] = File(None),
     selbstauskunft: Optional[UploadFile] = File(None),
     vorbefunde:     Optional[UploadFile] = File(None),
@@ -138,8 +139,20 @@ async def create_generate_job(
                 logger.warning("Vorbefunde-Extraktion fehlgeschlagen: %s", e)
 
         # 3. Stilprofil
+        from app.services.llm import truncate_style_context
         style_context = ""
-        if style_bytes and style_name:
+        style_is_example = False
+        if style_text and style_text.strip():
+            # Direkt eingefügter Stiltext (C&P) – kein Extraktionsschritt nötig
+            # Deduplizieren falls die eingefügte Vorlage selbst repetitiv ist
+            from app.services.llm import deduplicate_paragraphs
+            cleaned = deduplicate_paragraphs(style_text.strip())
+            style_context = truncate_style_context(cleaned)
+            style_is_example = True   # Rohtext → explizite "nur Stil"-Rahmung
+            logger.info("Stilvorlage via Text-Input (%d Zeichen nach Bereinigung)", len(style_context))
+        elif style_bytes and style_name:
+        elif style_bytes and style_name:
+        elif style_bytes and style_name:
             from app.core.files import upload_dir
             import uuid
             from pathlib import Path
@@ -148,6 +161,7 @@ async def create_generate_job(
             path.write_bytes(style_bytes)
             try:
                 style_context = await extract_style_context(path, generate_text)
+                style_context = truncate_style_context(style_context)
             except Exception as e:
                 logger.warning("Stilprofil-Extraktion fehlgeschlagen: %s", e)
         elif therapeut_id and therapeut_id.strip():
@@ -161,6 +175,7 @@ async def create_generate_job(
             workflow=workflow,
             custom_prompt=prompt,
             style_context=style_context,
+            style_is_example=style_is_example,
             diagnosen=dx_list,
         )
         user = build_user_content(

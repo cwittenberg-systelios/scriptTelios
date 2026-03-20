@@ -96,6 +96,7 @@ def build_system_prompt(
     workflow: str,
     custom_prompt: Optional[str] = None,
     style_context: Optional[str] = None,
+    style_is_example: bool = False,
     diagnosen: Optional[list[str]] = None,
 ) -> str:
     """
@@ -104,6 +105,12 @@ def build_system_prompt(
     2. Custom-Prompt des Therapeuten ODER Basis-Prompt des Workflows
     3. Stilprofil des Therapeuten (falls vorhanden)
     4. Abschliessende Anweisung
+
+    style_is_example=True: style_context ist ein Roh-Beispieltext (C&P).
+       Der Prompt erklärt dem Modell explizit dass nur Stil übernommen wird,
+       nicht Struktur oder Inhalt.
+    style_is_example=False: style_context ist eine LLM-extrahierte Stilbeschreibung
+       (z.B. "Schreibe in einem Stil der ...") – wird direkt als Anweisung eingebettet.
     """
     base = custom_prompt.strip() if custom_prompt and custom_prompt.strip() \
         else BASE_PROMPTS.get(workflow, "")
@@ -119,9 +126,19 @@ def build_system_prompt(
 
     # Stilprofil anhaengen
     if style_context and style_context.strip():
-        parts.append(
-            f"\nSTILVORGABE FUER DIESEN THERAPEUTEN:\n{style_context.strip()}"
-        )
+        if style_is_example:
+            parts.append(
+                "\nSTILBEISPIEL DES THERAPEUTEN (nur Schreibstil übernehmen):\n"
+                "Das folgende Beispiel zeigt den persönlichen Schreibstil dieses Therapeuten. "
+                "Übernimm ausschliesslich Tonalität, Satzbau, Fachbegriffsdichte und "
+                "Formulierungsgewohnheiten – NICHT Struktur, Überschriften oder Inhalte dieses Beispiels. "
+                "Erstelle stattdessen eine eigenständige Dokumentation für das aktuelle Gespräch.\n\n"
+                f"{style_context.strip()}"
+            )
+        else:
+            parts.append(
+                f"\nSTILVORGABE FUER DIESEN THERAPEUTEN:\n{style_context.strip()}"
+            )
 
     parts.append(
         "\nWICHTIG: Du bist ein Dokumentationssystem, kein Therapeut. "

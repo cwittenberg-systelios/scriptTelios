@@ -112,6 +112,8 @@ Die Tunnel-URL ändert sich dabei – im Frontend unter ⚙ Backend-URL anpassen
 
 ## Tests ausführen
 
+### Backend (pytest)
+
 ```bash
 # Alle Tests
 pytest -v
@@ -131,6 +133,29 @@ pytest --cov=app --cov-report=term-missing --cov-fail-under=70
 # Kurze Tracebacks
 pytest -v --tb=short
 ```
+
+### Frontend (Jest)
+
+Unit-Tests für die reinen Logik-Funktionen in `frontend/utils/api.js`
+(kein React-Overhead, kein laufendes Backend nötig).
+
+```bash
+cd frontend
+npm install
+npm test
+
+# Watch-Modus während der Entwicklung
+npm run test:watch
+```
+
+Die Tests decken ab:
+- `getApiBase()` – URL-Normalisierung und localStorage-Konfiguration
+- `getConfluenceUser()` – Confluence-User-Erkennung
+- `saveActiveJob / loadActiveJob / clearActiveJob` – Job-Persistenz inkl. korruptes JSON
+- `buildGeschlechtHinweis()` – Geschlecht-Anweisung für alle drei Optionen
+- `pollJob()` – Polling-Loop, Fehlerbehandlung, Timeout, nicht-ok Responses
+- `generate()` – FormData-Aufbau, **bullets als separates Feld** (Regression gegen alten Bug), localStorage-Lebenszyklus, Fehlerfall
+
 
 ### Tests mit echten Dateien
 

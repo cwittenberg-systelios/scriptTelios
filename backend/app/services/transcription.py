@@ -147,13 +147,12 @@ def _split_audio(file_path: Path, splits: list[float], tmp_dir: Path) -> list[Pa
 async def _ollama_free_vram() -> None:
     """
     Weist Ollama an das geladene Modell aus dem VRAM zu entladen.
-    Gibt VRAM frei bevor Whisper die GPU belegt.
-    Ollama laedt das Modell beim naechsten LLM-Aufruf automatisch neu.
+    Nur aufrufen wenn WHISPER_FREE_OLLAMA_VRAM=true (kleine GPUs).
+    Auf RTX 4090 nicht nötig – Whisper + Ollama passen gleichzeitig rein.
     """
     import httpx
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # keep_alive=0 entlaedt das Modell sofort aus dem VRAM
             await client.post(
                 f"{settings.OLLAMA_HOST}/api/generate",
                 json={
@@ -167,12 +166,41 @@ async def _ollama_free_vram() -> None:
         logger.debug("Ollama VRAM-Freigabe nicht moeglich (ignoriert): %s", e)
 
 
+async def _ollama_warmup() -> None:
+    """
+    Lädt das Ollama-Modell vorab in den VRAM (fire-and-forget).
+    Wird nach Whisper-Transkription aufgerufen damit der erste LLM-Aufruf
+    nicht 20-30s auf den Kaltstart warten muss.
+    keep_alive=-1 = Ollama-Standard (Modell bleibt geladen).
+    """
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            await client.post(
+                f"{settings.OLLAMA_HOST}/api/generate",
+                json={
+                    "model":      settings.OLLAMA_MODEL,
+                    "keep_alive": -1,
+                    "prompt":     "",
+                },
+            )
+        logger.info("Ollama-Modell vorgewaermt und bereit")
+    except Exception as e:
+        logger.debug("Ollama-Warmup nicht moeglich (ignoriert): %s", e)
+
+
 async def transcribe_audio(file_path: Path) -> dict:
     """
     Transkribiert eine Audiodatei lokal via faster-whisper.
     Lange Aufnahmen werden automatisch in Chunks aufgeteilt.
-    Ollama wird vor der Transkription aus dem VRAM entladen damit
-    Whisper den gesamten GPU-Speicher nutzen kann.
+
+    VRAM-Strategie (konfigurierbar via WHISPER_FREE_OLLAMA_VRAM):
+    - False (Standard, RTX 4090): Whisper und Ollama teilen VRAM.
+      large-v3 (~3GB) + mistral-nemo (~5GB) passen gleichzeitig.
+      Nach Whisper: Ollama wird vorgewaermt → kein LLM-Kaltstart.
+    - True (kleine GPUs <12GB): Ollama wird vor Whisper entladen,
+      Whisper bekommt den gesamten VRAM. LLM-Kaltstart nach Transkription
+      ist dann unvermeidbar.
     """
     try:
         from faster_whisper import WhisperModel
@@ -182,14 +210,21 @@ async def transcribe_audio(file_path: Path) -> dict:
             "Bitte 'pip install faster-whisper' ausfuehren."
         )
 
-    # Ollama aus VRAM entladen damit Whisper die GPU voll nutzen kann
-    await _ollama_free_vram()
+    if settings.WHISPER_FREE_OLLAMA_VRAM:
+        await _ollama_free_vram()
 
     result = await _transcribe_local(file_path)
 
     # Whisper-Modell aus Cache entfernen damit Ollama VRAM zurueckbekommt
     _model_cache.clear()
-    logger.info("Whisper-Modell aus Cache entfernt (VRAM fuer Ollama freigegeben)")
+    logger.info("Whisper-Modell aus Cache entfernt")
+
+    # Ollama vorwärmen / keep-alive senden – fire-and-forget.
+    # Bei FREE_VRAM=True: lädt das Modell nach Whisper wieder in den VRAM.
+    # Bei FREE_VRAM=False: verhindert Ollama-Inaktivitäts-Timeout.
+    # Fehler im Warmup werden geloggt aber nie an den Caller weitergegeben.
+    import asyncio
+    asyncio.ensure_future(_ollama_warmup())
 
     # Audiodatei nach Transkription loeschen (Datenschutz / DSGVO)
     if settings.DELETE_AUDIO_AFTER_TRANSCRIPTION and file_path.exists():

@@ -576,7 +576,33 @@ class TestPrompts:
             style_context="Schreibe kurz und praegnant."
         )
         assert "Schreibe kurz und praegnant" in p
-        assert "Schreibe kurz und praegnant" in p
+
+    def test_system_prompt_stilbeispiel_mit_nur_stil_rahmung(self):
+        """C&P-Stiltext (style_is_example=True) erhält explizite 'nur Stil'-Anweisung."""
+        from app.services.prompts import build_system_prompt
+        beispiel = "Im Mittelpunkt stand die Angst von Frau K. vor sozialen Situationen."
+        p = build_system_prompt(
+            workflow="dokumentation",
+            style_context=beispiel,
+            style_is_example=True,
+        )
+        assert beispiel in p
+        # Muss die explizite Abgrenzungsanweisung enthalten
+        assert "nur" in p.lower() and "Stil" in p
+        assert "NICHT" in p or "nicht" in p.lower()
+        # Soll NICHT die STILVORLAGE-Formulierung verwenden (die ist für extrahierte Beschreibungen)
+        assert "STILBEISPIEL" in p
+
+    def test_system_prompt_stilprofil_extrahiert_ohne_rahmung(self):
+        """Extrahiertes Stilprofil (style_is_example=False) wird direkt als Anweisung eingebettet."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="dokumentation",
+            style_context="Schreibe in einem Stil der kurze praegnante Saetze bevorzugt.",
+            style_is_example=False,
+        )
+        assert "STILVORLAGE" in p
+        assert "STILBEISPIEL" not in p
 
     def test_system_prompt_custom_prompt(self):
         """Eigener Prompt überschreibt den Standard-Prompt."""
@@ -640,6 +666,62 @@ class TestPrompts:
         )
         assert "VERLAUFSDOKUMENTATION" in u
         assert "Entlassbericht" in u
+
+    def test_user_content_dokumentation_bullets_getrennt_von_transkript(self):
+        """Bullets und Transkript landen als getrennte Blöcke – nicht zusammengemischt."""
+        from app.services.prompts import build_user_content
+        u = build_user_content(
+            workflow="dokumentation",
+            transcript="[A]: Wie geht es Ihnen?\n[B]: Besser.",
+            bullets="- der innere Löwe\n- Arbeit mit inneren Anteilen nach IFS",
+        )
+        # Beide Abschnitte vorhanden
+        assert "TRANSKRIPT" in u
+        assert "THERAPEUTISCHE STICHPUNKTE" in u
+        # Stichpunkte stehen NACH dem Transkript (Reihenfolge)
+        assert u.index("TRANSKRIPT") < u.index("THERAPEUTISCHE STICHPUNKTE")
+        # Kein Zusammenmischen – das wäre der alte Frontend-Bug
+        assert "STICHPUNKTE:\n-" not in u.split("TRANSKRIPT")[0]
+
+    def test_user_content_dokumentation_nur_bullets_ohne_transkript(self):
+        """Nur Stichpunkte ohne Transkript – z.B. wenn kein Audio hochgeladen wurde."""
+        from app.services.prompts import build_user_content
+        u = build_user_content(
+            workflow="dokumentation",
+            bullets="- Schlafprobleme\n- Kontakt zur Mutter verbessert",
+        )
+        assert "THERAPEUTISCHE STICHPUNKTE" in u
+        assert "TRANSKRIPT" not in u
+        # Abschlussanweisung muss trotzdem vorhanden sein
+        assert "Erstelle jetzt" in u
+
+    def test_user_content_dokumentation_abschlussanweisung_vorhanden(self):
+        """User-Content endet mit expliziter Generierungsanweisung."""
+        from app.services.prompts import build_user_content
+        u = build_user_content(
+            workflow="dokumentation",
+            transcript="Ein kurzes Gespräch.",
+        )
+        assert "Erstelle jetzt die klinische Dokumentation" in u
+
+    def test_user_content_dokumentation_leer_fallback(self):
+        """Leerer Input liefert sinnvollen Fallback-Text statt leerem String."""
+        from app.services.prompts import build_user_content
+        u = build_user_content(workflow="dokumentation")
+        assert len(u) > 10
+        assert "Verlaufsnotiz" in u
+
+    def test_system_prompt_kein_prompt_echo(self):
+        """System-Prompt enthält explizite Anweisung gegen Prompt-Wiederholung."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(workflow="dokumentation")
+        assert "Wiederholung" in p or "Echo" in p or "Prompt-Echo" in p
+
+    def test_system_prompt_beginne_sofort(self):
+        """System-Prompt weist Modell an sofort mit dem Text zu beginnen."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(workflow="dokumentation")
+        assert "Beginne sofort" in p or "beginne sofort" in p
 
     def test_alle_vier_workflows_haben_basis_prompt(self):
         """Alle vier Workflows haben einen definierten Basis-Prompt."""

@@ -193,6 +193,27 @@ const S = `
 
   /* ── UPLOAD ── */
   .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  /* ── InputTabs ──────────────────────────────────────────────── */
+  .input-tabs-wrap { display: flex; flex-direction: column; gap: 0; }
+  .input-tabs-bar {
+    display: flex; gap: 2px; border-bottom: 2px solid var(--st-gray-border);
+    margin-bottom: 12px;
+  }
+  .input-tab {
+    display: flex; align-items: center; gap: 5px;
+    padding: 6px 14px; border: none; background: none; cursor: pointer;
+    font-size: 12px; font-weight: 500; color: var(--st-text-soft);
+    border-bottom: 2px solid transparent; margin-bottom: -2px;
+    border-radius: 3px 3px 0 0; transition: all 0.12s;
+  }
+  .input-tab:hover { color: var(--st-text); background: var(--st-gray-light); }
+  .input-tab.active {
+    color: var(--st-red); border-bottom-color: var(--st-red);
+    font-weight: 600; background: none;
+  }
+  .input-tab-icon { font-size: 13px; }
+  .input-tabs-body { min-height: 80px; }
   .upload-col-label {
     font-size: 11px; font-weight: 600;
     letter-spacing: 0.06em; text-transform: uppercase;
@@ -499,6 +520,38 @@ function Dropzone({ label, hint, accept, file, onFile, icon }) {
   );
 }
 
+/**
+ * InputTabs – kompakte Tab-Navigation für alternative Eingabemodi.
+ * Kinder bekommen den aktiven Tab-ID als Argument (render-prop).
+ * Beispiel:
+ *   <InputTabs tabs={[{id:"a",icon:"🎙",label:"Audio"}, ...]}>
+ *     {(active) => active === "a" && <Dropzone ... />}
+ *   </InputTabs>
+ */
+function InputTabs({ tabs, children, defaultTab }) {
+  const [active, setActive] = useState(defaultTab || tabs[0]?.id);
+  return (
+    <div className="input-tabs-wrap">
+      <div className="input-tabs-bar">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            className={"input-tab" + (active === t.id ? " active" : "")}
+            onClick={() => setActive(t.id)}
+            type="button"
+          >
+            <span className="input-tab-icon">{t.icon}</span>
+            <span className="input-tab-label">{t.label}</span>
+          </button>
+        ))}
+      </div>
+      <div className="input-tabs-body">
+        {children(active)}
+      </div>
+    </div>
+  );
+}
+
 function Card({ num, title, badge, open: defaultOpen = true, children }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -634,6 +687,7 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   if (files.style)      fd.append("style_file",     files.style);
   if (files.diagnosen)  fd.append("diagnosen",      files.diagnosen);
   if (files.bullets)    fd.append("bullets",        files.bullets);
+  if (files.styleText)  fd.append("style_text",     files.styleText);
 
   // Job starten
   const r = await fetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
@@ -673,13 +727,15 @@ function P1({ toast, resumeJob, onResumed }) {
   const [txtFile, setTxtFile] = useState(null);
   const [text, setText]     = useState("");
   const [bullets, setBullets] = useState("");
-  const [style, setStyle]   = useState(null);
+  const [style, setStyle]     = useState(null);
+  const [styleText, setStyleText] = useState("");
   const [prompt, setPrompt] = useState(P_DOKU);
   const [out, setOut]           = useState("");
   const [lastJobId, setLastJobId] = useState(null);
   const [hasTranscript, setHasTranscript] = useState(false);
   const [busy, setBusy]         = useState(false);
   const [geschlecht, setGeschlecht] = useState("auto");
+  const [kuerzel, setKuerzel]         = useState("");
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
@@ -700,10 +756,14 @@ function P1({ toast, resumeJob, onResumed }) {
     setBusy(true);
     setLastJobId(null);
     setHasTranscript(false);
+    const k = kuerzel.trim().replace(/\.?$/, "."); // sicherstellen dass Punkt am Ende
+    const nameHinweis = kuerzel.trim()
+      ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}", "Herr ${k}", "Klient ${k}").`
+      : "";
     const geschlechtHinweis = {
-      "w":    "\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen (die Klientin, sie, ihr).",
-      "m":    "\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen (der Klient, er, ihm).",
-      "auto": "\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus dem Transkript ab (Namen, Pronomen, Anreden). Falls nicht erkennbar, verwende neutrale Formen.",
+      "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen (die Klientin, sie, ihr).${nameHinweis}`,
+      "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen (der Klient, er, ihm).${nameHinweis}`,
+      "auto": `\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus dem Transkript ab (Namen, Pronomen, Anreden). Falls nicht erkennbar, verwende neutrale Formen.${nameHinweis}`,
     }[geschlecht];
 
     const promptMitGeschlecht = prompt + geschlechtHinweis;
@@ -712,6 +772,7 @@ function P1({ toast, resumeJob, onResumed }) {
       const result = await generate("dokumentation", promptMitGeschlecht, text || "", {
         audio: audio,
         style: style,
+        styleText: styleText || null,
         bullets: bullets || null,
       }, "p1");
       setOut(result.text || "");
@@ -732,21 +793,25 @@ function P1({ toast, resumeJob, onResumed }) {
       <div className="page-body">
         <div className="workflow">
           <Card num="A" title="Gesprächsmaterial" badge="opt" open={true}>
-            <div className="upload-grid">
-              <div>
-                <div className="upload-col-label">Audio-Aufnahme</div>
-                <Dropzone label="Aufnahme hochladen" hint=".mp3  .m4a  .wav" accept="audio/*" icon="&#127897;" file={audio} onFile={setAudio} />
-              </div>
-              <div>
-                <div className="upload-col-label">Transkript-Datei</div>
-                <Dropzone label="Datei hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
-              </div>
-            </div>
-            <div className="or-row">oder direkt eingeben</div>
-            <div>
-              <label className="field-label">Transkript / Gespr&auml;chsinhalt</label>
-              <textarea rows={5} placeholder="Gesprächsinhalt direkt hier einfügen ..." value={text} onChange={(e) => setText(e.target.value)} />
-            </div>
+            <InputTabs
+              tabs={[
+                { id:"audio", icon:"🎙", label:"Aufnahme" },
+                { id:"file",  icon:"📄", label:"Datei"    },
+                { id:"text",  icon:"✏️", label:"Text"     },
+              ]}
+            >
+              {(activeTab) => (<>
+                {activeTab === "audio" && (
+                  <Dropzone label="Aufnahme hochladen" hint=".mp3  .m4a  .wav" accept="audio/*" icon="&#127897;" file={audio} onFile={setAudio} />
+                )}
+                {activeTab === "file" && (
+                  <Dropzone label="Transkript-Datei hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
+                )}
+                {activeTab === "text" && (
+                  <textarea rows={6} placeholder="Gesprächsinhalt direkt hier einfügen ..." value={text} onChange={(e) => setText(e.target.value)} style={{marginTop:0}} />
+                )}
+              </>)}
+            </InputTabs>
           </Card>
 
           <Card num="B" title="Stichpunkte" badge="opt" open={false}>
@@ -756,8 +821,23 @@ function P1({ toast, resumeJob, onResumed }) {
           </Card>
 
           <Card num="C" title="Stilvorlage" badge="opt" open={false}>
-            <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
-            <div className="info-note">Der Schreibstil des hochgeladenen Textes wird bei der Generierung beruecksichtigt.</div>
+            <InputTabs
+              tabs={[
+                { id:"file", icon:"📎", label:"Datei"  },
+                { id:"text", icon:"✏️", label:"Text C&P" },
+              ]}
+            >
+              {(activeTab) => (<>
+                {activeTab === "file" && (<>
+                  <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
+                  <div className="info-note" style={{marginTop:8}}>Der Schreibstil des hochgeladenen Textes wird bei der Generierung berücksichtigt.</div>
+                </>)}
+                {activeTab === "text" && (<>
+                  <textarea rows={6} placeholder="Beispieldokumentation hier einfügen – der Schreibstil wird übernommen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
+                  <div className="field-note">Direkt eingefügter Beispieltext als Stilvorlage</div>
+                </>)}
+              </>)}
+            </InputTabs>
           </Card>
 
           <Card num="D" title="Prompt anpassen" open={false}>
@@ -765,8 +845,8 @@ function P1({ toast, resumeJob, onResumed }) {
           </Card>
 
           <div className="action-bar">
-            {/* Geschlecht-Toggle */}
-            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto"}}>
+            {/* Geschlecht-Toggle + Kürzel */}
+            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto", flexWrap:"wrap"}}>
               <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
               {[
                 { val:"w", label:"♀ weiblich" },
@@ -782,6 +862,21 @@ function P1({ toast, resumeJob, onResumed }) {
                   transition:"all 0.12s",
                 }}>{label}</button>
               ))}
+              <div style={{display:"flex", alignItems:"center", gap:4, marginLeft:4}}>
+                <span style={{fontSize:11, color:"var(--st-text-soft)"}}>Kürzel</span>
+                <input
+                  type="text"
+                  value={kuerzel}
+                  onChange={e => setKuerzel(e.target.value)}
+                  placeholder="K."
+                  maxLength={8}
+                  style={{
+                    width:48, padding:"3px 6px", fontSize:12, borderRadius:3,
+                    border:"1px solid var(--st-gray-border)", background:"var(--st-bg)",
+                    color:"var(--st-text)", fontFamily:"inherit",
+                  }}
+                />
+              </div>
             </div>
             <button className="btn-primary" onClick={run} disabled={busy || (!audio && !txtFile && !text && !bullets)}>
               {busy ? <span className="spin" /> : null}
