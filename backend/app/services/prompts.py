@@ -298,7 +298,7 @@ def build_system_prompt(
             )
         else:
             parts.append(
-                f"\nSTILVORGABE FUER DIESEN THERAPEUTEN:\n{style_context.strip()}"
+                f"\nSTILVORLAGE FUER DIESEN THERAPEUTEN:\n{style_context.strip()}"
             )
 
     parts.append(

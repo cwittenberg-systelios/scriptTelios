@@ -621,3 +621,60 @@ class TestModelProfile:
         for name in ["deepseek-r1:7b", "deepseek-r1:32b", "deepseek-coder:6.7b"]:
             p = _get_model_profile(name)
             assert p["num_ctx"] == 65536, f"{name} sollte großen Kontext haben"
+
+
+# ══════════════════════════════════════════════════════════════════
+# JOB CANCEL (DELETE /api/jobs/{id})
+# ══════════════════════════════════════════════════════════════════
+
+class TestJobCancel:
+
+    def test_cancel_laufenden_job(self, mock_llm_jobs):
+        """DELETE /api/jobs/{id} bricht einen laufenden Job ab."""
+        r = client.post("/api/jobs/generate", data={
+            "workflow": "dokumentation", "prompt": "test", "transcript": "test",
+        })
+        job_id = r.json()["job_id"]
+        rc = client.delete(f"/api/jobs/{job_id}")
+        assert rc.status_code == 200
+        data = rc.json()
+        assert data["job_id"] == job_id
+        assert "cancelled" in data
+
+    def test_cancel_nicht_vorhandener_job(self):
+        """DELETE auf unbekannte job_id gibt 404."""
+        r = client.delete("/api/jobs/nichtvorhanden00000000000000000000")
+        assert r.status_code == 404
+
+    def test_cancel_abgeschlossener_job(self, mock_llm_jobs):
+        """DELETE auf bereits abgeschlossenen Job gibt cancelled=False zurück."""
+        import time
+        r = client.post("/api/jobs/generate", data={
+            "workflow": "dokumentation", "prompt": "test", "transcript": "test",
+        })
+        job_id = r.json()["job_id"]
+        # Warten bis fertig
+        for _ in range(30):
+            status = client.get(f"/api/jobs/{job_id}").json()["status"]
+            if status in ("done", "error"):
+                break
+            time.sleep(0.1)
+        rc = client.delete(f"/api/jobs/{job_id}")
+        assert rc.status_code == 200
+        assert rc.json()["cancelled"] is False  # war schon fertig
+
+    def test_cancelled_status_in_job_queue(self):
+        """cancel_job() setzt status auf CANCELLED."""
+        from app.services.job_queue import JobQueue, JobStatus
+        q = JobQueue()
+        job = q.create_job("dokumentation", "Test")
+        assert q.cancel_job(job.job_id) is True
+        assert job._cancel_requested is True
+        # Status bleibt PENDING bis run_job() läuft und es setzt
+        assert job.status == JobStatus.PENDING
+
+    def test_cancel_gibt_false_fuer_unbekannte_id(self):
+        """cancel_job() gibt False für unbekannte IDs zurück."""
+        from app.services.job_queue import JobQueue
+        q = JobQueue()
+        assert q.cancel_job("nichtvorhanden") is False

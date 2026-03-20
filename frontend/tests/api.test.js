@@ -189,6 +189,16 @@ describe("pollJob()", () => {
     expect(job.has_transcript).toBe(true);
   });
 
+  test("gibt null zurück bei status=cancelled", async () => {
+    const mockFetch = jest.fn().mockResolvedValue(
+      jsonResponse({ status: "cancelled" })
+    );
+    const p = pollJob("job-cancelled", 10, mockFetch);
+    await jest.runAllTimersAsync();
+    const result = await p;
+    expect(result).toBeNull();
+  });
+
   test("wirft Fehler bei status=error", async () => {
     const mockFetch = jest.fn().mockResolvedValue(
       jsonResponse({ status: "error", error_msg: "VRAM erschöpft" })

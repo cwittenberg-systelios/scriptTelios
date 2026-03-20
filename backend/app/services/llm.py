@@ -239,10 +239,11 @@ async def _generate_ollama(
 
     async def _call(num_ctx: int) -> httpx.Response:
         payload = {
-            "model": effective_model,
-            "system": system_prompt,
-            "prompt": user_content,
-            "stream": False,
+            "model":      effective_model,
+            "system":     system_prompt,
+            "prompt":     user_content,
+            "stream":     False,
+            "keep_alive": -1,   # Modell nach Generierung im VRAM behalten
             "options": {
                 "num_predict": max_tokens,
                 "num_ctx":     num_ctx,

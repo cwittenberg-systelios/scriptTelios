@@ -51,8 +51,9 @@ export async function pollJob(jobId, maxWaitSeconds = 1200, _fetch = fetch) {
     const poll = await _fetch(`${getApiBase()}/jobs/${jobId}`);
     if (!poll.ok) continue;
     const job = await poll.json();
-    if (job.status === "done")  return job;
-    if (job.status === "error") throw new Error(job.error_msg || "Job fehlgeschlagen");
+    if (job.status === "done")      return job;
+    if (job.status === "error")     throw new Error(job.error_msg || "Job fehlgeschlagen");
+    if (job.status === "cancelled") return null;
   }
   throw new Error("Timeout: Job dauert zu lange");
 }

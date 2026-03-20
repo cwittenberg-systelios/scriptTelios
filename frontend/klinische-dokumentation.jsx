@@ -360,6 +360,16 @@ const S = `
   }
   .btn-primary:disabled { opacity: 0.40; cursor: not-allowed; }
 
+  .btn-secondary {
+    background: white; color: var(--st-text-mid);
+    border: 1px solid var(--st-gray-border); border-radius: 3px;
+    padding: 10px 20px; font-size: 14px; font-weight: 600;
+    cursor: pointer; letter-spacing: 0.01em;
+    transition: background 0.15s, border-color 0.15s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-secondary:hover { background: var(--st-gray-light); border-color: var(--st-text-soft); }
+
   /* ── OUTPUT ── */
   .output-card {
     background: white; border: 1px solid var(--st-gray-mid);
@@ -710,7 +720,8 @@ function clearActiveJob() {
   try { localStorage.removeItem(JOB_STORAGE_KEY); } catch (_) {}
 }
 
-// Polling fuer eine bekannte job_id – wiederverwendbar fuer Resume
+// Polling fuer eine bekannte job_id – wiederverwendbar fuer Resume.
+// Stoppt automatisch wenn der Server status="cancelled" zurueckgibt.
 async function pollJob(jobId, maxWaitSeconds = 1200) {
   const interval = 2;
   for (let i = 0; i < maxWaitSeconds / interval; i++) {
@@ -718,14 +729,13 @@ async function pollJob(jobId, maxWaitSeconds = 1200) {
     const poll = await fetch(`${getApiBase()}/jobs/${jobId}`);
     if (!poll.ok) continue;
     const job = await poll.json();
-    if (job.status === "done")  return job;
-    if (job.status === "error") throw new Error(job.error_msg || "Job fehlgeschlagen");
+    if (job.status === "done")      return job;
+    if (job.status === "error")     throw new Error(job.error_msg || "Job fehlgeschlagen");
+    if (job.status === "cancelled") return null;  // Server hat abgebrochen
   }
   throw new Error("Timeout: Job dauert zu lange");
 }
 
-// Ruft das sysTelios Backend asynchron auf (Job-Queue mit Polling).
-// Gibt Promise<{ text, jobId }> zurueck – jobId fuer optionalen Transkript-Download.
 async function generate(workflow, prompt, userContent, files = {}, page = null) {
   const therapeutId = getConfluenceUser();
   const fd = new FormData();
@@ -751,7 +761,7 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   saveActiveJob(jobId, page);
 
   try {
-    const job = await pollJob(jobId);
+    const job = await pollJob(jobId, 1200);
     clearActiveJob();
     return { text: job.result_text || "", jobId, hasTranscript: job.has_transcript || false };
   } catch (e) {
@@ -794,8 +804,9 @@ function P1({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p1") return;
     setBusy(true);
-    pollJob(resumeJob.jobId)
+    pollJob(resumeJob.jobId, 1200)
       .then(job => {
+        if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
         setLastJobId(resumeJob.jobId);
         setHasTranscript(job.has_transcript || false);
@@ -804,6 +815,16 @@ function P1({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
       .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
+
+  function cancelRun() {
+    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
+    const jobId = loadActiveJob()?.jobId;
+    if (jobId) {
+      fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+    }
+    clearActiveJob();
+    setBusy(false);
+  }
 
   async function run() {
     setBusy(true);
@@ -933,10 +954,10 @@ function P1({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
               </div>
             </div>
             <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
-            <button className="btn-primary" onClick={run} disabled={busy || (!audio && !txtFile && !text && !bullets)}>
-              {busy ? <span className="spin" /> : null}
-              {busy ? "Generiere ..." : "Verlaufsnotiz generieren"}
-            </button>
+            {busy
+              ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
+              : <button className="btn-primary" onClick={run} disabled={!audio && !txtFile && !text && !bullets}>Verlaufsnotiz generieren</button>
+            }
           </div>
 
           <Output text={out} loading={busy}
@@ -972,8 +993,9 @@ function P2({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p2") return;
     setBusy(true);
-    pollJob(resumeJob.jobId)
+    pollJob(resumeJob.jobId, 1200)
       .then(job => {
+        if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
         setLastJobId(resumeJob.jobId);
         setHasTranscript(job.has_transcript || false);
@@ -982,6 +1004,16 @@ function P2({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
       .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
+
+  function cancelRun() {
+    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
+    const jobId = loadActiveJob()?.jobId;
+    if (jobId) {
+      fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+    }
+    clearActiveJob();
+    setBusy(false);
+  }
 
   async function run() {
     setBusy(true);
@@ -1116,10 +1148,10 @@ function P2({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
               </div>
             </div>
             <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
-            <button className="btn-primary" onClick={run} disabled={busy || !selbst}>
-              {busy ? <span className="spin" /> : null}
-              {busy ? "Generiere ..." : "Anamnese und Befund generieren"}
-            </button>
+            {busy
+              ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
+              : <button className="btn-primary" onClick={run} disabled={!selbst}>Anamnese und Befund generieren</button>
+            }
           </div>
 
           <Output text={out} loading={busy}
@@ -1148,8 +1180,9 @@ function P3({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p3") return;
     setBusy(true);
-    pollJob(resumeJob.jobId)
+    pollJob(resumeJob.jobId, 1200)
       .then(job => {
+        if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
         setLastJobId(resumeJob.jobId);
         onResumed();
@@ -1157,6 +1190,16 @@ function P3({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
       .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
+
+  function cancelRun() {
+    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
+    const jobId = loadActiveJob()?.jobId;
+    if (jobId) {
+      fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+    }
+    clearActiveJob();
+    setBusy(false);
+  }
 
   async function run() {
     setBusy(true);
@@ -1218,10 +1261,10 @@ function P3({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
 
           <div className="action-bar">
             <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
-            <button className="btn-primary" onClick={run} disabled={busy || !verlauf}>
-              {busy ? <span className="spin" /> : null}
-              {busy ? "Generiere ..." : "Verlängerungsantrag erstellen"}
-            </button>
+            {busy
+              ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
+              : <button className="btn-primary" onClick={run} disabled={!verlauf}>Verlängerungsantrag erstellen</button>
+            }
           </div>
 
           <Output text={out} loading={busy}
@@ -1246,8 +1289,9 @@ function P4({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p4") return;
     setBusy(true);
-    pollJob(resumeJob.jobId)
+    pollJob(resumeJob.jobId, 1200)
       .then(job => {
+        if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
         setLastJobId(resumeJob.jobId);
         onResumed();
@@ -1255,6 +1299,16 @@ function P4({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
       .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
+
+  function cancelRun() {
+    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
+    const jobId = loadActiveJob()?.jobId;
+    if (jobId) {
+      fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+    }
+    clearActiveJob();
+    setBusy(false);
+  }
 
   async function run() {
     setBusy(true);
@@ -1316,10 +1370,10 @@ function P4({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
 
           <div className="action-bar">
             <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
-            <button className="btn-primary" onClick={run} disabled={busy || !verlauf}>
-              {busy ? <span className="spin" /> : null}
-              {busy ? "Generiere ..." : "Entlassbericht erstellen"}
-            </button>
+            {busy
+              ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
+              : <button className="btn-primary" onClick={run} disabled={!verlauf}>Entlassbericht erstellen</button>
+            }
           </div>
 
           <Output text={out} loading={busy}

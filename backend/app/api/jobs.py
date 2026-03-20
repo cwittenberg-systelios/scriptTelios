@@ -8,6 +8,7 @@ from typing import Annotated, Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.files import save_upload, ALLOWED_DOCS, ALLOWED_IMAGES, ALLOWED_AUDIO
 from app.services.job_queue import job_queue, JobStatus
 from app.services.embeddings import retrieve_style_examples
@@ -68,6 +69,25 @@ async def get_job(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
     return job.to_dict()
+
+
+@router.delete("/jobs/{job_id}")
+async def cancel_job(job_id: str):
+    """
+    Bricht einen laufenden Job ab.
+    Setzt das Cancel-Flag – run_job() stoppt nach dem aktuellen Schritt.
+    Ollama-Requests können nicht mittendrin unterbrochen werden,
+    aber das Ergebnis wird nach Fertigstellung verworfen.
+    """
+    job = job_queue.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
+    cancelled = job_queue.cancel_job(job_id)
+    return {
+        "job_id":    job_id,
+        "cancelled": cancelled,
+        "status":    job.status.value,
+    }
 
 
 @router.get("/jobs/{job_id}/transcript")

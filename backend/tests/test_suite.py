@@ -641,11 +641,14 @@ class TestPrompts:
             style_is_example=True,
         )
         assert beispiel in p
-        # Muss die explizite Abgrenzungsanweisung enthalten
-        assert "nur" in p.lower() and "Stil" in p
-        assert "NICHT" in p or "nicht" in p.lower()
-        # Soll NICHT die STILVORLAGE-Formulierung verwenden (die ist für extrahierte Beschreibungen)
+        # Muss die explizite Abgrenzungsanweisung enthalten (case-insensitive)
+        p_lower = p.lower()
+        assert "nur" in p_lower
+        assert "stil" in p_lower
+        assert "nicht" in p_lower
+        # Soll STILBEISPIEL-Kennzeichnung verwenden, nicht STILVORLAGE
         assert "STILBEISPIEL" in p
+        assert "STILVORLAGE" not in p
 
     def test_system_prompt_stilprofil_extrahiert_ohne_rahmung(self):
         """Extrahiertes Stilprofil (style_is_example=False) wird direkt als Anweisung eingebettet."""

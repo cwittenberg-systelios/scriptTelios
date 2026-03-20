@@ -60,10 +60,11 @@ def _log_performance(job: "Job", queue_size: int) -> None:
 
 
 class JobStatus(str, Enum):
-    PENDING  = "pending"
-    RUNNING  = "running"
-    DONE     = "done"
-    ERROR    = "error"
+    PENDING    = "pending"
+    RUNNING    = "running"
+    DONE       = "done"
+    ERROR      = "error"
+    CANCELLED  = "cancelled"
 
 
 class Job:
@@ -81,6 +82,7 @@ class Job:
         self.finished_at        : Optional[datetime] = None
         self.model_used         : Optional[str] = None
         self.duration_s         : Optional[float] = None
+        self._cancel_requested  : bool = False  # gesetzt via cancel_job()
 
     def to_dict(self) -> dict:
         return {
@@ -88,6 +90,7 @@ class Job:
             "workflow":        self.workflow,
             "description":     self.description,
             "status":          self.status.value,
+            "cancelled":       self._cancel_requested,
             "result_text":     self.result_text,
             "has_transcript":  self.result_transcript is not None,
             "result_file":     self.result_file,
@@ -122,6 +125,21 @@ class JobQueue:
     def get_all_jobs(self) -> list[Job]:
         return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
 
+    def cancel_job(self, job_id: str) -> bool:
+        """
+        Markiert einen Job als abzubrechen.
+        run_job() prüft das Flag und bricht ab bevor/nach dem LLM-Call.
+        Gibt True zurück wenn der Job gefunden und noch nicht abgeschlossen war.
+        """
+        job = self._jobs.get(job_id)
+        if not job:
+            return False
+        if job.status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED):
+            return False
+        job._cancel_requested = True
+        logger.info("Abbruch angefordert: %s (%s)", job_id, job.workflow)
+        return True
+
     async def run_job(
         self,
         job: Job,
@@ -133,7 +151,22 @@ class JobQueue:
         t0 = asyncio.get_event_loop().time()
 
         try:
+            # Vor dem Start: schon abgebrochen?
+            if job._cancel_requested:
+                job.status = JobStatus.CANCELLED
+                job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
+                logger.info("Job abgebrochen (vor Start): %s", job.job_id)
+                return
+
             result = await coro
+
+            # Nach dem LLM-Call: inzwischen abgebrochen?
+            if job._cancel_requested:
+                job.status = JobStatus.CANCELLED
+                job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
+                logger.info("Job abgebrochen (nach Generierung): %s", job.job_id)
+                return
+
             job.status             = JobStatus.DONE
             job.result_text        = result.get("text")
             job.result_transcript  = result.get("transcript")
@@ -144,6 +177,11 @@ class JobQueue:
                 "Job abgeschlossen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s
             )
         except Exception as e:
+            if job._cancel_requested:
+                job.status = JobStatus.CANCELLED
+                job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
+                logger.info("Job abgebrochen (Exception während Abbruch): %s", job.job_id)
+                return
             job.status    = JobStatus.ERROR
             job.error_msg = str(e)
             job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
@@ -157,7 +195,7 @@ class JobQueue:
         if len(self._jobs) > self._max_jobs:
             # Aelteste abgeschlossene Jobs entfernen
             done_jobs = sorted(
-                [j for j in self._jobs.values() if j.status in (JobStatus.DONE, JobStatus.ERROR)],
+                [j for j in self._jobs.values() if j.status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED)],
                 key=lambda j: j.created_at,
             )
             for job in done_jobs[:len(self._jobs) - self._max_jobs]:

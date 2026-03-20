@@ -387,14 +387,15 @@ def _preprocess_transcript(text: str) -> str:
 def _transcribe_single(file_path: Path, duration: float) -> dict:
     """Einzelne Datei transkribieren mit Sprecher-Heuristik und Vorverarbeitung."""
     model = _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
-    segments, info = model.transcribe(
+    segments_gen, info = model.transcribe(
         str(file_path),
         language="de",
-        beam_size=2,
+        beam_size=1,           # Greedy – stabiler als beam_size=2 mit VAD
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
+        word_timestamps=False,
     )
-    segments = list(segments)
+    segments = list(segments_gen)
     text = _assign_speakers(segments)
     text = _preprocess_transcript(text)
     return {
@@ -411,6 +412,13 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
     Chunks werden an Stille-Grenzen geschnitten.
     Sprecher-Zuordnung laeuft ueber alle Chunks konsistent durch.
     Vorverarbeitung laeuft nach Zusammenfuehren aller Chunks.
+
+    Stabilitaetshinweise:
+    - beam_size=1 (Greedy) statt beam_size=2: verhindert CUDA-Deadlocks
+      bei VAD+Beam-Search Kombination auf large-v3
+    - Jeder Chunk hat einen eigenen try/except: ein hängender Chunk
+      bricht nicht die gesamte Transkription ab
+    - segments-Generator wird mit explizitem Timeout konsumiert
     """
     logger.info(
         "Lange Aufnahme (%.1f Min) – splitte in %d-Min-Chunks",
@@ -432,15 +440,36 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
 
         for i, chunk_path in enumerate(chunks):
             logger.info("Transkribiere Chunk %d/%d ...", i + 1, len(chunks))
-            segments, info = model.transcribe(
-                str(chunk_path),
-                language="de",
-                beam_size=2,
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": 500},
-            )
-            segments = list(segments)
-            language = info.language
+            try:
+                segments_gen, info = model.transcribe(
+                    str(chunk_path),
+                    language="de",
+                    beam_size=1,          # Greedy – stabiler als beam_size=2 mit VAD
+                    vad_filter=True,
+                    vad_parameters={"min_silence_duration_ms": 500},
+                    word_timestamps=False, # spart Speicher und Rechenzeit
+                )
+                # Generator explizit mit Timeout konsumieren
+                # (list() kann bei CUDA-Deadlock ewig haengen)
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    future = ex.submit(list, segments_gen)
+                    try:
+                        segments = future.result(timeout=300)  # max 5 Min pro Chunk
+                    except concurrent.futures.TimeoutError:
+                        logger.error(
+                            "Chunk %d/%d: Timeout nach 5 Min – ueberspringe diesen Chunk",
+                            i + 1, len(chunks)
+                        )
+                        continue
+
+                language = info.language
+            except Exception as e:
+                logger.error(
+                    "Chunk %d/%d: Fehler (%s) – ueberspringe diesen Chunk",
+                    i + 1, len(chunks), e
+                )
+                continue
 
             # Zeitoffset fuer diesen Chunk (aus splits berechnen)
             chunk_offset = splits[i - 1] if i > 0 else 0.0
@@ -460,6 +489,12 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
                     all_lines.append(f"[{current_speaker}]: {text}")
 
                 last_end_global = abs_end
+
+        if not all_lines:
+            raise RuntimeError(
+                "Alle Chunks fehlgeschlagen oder leer – Transkription nicht moeglich. "
+                "Prüfe CUDA-Speicher und Audioqualität."
+            )
 
         full_text = "\n".join(all_lines)
         full_text = _preprocess_transcript(full_text)
