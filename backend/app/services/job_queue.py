@@ -68,33 +68,35 @@ class JobStatus(str, Enum):
 
 class Job:
     def __init__(self, job_id: str, workflow: str, description: str = ""):
-        self.job_id       = job_id
-        self.workflow     = workflow
-        self.description  = description
-        self.status       = JobStatus.PENDING
-        self.result_text  : Optional[str] = None
-        self.result_file  : Optional[str] = None
-        self.error_msg    : Optional[str] = None
-        self.created_at   = datetime.now(timezone.utc)
-        self.started_at   : Optional[datetime] = None
-        self.finished_at  : Optional[datetime] = None
-        self.model_used   : Optional[str] = None
-        self.duration_s   : Optional[float] = None
+        self.job_id             = job_id
+        self.workflow           = workflow
+        self.description        = description
+        self.status             = JobStatus.PENDING
+        self.result_text        : Optional[str] = None
+        self.result_transcript  : Optional[str] = None
+        self.result_file        : Optional[str] = None
+        self.error_msg          : Optional[str] = None
+        self.created_at         = datetime.now(timezone.utc)
+        self.started_at         : Optional[datetime] = None
+        self.finished_at        : Optional[datetime] = None
+        self.model_used         : Optional[str] = None
+        self.duration_s         : Optional[float] = None
 
     def to_dict(self) -> dict:
         return {
-            "job_id":       self.job_id,
-            "workflow":     self.workflow,
-            "description":  self.description,
-            "status":       self.status.value,
-            "result_text":  self.result_text,
-            "result_file":  self.result_file,
-            "error_msg":    self.error_msg,
-            "created_at":   self.created_at.isoformat(),
-            "started_at":   self.started_at.isoformat() if self.started_at else None,
-            "finished_at":  self.finished_at.isoformat() if self.finished_at else None,
-            "model_used":   self.model_used,
-            "duration_s":   self.duration_s,
+            "job_id":          self.job_id,
+            "workflow":        self.workflow,
+            "description":     self.description,
+            "status":          self.status.value,
+            "result_text":     self.result_text,
+            "has_transcript":  self.result_transcript is not None,
+            "result_file":     self.result_file,
+            "error_msg":       self.error_msg,
+            "created_at":      self.created_at.isoformat(),
+            "started_at":      self.started_at.isoformat() if self.started_at else None,
+            "finished_at":     self.finished_at.isoformat() if self.finished_at else None,
+            "model_used":      self.model_used,
+            "duration_s":      self.duration_s,
         }
 
 
@@ -132,10 +134,11 @@ class JobQueue:
 
         try:
             result = await coro
-            job.status      = JobStatus.DONE
-            job.result_text = result.get("text")
-            job.result_file = result.get("file")
-            job.model_used  = result.get("model_used")
+            job.status             = JobStatus.DONE
+            job.result_text        = result.get("text")
+            job.result_transcript  = result.get("transcript")
+            job.result_file        = result.get("file")
+            job.model_used         = result.get("model_used")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
             logger.info(
                 "Job abgeschlossen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s

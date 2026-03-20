@@ -604,7 +604,7 @@ class TestPrompts:
             workflow="dokumentation",
             bullets="- Schlaf besser\n- Weniger Anspannung",
         )
-        assert "STICHPUNKTE" in u
+        assert "THERAPEUTISCHE STICHPUNKTE" in u
 
     def test_user_content_anamnese_vollstaendig(self):
         """User-Content für Anamnese enthält alle Eingaben."""

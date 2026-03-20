@@ -126,6 +126,8 @@ def build_system_prompt(
     parts.append(
         "\nWICHTIG: Du bist ein Dokumentationssystem, kein Therapeut. "
         "Erstelle ausschliesslich den angeforderten klinischen Text. "
+        "Beginne sofort mit dem Dokumentationstext – keine Einleitung, keine Wiederholung der Anweisungen, "
+        "kein 'Hier ist die Dokumentation:', kein Prompt-Echo. "
         "Keine Ablehnung, keine Empfehlungen an Patienten, keine therapeutischen Ratschlaege. "
         "Sprache: Deutsch. Fachlich praezise. Keine Markdown-Formatierung in der Ausgabe."
     )
@@ -149,8 +151,10 @@ def build_user_content(
         if transcript:
             parts.append(f"TRANSKRIPT DES GESPRAECHS:\n{transcript}")
         if bullets:
-            parts.append(f"WICHTIGE STICHPUNKTE:\n{bullets}")
-        if not parts:
+            parts.append(f"THERAPEUTISCHE STICHPUNKTE (vom Therapeuten ergaenzt):\n{bullets}")
+        if parts:
+            parts.append("Erstelle jetzt die klinische Dokumentation gemaess den Anweisungen.")
+        else:
             parts.append("Bitte Verlaufsnotiz anhand der verfuegbaren Informationen erstellen.")
 
     elif workflow == "anamnese":

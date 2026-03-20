@@ -406,21 +406,21 @@ const S = `
 `;
 
 // ── Prompts ─────────────────────────────────────────────────────
-const P_DOKU = `Erstelle eine systemische Gesprächsdokumentation in Fließtext. Schreibe aktiv aus der Perspektive der Klientin/des Klienten – nicht über das Gespräch, sondern über die Person und ihre Themen. Keine abschließende Sektion über den Gesprächsstil.
+const P_DOKU = `Erstelle eine systemische Gesprächsdokumentation. Schreibe aktiv aus der Perspektive der Klientin/des Klienten – nicht über das Gespräch, sondern über die Person und ihre Themen. Gliedere den Text in folgende vier Abschnitte mit den jeweiligen Überschriften:
 
-Auftragsklärung
+**Auftragsklärung**
 Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame Ziel des Gesprächs war. Beispiel: "Im Mittelpunkt stand..." oder "Frau X. kam mit dem Anliegen..."
 
-Relevante Gesprächsinhalte
+**Relevante Gesprächsinhalte**
 Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. Konkrete Formulierungen statt allgemeiner Beschreibungen. Systemische und IFS-Begriffe wo passend (Manager-Anteile, Exile, Self-Energy etc.).
 
-Hypothesen und Entwicklungsperspektiven
+**Hypothesen und Entwicklungsperspektiven**
 Formuliere systemische Hypothesen über Sinnzusammenhänge. Zeige Entwicklungsperspektiven auf – was wird möglich, wenn... Ressourcenorientiert und konkret.
 
-Einladungen
+**Einladungen**
 Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden – aktiv formuliert: "Frau X. wurde eingeladen, ..." oder "Als Übung wurde vereinbart, ..."
 
-Stil: Fließtext, aktiv, konkret, systemisch-wertschätzend. Keine Aufzählungszeichen außer bei den Einladungen. Keine Sektion über den Gesprächsstil.`;
+Stil: Fließtext pro Abschnitt, aktiv, konkret, systemisch-wertschätzend. Keine Sektion über den Gesprächsstil.`;
 
 const P_ANAMNESE = `Erstelle Anamnese und psychopathologischen Befund aus systemischer Perspektive auf Basis der vorliegenden Unterlagen.
 
@@ -530,7 +530,7 @@ function PromptEditor({ value, onChange, def }) {
   );
 }
 
-function Output({ text, loading, tabs, activeTab, onTab, onCopy, onDownload }) {
+function Output({ text, loading, tabs, activeTab, onTab, onCopy, onDownload, extraButtons = [] }) {
   const empty = !text && !loading;
   return (
     <div className="output-card">
@@ -539,6 +539,9 @@ function Output({ text, loading, tabs, activeTab, onTab, onCopy, onDownload }) {
         <div className="output-btns">
           {text && <button className="btn-out" onClick={onCopy}>Kopieren</button>}
           {text && onDownload && <button className="btn-out" onClick={onDownload}>Download</button>}
+          {extraButtons.map((btn, i) => (
+            <button key={i} className="btn-out" onClick={btn.onClick}>{btn.label}</button>
+          ))}
         </div>
       </div>
       {tabs && (
@@ -610,26 +613,27 @@ async function pollJob(jobId, maxWaitSeconds = 1200) {
     const poll = await fetch(`${getApiBase()}/jobs/${jobId}`);
     if (!poll.ok) continue;
     const job = await poll.json();
-    if (job.status === "done")  return job.result_text || "";
+    if (job.status === "done")  return job;
     if (job.status === "error") throw new Error(job.error_msg || "Job fehlgeschlagen");
   }
   throw new Error("Timeout: Job dauert zu lange");
 }
 
 // Ruft das sysTelios Backend asynchron auf (Job-Queue mit Polling).
-// Gibt Promise<string> zurueck – wartet bis Job fertig ist.
+// Gibt Promise<{ text, jobId }> zurueck – jobId fuer optionalen Transkript-Download.
 async function generate(workflow, prompt, userContent, files = {}, page = null) {
   const therapeutId = getConfluenceUser();
   const fd = new FormData();
   fd.append("workflow",   workflow);
   fd.append("prompt",     prompt);
   fd.append("transcript", userContent);
-  if (therapeutId)     fd.append("therapeut_id",  therapeutId);
-  if (files.audio)     fd.append("audio",          files.audio);
-  if (files.selbst)    fd.append("selbstauskunft", files.selbst);
-  if (files.vorbef)    fd.append("vorbefunde",     files.vorbef);
-  if (files.style)     fd.append("style_file",     files.style);
-  if (files.diagnosen) fd.append("diagnosen",      files.diagnosen);
+  if (therapeutId)      fd.append("therapeut_id",  therapeutId);
+  if (files.audio)      fd.append("audio",          files.audio);
+  if (files.selbst)     fd.append("selbstauskunft", files.selbst);
+  if (files.vorbef)     fd.append("vorbefunde",     files.vorbef);
+  if (files.style)      fd.append("style_file",     files.style);
+  if (files.diagnosen)  fd.append("diagnosen",      files.diagnosen);
+  if (files.bullets)    fd.append("bullets",        files.bullets);
 
   // Job starten
   const r = await fetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
@@ -637,18 +641,30 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   if (!r.ok) throw new Error(d.detail || r.statusText);
 
   const jobId = d.job_id;
-
-  // Job-ID in localStorage speichern damit Reload den Job nicht verliert
   saveActiveJob(jobId, page);
 
   try {
-    const result = await pollJob(jobId);
+    const job = await pollJob(jobId);
     clearActiveJob();
-    return result;
+    return { text: job.result_text || "", jobId, hasTranscript: job.has_transcript || false };
   } catch (e) {
     clearActiveJob();
     throw e;
   }
+}
+
+// Laedt das Transkript eines Jobs vom Backend und speichert es als .txt
+async function downloadTranscript(jobId, filename = "transkript.txt") {
+  const r = await fetch(`${getApiBase()}/jobs/${jobId}/transcript`);
+  if (!r.ok) throw new Error("Transkript nicht verfügbar");
+  const data = await r.json();
+  const blob = new Blob([data.transcript], { type: "text/plain;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Pages ────────────────────────────────────────────────────────
@@ -659,25 +675,31 @@ function P1({ toast, resumeJob, onResumed }) {
   const [bullets, setBullets] = useState("");
   const [style, setStyle]   = useState(null);
   const [prompt, setPrompt] = useState(P_DOKU);
-  const [out, setOut]       = useState("");
-  const [busy, setBusy]     = useState(false);
-  const [geschlecht, setGeschlecht] = useState("auto"); // "w" | "m" | "d" | "auto"
+  const [out, setOut]           = useState("");
+  const [lastJobId, setLastJobId] = useState(null);
+  const [hasTranscript, setHasTranscript] = useState(false);
+  const [busy, setBusy]         = useState(false);
+  const [geschlecht, setGeschlecht] = useState("auto");
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p1") return;
     setBusy(true);
     pollJob(resumeJob.jobId)
-      .then(result => { setOut(result); onResumed(); })
+      .then(job => {
+        setOut(job.result_text || "");
+        setLastJobId(resumeJob.jobId);
+        setHasTranscript(job.has_transcript || false);
+        onResumed();
+      })
       .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
 
   async function run() {
     setBusy(true);
-    const u = (text    ? "TRANSKRIPT:\n" + text + "\n\n" : "")
-            + (bullets ? "STICHPUNKTE:\n" + bullets + "\n" : "");
-
+    setLastJobId(null);
+    setHasTranscript(false);
     const geschlechtHinweis = {
       "w":    "\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen (die Klientin, sie, ihr).",
       "m":    "\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen (der Klient, er, ihm).",
@@ -687,10 +709,14 @@ function P1({ toast, resumeJob, onResumed }) {
     const promptMitGeschlecht = prompt + geschlechtHinweis;
 
     try {
-      setOut(await generate("dokumentation", promptMitGeschlecht, u || "Verlaufsnotiz erstellen.", {
+      const result = await generate("dokumentation", promptMitGeschlecht, text || "", {
         audio: audio,
         style: style,
-      }, "p1"));
+        bullets: bullets || null,
+      }, "p1");
+      setOut(result.text || "");
+      setLastJobId(result.jobId);
+      setHasTranscript(result.hasTranscript || false);
     }
     catch (e) { setOut("Fehler: " + e.message); }
     setBusy(false);
@@ -764,7 +790,10 @@ function P1({ toast, resumeJob, onResumed }) {
           </div>
 
           <Output text={out} loading={busy}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("In Zwischenablage kopiert"); }} />
+            onCopy={() => { navigator.clipboard.writeText(out); toast("In Zwischenablage kopiert"); }}
+            extraButtons={hasTranscript ? [
+              { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
+            ] : []} />
         </div>
       </div>
     </div>

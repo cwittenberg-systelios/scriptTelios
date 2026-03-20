@@ -24,11 +24,31 @@ logger = logging.getLogger(__name__)
 
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str):
-    """Gibt den aktuellen Status eines Jobs zurueck."""
+    """Gibt den aktuellen Status eines Jobs zurueck (ohne Transkript)."""
     job = job_queue.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
     return job.to_dict()
+
+
+@router.get("/jobs/{job_id}/transcript")
+async def get_job_transcript(job_id: str):
+    """
+    Gibt das Transkript eines abgeschlossenen Jobs zurueck.
+    Nur verfuegbar wenn der Job Audio enthalten hat.
+    Separater Endpunkt damit das Transkript nicht bei jedem Poll-Request
+    uebertragen wird (kann >50k Zeichen sein).
+    """
+    job = job_queue.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
+    if job.result_transcript is None:
+        raise HTTPException(status_code=404, detail="Kein Transkript fuer diesen Job vorhanden")
+    return {
+        "job_id":     job_id,
+        "transcript": job.result_transcript,
+        "word_count": len(job.result_transcript.split()),
+    }
 
 
 @router.get("/jobs")
@@ -154,6 +174,7 @@ async def create_generate_job(
         result = await generate_text(system, user)
         return {
             "text":       result["text"],
+            "transcript": audio_transcript or None,
             "model_used": result["model_used"],
         }
 
