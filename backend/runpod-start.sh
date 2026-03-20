@@ -197,7 +197,13 @@ done
 
 # Modelle pruefen und laden
 echo "${GO}Modelle pruefen..."
-for model in "mistral-nemo" "nomic-embed-text" "llava"; do
+# Empfohlene Modelle:
+#   RTX Pro 4500 / 32GB:  qwen2.5:32b:q6_K (~24GB)  <- Empfehlung
+#   RTX 4090 / 24GB:      qwen2.5:32b       (~19GB)  <- Empfehlung
+#   Alternative:          gemma3:27b         (~17GB)
+#   Reasoning:            deepseek-r1:32b    (~19GB)
+LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen2.5:32b:q6_K")
+for model in "$LLM_MODEL" "nomic-embed-text"; do
     if OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama list 2>/dev/null | grep -q "$model"; then
         echo "${OK}$model vorhanden"
     else
@@ -284,7 +290,7 @@ if [ ! -f "$BACKEND_DIR/.env" ]; then
     SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     cat > "$BACKEND_DIR/.env" << ENVEOF
 OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=mistral-nemo
+OLLAMA_MODEL=qwen2.5:32b:q6_K
 WHISPER_MODEL=large-v3
 WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16
@@ -350,6 +356,19 @@ for i in $(seq 1 $MAX); do
         sleep 3
     fi
 done
+
+# 8b. Ollama-Modell in VRAM vorwaermen (verhindert 25-30s Kaltstart beim ersten Request)
+echo "${GO}Ollama-Modell vorwaermen (kann bei grossen Modellen 30-60s dauern)..."
+OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen2.5:32b:q6_K")
+WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
+    -H "Content-Type: application/json" \
+    -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": \"\", \"keep_alive\": -1}" \
+    --max-time 120 2>/dev/null)
+if echo "$WARMUP_RESPONSE" | grep -q "done"; then
+    echo "${OK}${OLLAMA_MODEL} im VRAM geladen – erster Request sofort bereit"
+else
+    echo "${WARN}Warmup-Ping fehlgeschlagen (ignoriert) – erster Request laedt Modell"
+fi
 
 # 9. Cloudflare Tunnel starten
 echo ""

@@ -528,6 +528,58 @@ function Dropzone({ label, hint, accept, file, onFile, icon }) {
  *     {(active) => active === "a" && <Dropzone ... />}
  *   </InputTabs>
  */
+/**
+ * ModelSelector – kompakter Inline-Selektor für das LLM-Modell.
+ * Lädt verfügbare Modelle vom Backend und zeigt sie als Buttons an.
+ * Props: model (aktiver Wert), onChange (Callback), apiBase
+ */
+function ModelSelector({ model, onChange, apiBase }) {
+  const [models, setModels] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${apiBase}/models`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.models?.length) {
+          setModels(data.models);
+          // Wenn kein Modell gesetzt, Default nehmen
+          if (!model && data.default) onChange(data.default);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [apiBase]);
+
+  if (loading || models.length === 0) return null;
+
+  return (
+    <div style={{display:"flex", alignItems:"center", gap:4, flexWrap:"wrap"}}>
+      <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)",
+        textTransform:"uppercase", letterSpacing:"0.06em", marginRight:2}}>Modell</span>
+      {models.map(m => {
+        const isActive = model === m.name || (!model && m.is_default);
+        const shortName = m.name.replace(/:latest$/, "");
+        return (
+          <button key={m.name} onClick={() => onChange(m.name)} title={m.name}
+            style={{
+              padding:"3px 8px", borderRadius:3, cursor:"pointer",
+              fontSize:11, fontWeight: isActive ? 700 : 400,
+              background: isActive ? "var(--st-red)" : "var(--st-gray-light)",
+              color: isActive ? "white" : "var(--st-text-soft)",
+              border: isActive ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+              transition:"all 0.12s", whiteSpace:"nowrap",
+            }}>
+            {shortName}
+            {m.size_gb ? <span style={{opacity:0.75, fontSize:10}}> {m.size_gb}G</span> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function InputTabs({ tabs, children, defaultTab }) {
   const [active, setActive] = useState(defaultTab || tabs[0]?.id);
   return (
@@ -688,6 +740,7 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   if (files.diagnosen)  fd.append("diagnosen",      files.diagnosen);
   if (files.bullets)    fd.append("bullets",        files.bullets);
   if (files.styleText)  fd.append("style_text",     files.styleText);
+  if (files.model)      fd.append("model",           files.model);
 
   // Job starten
   const r = await fetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
@@ -722,7 +775,7 @@ async function downloadTranscript(jobId, filename = "transkript.txt") {
 }
 
 // ── Pages ────────────────────────────────────────────────────────
-function P1({ toast, resumeJob, onResumed }) {
+function P1({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
   const [audio, setAudio]   = useState(null);
   const [txtFile, setTxtFile] = useState(null);
   const [text, setText]     = useState("");
@@ -774,6 +827,7 @@ function P1({ toast, resumeJob, onResumed }) {
         style: style,
         styleText: styleText || null,
         bullets: bullets || null,
+        model: model || null,
       }, "p1");
       setOut(result.text || "");
       setLastJobId(result.jobId);
@@ -878,6 +932,7 @@ function P1({ toast, resumeJob, onResumed }) {
                 />
               </div>
             </div>
+            <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
             <button className="btn-primary" onClick={run} disabled={busy || (!audio && !txtFile && !text && !bullets)}>
               {busy ? <span className="spin" /> : null}
               {busy ? "Generiere ..." : "Verlaufsnotiz generieren"}
@@ -895,44 +950,70 @@ function P1({ toast, resumeJob, onResumed }) {
   );
 }
 
-function P2({ toast, resumeJob, onResumed }) {
-  const [selbst, setSelbst]   = useState(null);
-  const [befunde, setBefunde] = useState(null);
-  const [audio, setAudio]     = useState(null);
-  const [txtFile, setTxtFile] = useState(null);
-  const [text, setText]       = useState("");
-  const [dx, setDx]           = useState([]);
-  const [style, setStyle]     = useState(null);
-  const [prompt, setPrompt]   = useState(P_ANAMNESE);
-  const [out, setOut]         = useState("");
-  const [tab, setTab]         = useState("Anamnese");
-  const [busy, setBusy]       = useState(false);
+function P2({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
+  const [selbst, setSelbst]       = useState(null);
+  const [befunde, setBefunde]     = useState(null);
+  const [audio, setAudio]         = useState(null);
+  const [txtFile, setTxtFile]     = useState(null);
+  const [text, setText]           = useState("");
+  const [dx, setDx]               = useState([]);
+  const [style, setStyle]         = useState(null);
+  const [styleText, setStyleText] = useState("");
+  const [prompt, setPrompt]       = useState(P_ANAMNESE);
+  const [out, setOut]             = useState("");
+  const [tab, setTab]             = useState("Anamnese");
+  const [lastJobId, setLastJobId] = useState(null);
+  const [hasTranscript, setHasTranscript] = useState(false);
+  const [busy, setBusy]           = useState(false);
   const [geschlecht, setGeschlecht] = useState("auto");
+  const [kuerzel, setKuerzel]     = useState("");
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p2") return;
     setBusy(true);
     pollJob(resumeJob.jobId)
-      .then(result => { setOut(result); onResumed(); })
+      .then(job => {
+        setOut(job.result_text || "");
+        setLastJobId(resumeJob.jobId);
+        setHasTranscript(job.has_transcript || false);
+        onResumed();
+      })
       .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
 
   async function run() {
     setBusy(true);
+    setLastJobId(null);
+    setHasTranscript(false);
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
 
+    const k = kuerzel.trim().replace(/\.?$/, ".");
+    const nameHinweis = kuerzel.trim()
+      ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}", "Herr ${k}").`
+      : "";
     const geschlechtHinweis = {
-      "w":    "\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen.",
-      "m":    "\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen.",
-      "auto": "\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus den Unterlagen ab. Falls nicht erkennbar, neutrale Formen verwenden.",
+      "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen.${nameHinweis}`,
+      "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen.${nameHinweis}`,
+      "auto": `\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus den Unterlagen ab. Falls nicht erkennbar, neutrale Formen verwenden.${nameHinweis}`,
     }[geschlecht];
 
     const sys = prompt.replace("{diagnosen}", dxStr) + geschlechtHinweis;
-    const u = (text ? "AUFNAHMEGESPRAECH:\n" + text + "\n\n" : "")
-            + "DIAGNOSEN: " + dxStr + "\n\nAnamnese und psychopathologischen Befund erstellen.";
-    try { setOut(await generate("anamnese", sys, u, {}, "p2")); }
+    try {
+      const result = await generate("anamnese", sys, "", {
+        selbst:    selbst,
+        vorbef:    befunde,
+        audio:     audio,
+        style:     style,
+        styleText: styleText || null,
+        bullets:   text || null,
+        model:     model || null,
+      }, "p2");
+      setOut(result.text || "");
+      setLastJobId(result.jobId);
+      setHasTranscript(result.hasTranscript || false);
+    }
     catch (e) { setOut("Fehler: " + e.message); }
     setBusy(false);
   }
@@ -959,22 +1040,24 @@ function P2({ toast, resumeJob, onResumed }) {
             </div>
           </Card>
 
-          <Card num="B" title="Aufnahmegespraech" badge="opt" open={false}>
-            <div className="upload-grid">
-              <div>
-                <div className="upload-col-label">Audio-Aufnahme</div>
-                <Dropzone label="Aufnahme hochladen" hint=".mp3  .m4a  .wav" accept="audio/*" icon="&#127897;" file={audio} onFile={setAudio} />
-              </div>
-              <div>
-                <div className="upload-col-label">Transkript-Datei</div>
-                <Dropzone label="Datei hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
-              </div>
-            </div>
-            <div className="or-row">oder direkt eingeben</div>
-            <div>
-              <label className="field-label">Transkript Aufnahmegespraech</label>
-              <textarea rows={4} placeholder="Gespraechsinhalt des Aufnahmegespraechs ..." value={text} onChange={(e) => setText(e.target.value)} />
-            </div>
+          <Card num="B" title="Aufnahmegespräch" badge="opt" open={false}>
+            <InputTabs tabs={[
+              { id:"audio", icon:"🎙", label:"Aufnahme" },
+              { id:"file",  icon:"📄", label:"Datei"    },
+              { id:"text",  icon:"✏️", label:"Text"     },
+            ]}>
+              {(activeTab) => (<>
+                {activeTab === "audio" && (
+                  <Dropzone label="Aufnahme hochladen" hint=".mp3  .m4a  .wav" accept="audio/*" icon="&#127897;" file={audio} onFile={setAudio} />
+                )}
+                {activeTab === "file" && (
+                  <Dropzone label="Transkript-Datei hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
+                )}
+                {activeTab === "text" && (
+                  <textarea rows={5} placeholder="Gesprächsinhalt des Aufnahmegesprächs direkt einfügen ..." value={text} onChange={(e) => setText(e.target.value)} style={{marginTop:0}} />
+                )}
+              </>)}
+            </InputTabs>
           </Card>
 
           <Card num="C" title="Diagnosen" badge="req">
@@ -984,7 +1067,21 @@ function P2({ toast, resumeJob, onResumed }) {
           </Card>
 
           <Card num="D" title="Stilvorlage" badge="opt" open={false}>
-            <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
+            <InputTabs tabs={[
+              { id:"file", icon:"📎", label:"Datei"   },
+              { id:"text", icon:"✏️", label:"Text C&P" },
+            ]}>
+              {(activeTab) => (<>
+                {activeTab === "file" && (<>
+                  <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
+                  <div className="info-note" style={{marginTop:8}}>Schreibstil des hochgeladenen Textes wird übernommen.</div>
+                </>)}
+                {activeTab === "text" && (<>
+                  <textarea rows={6} placeholder="Beispieldokumentation hier einfügen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
+                  <div className="field-note">Direkt eingefügter Beispieltext als Stilvorlage</div>
+                </>)}
+              </>)}
+            </InputTabs>
           </Card>
 
           <Card num="E" title="Prompt anpassen" open={false}>
@@ -992,7 +1089,7 @@ function P2({ toast, resumeJob, onResumed }) {
           </Card>
 
           <div className="action-bar">
-            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto"}}>
+            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto", flexWrap:"wrap"}}>
               <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
               {[
                 { val:"w", label:"♀ weiblich" },
@@ -1008,7 +1105,17 @@ function P2({ toast, resumeJob, onResumed }) {
                   transition:"all 0.12s",
                 }}>{label}</button>
               ))}
+              <div style={{display:"flex", alignItems:"center", gap:4, marginLeft:4}}>
+                <span style={{fontSize:11, color:"var(--st-text-soft)"}}>Kürzel</span>
+                <input type="text" value={kuerzel} onChange={e => setKuerzel(e.target.value)}
+                  placeholder="K." maxLength={8} style={{
+                    width:48, padding:"3px 6px", fontSize:12, borderRadius:3,
+                    border:"1px solid var(--st-gray-border)", background:"var(--st-bg)",
+                    color:"var(--st-text)", fontFamily:"inherit",
+                  }} />
+              </div>
             </div>
+            <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
             <button className="btn-primary" onClick={run} disabled={busy || !selbst}>
               {busy ? <span className="spin" /> : null}
               {busy ? "Generiere ..." : "Anamnese und Befund generieren"}
@@ -1017,25 +1124,55 @@ function P2({ toast, resumeJob, onResumed }) {
 
           <Output text={out} loading={busy}
             tabs={["Anamnese", "Psych. Befund"]} activeTab={tab} onTab={setTab}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
+            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }}
+            extraButtons={hasTranscript ? [
+              { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
+            ] : []} />
         </div>
       </div>
     </div>
   );
 }
 
-function P3({ toast }) {
-  const [antrag, setAntrag]   = useState(null);
-  const [verlauf, setVerlauf] = useState(null);
-  const [style, setStyle]     = useState(null);
-  const [prompt, setPrompt]   = useState(P_VERL);
-  const [out, setOut]         = useState("");
-  const [busy, setBusy]       = useState(false);
+function P3({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
+  const [antrag, setAntrag]       = useState(null);
+  const [verlauf, setVerlauf]     = useState(null);
+  const [style, setStyle]         = useState(null);
+  const [styleText, setStyleText] = useState("");
+  const [prompt, setPrompt]       = useState(P_VERL);
+  const [out, setOut]             = useState("");
+  const [lastJobId, setLastJobId] = useState(null);
+  const [busy, setBusy]           = useState(false);
+
+  // Resume: laufenden Job nach Reload wieder aufnehmen
+  useEffect(() => {
+    if (!resumeJob || resumeJob.page !== "p3") return;
+    setBusy(true);
+    pollJob(resumeJob.jobId)
+      .then(job => {
+        setOut(job.result_text || "");
+        setLastJobId(resumeJob.jobId);
+        onResumed();
+      })
+      .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
+      .finally(() => setBusy(false));
+  }, [resumeJob]);
 
   async function run() {
     setBusy(true);
-    await new Promise((r) => setTimeout(r, 1400));
-    setOut("VERLAENGERUNGSANTRAG\n\nVorlage: " + (antrag ? antrag.name : "-") + "\nVerlaufsdokumentation: " + (verlauf ? verlauf.name : "-") + "\n\nIn der Produktionsversion wird das DOCX serverseitig befuellt.\n\nBegruendung der Verlaengerung:\nDer Klient befindet sich seit [Aufnahmedatum] in stationaerer Behandlung. Der bisherige Verlauf zeigt erste therapeutische Fortschritte. Die angestrebten Therapieziele sind noch nicht vollstaendig erreicht. Eine Verlaengerung wird aus medizinischer Sicht als notwendig erachtet.\n\n[Vollstaendiger Antrag wird aus der Verlaufsdokumentation generiert]");
+    setOut("");
+    setLastJobId(null);
+    try {
+      const result = await generate("verlaengerung", prompt, "", {
+        vorbef:    verlauf,
+        style:     style,
+        styleText: styleText || null,
+        model:     model || null,
+      }, "p3");
+      setOut(result.text || "");
+      setLastJobId(result.jobId);
+    }
+    catch (e) { setOut("Fehler: " + e.message); }
     setBusy(false);
   }
 
@@ -1043,22 +1180,36 @@ function P3({ toast }) {
     <div>
       <div className="page-header">
         <div className="page-eyebrow">Workflow 3</div>
-        <h2>Verlaengerungsantrag</h2>
-        <p>Befuellt vorhandene Antragsvorlagen aus der Verlaufsdokumentation</p>
+        <h2>Verlängerungsantrag</h2>
+        <p>Befüllt vorhandene Antragsvorlagen aus der Verlaufsdokumentation</p>
       </div>
       <div className="page-body">
         <div className="workflow">
-          <Card num="A" title="Verlaengerungsantrag-Vorlage" badge="req">
-            <Dropzone label="Antrag hochladen" hint=".docx — vorhandene Vorlage mit Feldern" accept=".docx" icon="&#128196;" file={antrag} onFile={setAntrag} />
-            <div className="info-note">Die Vorlage wird analysiert und alle Felder werden aus der Verlaufsdokumentation befuellt.</div>
+          <Card num="A" title="Verlaufsdokumentation" badge="req">
+            <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — alle Verlaufsnotizen des Aufenthalts" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
+            <div className="info-note" style={{marginTop:8}}>Alle Verlaufsnotizen des stationären Aufenthalts als PDF.</div>
           </Card>
 
-          <Card num="B" title="Verlaufsdokumentation" badge="req">
-            <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — alle Verlaufsnotizen des Aufenthalts" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
+          <Card num="B" title="Antragsvorlage" badge="opt" open={false}>
+            <Dropzone label="Vorlage hochladen" hint=".docx — vorhandene Vorlage mit Feldern" accept=".docx" icon="&#128196;" file={antrag} onFile={setAntrag} />
+            <div className="info-note" style={{marginTop:8}}>Optional: vorhandene DOCX-Vorlage — Felder werden befüllt.</div>
           </Card>
 
           <Card num="C" title="Stilvorlage" badge="opt" open={false}>
-            <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
+            <InputTabs tabs={[
+              { id:"file", icon:"📎", label:"Datei"   },
+              { id:"text", icon:"✏️", label:"Text C&P" },
+            ]}>
+              {(activeTab) => (<>
+                {activeTab === "file" && (
+                  <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
+                )}
+                {activeTab === "text" && (<>
+                  <textarea rows={5} placeholder="Beispiel-Verlängerungsantrag einfügen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
+                  <div className="field-note">Schreibstil des eingefügten Texts wird übernommen</div>
+                </>)}
+              </>)}
+            </InputTabs>
           </Card>
 
           <Card num="D" title="Prompt anpassen" open={false}>
@@ -1066,33 +1217,60 @@ function P3({ toast }) {
           </Card>
 
           <div className="action-bar">
-            <button className="btn-primary" onClick={run} disabled={busy || !antrag || !verlauf}>
+            <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
+            <button className="btn-primary" onClick={run} disabled={busy || !verlauf}>
               {busy ? <span className="spin" /> : null}
-              {busy ? "Generiere ..." : "Antrag ausfuellen"}
+              {busy ? "Generiere ..." : "Verlängerungsantrag erstellen"}
             </button>
           </div>
 
           <Output text={out} loading={busy}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }}
-            onDownload={() => toast("Download wird vorbereitet (DOCX)")} />
+            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
         </div>
       </div>
     </div>
   );
 }
 
-function P4({ toast }) {
-  const [bericht, setBericht] = useState(null);
-  const [verlauf, setVerlauf] = useState(null);
-  const [style, setStyle]     = useState(null);
-  const [prompt, setPrompt]   = useState(P_ENTL);
-  const [out, setOut]         = useState("");
-  const [busy, setBusy]       = useState(false);
+function P4({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
+  const [bericht, setBericht]     = useState(null);
+  const [verlauf, setVerlauf]     = useState(null);
+  const [style, setStyle]         = useState(null);
+  const [styleText, setStyleText] = useState("");
+  const [prompt, setPrompt]       = useState(P_ENTL);
+  const [out, setOut]             = useState("");
+  const [lastJobId, setLastJobId] = useState(null);
+  const [busy, setBusy]           = useState(false);
+
+  // Resume: laufenden Job nach Reload wieder aufnehmen
+  useEffect(() => {
+    if (!resumeJob || resumeJob.page !== "p4") return;
+    setBusy(true);
+    pollJob(resumeJob.jobId)
+      .then(job => {
+        setOut(job.result_text || "");
+        setLastJobId(resumeJob.jobId);
+        onResumed();
+      })
+      .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
+      .finally(() => setBusy(false));
+  }, [resumeJob]);
 
   async function run() {
     setBusy(true);
-    await new Promise((r) => setTimeout(r, 1400));
-    setOut("ENTLASSBERICHT\n\nVorlage: " + (bericht ? bericht.name : "-") + "\nVerlaufsdokumentation: " + (verlauf ? verlauf.name : "-") + "\n\nIn der Produktionsversion wird die DOCX-Vorlage vollstaendig befuellt.\n\nBehandlungsverlauf:\nDer Klient wurde mit [Diagnosen] aufgenommen. Im Verlauf konnten therapeutische Fortschritte erzielt werden ...\n\nEmpfehlungen:\n- Ambulante Weiterbehandlung\n- Regelmaessige Kontrolltermine\n- Fortfuehrung der vereinbarten Eigenubungen\n\n[Vollstaendiger Bericht wird synthetisiert]");
+    setOut("");
+    setLastJobId(null);
+    try {
+      const result = await generate("entlassbericht", prompt, "", {
+        vorbef:    verlauf,
+        style:     style,
+        styleText: styleText || null,
+        model:     model || null,
+      }, "p4");
+      setOut(result.text || "");
+      setLastJobId(result.jobId);
+    }
+    catch (e) { setOut("Fehler: " + e.message); }
     setBusy(false);
   }
 
@@ -1101,21 +1279,35 @@ function P4({ toast }) {
       <div className="page-header">
         <div className="page-eyebrow">Workflow 4</div>
         <h2>Entlassbericht</h2>
-        <p>Synthetisiert alle Verlaufsnotizen zu einem vollstaendigen Entlassbericht</p>
+        <p>Synthetisiert alle Verlaufsnotizen zu einem vollständigen Entlassbericht</p>
       </div>
       <div className="page-body">
         <div className="workflow">
-          <Card num="A" title="Entlassbericht-Vorlage" badge="req">
-            <Dropzone label="Vorlage hochladen" hint=".docx — Vorlage mit vorhandener Struktur" accept=".docx" icon="&#128196;" file={bericht} onFile={setBericht} />
-            <div className="info-note">Die Struktur der Vorlage wird uebernommen und mit Inhalten aus der Verlaufsdokumentation befuellt.</div>
+          <Card num="A" title="Verlaufsdokumentation" badge="req">
+            <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — gesamte Dokumentation des Aufenthalts" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
+            <div className="info-note" style={{marginTop:8}}>Alle Verlaufsnotizen des stationären Aufenthalts als PDF.</div>
           </Card>
 
-          <Card num="B" title="Verlaufsdokumentation" badge="req">
-            <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — gesamte Dokumentation des Aufenthalts" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
+          <Card num="B" title="Berichtsvorlage" badge="opt" open={false}>
+            <Dropzone label="Vorlage hochladen" hint=".docx — Vorlage mit vorhandener Struktur" accept=".docx" icon="&#128196;" file={bericht} onFile={setBericht} />
+            <div className="info-note" style={{marginTop:8}}>Optional: DOCX-Vorlage — Struktur wird übernommen und befüllt.</div>
           </Card>
 
           <Card num="C" title="Stilvorlage" badge="opt" open={false}>
-            <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
+            <InputTabs tabs={[
+              { id:"file", icon:"📎", label:"Datei"   },
+              { id:"text", icon:"✏️", label:"Text C&P" },
+            ]}>
+              {(activeTab) => (<>
+                {activeTab === "file" && (
+                  <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
+                )}
+                {activeTab === "text" && (<>
+                  <textarea rows={5} placeholder="Beispiel-Entlassbericht einfügen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
+                  <div className="field-note">Schreibstil des eingefügten Texts wird übernommen</div>
+                </>)}
+              </>)}
+            </InputTabs>
           </Card>
 
           <Card num="D" title="Prompt anpassen" open={false}>
@@ -1123,15 +1315,15 @@ function P4({ toast }) {
           </Card>
 
           <div className="action-bar">
-            <button className="btn-primary" onClick={run} disabled={busy || !bericht || !verlauf}>
+            <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
+            <button className="btn-primary" onClick={run} disabled={busy || !verlauf}>
               {busy ? <span className="spin" /> : null}
               {busy ? "Generiere ..." : "Entlassbericht erstellen"}
             </button>
           </div>
 
           <Output text={out} loading={busy}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }}
-            onDownload={() => toast("Download wird vorbereitet (DOCX)")} />
+            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
         </div>
       </div>
     </div>
@@ -1419,12 +1611,21 @@ export default function App() {
   const [msg, setMsg]         = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [resumeJob, setResumeJob] = useState(null); // { jobId, page } falls ein Job wiederhergestellt wird
+  const [selectedModel, setSelectedModel] = useState(
+    () => localStorage.getItem("systelios_model") || ""
+  );
   const [backendUrl, setBackendUrl] = useState(
     () => localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""
   );
   const [urlInput, setUrlInput] = useState(
     () => localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""
   );
+
+  // Modell-Wahl persistent speichern
+  function handleModelChange(m) {
+    setSelectedModel(m);
+    localStorage.setItem("systelios_model", m);
+  }
 
   // Beim Start: prüfen ob ein laufender Job existiert
   useEffect(() => {
@@ -1539,10 +1740,10 @@ export default function App() {
             }}>Abbrechen</button>
           </div>
         )}
-        {page === "p1" && <P1 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
-        {page === "p2" && <P2 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
-        {page === "p3" && <P3 toast={toast} />}
-        {page === "p4" && <P4 toast={toast} />}
+        {page === "p1" && <P1 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} onModelChange={handleModelChange} apiBase={getApiBase()} />}
+        {page === "p2" && <P2 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} onModelChange={handleModelChange} apiBase={getApiBase()} />}
+        {page === "p3" && <P3 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} onModelChange={handleModelChange} apiBase={getApiBase()} />}
+        {page === "p4" && <P4 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} onModelChange={handleModelChange} apiBase={getApiBase()} />}
         {page === "p5" && <P5 toast={toast} />}
       </main>
 
@@ -1586,6 +1787,17 @@ export default function App() {
             <div style={{fontSize:11, color:"#a0a49e", marginBottom:20, lineHeight:1.6}}>
               Testphase RunPod: <code style={{background:"#f0eeea",padding:"1px 5px",borderRadius:3}}>https://&lt;pod-id&gt;-8000.proxy.runpod.net</code><br />
               Produktion: <code style={{background:"#f0eeea",padding:"1px 5px",borderRadius:3}}>http://systelios-server:8000</code>
+            </div>
+
+            <div style={{marginBottom:8, fontSize:12, fontWeight:600, color:"#444", textTransform:"uppercase", letterSpacing:"0.06em"}}>
+              Standard-Modell
+            </div>
+            <div style={{marginBottom:6}}>
+              <ModelSelector model={selectedModel} onChange={handleModelChange} apiBase={getApiBase()} />
+            </div>
+            <div style={{fontSize:11, color:"#a0a49e", marginBottom:20, lineHeight:1.6}}>
+              Gilt für alle Workflows. Kann pro Generierung in der Action-Bar überschrieben werden.<br />
+              Reasoning-Modelle (z.B. deepseek-r1) sind besser für Hypothesen, Standard-Modelle schneller.
             </div>
 
             <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>

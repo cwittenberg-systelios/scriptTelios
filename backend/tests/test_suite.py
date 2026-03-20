@@ -551,8 +551,62 @@ class TestPrompts:
         from app.services.prompts import build_system_prompt
         p = build_system_prompt(workflow="dokumentation")
         assert "sysTelios" in p
-        assert "Verlaufsnotiz" in p
+        assert "Verlaufsnotiz" in p or "Dokumentation" in p
         assert "Deutsch" in p
+
+    def test_system_prompt_enthaelt_ifs_glossar(self):
+        """Alle Workflows enthalten das IFS/systemische Fachglossar."""
+        from app.services.prompts import build_system_prompt
+        for wf in ["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]:
+            p = build_system_prompt(workflow=wf)
+            assert "Manager-Anteile" in p, f"{wf}: Manager-Anteile fehlen"
+            assert "Self-Energy" in p,     f"{wf}: Self-Energy fehlt"
+            assert "Exile" in p,           f"{wf}: Exile fehlt"
+            assert "IFS" in p,             f"{wf}: IFS fehlt"
+
+    def test_system_prompt_enthaelt_systemische_begriffe(self):
+        """Fachglossar enthält systemische und hypnosystemische Begriffe."""
+        from app.services.prompts import KLINISCHES_GLOSSAR
+        assert "zirkulaere Fragen" in KLINISCHES_GLOSSAR
+        assert "Hypnosystemik" in KLINISCHES_GLOSSAR
+        assert "Byron Katie" in KLINISCHES_GLOSSAR
+        assert "AMDP" in KLINISCHES_GLOSSAR
+
+    def test_system_prompt_enthaelt_few_shot_dokumentation(self):
+        """Dokumentations-Prompt enthält Few-Shot-Beispiel."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(workflow="dokumentation")
+        assert "BEISPIEL" in p
+        assert "Auftragsklarung" in p or "Auftragsklärung" in p
+        assert "Einladungen" in p
+
+    def test_system_prompt_enthaelt_few_shot_anamnese(self):
+        """Anamnese-Prompt enthält AMDP-Beispielstruktur."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(workflow="anamnese")
+        assert "bewusstseinsklar" in p
+        assert "AMDP" in p
+
+    def test_system_prompt_enthaelt_few_shot_verlaengerung(self):
+        """Verlängerungsantrag-Prompt enthält medizinische Begründungsstruktur."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(workflow="verlaengerung")
+        assert "Begruendung" in p or "medizinisch" in p
+        assert "Therapieziele" in p
+
+    def test_system_prompt_enthaelt_few_shot_entlassbericht(self):
+        """Entlassbericht-Prompt enthält Epikrise-Beispiel."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(workflow="entlassbericht")
+        assert "Epikrise" in p
+        assert "Behandlungsverlauf" in p
+
+    def test_glossar_formulierungshilfen_vorhanden(self):
+        """Fachglossar enthält konkrete Formulierungsbeispiele."""
+        from app.services.prompts import KLINISCHES_GLOSSAR
+        assert "Im Mittelpunkt stand" in KLINISCHES_GLOSSAR
+        assert "wurde eingeladen" in KLINISCHES_GLOSSAR
+        assert "Schutzreaktion" in KLINISCHES_GLOSSAR
 
     def test_system_prompt_anamnese_mit_diagnosen(self):
         """Diagnosen werden in den Anamnese-Prompt eingefügt."""

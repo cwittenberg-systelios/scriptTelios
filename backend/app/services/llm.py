@@ -7,6 +7,8 @@ Kein externer API-Aufruf – alle Daten bleiben im internen Netz.
 import logging
 import time
 
+from typing import Optional
+
 import httpx
 
 from app.core.config import settings
@@ -16,6 +18,34 @@ logger = logging.getLogger(__name__)
 # Maximale Zeichen im User-Content (ca. 80k Tokens bei durchschnittlichen Texten)
 # Verhindert EOF-Fehler bei sehr langen Transkripten
 MAX_USER_CONTENT_CHARS = 60_000
+
+# Modell-spezifische Generierungsparameter.
+# Match erfolgt auf Modellname-Prefix (case-insensitive).
+# Quantisierungssuffixe (:q6_K, :q4_K_M etc.) werden ignoriert – Prefix reicht.
+#
+# Empfehlung RTX Pro 4500 (32GB): qwen2.5:32b:q6_K
+# Empfehlung RTX 4090 (24GB):     qwen2.5:32b
+# Reasoning (beide):               deepseek-r1:32b (langsamerer aber tieferer Analyse)
+MODEL_PROFILES: dict[str, dict] = {
+    # Reasoning-Modelle: groesserer Kontext, niedrigere Temperatur fuer Konsistenz
+    "deepseek-r1": {"num_ctx": 65536, "temperature": 0.2, "top_p": 0.85},
+    "deepseek":    {"num_ctx": 65536, "temperature": 0.2, "top_p": 0.85},
+    # Standard-Modelle: bewaehrte Parameter fuer klinische Dokumentation
+    "qwen2.5":     {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
+    "qwen":        {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
+    "llama":       {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
+    "gemma":       {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
+    "mistral":     {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
+    "_default":    {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
+}
+
+def _get_model_profile(model_name: str) -> dict:
+    """Gibt modellspezifische Generierungsparameter zurück."""
+    name_lower = model_name.lower()
+    for prefix, profile in MODEL_PROFILES.items():
+        if prefix != "_default" and name_lower.startswith(prefix):
+            return profile
+    return MODEL_PROFILES["_default"]
 
 # Maximale Zeichen für Stilvorlagen im System-Prompt.
 # Durch explizite "nur Stil"-Rahmung bei C&P-Texten ist das Looping-Risiko
@@ -73,10 +103,12 @@ async def generate_text(
     system_prompt: str,
     user_content: str,
     max_tokens: int = 2048,
+    model: Optional[str] = None,
 ) -> dict:
     """
     Generiert Text ausschliesslich via lokalem Ollama-Modell.
 
+    model: Optionales Modell-Override. Wenn None, wird settings.OLLAMA_MODEL verwendet.
     Fallback-Kuerzung bei extremen Laengen: gleichmaessiges Sampling
     ueber das gesamte Transkript – jeder Gespraechsabschnitt bleibt
     anteilig vertreten. Greift normalerweise nicht, da num_ctx=32768
@@ -86,7 +118,7 @@ async def generate_text(
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
 
     t0 = time.time()
-    result = await _generate_ollama(system_prompt, user_content, max_tokens)
+    result = await _generate_ollama(system_prompt, user_content, max_tokens, model=model)
 
     # Output-Postprocessing: doppelte Absätze entfernen (LLM-Wiederholungsloop)
     if result.get("text"):
@@ -171,15 +203,16 @@ def _classify_ollama_error(status_code: int, body: str) -> RuntimeError:
     return RuntimeError(f"Ollama Fehler {status_code}: {body}")
 
 
-async def _ollama_unload() -> None:
-    """Entlädt das Ollama-Modell aus dem VRAM (keep_alive=0)."""
+async def _ollama_unload(model: Optional[str] = None) -> None:
+    """Entlädt das angegebene Ollama-Modell aus dem VRAM (keep_alive=0)."""
+    target = model or settings.OLLAMA_MODEL
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             await client.post(
                 f"{settings.OLLAMA_HOST}/api/generate",
-                json={"model": settings.OLLAMA_MODEL, "keep_alive": 0, "prompt": ""},
+                json={"model": target, "keep_alive": 0, "prompt": ""},
             )
-        logger.info("Ollama-Modell aus VRAM entladen (OOM-Recovery)")
+        logger.info("Ollama-Modell '%s' aus VRAM entladen (OOM-Recovery)", target)
     except Exception as e:
         logger.debug("Ollama-Entladen nicht moeglich: %s", e)
 
@@ -188,26 +221,33 @@ async def _generate_ollama(
     system_prompt: str,
     user_content: str,
     max_tokens: int,
+    model: Optional[str] = None,
 ) -> dict:
     """
     Ollama REST API (lokal, kein externer Aufruf).
 
+    model: Optionales Modell-Override. Wenn None, wird settings.OLLAMA_MODEL verwendet.
     VRAM-OOM-Strategie (3 Stufen):
     1. Normalaufruf mit num_ctx=32768
     2. Bei OOM: Modell entladen + neu laden, num_ctx auf 8192 reduzieren
     3. Bei erneutem OOM: Klare Fehlermeldung an den Therapeuten
     """
+    effective_model = model or settings.OLLAMA_MODEL
+
+    profile = _get_model_profile(effective_model)
+    logger.debug("Modell-Profil für '%s': %s", effective_model, profile)
+
     async def _call(num_ctx: int) -> httpx.Response:
         payload = {
-            "model": settings.OLLAMA_MODEL,
+            "model": effective_model,
             "system": system_prompt,
             "prompt": user_content,
             "stream": False,
             "options": {
                 "num_predict": max_tokens,
                 "num_ctx":     num_ctx,
-                "temperature": 0.3,
-                "top_p":       0.9,
+                "temperature": profile["temperature"],
+                "top_p":       profile["top_p"],
             },
         }
         async with httpx.AsyncClient(timeout=300.0) as client:
@@ -227,9 +267,9 @@ async def _generate_ollama(
                 body = e.response.text
                 raise _classify_ollama_error(e.response.status_code, body)
 
-    # Versuch 1: Normal mit vollem Kontext
+    # Versuch 1: Normal mit modellspezifischem Kontext
     try:
-        r = await _call(num_ctx=32768)
+        r = await _call(num_ctx=profile["num_ctx"])
     except Exception as e:
         if not _is_vram_error(e):
             raise
@@ -237,7 +277,7 @@ async def _generate_ollama(
             "Ollama VRAM-OOM – entlade Modell und versuche erneut "
             "mit reduziertem Kontext (8192 tokens). Fehler: %s", e
         )
-        await _ollama_unload()
+        await _ollama_unload(effective_model)
         # Versuch 2: reduzierter Kontext
         try:
             r = await _call(num_ctx=8192)
@@ -255,6 +295,6 @@ async def _generate_ollama(
     text = data.get("response", "").strip()
     return {
         "text": text,
-        "model_used": f"ollama/{settings.OLLAMA_MODEL}",
+        "model_used": f"ollama/{effective_model}",
         "token_count": data.get("eval_count"),
     }

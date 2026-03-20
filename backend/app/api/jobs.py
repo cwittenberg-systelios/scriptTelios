@@ -20,6 +20,45 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+# ── Verfuegbare Modelle ───────────────────────────────────────────────────────
+
+@router.get("/models")
+async def list_models():
+    """
+    Gibt alle installierten Ollama-Modelle zurueck.
+    Frontend nutzt diesen Endpunkt um die Modell-Auswahl zu befuellen.
+    Das aktuell konfigurierte Standardmodell wird markiert.
+    """
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{settings.OLLAMA_HOST}/api/tags")
+        r.raise_for_status()
+        data = r.json()
+        models = []
+        for m in data.get("models", []):
+            name = m.get("name", "")
+            size_gb = round(m.get("size", 0) / 1e9, 1)
+            models.append({
+                "name":       name,
+                "size_gb":    size_gb,
+                "is_default": name == settings.OLLAMA_MODEL
+                              or name.split(":")[0] == settings.OLLAMA_MODEL.split(":")[0],
+            })
+        # Standardmodell zuerst
+        models.sort(key=lambda m: (0 if m["is_default"] else 1, m["name"]))
+        return {
+            "models":  models,
+            "default": settings.OLLAMA_MODEL,
+        }
+    except Exception as e:
+        logger.warning("Modell-Liste nicht abrufbar: %s", e)
+        return {
+            "models":  [{"name": settings.OLLAMA_MODEL, "size_gb": None, "is_default": True}],
+            "default": settings.OLLAMA_MODEL,
+        }
+
+
 # ── Job-Status abfragen ───────────────────────────────────────────────────────
 
 @router.get("/jobs/{job_id}")
@@ -69,6 +108,7 @@ async def create_generate_job(
     transcript:     Annotated[Optional[str], Form()] = None,
     bullets:        Annotated[Optional[str], Form()] = None,
     style_text:     Annotated[Optional[str], Form()] = None,
+    model:          Annotated[Optional[str], Form()] = None,
     audio:          Optional[UploadFile] = File(None),
     selbstauskunft: Optional[UploadFile] = File(None),
     vorbefunde:     Optional[UploadFile] = File(None),
@@ -151,8 +191,6 @@ async def create_generate_job(
             style_is_example = True   # Rohtext → explizite "nur Stil"-Rahmung
             logger.info("Stilvorlage via Text-Input (%d Zeichen nach Bereinigung)", len(style_context))
         elif style_bytes and style_name:
-        elif style_bytes and style_name:
-        elif style_bytes and style_name:
             from app.core.files import upload_dir
             import uuid
             from pathlib import Path
@@ -183,10 +221,12 @@ async def create_generate_job(
             transcript=audio_transcript,
             bullets=bullets,
             selbstauskunft_text=selbstauskunft_text,
-            vorbefunde_text=vorbefunde_text,
+            # Für verlaengerung/entlassbericht kommt die Verlaufsdoku als vorbefunde-Upload
+            vorbefunde_text=vorbefunde_text if workflow not in ("verlaengerung", "entlassbericht") else None,
+            verlauf_text=vorbefunde_text    if workflow in ("verlaengerung", "entlassbericht")    else None,
             diagnosen=dx_list,
         )
-        result = await generate_text(system, user)
+        result = await generate_text(system, user, model=model)
         return {
             "text":       result["text"],
             "transcript": audio_transcript or None,
