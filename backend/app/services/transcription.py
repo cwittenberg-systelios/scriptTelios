@@ -144,10 +144,35 @@ def _split_audio(file_path: Path, splits: list[float], tmp_dir: Path) -> list[Pa
     return chunks
 
 
+async def _ollama_free_vram() -> None:
+    """
+    Weist Ollama an das geladene Modell aus dem VRAM zu entladen.
+    Gibt VRAM frei bevor Whisper die GPU belegt.
+    Ollama laedt das Modell beim naechsten LLM-Aufruf automatisch neu.
+    """
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # keep_alive=0 entlaedt das Modell sofort aus dem VRAM
+            await client.post(
+                f"{settings.OLLAMA_HOST}/api/generate",
+                json={
+                    "model": settings.OLLAMA_MODEL,
+                    "keep_alive": 0,
+                    "prompt": "",
+                },
+            )
+        logger.info("Ollama-Modell aus VRAM entladen (Platz fuer Whisper)")
+    except Exception as e:
+        logger.debug("Ollama VRAM-Freigabe nicht moeglich (ignoriert): %s", e)
+
+
 async def transcribe_audio(file_path: Path) -> dict:
     """
     Transkribiert eine Audiodatei lokal via faster-whisper.
     Lange Aufnahmen werden automatisch in Chunks aufgeteilt.
+    Ollama wird vor der Transkription aus dem VRAM entladen damit
+    Whisper den gesamten GPU-Speicher nutzen kann.
     """
     try:
         from faster_whisper import WhisperModel
@@ -157,7 +182,14 @@ async def transcribe_audio(file_path: Path) -> dict:
             "Bitte 'pip install faster-whisper' ausfuehren."
         )
 
+    # Ollama aus VRAM entladen damit Whisper die GPU voll nutzen kann
+    await _ollama_free_vram()
+
     result = await _transcribe_local(file_path)
+
+    # Whisper-Modell aus Cache entfernen damit Ollama VRAM zurueckbekommt
+    _model_cache.clear()
+    logger.info("Whisper-Modell aus Cache entfernt (VRAM fuer Ollama freigegeben)")
 
     # Audiodatei nach Transkription loeschen (Datenschutz / DSGVO)
     if settings.DELETE_AUDIO_AFTER_TRANSCRIPTION and file_path.exists():
