@@ -27,16 +27,16 @@ MAX_USER_CONTENT_CHARS = 60_000
 # Empfehlung RTX 4090 (24GB):     qwen2.5:32b
 # Reasoning (beide):               deepseek-r1:32b (langsamerer aber tieferer Analyse)
 MODEL_PROFILES: dict[str, dict] = {
-    # Reasoning-Modelle: groesserer Kontext, niedrigere Temperatur fuer Konsistenz
-    "deepseek-r1": {"num_ctx": 65536, "temperature": 0.2, "top_p": 0.85},
-    "deepseek":    {"num_ctx": 65536, "temperature": 0.2, "top_p": 0.85},
-    # Standard-Modelle: bewaehrte Parameter fuer klinische Dokumentation
-    "qwen2.5":     {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
-    "qwen":        {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
-    "llama":       {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
-    "gemma":       {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
-    "mistral":     {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
-    "_default":    {"num_ctx": 32768, "temperature": 0.3, "top_p": 0.9},
+    # Reasoning-Modelle: größerer Mindest-Kontext, niedrigere Temperatur
+    "deepseek-r1": {"min_ctx": 8192, "temperature": 0.2, "top_p": 0.85},
+    "deepseek":    {"min_ctx": 8192, "temperature": 0.2, "top_p": 0.85},
+    # Standard-Modelle: dynamischer Kontext, kein Minimum nötig
+    "qwen2.5":     {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
+    "qwen":        {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
+    "llama":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
+    "gemma":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
+    "mistral":     {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
+    "_default":    {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
 }
 
 def _get_model_profile(model_name: str) -> dict:
@@ -108,11 +108,9 @@ async def generate_text(
     """
     Generiert Text ausschliesslich via lokalem Ollama-Modell.
 
-    model: Optionales Modell-Override. Wenn None, wird settings.OLLAMA_MODEL verwendet.
-    Fallback-Kuerzung bei extremen Laengen: gleichmaessiges Sampling
-    ueber das gesamte Transkript – jeder Gespraechsabschnitt bleibt
-    anteilig vertreten. Greift normalerweise nicht, da num_ctx=32768
-    auch lange Therapiegespraeche (ca. 15-20k Tokens) vollstaendig abdeckt.
+    num_ctx wird dynamisch berechnet: Input-Tokens * 1.2 + max_tokens,
+    auf das nächste Vielfache von 1024 aufgerundet.
+    Das vermeidet unnötige KV-Cache-Reallokierungen bei jedem Request.
     """
     if len(user_content) > MAX_USER_CONTENT_CHARS:
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
@@ -132,6 +130,28 @@ async def generate_text(
         result["model_used"],
     )
     return result
+
+
+def _estimate_num_ctx(system_prompt: str, user_content: str, max_tokens: int) -> int:
+    """
+    Schätzt den benötigten Kontext basierend auf der tatsächlichen Input-Länge.
+
+    Faustregel: 1 Token ≈ 3.5 Zeichen (Deutsch, klinischer Text).
+    Puffer: 20% Sicherheitsmarge + max_tokens für den Output.
+    Rundet auf das nächste Vielfache von 512 für Ollama-Effizienz.
+
+    Warum nicht immer 32768:
+    Ein Therapiegespräch (System ~2k + Transkript ~6k Zeichen) braucht
+    ~2500 Tokens Kontext. num_ctx=32768 erzwingt einen 13x größeren KV-Cache
+    der bei jedem Request neu alloziert wird → ~20s Overhead.
+    """
+    total_chars = len(system_prompt) + len(user_content)
+    estimated_tokens = int(total_chars / 3.5)
+    needed = int(estimated_tokens * 1.2) + max_tokens
+    # Auf nächstes Vielfaches von 512 aufrunden, Minimum 2048
+    rounded = max(2048, ((needed + 511) // 512) * 512)
+    # Niemals über das Modell-Limit
+    return min(rounded, 32768)
 
 
 def _sample_uniformly(text: str, max_chars: int, n_windows: int = 10) -> str:
@@ -235,7 +255,13 @@ async def _generate_ollama(
     effective_model = model or settings.OLLAMA_MODEL
 
     profile = _get_model_profile(effective_model)
-    logger.debug("Modell-Profil für '%s': %s", effective_model, profile)
+    num_ctx = _estimate_num_ctx(system_prompt, user_content, max_tokens)
+    # Für Reasoning-Modelle: mindestens deren Profil-Minimum respektieren
+    num_ctx = max(num_ctx, profile.get("min_ctx", 2048))
+    logger.debug(
+        "Modell '%s': num_ctx=%d (dynamisch berechnet, Profil-Max: %d)",
+        effective_model, num_ctx, profile["num_ctx"]
+    )
 
     async def _call(num_ctx: int) -> httpx.Response:
         payload = {
@@ -268,9 +294,9 @@ async def _generate_ollama(
                 body = e.response.text
                 raise _classify_ollama_error(e.response.status_code, body)
 
-    # Versuch 1: Normal mit modellspezifischem Kontext
+    # Versuch 1: Normal mit dynamisch berechnetem Kontext
     try:
-        r = await _call(num_ctx=profile["num_ctx"])
+        r = await _call(num_ctx=num_ctx)
     except Exception as e:
         if not _is_vram_error(e):
             raise

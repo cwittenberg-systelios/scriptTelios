@@ -546,6 +546,7 @@ function Dropzone({ label, hint, accept, file, onFile, icon }) {
 function ModelSelector({ model, onChange, apiBase }) {
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [defaultModel, setDefaultModel] = useState("");
 
   useEffect(() => {
     setLoading(true);
@@ -554,7 +555,8 @@ function ModelSelector({ model, onChange, apiBase }) {
       .then(data => {
         if (data?.models?.length) {
           setModels(data.models);
-          // Wenn kein Modell gesetzt, Default nehmen
+          setDefaultModel(data.default || "");
+          // Wenn noch kein Modell gewählt, Default setzen
           if (!model && data.default) onChange(data.default);
         }
       })
@@ -564,12 +566,15 @@ function ModelSelector({ model, onChange, apiBase }) {
 
   if (loading || models.length === 0) return null;
 
+  // Effektiv aktives Modell: explizite Wahl > localStorage-Default > Server-Default
+  const activeModel = model || defaultModel;
+
   return (
     <div style={{display:"flex", alignItems:"center", gap:4, flexWrap:"wrap"}}>
       <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)",
         textTransform:"uppercase", letterSpacing:"0.06em", marginRight:2}}>Modell</span>
       {models.map(m => {
-        const isActive = model === m.name || (!model && m.is_default);
+        const isActive = activeModel === m.name || (!activeModel && m.is_default);
         const shortName = m.name.replace(/:latest$/, "");
         return (
           <button key={m.name} onClick={() => onChange(m.name)} title={m.name}
@@ -785,7 +790,7 @@ async function downloadTranscript(jobId, filename = "transkript.txt") {
 }
 
 // ── Pages ────────────────────────────────────────────────────────
-function P1({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
+function P1({ toast, resumeJob, onResumed, model }) {
   const [audio, setAudio]   = useState(null);
   const [txtFile, setTxtFile] = useState(null);
   const [text, setText]     = useState("");
@@ -953,7 +958,6 @@ function P1({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
                 />
               </div>
             </div>
-            <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button className="btn-primary" onClick={run} disabled={!audio && !txtFile && !text && !bullets}>Verlaufsnotiz generieren</button>
@@ -971,7 +975,7 @@ function P1({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
   );
 }
 
-function P2({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
+function P2({ toast, resumeJob, onResumed, model }) {
   const [selbst, setSelbst]       = useState(null);
   const [befunde, setBefunde]     = useState(null);
   const [audio, setAudio]         = useState(null);
@@ -1147,7 +1151,6 @@ function P2({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
                   }} />
               </div>
             </div>
-            <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button className="btn-primary" onClick={run} disabled={!selbst}>Anamnese und Befund generieren</button>
@@ -1166,7 +1169,7 @@ function P2({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
   );
 }
 
-function P3({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
+function P3({ toast, resumeJob, onResumed, model }) {
   const [antrag, setAntrag]       = useState(null);
   const [verlauf, setVerlauf]     = useState(null);
   const [style, setStyle]         = useState(null);
@@ -1260,7 +1263,6 @@ function P3({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
           </Card>
 
           <div className="action-bar">
-            <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button className="btn-primary" onClick={run} disabled={!verlauf}>Verlängerungsantrag erstellen</button>
@@ -1275,7 +1277,7 @@ function P3({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
   );
 }
 
-function P4({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
+function P4({ toast, resumeJob, onResumed, model }) {
   const [bericht, setBericht]     = useState(null);
   const [verlauf, setVerlauf]     = useState(null);
   const [style, setStyle]         = useState(null);
@@ -1369,7 +1371,6 @@ function P4({ toast, resumeJob, onResumed, model, onModelChange, apiBase }) {
           </Card>
 
           <div className="action-bar">
-            <ModelSelector model={model} onChange={onModelChange} apiBase={apiBase} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button className="btn-primary" onClick={run} disabled={!verlauf}>Entlassbericht erstellen</button>
@@ -1396,9 +1397,12 @@ const DOKUMENTTYPEN = [
 // API_BASE: dynamisch aus localStorage/window lesen damit URL-Änderungen
 // sofort ohne Seitenneuladung greifen
 function getApiBase() {
-  const stored = localStorage.getItem("systelios_backend_url") || "";
+  // window.SYSTELIOS_API_BASE hat Vorrang (vom Confluence Macro gesetzt, immer verfügbar)
   const fromWindow = (typeof window !== "undefined" && window.SYSTELIOS_API_BASE) || "";
-  const raw = stored || fromWindow;
+  // localStorage als Fallback – kann in Confluence-iframes blockiert sein
+  let stored = "";
+  try { stored = localStorage.getItem("systelios_backend_url") || ""; } catch (_) {}
+  const raw = fromWindow || stored;
   if (!raw) return "http://localhost:8000/api";
   return raw.replace(/\/$/, "").replace(/\/api$/, "") + "/api";
 }
@@ -1416,9 +1420,20 @@ function P5({ toast }) {
   const [dokumenttyp, setDokumenttyp] = useState("dokumentation");
   const [istStatisch, setIstStatisch] = useState(false);
   const [file, setFile] = useState(null);
+  const [textInput, setTextInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [liste, setListe] = useState(null);
   const [ladebusy, setLadebusy] = useState(false);
+
+  // Abschnitte die für Verlängerung/Entlassbericht relevant sind
+  const ABSCHNITTE_HINWEIS = [
+    "Aktuelle Anamnese",
+    "Verlauf und Begründung der weiteren Verlängerung",
+    "Problemrelevante Vorgeschichte",
+    "Biographische Anamnese",
+    "Psychotherapeutischer Verlauf",
+  ];
+  const hatAbschnitte = ["verlaengerung", "entlassbericht"].includes(dokumenttyp);
 
   // Bibliothek automatisch laden beim ersten Render
   const didMount = useRef(false);
@@ -1428,14 +1443,20 @@ function P5({ toast }) {
   }
 
   async function hochladen() {
-    if (!therapeutId.trim() || !file) return;
+    const hasFile = !!file;
+    const hasText = textInput.trim().length > 30;
+    if (!therapeutId.trim() || (!hasFile && !hasText)) return;
     setBusy(true);
     try {
       const fd = new FormData();
-      fd.append("therapeut_id",  therapeutId.trim());
-      fd.append("dokumenttyp",   dokumenttyp);
-      fd.append("ist_statisch",  istStatisch ? "true" : "false");
-      fd.append("beispiel_file", file);
+      fd.append("therapeut_id", therapeutId.trim());
+      fd.append("dokumenttyp",  dokumenttyp);
+      fd.append("ist_statisch", istStatisch ? "true" : "false");
+      if (hasText) {
+        fd.append("text_content", textInput.trim());
+      } else {
+        fd.append("beispiel_file", file);
+      }
 
       const r = await fetch(`${getApiBase()}/style/upload`, { method: "POST", body: fd });
       if (!r.ok) {
@@ -1443,8 +1464,10 @@ function P5({ toast }) {
         throw new Error(err.detail || r.statusText);
       }
       const data = await r.json();
-      toast(`✓ Gespeichert: ${data.dokumenttyp_label} · ${data.word_count} Wörter${data.ist_statisch ? " · Anker" : ""}`);
+      const hinweis = hatAbschnitte ? " · nur relevante Abschnitte" : "";
+      toast(`✓ Gespeichert: ${data.dokumenttyp_label} · ${data.word_count} Wörter${data.ist_statisch ? " · Anker" : ""}${hinweis}`);
       setFile(null);
+      setTextInput("");
       await ladeListe();
     } catch (e) {
       toast("Fehler: " + e.message);
@@ -1548,17 +1571,46 @@ function P5({ toast }) {
               </div>
             </div>
 
-            <Dropzone
-              label="Beispieltext hochladen"
-              hint="PDF, DOCX oder TXT · typischer Text dieses Therapeuten für diesen Dokumenttyp"
-              accept=".pdf,.docx,.txt"
-              icon="📝"
-              file={file}
-              onFile={setFile}
-            />
+            <InputTabs tabs={[
+              { id:"file", icon:"📄", label:"Datei" },
+              { id:"text", icon:"✏️", label:"Text einfügen" },
+            ]}>
+              {(activeTab) => (<>
+                {activeTab === "file" && (
+                  <Dropzone
+                    label="Beispieltext hochladen"
+                    hint="PDF, DOCX oder TXT · typischer Text dieses Therapeuten"
+                    accept=".pdf,.docx,.txt"
+                    icon="📝"
+                    file={file}
+                    onFile={setFile}
+                  />
+                )}
+                {activeTab === "text" && (
+                  <textarea
+                    rows={7}
+                    placeholder={hatAbschnitte
+                      ? "Relevante Abschnitte einfügen:\n• Aktuelle Anamnese\n• Verlauf und Begründung\n• Problemrelevante Vorgeschichte\n• Biographische Anamnese\n• Psychotherapeutischer Verlauf"
+                      : "Beispieltext direkt einfügen – Gesprächsdokumentation oder Anamnese des Therapeuten ..."}
+                    value={textInput}
+                    onChange={e => setTextInput(e.target.value)}
+                    style={{ marginTop: 0 }}
+                  />
+                )}
+              </>)}
+            </InputTabs>
 
-            <div className="info-note" style={{ marginTop: 10 }}>
-              Das Dokument wird automatisch vektorisiert. Beim nächsten Generieren sucht das System
+            {hatAbschnitte && (
+              <div className="info-note" style={{ marginTop: 8 }}>
+                <strong>Hinweis:</strong> Für {dokumenttyp === "verlaengerung" ? "Verlängerungsanträge" : "Entlassberichte"} werden
+                nur die therapeutenspezifischen Abschnitte als Stilvorlage verwendet:
+                {" "}{ABSCHNITTE_HINWEIS.join(", ")}.
+                Standardisierte Felder (Diagnosen, Medikation etc.) werden automatisch herausgefiltert.
+              </div>
+            )}
+
+            <div className="info-note" style={{ marginTop: hatAbschnitte ? 6 : 10 }}>
+              Der Text wird automatisch vektorisiert. Beim Generieren sucht das System
               die passendsten Beispiele heraus — kein manuelles Zuweisen nötig.
             </div>
 
@@ -1566,7 +1618,7 @@ function P5({ toast }) {
               <button
                 className="btn-primary"
                 onClick={hochladen}
-                disabled={busy || !file || !therapeutId.trim()}
+                disabled={busy || (!file && textInput.trim().length < 30) || !therapeutId.trim()}
               >
                 {busy ? <span className="spin" /> : null}
                 {busy ? "Wird gespeichert …" : "Beispiel speichern"}
@@ -1665,20 +1717,22 @@ export default function App() {
   const [msg, setMsg]         = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [resumeJob, setResumeJob] = useState(null); // { jobId, page } falls ein Job wiederhergestellt wird
-  const [selectedModel, setSelectedModel] = useState(
-    () => localStorage.getItem("systelios_model") || ""
-  );
-  const [backendUrl, setBackendUrl] = useState(
-    () => localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""
-  );
-  const [urlInput, setUrlInput] = useState(
-    () => localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""
-  );
+  const [selectedModel, setSelectedModel] = useState(() => {
+    try { return localStorage.getItem("systelios_model") || ""; } catch (_) { return ""; }
+  });
+  const [backendUrl, setBackendUrl] = useState(() => {
+    try { return localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""; }
+    catch (_) { return window.SYSTELIOS_API_BASE || ""; }
+  });
+  const [urlInput, setUrlInput] = useState(() => {
+    try { return localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""; }
+    catch (_) { return window.SYSTELIOS_API_BASE || ""; }
+  });
 
   // Modell-Wahl persistent speichern
   function handleModelChange(m) {
     setSelectedModel(m);
-    localStorage.setItem("systelios_model", m);
+    try { localStorage.setItem("systelios_model", m); } catch (_) {}
   }
 
   // Beim Start: prüfen ob ein laufender Job existiert
@@ -1708,7 +1762,7 @@ export default function App() {
     if (url && !url.startsWith("http://") && !url.startsWith("https://")) {
       url = "https://" + url;
     }
-    localStorage.setItem("systelios_backend_url", url);
+    try { localStorage.setItem("systelios_backend_url", url); } catch (_) {}
     window.SYSTELIOS_API_BASE = url;
     setBackendUrl(url);
     setUrlInput(url);
@@ -1794,10 +1848,10 @@ export default function App() {
             }}>Abbrechen</button>
           </div>
         )}
-        {page === "p1" && <P1 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} onModelChange={handleModelChange} apiBase={getApiBase()} />}
-        {page === "p2" && <P2 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} onModelChange={handleModelChange} apiBase={getApiBase()} />}
-        {page === "p3" && <P3 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} onModelChange={handleModelChange} apiBase={getApiBase()} />}
-        {page === "p4" && <P4 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} onModelChange={handleModelChange} apiBase={getApiBase()} />}
+        {page === "p1" && <P1 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
+        {page === "p2" && <P2 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
+        {page === "p3" && <P3 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
+        {page === "p4" && <P4 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
         {page === "p5" && <P5 toast={toast} />}
       </main>
 
@@ -1850,8 +1904,8 @@ export default function App() {
               <ModelSelector model={selectedModel} onChange={handleModelChange} apiBase={getApiBase()} />
             </div>
             <div style={{fontSize:11, color:"#a0a49e", marginBottom:20, lineHeight:1.6}}>
-              Gilt für alle Workflows. Kann pro Generierung in der Action-Bar überschrieben werden.<br />
-              Reasoning-Modelle (z.B. deepseek-r1) sind besser für Hypothesen, Standard-Modelle schneller.
+              Gilt für alle Workflows (Gesprächsdokumentation, Anamnese, Verlängerung, Entlassbericht).<br />
+              Reasoning-Modelle (z.B. deepseek-r1) für tiefe Hypothesenarbeit, Standard-Modelle schneller.
             </div>
 
             <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>

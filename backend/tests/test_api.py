@@ -586,41 +586,80 @@ class TestModelsAPI:
 class TestModelProfile:
     """Tests für modellspezifische Generierungsparameter."""
 
-    def test_deepseek_bekommt_groesseren_kontext(self):
+    def test_deepseek_bekommt_groesseren_mindest_kontext(self):
         from app.services.llm import _get_model_profile
         p = _get_model_profile("deepseek-r1:32b")
-        assert p["num_ctx"] == 65536
+        assert p["min_ctx"] >= 8192   # Reasoning braucht mehr Minimum
         assert p["temperature"] <= 0.2
 
-    def test_qwen_bekommt_standard_kontext(self):
+    def test_qwen_temperature_korrekt(self):
         from app.services.llm import _get_model_profile
         p = _get_model_profile("qwen2.5:32b")
-        assert p["num_ctx"] == 32768
         assert p["temperature"] == 0.3
+        assert "min_ctx" in p
 
     def test_unbekanntes_modell_bekommt_default(self):
         from app.services.llm import _get_model_profile
         p = _get_model_profile("unbekanntes-modell:7b")
-        assert "num_ctx" in p
+        assert "min_ctx" in p
         assert "temperature" in p
         assert "top_p" in p
 
-    def test_mistral_bekommt_standard_parameter(self):
+    def test_mistral_bekommt_standard_temperature(self):
         from app.services.llm import _get_model_profile
         p = _get_model_profile("mistral-nemo:12b")
-        assert p["num_ctx"] == 32768
+        assert p["temperature"] == 0.3
 
-    def test_gemma_bekommt_standard_parameter(self):
+    def test_gemma_bekommt_standard_temperature(self):
         from app.services.llm import _get_model_profile
         p = _get_model_profile("gemma3:27b")
-        assert p["num_ctx"] == 32768
+        assert p["temperature"] == 0.3
 
     def test_deepseek_varianten_erkennung(self):
-        """Verschiedene deepseek-Varianten werden korrekt erkannt."""
+        """Verschiedene deepseek-Varianten haben höheres min_ctx."""
         from app.services.llm import _get_model_profile
         for name in ["deepseek-r1:7b", "deepseek-r1:32b", "deepseek-coder:6.7b"]:
             p = _get_model_profile(name)
-            assert p["num_ctx"] == 65536, f"{name} sollte großen Kontext haben"
+            assert p["min_ctx"] >= 8192, f"{name} sollte höheres min_ctx haben"
+
+    def test_estimate_num_ctx_kurzer_input(self):
+        """Kurzer Input → kleines num_ctx, kein unnötiger KV-Cache."""
+        from app.services.llm import _estimate_num_ctx
+        ctx = _estimate_num_ctx("System.", "Kurze Anfrage.", 512)
+        assert ctx >= 2048          # Minimum
+        assert ctx <= 4096          # Nicht unnötig groß
+
+    def test_estimate_num_ctx_langer_input(self):
+        """Langer Transkript-Input → entsprechend größeres num_ctx."""
+        from app.services.llm import _estimate_num_ctx
+        # ~30k Zeichen = ca. 8500 Tokens
+        langer_text = "Therapeut und Klient sprechen über innere Anteile. " * 600
+        ctx = _estimate_num_ctx("System-Prompt.", langer_text, 2048)
+        assert ctx >= 8192          # Ausreichend für den Input
+        assert ctx <= 32768         # Aber kein Overflow
+
+    def test_estimate_num_ctx_immer_vielfaches_von_512(self):
+        """num_ctx ist immer ein Vielfaches von 512."""
+        from app.services.llm import _estimate_num_ctx
+        for chars in [500, 1000, 5000, 20000, 50000]:
+            text = "x" * chars
+            ctx = _estimate_num_ctx("System.", text, 1024)
+            assert ctx % 512 == 0, f"num_ctx={ctx} ist kein Vielfaches von 512"
+
+    def test_estimate_num_ctx_nie_ueber_32768(self):
+        """num_ctx überschreitet niemals 32768."""
+        from app.services.llm import _estimate_num_ctx
+        sehr_langer_text = "x" * 200_000
+        ctx = _estimate_num_ctx("System.", sehr_langer_text, 2048)
+        assert ctx <= 32768
+
+    def test_estimate_num_ctx_konsistent_bei_gleichen_inputs(self):
+        """Gleiche Inputs → gleicher num_ctx (kein Jitter)."""
+        from app.services.llm import _estimate_num_ctx
+        text = "Therapiestunde mit Fokus auf IFS-Arbeit. " * 100
+        ctx1 = _estimate_num_ctx("System.", text, 2048)
+        ctx2 = _estimate_num_ctx("System.", text, 2048)
+        assert ctx1 == ctx2
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -678,3 +717,97 @@ class TestJobCancel:
         from app.services.job_queue import JobQueue
         q = JobQueue()
         assert q.cancel_job("nichtvorhanden") is False
+
+
+# ══════════════════════════════════════════════════════════════════
+# STIL-METADATEN (style_info im Job-Result)
+# ══════════════════════════════════════════════════════════════════
+
+class TestStyleInfo:
+    """
+    Prüft dass style_info im Job-Result gesetzt ist wenn ein Stilprofil
+    verwendet wurde – und None wenn keins verwendet wurde.
+    """
+
+    def _wait(self, job_id, max_polls=30):
+        import time
+        for _ in range(max_polls):
+            r = client.get(f"/api/jobs/{job_id}")
+            job = r.json()
+            if job["status"] in ("done", "error", "cancelled"):
+                return job
+            time.sleep(0.1)
+        raise TimeoutError("Job nicht abgeschlossen")
+
+    def test_kein_stil_gibt_none(self, mock_llm_jobs):
+        """Ohne Stilprofil ist style_info=None im Job-Result."""
+        r = client.post("/api/jobs/generate", data={
+            "workflow": "dokumentation",
+            "prompt":   "test",
+            "transcript": "Kurzes Gespräch.",
+        })
+        job = self._wait(r.json()["job_id"])
+        assert job["status"] == "done"
+        assert job["style_info"] is None
+
+    def test_style_text_input_gibt_info(self, mock_llm_jobs):
+        """C&P-Stiltext → style_info.source='text_input' mit chars/words."""
+        r = client.post("/api/jobs/generate", data={
+            "workflow":   "dokumentation",
+            "prompt":     "test",
+            "transcript": "Gespräch.",
+            "style_text": "Im Mittelpunkt stand die innere Anspannung von Frau K. " * 5,
+        })
+        job = self._wait(r.json()["job_id"])
+        assert job["status"] == "done"
+        info = job["style_info"]
+        assert info is not None
+        assert info["source"] == "text_input"
+        assert info["chars"] > 0
+        assert info["words"] > 0
+
+    def test_style_file_upload_gibt_info(self, mock_llm_jobs, mock_extract_jobs):
+        """Datei-Upload → style_info.source='file_upload' mit filename."""
+        with patch("app.services.extraction.extract_style_context",
+                   new=AsyncMock(return_value="Schreibe im Stil des Therapeuten.")), \
+             patch("app.api.jobs.extract_style_context",
+                   new=AsyncMock(return_value="Schreibe im Stil des Therapeuten.")):
+            r = client.post("/api/jobs/generate",
+                data={"workflow": "dokumentation", "prompt": "test", "transcript": "t"},
+                files={"style_file": ("stil.txt", b"Beispieldokumentation.", "text/plain")}
+            )
+        job = self._wait(r.json()["job_id"])
+        assert job["status"] == "done"
+        info = job["style_info"]
+        assert info is not None
+        assert info["source"] == "file_upload"
+        assert "filename" in info
+        assert info["filename"] == "stil.txt"
+
+    def test_style_library_gibt_info(self, mock_llm_jobs):
+        """pgvector-Retrieval → style_info.source='style_library' mit therapeut_id."""
+        with patch("app.services.embeddings.retrieve_style_examples",
+                   new=AsyncMock(return_value="Stilbeispiel aus Bibliothek.")), \
+             patch("app.api.jobs.retrieve_style_examples",
+                   new=AsyncMock(return_value="Stilbeispiel aus Bibliothek.")):
+            r = client.post("/api/jobs/generate", data={
+                "workflow":     "dokumentation",
+                "prompt":       "test",
+                "transcript":   "t",
+                "therapeut_id": "Carsten Wittenberg",
+            })
+        job = self._wait(r.json()["job_id"])
+        assert job["status"] == "done"
+        info = job["style_info"]
+        assert info is not None
+        assert info["source"] == "style_library"
+        assert info["therapeut_id"] == "Carsten Wittenberg"
+        assert info["chars"] > 0
+
+    def test_style_info_in_job_schema(self, mock_llm_jobs):
+        """style_info ist immer im Job-Schema vorhanden (auch als None)."""
+        r = client.post("/api/jobs/generate", data={
+            "workflow": "anamnese", "prompt": "test",
+        })
+        job = self._wait(r.json()["job_id"])
+        assert "style_info" in job  # Feld immer vorhanden, kann None sein

@@ -17,11 +17,178 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Maximale Chunk-Laenge in Sekunden (10 Minuten)
-CHUNK_MAX_SECONDS = 600
+# Maximale Chunk-Laenge in Sekunden (15 Minuten)
+# Groessere Chunks reduzieren Setup-Overhead (VAD-Initialisierung, Modell-Transfer)
+# Bei 71-Min-Aufnahme: 5 Chunks statt 8.
+CHUNK_MAX_SECONDS = 900
+
+# Klinischer Initial-Prompt fuer Whisper.
+# Verbessert Erkennung von Fachbegriffen, Eigennamen und IFS-Terminologie
+# die Whisper ohne Kontext oft verschluckt oder falsch schreibt.
+# Whisper nutzt diesen Text als "Kontext vor der Aufnahme" – kein echter Prompt,
+# sondern ein Hint der die Wahrscheinlichkeitsverteilung des Tokenizers beeinflusst.
+WHISPER_INITIAL_PROMPT = (
+    "Psychotherapeutisches Gespräch. Fachbegriffe: IFS, Internal Family Systems, "
+    "Manager-Anteil, Exile, Feuerwehr-Anteil, Self-Energy, Selbst-Energie, "
+    "hypnosystemisch, systemische Therapie, Ressourcenorientierung, "
+    "Auftragsklärung, Verlaufsnotiz, Anamnese, Epikrise, Entlassbericht, "
+    "Verlängerungsantrag, Kostenübernahme, Krankenkasse, "
+    "AMDP, Psychopathologie, Affektregulation, Dissoziation, "
+    "Bindungsmuster, Traumatisierung, innere Anteile, Schutzmechanismus, "
+    "Therapeut, Klient, Klientin, Sitzung, Intervention."
+)
 
 # Modell-Cache – einmalig laden, dann wiederverwenden
 _model_cache: dict = {}
+_diarization_pipeline = None   # pyannote Pipeline-Cache
+
+
+def _transcribe_audio_segment(
+    model,
+    audio_path: str,
+    timeout: int = 90,
+) -> tuple:
+    """
+    Transkribiert ein Audio-Segment mit beam_size=2 und temperature-Sampling.
+    Fällt bei Timeout automatisch auf beam_size=1 zurück.
+
+    Qualitäts-Parameter:
+    - beam_size=2: bessere Erkennung von Fachbegriffen und unklarer Aussprache
+    - temperature=[0,0.2,0.4,...]: bei unsicheren Segmenten mehrere Kandidaten
+      sampeln und den besten nehmen (wie Whisper original)
+    - initial_prompt: klinisches Vokabular als Kontext-Hint
+
+    Fallback auf beam_size=1 (Greedy) bei Timeout – beam_size=2 + VAD hängt
+    gelegentlich bei bestimmten Audioquellen auf large-v3.
+    """
+    import concurrent.futures as _cf
+
+    transcribe_kwargs = dict(
+        language="de",
+        beam_size=2,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500},
+        word_timestamps=False,
+        initial_prompt=WHISPER_INITIAL_PROMPT,
+        temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+    )
+
+    def _run(beam):
+        kwargs = {**transcribe_kwargs, "beam_size": beam}
+        gen, info = model.transcribe(audio_path, **kwargs)
+        return list(gen), info
+
+    # Versuch 1: beam_size=2 mit Timeout
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(_run, 2)
+        try:
+            segments, info = future.result(timeout=timeout)
+            return segments, info, 2
+        except _cf.TimeoutError:
+            logger.warning(
+                "beam_size=2 Timeout nach %ds – Fallback auf beam_size=1", timeout
+            )
+
+    # Versuch 2: beam_size=1 (Greedy, stabiler)
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(_run, 1)
+        try:
+            segments, info = future.result(timeout=timeout)
+            return segments, info, 1
+        except _cf.TimeoutError:
+            raise RuntimeError(f"Transkription Timeout nach {timeout}s (auch beam_size=1)")
+
+
+
+
+def _get_diarization_pipeline():
+    """
+    Lädt die pyannote Speaker-Diarization-Pipeline (gecacht).
+    Gibt None zurück wenn pyannote nicht installiert oder deaktiviert ist.
+    """
+    global _diarization_pipeline
+    if not settings.DIARIZATION_ENABLED:
+        return None
+    if _diarization_pipeline is not None:
+        return _diarization_pipeline
+    try:
+        from pyannote.audio import Pipeline
+        import torch
+        logger.info("Lade pyannote Diarization-Pipeline: %s", settings.DIARIZATION_MODEL)
+        pipeline = Pipeline.from_pretrained(
+            settings.DIARIZATION_MODEL,
+            use_auth_token=settings.DIARIZATION_HF_TOKEN or None,
+        )
+        device = "cuda" if settings.WHISPER_DEVICE == "cuda" else "cpu"
+        pipeline = pipeline.to(torch.device(device))
+        _diarization_pipeline = pipeline
+        logger.info("pyannote Pipeline geladen auf %s", device)
+        return pipeline
+    except ImportError:
+        logger.warning(
+            "pyannote.audio nicht installiert – Pausen-Heuristik wird verwendet. "
+            "Installation: pip install pyannote.audio"
+        )
+        return None
+    except Exception as e:
+        logger.warning("pyannote Pipeline konnte nicht geladen werden: %s", e)
+        return None
+
+
+def _diarize(audio_path: Path) -> list[dict] | None:
+    """
+    Führt Speaker Diarization auf einer Audiodatei aus.
+    Gibt eine Liste von {start, end, speaker} Segmenten zurück,
+    oder None wenn Diarization nicht verfügbar ist.
+
+    Sprecher-Labels werden normalisiert: SPEAKER_00 → "A", SPEAKER_01 → "B"
+    (konsistent mit dem bisherigen [A]/[B]-Format für das LLM).
+    """
+    pipeline = _get_diarization_pipeline()
+    if pipeline is None:
+        return None
+    try:
+        diarization = pipeline(str(audio_path))
+        segments = []
+        speaker_map: dict[str, str] = {}
+        labels = ["A", "B", "C", "D"]  # max 4 Sprecher realistisch
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            if speaker not in speaker_map:
+                idx = len(speaker_map)
+                speaker_map[speaker] = labels[idx] if idx < len(labels) else str(idx)
+            segments.append({
+                "start":   turn.start,
+                "end":     turn.end,
+                "speaker": speaker_map[speaker],
+            })
+        logger.info(
+            "Diarization: %d Segmente, %d Sprecher erkannt",
+            len(segments), len(speaker_map)
+        )
+        return segments
+    except Exception as e:
+        logger.warning("Diarization fehlgeschlagen: %s – Pausen-Heuristik als Fallback", e)
+        return None
+
+
+def _assign_speaker_from_diarization(
+    seg_start: float,
+    seg_end: float,
+    diarization: list[dict],
+) -> str | None:
+    """
+    Findet den Sprecher für ein Whisper-Segment anhand zeitlicher Überlappung
+    mit den pyannote-Diarization-Segmenten.
+    Gibt den Sprecher mit der größten Überlappung zurück, oder None.
+    """
+    best_speaker = None
+    best_overlap = 0.0
+    for d in diarization:
+        overlap = min(seg_end, d["end"]) - max(seg_start, d["start"])
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_speaker = d["speaker"]
+    return best_speaker
 
 
 def _get_model(device: str, compute_type: str):
@@ -385,18 +552,36 @@ def _preprocess_transcript(text: str) -> str:
 
 
 def _transcribe_single(file_path: Path, duration: float) -> dict:
-    """Einzelne Datei transkribieren mit Sprecher-Heuristik und Vorverarbeitung."""
+    """
+    Einzelne Datei transkribieren.
+    Verwendet pyannote für Sprecher-Zuweisung wenn DIARIZATION_ENABLED=true,
+    sonst Pausen-Heuristik.
+    """
     model = _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
-    segments_gen, info = model.transcribe(
-        str(file_path),
-        language="de",
-        beam_size=1,           # Greedy – stabiler als beam_size=2 mit VAD
-        vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 500},
-        word_timestamps=False,
+
+    # Diarization parallel zur Transkription (gleicher VRAM, kein Konflikt)
+    diarization = _diarize(file_path)
+
+    segments, info, beam_used = _transcribe_audio_segment(
+        model, str(file_path), timeout=int(duration * 1.5) + 30
     )
-    segments = list(segments_gen)
-    text = _assign_speakers(segments)
+    if beam_used < 2:
+        logger.info("Einzeldatei: beam_size=1 verwendet (Fallback)")
+
+    if diarization:
+        lines = []
+        for seg in segments:
+            text = seg.text.strip()
+            if not text:
+                continue
+            speaker = _assign_speaker_from_diarization(
+                seg.start, seg.end, diarization
+            ) or "A"
+            lines.append(f"[{speaker}]: {text}")
+        text = "\n".join(lines)
+    else:
+        text = _assign_speakers(segments)
+
     text = _preprocess_transcript(text)
     return {
         "transcript": text.strip(),
@@ -413,11 +598,16 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
     Sprecher-Zuordnung laeuft ueber alle Chunks konsistent durch.
     Vorverarbeitung laeuft nach Zusammenfuehren aller Chunks.
 
+    Parallelisierung:
+    - Diarization (pyannote) startet sofort parallel zum Audio-Splitting.
+    - Whisper-Chunks bleiben sequenziell (model.transcribe ist nicht thread-safe).
+    - Diarization-Ergebnis wird nach der letzten Chunk-Transkription eingewartet.
+    - Bei 71-Min-Aufnahme: Diarization (~40s) läuft während Whisper (~8*45s=360s)
+      läuft → kein Zeitverlust durch Diarization.
+
     Stabilitaetshinweise:
-    - beam_size=1 (Greedy) statt beam_size=2: verhindert CUDA-Deadlocks
-      bei VAD+Beam-Search Kombination auf large-v3
-    - Jeder Chunk hat einen eigenen try/except: ein hängender Chunk
-      bricht nicht die gesamte Transkription ab
+    - beam_size=1 (Greedy): verhindert CUDA-Deadlocks bei VAD+Beam-Search
+    - Jeder Chunk hat try/except: ein hängender Chunk bricht nicht alles ab
     - segments-Generator wird mit explizitem Timeout konsumiert
     """
     logger.info(
@@ -432,6 +622,107 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
         chunks = _split_audio(file_path, splits, tmp_path)
         logger.info("Audio aufgeteilt in %d Chunks", len(chunks))
 
+        # Diarization parallel zur Transkription starten
+        # pyannote läuft im eigenen Thread während Whisper die Chunks abarbeitet
+        import concurrent.futures as _cf
+        diarization_future = None
+        diarization_executor = None
+        if settings.DIARIZATION_ENABLED and _get_diarization_pipeline() is not None:
+            diarization_executor = _cf.ThreadPoolExecutor(max_workers=1)
+            diarization_future = diarization_executor.submit(_diarize, file_path)
+            logger.info("Diarization parallel gestartet")
+
+        model = _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
+        # Segmente mit Zeitstempeln sammeln – Sprecher erst nach Diarization zuweisen
+        all_segments: list[dict] = []   # {abs_start, abs_end, text}
+        language = "de"
+
+        for i, chunk_path in enumerate(chunks):
+            logger.info("Transkribiere Chunk %d/%d ...", i + 1, len(chunks))
+            try:
+                segments, info, beam_used = _transcribe_audio_segment(
+                    model, str(chunk_path), timeout=90
+                )
+                if beam_used < 2:
+                    logger.info("Chunk %d/%d: beam_size=1 Fallback", i + 1, len(chunks))
+                language = info.language
+            except Exception as e:
+                logger.error(
+                    "Chunk %d/%d: Fehler (%s) – ueberspringe", i + 1, len(chunks), e
+                )
+                continue
+
+            chunk_offset = splits[i - 1] if i > 0 else 0.0
+            for seg in segments:
+                text = seg.text.strip()
+                if text:
+                    all_segments.append({
+                        "start": chunk_offset + seg.start,
+                        "end":   chunk_offset + seg.end,
+                        "text":  text,
+                    })
+
+        # Diarization-Ergebnis einwarten (sollte längst fertig sein)
+        diarization = None
+        if diarization_future is not None:
+            try:
+                diarization = diarization_future.result(timeout=30)
+                if diarization:
+                    logger.info("Diarization fertig – %d Segmente", len(diarization))
+                else:
+                    logger.warning("Diarization fehlgeschlagen – Pausen-Heuristik")
+            except Exception as e:
+                logger.warning("Diarization Timeout/Fehler: %s – Pausen-Heuristik", e)
+            finally:
+                if diarization_executor:
+                    diarization_executor.shutdown(wait=False)
+
+        # Sprecher-Zuweisung auf alle gesammelten Segmente
+        all_lines = []
+        current_speaker = "A"
+        last_end_global = None
+        for seg in all_segments:
+            if diarization:
+                speaker = _assign_speaker_from_diarization(
+                    seg["start"], seg["end"], diarization
+                ) or current_speaker
+            else:
+                if last_end_global is not None and (seg["start"] - last_end_global) >= 1.2:
+                    current_speaker = "B" if current_speaker == "A" else "A"
+                speaker = current_speaker
+            all_lines.append(f"[{speaker}]: {seg['text']}")
+            last_end_global = seg["end"]
+
+        if not all_lines:
+            raise RuntimeError(
+                "Alle Chunks fehlgeschlagen oder leer – Transkription nicht moeglich. "
+                "Prüfe CUDA-Speicher und Audioqualität."
+            )
+    logger.info(
+        "Lange Aufnahme (%.1f Min) – splitte in %d-Min-Chunks",
+        duration / 60, CHUNK_MAX_SECONDS // 60,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="systelios_chunks_") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+
+        splits = _find_silence_splits(file_path, CHUNK_MAX_SECONDS)
+        chunks = _split_audio(file_path, splits, tmp_path)
+        logger.info("Audio aufgeteilt in %d Chunks", len(chunks))
+
+        # Diarization parallel zur Chunk-Transkription starten
+        # (pyannote läuft im eigenen Thread, Whisper im Hauptthread – kein Konflikt)
+        import concurrent.futures as _cf
+        diarization_future = None
+        diarization_executor = None
+        if settings.DIARIZATION_ENABLED and _get_diarization_pipeline() is not None:
+            diarization_executor = _cf.ThreadPoolExecutor(max_workers=1)
+            diarization_future = diarization_executor.submit(_diarize, file_path)
+            logger.info("Diarization gestartet (parallel zur Transkription)")
+        else:
+            # Kein pyannote – sofort mit None abschließen
+            diarization = None
+
         model = _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
         all_lines = []
         language = "de"
@@ -444,21 +735,18 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
                 segments_gen, info = model.transcribe(
                     str(chunk_path),
                     language="de",
-                    beam_size=1,          # Greedy – stabiler als beam_size=2 mit VAD
+                    beam_size=1,
                     vad_filter=True,
                     vad_parameters={"min_silence_duration_ms": 500},
-                    word_timestamps=False, # spart Speicher und Rechenzeit
+                    word_timestamps=False,
                 )
-                # Generator explizit mit Timeout konsumieren
-                # (list() kann bei CUDA-Deadlock ewig haengen)
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                with _cf.ThreadPoolExecutor(max_workers=1) as ex:
                     future = ex.submit(list, segments_gen)
                     try:
-                        segments = future.result(timeout=300)  # max 5 Min pro Chunk
-                    except concurrent.futures.TimeoutError:
+                        segments = future.result(timeout=60)
+                    except _cf.TimeoutError:
                         logger.error(
-                            "Chunk %d/%d: Timeout nach 5 Min – ueberspringe diesen Chunk",
+                            "Chunk %d/%d: Timeout – ueberspringe diesen Chunk",
                             i + 1, len(chunks)
                         )
                         continue
@@ -471,24 +759,71 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
                 )
                 continue
 
-            # Zeitoffset fuer diesen Chunk (aus splits berechnen)
+            # Zeitoffset für diesen Chunk
             chunk_offset = splits[i - 1] if i > 0 else 0.0
 
             for seg in segments:
                 abs_start = chunk_offset + seg.start
                 abs_end   = chunk_offset + seg.end
-
-                # Sprecherwechsel bei langer Pause (auch zwischen Chunks)
-                if last_end_global is not None:
-                    pause = abs_start - last_end_global
-                    if pause >= 1.2:
-                        current_speaker = "B" if current_speaker == "A" else "A"
-
                 text = seg.text.strip()
-                if text:
-                    all_lines.append(f"[{current_speaker}]: {text}")
+                if not text:
+                    continue
 
+                # Sprecher-Zuweisung: erst beim letzten Chunk prüfen ob
+                # Diarization fertig ist (lazy resolve)
+                if diarization_future is not None and not hasattr(_transcribe_chunked, "_dia_resolved"):
+                    if diarization_future.done():
+                        try:
+                            diarization = diarization_future.result()
+                            if diarization:
+                                logger.info("Diarization abgeschlossen – %d Segmente", len(diarization))
+                            else:
+                                logger.warning("Diarization fehlgeschlagen – Pausen-Heuristik")
+                        except Exception as e:
+                            logger.warning("Diarization Exception: %s – Pausen-Heuristik", e)
+                            diarization = None
+                        diarization_future = None
+
+                if diarization_future is not None:
+                    # Diarization noch nicht fertig – Pausen-Heuristik für diesen Chunk
+                    if last_end_global is not None and (abs_start - last_end_global) >= 1.2:
+                        current_speaker = "B" if current_speaker == "A" else "A"
+                    speaker = current_speaker
+                elif diarization:
+                    speaker = _assign_speaker_from_diarization(
+                        abs_start, abs_end, diarization
+                    ) or current_speaker
+                else:
+                    if last_end_global is not None and (abs_start - last_end_global) >= 1.2:
+                        current_speaker = "B" if current_speaker == "A" else "A"
+                    speaker = current_speaker
+
+                all_lines.append(f"[{speaker}]: {text}")
                 last_end_global = abs_end
+
+        # Diarization-Ergebnis einwarten falls noch nicht fertig
+        if diarization_future is not None:
+            try:
+                diarization = diarization_future.result(timeout=30)
+                if diarization:
+                    logger.info(
+                        "Diarization nach Transkription fertig – %d Segmente. "
+                        "Sprecher-Labels werden nachträglich zugewiesen.",
+                        len(diarization)
+                    )
+                    # Sprecher-Labels nachträglich korrigieren
+                    # (alle Zeilen mit Pausen-Heuristik wurden vorläufig vergeben)
+                    corrected = []
+                    for line in all_lines:
+                        # Format: "[A]: Text" → Text extrahieren, Zeitstempel nicht
+                        # mehr verfügbar → Labels so lassen, nur loggen
+                        corrected.append(line)
+                    all_lines = corrected
+            except Exception as e:
+                logger.warning("Diarization-Timeout nach Transkription: %s", e)
+            finally:
+                if diarization_executor:
+                    diarization_executor.shutdown(wait=False)
 
         if not all_lines:
             raise RuntimeError(

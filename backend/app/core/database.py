@@ -20,6 +20,10 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
+# Alias für Background-Tasks die ihre eigene Session erstellen müssen
+# (nicht die Request-Session nutzen die nach Request-Ende geschlossen wird)
+async_session_factory = AsyncSessionLocal
+
 
 class Base(DeclarativeBase):
     pass

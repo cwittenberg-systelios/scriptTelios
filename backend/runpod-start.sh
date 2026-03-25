@@ -234,6 +234,30 @@ else
     echo "${OK}Python-Pakete vorhanden"
 fi
 
+# pyannote.audio – nur installieren wenn DIARIZATION_ENABLED=true
+DIARIZATION_ENABLED=$(grep "^DIARIZATION_ENABLED=" "$BACKEND_DIR/.env" 2>/dev/null \
+    | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
+if [ "$DIARIZATION_ENABLED" = "true" ]; then
+    if ! python -c "import pyannote.audio" 2>/dev/null; then
+        echo "${GO}pyannote.audio installieren (Sprecher-Diarization)..."
+        pip install --quiet pyannote.audio
+        echo "${OK}pyannote.audio installiert"
+    else
+        echo "${OK}pyannote.audio vorhanden"
+    fi
+    HF_TOKEN=$(grep "^DIARIZATION_HF_TOKEN=" "$BACKEND_DIR/.env" 2>/dev/null \
+        | cut -d= -f2 | tr -d '"')
+    if [ -z "$HF_TOKEN" ] || [ "$HF_TOKEN" = "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ]; then
+        echo "${WARN}DIARIZATION_HF_TOKEN fehlt in .env – Diarization wird deaktiviert."
+        echo "       Token erstellen: huggingface.co/settings/tokens"
+        echo "       Modell freischalten: huggingface.co/pyannote/speaker-diarization-3.1"
+    else
+        echo "${OK}HuggingFace Token gesetzt – pyannote Diarization aktiv"
+    fi
+else
+    echo "${OK}Sprecher-Diarization deaktiviert (Pausen-Heuristik aktiv)"
+fi
+
 # 5. Frontend bauen
 echo ""
 echo "${GO}Frontend pruefen..."
@@ -306,6 +330,11 @@ CONFLUENCE_URL=http://intranet.systelios.local
 # Cloudflare-Tunnel und RunPod-Proxy fuer Testphase erlauben:
 ALLOW_RUNPOD_PROXY=true
 ALLOW_CLOUDFLARE_TUNNEL=true
+# Sprecher-Diarization (pyannote.audio) – auf true setzen + HF-Token eintragen:
+# 1. huggingface.co/pyannote/speaker-diarization-3.1 → Zugang beantragen
+# 2. huggingface.co/settings/tokens → Token erstellen
+DIARIZATION_ENABLED=false
+DIARIZATION_HF_TOKEN=
 ENVEOF
     echo "${OK}.env erstellt (SECRET_KEY automatisch generiert)"
 else

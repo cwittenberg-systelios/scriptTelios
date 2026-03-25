@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     # Kleinere GPUs (<12GB): auf True setzen.
     WHISPER_FREE_OLLAMA_VRAM: bool = False
 
+    # ── Sprecher-Diarization (pyannote.audio) ─────────────────────
+    # Echte Sprecher-Erkennung statt einfacher Pausen-Heuristik.
+    # Benötigt: pip install pyannote.audio
+    # Benötigt: HuggingFace-Token mit Zugriff auf pyannote/speaker-diarization-3.1
+    #   → huggingface.co/pyannote/speaker-diarization-3.1 (kostenlos, Zugang beantragen)
+    #   → huggingface.co/settings/tokens → Token generieren
+    # DIARIZATION_ENABLED=false: verwendet die alte Pausen-Heuristik (kein Token nötig)
+    DIARIZATION_ENABLED:    bool = False
+    DIARIZATION_HF_TOKEN:   str  = ""   # HuggingFace Access Token
+    # Modell wird beim ersten Aufruf heruntergeladen und gecacht
+    DIARIZATION_MODEL:      str  = "pyannote/speaker-diarization-3.1"
+
     # ── Dateien ───────────────────────────────────────────────────
     UPLOAD_DIR:    str = "uploads"
     OUTPUT_DIR:    str = "outputs"

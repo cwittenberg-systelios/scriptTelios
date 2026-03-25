@@ -82,6 +82,7 @@ class Job:
         self.finished_at        : Optional[datetime] = None
         self.model_used         : Optional[str] = None
         self.duration_s         : Optional[float] = None
+        self.style_info         : Optional[dict] = None   # Stil-Metadaten: source, chars, words
         self._cancel_requested  : bool = False  # gesetzt via cancel_job()
 
     def to_dict(self) -> dict:
@@ -100,6 +101,7 @@ class Job:
             "finished_at":     self.finished_at.isoformat() if self.finished_at else None,
             "model_used":      self.model_used,
             "duration_s":      self.duration_s,
+            "style_info":      self.style_info,
         }
 
 
@@ -172,6 +174,7 @@ class JobQueue:
             job.result_transcript  = result.get("transcript")
             job.result_file        = result.get("file")
             job.model_used         = result.get("model_used")
+            job.style_info         = result.get("style_info")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
             logger.info(
                 "Job abgeschlossen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s

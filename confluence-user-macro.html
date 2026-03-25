@@ -32,17 +32,22 @@
   // Confluence-Benutzername
   window.SYSTELIOS_USER = AJS && AJS.Data ? (AJS.Data.get("current-user-fullname") || "") : "";
 
-  // Backend-URL: Macro-Parameter hat Vorrang, dann localStorage, dann leer
+  // Backend-URL: Macro-Parameter hat immer Vorrang (empfohlen!)
+  // localStorage kann in manchen Browsern/Confluence-Versionen blockiert sein.
   var macroUrl = "$!{parambackendUrl}".trim().replace(/\/+$/, "");
   if (macroUrl && !macroUrl.startsWith("http://") && !macroUrl.startsWith("https://")) {
     macroUrl = "https://" + macroUrl;
   }
-  var storedUrl = localStorage.getItem("systelios_backend_url") || "";
+
+  var storedUrl = "";
+  try { storedUrl = localStorage.getItem("systelios_backend_url") || ""; } catch(e) {}
+
+  // Priorität: Macro-Parameter > localStorage > leer
   window.SYSTELIOS_API_BASE = macroUrl || storedUrl;
 
-  // Macro-Parameter in localStorage synchronisieren damit das Frontend ihn kennt
+  // Macro-Parameter in localStorage synchronisieren (best-effort)
   if (macroUrl) {
-    localStorage.setItem("systelios_backend_url", macroUrl);
+    try { localStorage.setItem("systelios_backend_url", macroUrl); } catch(e) {}
   }
 </script>
 

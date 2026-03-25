@@ -541,3 +541,211 @@ class TestEmbeddingsService:
 
         assert "Anker" in result
         assert "Anker-Beispiel" in result
+
+
+# ══════════════════════════════════════════════════════════════════
+# SPRECHER-ANNOTATION (Unit Tests)
+# Testet beide Annotationswege:
+#   1. pyannote-basiert: _assign_speaker_from_diarization()
+#   2. Pausen-Heuristik: _assign_speakers()
+# Kein Whisper, kein pyannote, keine GPU nötig.
+# ══════════════════════════════════════════════════════════════════
+
+class TestSpreecherAnnotation:
+    """Tests für Sprecher-Zuweisung – beide Implementierungen."""
+
+    # ── Hilfsmethoden ─────────────────────────────────────────────
+
+    def _seg(self, start, end, text):
+        """Erstellt ein Minimal-Segment-Objekt (Whisper-kompatibel)."""
+        class Seg:
+            pass
+        s = Seg()
+        s.start = start
+        s.end = end
+        s.text = text
+        return s
+
+    def _dia(self, start, end, speaker):
+        """Erstellt ein pyannote-Diarization-Segment."""
+        return {"start": start, "end": end, "speaker": speaker}
+
+    # ── _assign_speaker_from_diarization ──────────────────────────
+
+    def test_exakte_ueberlappung(self):
+        """Segment liegt vollständig in einem Diarization-Segment."""
+        from app.services.transcription import _assign_speaker_from_diarization
+        dia = [self._dia(0.0, 5.0, "A"), self._dia(5.0, 10.0, "B")]
+        assert _assign_speaker_from_diarization(1.0, 3.0, dia) == "A"
+        assert _assign_speaker_from_diarization(6.0, 8.0, dia) == "B"
+
+    def test_groesste_ueberlappung_gewinnt(self):
+        """Bei Überschneidung gewinnt der Sprecher mit mehr Überlappung."""
+        from app.services.transcription import _assign_speaker_from_diarization
+        # Segment 4.0-6.0 überlappt mit A (4.0-5.0 = 1s) und B (5.0-6.0 = 1s)
+        # Gleiche Überlappung → A gewinnt (erster Fund)
+        dia = [self._dia(0.0, 5.0, "A"), self._dia(5.0, 10.0, "B")]
+        result = _assign_speaker_from_diarization(4.0, 6.0, dia)
+        assert result in ("A", "B")  # deterministisch aber beide valide
+
+    def test_klare_mehrheit(self):
+        """Segment überlappt stark mit einem Sprecher."""
+        from app.services.transcription import _assign_speaker_from_diarization
+        dia = [self._dia(0.0, 5.0, "A"), self._dia(5.0, 10.0, "B")]
+        # 4.5-7.0: 0.5s mit A, 2.0s mit B → B gewinnt
+        assert _assign_speaker_from_diarization(4.5, 7.0, dia) == "B"
+
+    def test_keine_ueberlappung_gibt_none(self):
+        """Segment liegt außerhalb aller Diarization-Segmente → None."""
+        from app.services.transcription import _assign_speaker_from_diarization
+        dia = [self._dia(0.0, 2.0, "A"), self._dia(3.0, 5.0, "B")]
+        # Lücke zwischen 2.0 und 3.0
+        assert _assign_speaker_from_diarization(2.1, 2.9, dia) is None
+
+    def test_leere_diarization_gibt_none(self):
+        """Leere Diarization-Liste gibt None zurück."""
+        from app.services.transcription import _assign_speaker_from_diarization
+        assert _assign_speaker_from_diarization(0.0, 1.0, []) is None
+
+    def test_drei_sprecher(self):
+        """Auch mehr als zwei Sprecher werden korrekt zugewiesen."""
+        from app.services.transcription import _assign_speaker_from_diarization
+        dia = [
+            self._dia(0.0, 3.0, "A"),
+            self._dia(3.0, 6.0, "B"),
+            self._dia(6.0, 9.0, "C"),
+        ]
+        assert _assign_speaker_from_diarization(0.5, 1.5, dia) == "A"
+        assert _assign_speaker_from_diarization(3.5, 4.5, dia) == "B"
+        assert _assign_speaker_from_diarization(6.5, 7.5, dia) == "C"
+
+    def test_punkt_ueberlappung_zaehlt_nicht(self):
+        """Berührung ohne echte Überlappung (overlap=0) gibt None."""
+        from app.services.transcription import _assign_speaker_from_diarization
+        dia = [self._dia(0.0, 5.0, "A")]
+        # Segment beginnt genau wo Diarization endet → overlap=0
+        assert _assign_speaker_from_diarization(5.0, 6.0, dia) is None
+
+    def test_realistische_therapiesitzung(self):
+        """Simuliert typisches Therapiegespräch mit abwechselnden Sprechern."""
+        from app.services.transcription import _assign_speaker_from_diarization
+        # Therapeut: 0-8s, 15-22s, 30-35s
+        # Klient:    8-15s, 22-30s, 35-50s
+        dia = [
+            self._dia(0.0,  8.0,  "A"),   # Therapeut
+            self._dia(8.0,  15.0, "B"),   # Klient
+            self._dia(15.0, 22.0, "A"),   # Therapeut
+            self._dia(22.0, 30.0, "B"),   # Klient
+            self._dia(30.0, 35.0, "A"),   # Therapeut
+            self._dia(35.0, 50.0, "B"),   # Klient (langer Monolog)
+        ]
+        whisper_segs = [
+            (1.0,  4.0,  "A"),   # Therapeut-Frage
+            (9.0,  13.0, "B"),   # Klient-Antwort
+            (16.0, 20.0, "A"),   # Therapeut-Intervention
+            (23.0, 28.0, "B"),   # Klient erzählt
+            (31.0, 34.0, "A"),   # Therapeut kurz
+            (36.0, 45.0, "B"),   # Klient langer Bericht
+        ]
+        for start, end, expected in whisper_segs:
+            result = _assign_speaker_from_diarization(start, end, dia)
+            assert result == expected, \
+                f"Segment {start}-{end}s: erwartet {expected}, bekommen {result}"
+
+    # ── _assign_speakers (Pausen-Heuristik) ───────────────────────
+
+    def test_heuristik_wechsel_bei_langer_pause(self):
+        """Pause ≥ 1.2s → Sprecherwechsel."""
+        from app.services.transcription import _assign_speakers
+        segs = [
+            self._seg(0.0, 3.0, "Guten Morgen."),
+            self._seg(4.5, 7.0, "Wie geht es Ihnen?"),  # 1.5s Pause → Wechsel
+        ]
+        result = _assign_speakers(segs)
+        assert "[A]: Guten Morgen." in result
+        assert "[B]: Wie geht es Ihnen?" in result
+
+    def test_heuristik_kein_wechsel_bei_kurzer_pause(self):
+        """Pause < 1.2s → kein Sprecherwechsel."""
+        from app.services.transcription import _assign_speakers
+        segs = [
+            self._seg(0.0, 2.0, "Erster Satz."),
+            self._seg(2.5, 4.0, "Zweiter Satz."),  # 0.5s Pause → kein Wechsel
+        ]
+        result = _assign_speakers(segs)
+        lines = result.strip().split("\n")
+        assert all(l.startswith("[A]:") for l in lines), \
+            f"Beide Segmente sollten [A] sein: {result}"
+
+    def test_heuristik_leere_segmente_werden_uebersprungen(self):
+        """Segmente mit leerem Text werden nicht in den Output aufgenommen."""
+        from app.services.transcription import _assign_speakers
+        segs = [
+            self._seg(0.0, 1.0, ""),
+            self._seg(1.0, 2.0, "  "),
+            self._seg(2.0, 3.0, "Echter Text."),
+        ]
+        result = _assign_speakers(segs)
+        assert result.count("\n") == 0  # nur eine Zeile
+        assert "Echter Text." in result
+
+    def test_heuristik_alternierende_sprecher(self):
+        """Typisches Therapiegespräch mit regelmäßigem Wechsel."""
+        from app.services.transcription import _assign_speakers
+        segs = [
+            self._seg(0.0,  3.0, "Frage des Therapeuten."),
+            self._seg(4.5,  8.0, "Antwort des Klienten."),    # Wechsel → B
+            self._seg(9.5, 11.0, "Nachfrage Therapeut."),     # Wechsel → A
+            self._seg(12.5, 16.0, "Weitere Antwort Klient."), # Wechsel → B
+        ]
+        result = _assign_speakers(segs)
+        lines = result.strip().split("\n")
+        assert lines[0].startswith("[A]:")
+        assert lines[1].startswith("[B]:")
+        assert lines[2].startswith("[A]:")
+        assert lines[3].startswith("[B]:")
+
+    def test_heuristik_erster_sprecher_immer_a(self):
+        """Das erste Segment wird immer [A] zugewiesen."""
+        from app.services.transcription import _assign_speakers
+        segs = [self._seg(5.0, 8.0, "Erster Sprecher.")]
+        assert _assign_speakers(segs).startswith("[A]:")
+
+    def test_heuristik_genau_an_schwelle(self):
+        """Pause exakt 1.2s → Wechsel (Schwellenwert inklusiv)."""
+        from app.services.transcription import _assign_speakers
+        segs = [
+            self._seg(0.0, 2.0, "Erster."),
+            self._seg(3.2, 5.0, "Zweiter."),  # genau 1.2s Pause
+        ]
+        result = _assign_speakers(segs)
+        assert "[B]:" in result
+
+    # ── _diarize Fallback-Verhalten ────────────────────────────────
+
+    def test_diarize_gibt_none_wenn_deaktiviert(self):
+        """_diarize() gibt None zurück wenn DIARIZATION_ENABLED=false."""
+        from app.services import transcription as t
+        from unittest.mock import patch
+        with patch.object(t.settings, "DIARIZATION_ENABLED", False):
+            result = t._diarize(Path("/tmp/test.wav"))
+        assert result is None
+
+    def test_diarize_gibt_none_wenn_pyannote_fehlt(self):
+        """_diarize() gibt None zurück wenn pyannote nicht installiert."""
+        from app.services import transcription as t
+        from unittest.mock import patch
+        import sys
+        with patch.object(t.settings, "DIARIZATION_ENABLED", True), \
+             patch.object(t, "_diarization_pipeline", None), \
+             patch.dict(sys.modules, {"pyannote.audio": None}):
+            result = t._diarize(Path("/tmp/test.wav"))
+        assert result is None
+
+    def test_get_diarization_pipeline_gibt_none_wenn_deaktiviert(self):
+        """_get_diarization_pipeline() gibt None wenn DIARIZATION_ENABLED=false."""
+        from app.services import transcription as t
+        from unittest.mock import patch
+        with patch.object(t.settings, "DIARIZATION_ENABLED", False):
+            result = t._get_diarization_pipeline()
+        assert result is None

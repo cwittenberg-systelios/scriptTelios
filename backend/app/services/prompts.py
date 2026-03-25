@@ -220,42 +220,68 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "verlaengerung": (
-        "Fuelle den vorliegenden Verlaengerungsantrag vollstaendig und medizinisch "
-        "begruendet aus. Nutze das klinische Fachwissen aus dem Referenzwissen oben "
-        "fuer praezise therapeutische Formulierungen.\n\n"
-        "Achte besonders auf:\n"
-        "- Praezise Darstellung der medizinischen Notwendigkeit der Verlaengerung\n"
-        "- Konkreter bisheriger Behandlungsverlauf mit erzielten Fortschritten "
-        "(IFS-Arbeit, systemische Interventionen, Stabilisierung)\n"
-        "- Klar benannte noch ausstehende Therapieziele (spezifisch, messbar)\n"
-        "- Stichhaltige Begruendung, warum ambulante Weiterbehandlung noch nicht "
-        "moeglich ist (Belastbarkeit, Stabilitaet, soziale Integration)\n"
-        "- Realistische Prognose und geplante Verweildauer\n\n"
-        "Schreibe im Stil eines professionellen klinischen Gutachtens. "
-        "Alle Aussagen muessen aus der Verlaufsdokumentation belegbar sein.\n\n"
+        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik fuer "
+        "Psychosomatik und Psychotherapie. Schreibe ausschliesslich die Sektion "
+        "'Bisheriger Verlauf und Begruendung der Verlaengerung' fuer einen Antrag "
+        "auf Verlaengerung der Kostenzusage bei der Krankenversicherung.\n\n"
+        "FOKUS DIESER SEKTION:\n"
+        "Schreibe NUR diesen einen Abschnitt – keine Diagnosen, keine Stammdaten, "
+        "keine anderen Sektionen des Antrags. Diese Felder sind standardisiert "
+        "und werden separat befuellt.\n\n"
+        "INHALT:\n"
+        "- Kurzer Rueckblick auf die bisherige Behandlung: was wurde bearbeitet, "
+        "welche therapeutischen Methoden eingesetzt (IFS, systemisch, hypnosystemisch)\n"
+        "- Konkrete Fortschritte und erzielte Veraenderungen – spezifisch und belegbar "
+        "aus der Verlaufsdokumentation, keine allgemeinen Behauptungen\n"
+        "- Noch ausstehende Therapieziele: was bleibt zu tun, warum ist weitere "
+        "stationaere Behandlung notwendig (nicht ambulant moeglich)\n"
+        "- Medizinische Begruendung der Verlaengerung: Belastbarkeit, Stabilitaet, "
+        "soziale Integration, Entlassfaehigkeit noch nicht erreicht\n"
+        "- Geplante Massnahmen und realistische Prognose fuer den Verlaengerungszeitraum\n\n"
+        "STIL:\n"
+        "Professionelles klinisches Gutachten. Aktiv und konkret formuliert. "
+        "Systemische Fachsprache (IFS, Self-Energy, Manager-Anteile etc.) wo inhaltlich "
+        "passend – nicht als Dekoration. Alle Aussagen aus der Verlaufsdokumentation "
+        "belegbar. Fliesstext, keine Aufzaehlungen.\n\n"
+        "WICHTIG – STILBEISPIEL:\n"
+        "Falls ein Stilbeispiel bereitgestellt wird: Uebernimm AUSSCHLIESSLICH den "
+        "Schreibstil (Satzbau, Tonalitaet, Fachbegriffsdichte). "
+        "NIEMALS Diagnosen, Patientennamen, Daten oder konkrete Inhalte aus dem "
+        "Stilbeispiel in den neuen Text uebernehmen. "
+        "Das Stilbeispiel handelt von einem anderen Patienten.\n\n"
         + FEW_SHOT_VERLAENGERUNG
     ),
 
     "entlassbericht": (
-        "Erstelle einen vollstaendigen, professionellen Entlassbericht. "
-        "Nutze das klinische Fachwissen aus dem Referenzwissen oben "
-        "fuer praezise therapeutische Formulierungen.\n\n"
-        "STRUKTUR:\n"
-        "1. Aufnahme- und Entlassdaten, Verweildauer, Unterkunft\n"
-        "2. Aufnahmegrund und Hauptdiagnosen (ICD-10/11 mit Kodierung)\n"
-        "3. Psychischer Aufnahmebefund (AMDP-orientiert)\n"
-        "4. Somatischer Befund bei Aufnahme\n"
-        "5. Behandlungsverlauf:\n"
-        "   - Einzel- und Gruppenpsychotherapie (IFS, systemisch, hypnosystemisch)\n"
-        "   - Koerper-, Kunst-, Musikpsychotherapie (soweit erfolgt)\n"
-        "   - Besondere Ereignisse / Krisen\n"
-        "   - Verlauf der Symptomatik und der Arbeit mit inneren Anteilen\n"
-        "6. Psychischer Entlassbefund (AMDP)\n"
-        "7. Epikrise und Beurteilung\n"
-        "8. Empfehlungen und Weiteres Procedere\n"
-        "9. Medikation bei Entlassung\n\n"
-        "Synthetisiere alle Verlaufsnotizen zu einem kohaerenten, lesbaren Bericht. "
-        "Formuliere professionell und kollegial fuer den Zuweiser.\n\n"
+        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik fuer "
+        "Psychosomatik und Psychotherapie. Schreibe den psychotherapeutischen Teil "
+        "des Entlassberichts – ausschliesslich folgende Sektionen:\n\n"
+        "1. PSYCHOTHERAPEUTISCHER BEHANDLUNGSVERLAUF\n"
+        "Beschreibe den gesamten Verlauf der Psychotherapie: Phasen, eingesetzte Methoden "
+        "(IFS, systemisch, hypnosystemisch, The Work), Arbeit mit inneren Anteilen, "
+        "Krisenmomente und Wendepunkte, Entwicklung der therapeutischen Beziehung. "
+        "Synthetisiere alle Verlaufsnotizen zu einem kohaerenten Fliesstext – "
+        "nicht als Aufzaehlung der Einzelsitzungen.\n\n"
+        "2. EPIKRISE UND BEURTEILUNG\n"
+        "Systemische Zusammenschau: Wie hat sich die Symptomatik entwickelt? "
+        "Welche Schutzanteile konnten entlastet werden, wo besteht weiter Bedarf? "
+        "Self-Energy-Entwicklung. Ressourcen und Risikofaktoren fuer die Zeit nach "
+        "der Entlassung. Prognose.\n\n"
+        "3. EMPFEHLUNGEN UND WEITERES PROCEDERE\n"
+        "Konkrete Empfehlungen fuer die Weiterbehandlung: ambulante Psychotherapie "
+        "(Frequenz, Schwerpunkt), Nachsorge, Selbsthilfe, Krisenplan.\n\n"
+        "NICHT SCHREIBEN: Stammdaten, Aufnahme-/Entlassdaten, somatischer Befund, "
+        "Medikation, Diagnosen-Kodierung – diese Felder werden separat befuellt.\n\n"
+        "STIL:\n"
+        "Professionell, kollegial, fuer den Zuweiser verstaendlich. "
+        "Systemische Fachsprache wo inhaltlich passend. Fliesstext pro Sektion. "
+        "Alle Aussagen aus der Verlaufsdokumentation belegbar.\n\n"
+        "WICHTIG – STILBEISPIEL:\n"
+        "Falls ein Stilbeispiel bereitgestellt wird: Uebernimm AUSSCHLIESSLICH den "
+        "Schreibstil (Satzbau, Tonalitaet, Fachbegriffsdichte). "
+        "NIEMALS Diagnosen, Patientennamen, Daten, ICD-Codes oder konkrete Inhalte "
+        "aus dem Stilbeispiel uebernehmen. "
+        "Das Stilbeispiel handelt von einem anderen Patienten.\n\n"
         + FEW_SHOT_ENTLASSBERICHT
     ),
 }
@@ -288,17 +314,25 @@ def build_system_prompt(
     if style_context and style_context.strip():
         if style_is_example:
             parts.append(
-                "\nSTILBEISPIEL DES THERAPEUTEN (nur Schreibstil uebernehmen):\n"
+                "\nSTILBEISPIEL DES THERAPEUTEN – NUR SCHREIBSTIL REFERENZ:\n"
                 "Das folgende Beispiel zeigt den persoenlichen Schreibstil dieses Therapeuten. "
-                "Uebernimm ausschliesslich Tonalitaet, Satzbau, Fachbegriffsdichte und "
-                "Formulierungsgewohnheiten - NICHT Struktur, Ueberschriften oder Inhalte "
-                "dieses Beispiels. Erstelle stattdessen eine eigenstaendige Dokumentation "
-                "fuer das aktuelle Gespraech.\n\n"
+                "Es handelt sich um einen ANDEREN PATIENTEN mit anderen Diagnosen und anderen Inhalten.\n"
+                "UEBERNIMM AUSSCHLIESSLICH: Tonalitaet, Satzbau, Absatzlaenge, "
+                "Fachbegriffsdichte, Formulierungsgewohnheiten.\n"
+                "NIEMALS UEBERNEHMEN: Diagnosen, ICD-Codes, Patientennamen, Daten, "
+                "Medikamente, konkrete Symptome, Therapieinhalte oder andere "
+                "patientenspezifische Informationen aus diesem Beispiel. "
+                "Diese Informationen beziehen sich auf einen anderen Patienten "
+                "und duerfen nicht in den neuen Bericht einfliessen.\n\n"
                 f"{style_context.strip()}"
             )
         else:
             parts.append(
-                f"\nSTILVORLAGE FUER DIESEN THERAPEUTEN:\n{style_context.strip()}"
+                "\nSTILVORLAGE FUER DIESEN THERAPEUTEN:\n"
+                "Uebernimm den Schreibstil der folgenden Vorlage. "
+                "NICHT die konkreten Inhalte, Diagnosen oder Patientendaten – "
+                "nur Tonalitaet, Satzbau und Formulierungsgewohnheiten.\n\n"
+                f"{style_context.strip()}"
             )
 
     parts.append(
@@ -350,10 +384,29 @@ def build_user_content(
             parts.append(f"DIAGNOSEN: {', '.join(diagnosen)}")
         parts.append("Anamnese und psychopathologischen Befund erstellen.")
 
-    elif workflow in ("verlaengerung", "entlassbericht"):
+    elif workflow == "verlaengerung":
         if verlauf_text:
-            parts.append(f"VERLAUFSDOKUMENTATION:\n{verlauf_text}")
-        label = "Verlaengerungsantrag" if workflow == "verlaengerung" else "Entlassbericht"
-        parts.append(f"{label} gemaess Vorlage vollstaendig ausfuellen.")
+            parts.append(f"VERLAUFSDOKUMENTATION (Grundlage fuer den Bericht):\n{verlauf_text}")
+        if diagnosen:
+            parts.append(f"DIAGNOSEN DES AKTUELLEN PATIENTEN: {', '.join(diagnosen)}")
+        parts.append(
+            "Schreibe jetzt die Sektion 'Bisheriger Verlauf und Begruendung der Verlaengerung'. "
+            "Nur diese Sektion – keine anderen Teile des Antrags. "
+            "Ausschliesslich auf Basis der obigen Verlaufsdokumentation – "
+            "keine Informationen aus einem Stilbeispiel uebernehmen."
+        )
+
+    elif workflow == "entlassbericht":
+        if verlauf_text:
+            parts.append(f"VERLAUFSDOKUMENTATION (alle Sitzungen):\n{verlauf_text}")
+        if diagnosen:
+            parts.append(f"DIAGNOSEN DES AKTUELLEN PATIENTEN: {', '.join(diagnosen)}")
+        parts.append(
+            "Schreibe jetzt die drei psychotherapeutischen Sektionen des Entlassberichts: "
+            "Psychotherapeutischer Behandlungsverlauf, Epikrise und Beurteilung, "
+            "Empfehlungen und Weiteres Procedere. "
+            "Ausschliesslich auf Basis der obigen Verlaufsdokumentation – "
+            "keine Informationen aus einem Stilbeispiel uebernehmen."
+        )
 
     return "\n\n".join(parts)
