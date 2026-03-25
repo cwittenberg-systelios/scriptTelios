@@ -47,6 +47,13 @@ Typische Dokumentationsformulierungen:
 """
 
 
+# ── Psychopathologischer Befund Vorlage ──────────────────────────────────────
+# Exakte Vorlage aus der Klinik. Wird durch Informationen aus der Selbstauskunft
+# befüllt – Lücken werden geschlossen, Mehrfachoptionen auf die passende reduziert.
+# NICHT verändern – ist eine klinisch validierte Standardstruktur.
+
+BEFUND_VORLAGE = """Im Gespräch offen, wach, bewusstseinsklar, zu allen Qualitäten orientiert. Konzentration subjektiv {konzentration}. Auffassung, Merkfähigkeit und Gedächtnis intakt. Formalgedanklich {formalgedanke}, keine Denkverlangsamung, {fokus_denken}. {phobien_angst}. {zwaenge}. {vermeidung}. Kein Anhalt für Wahn oder Sinnestäuschungen, keine Ich-Störungen (z.B. Depersonalisation, Derealisation, Dissoziation). Stimmungslage {stimmung}, affektive Schwingungsfähigkeit {schwingung} bei insgesamt {affektlage} Affektlage. {freud_interessen}. {erschoepfung}. Antrieb {antrieb}. {hoffnung_insuffizienz}. {schuldgefuehle}. Selbstwertgefühl ist {selbstwert}. Gefühlsregulation ist {gefuehlsregulation}. Impulskontrolle ist {impulskontrolle}. {ambivalenz}. {innere_unruhe}. {zirkadian}. {schlaf}. Appetenz {appetenz}. {aggressiv_selbstverletzend}. {sozialer_rueckzug}. Essverhalten {essverhalten}. {suchtverhalten}. {somatisierung}. {suizidalitaet_vergangenheit}. Aktuelle Verneinung von lebensüberdrüssigen und suizidalen Gedanken, keine suizidale Handlungsplanung oder Handlungsvorbereitung. Zum Zeitpunkt der Aufnahme von akuter Suizidalität klar distanziert."""
+
 # ── Few-Shot-Beispiele ────────────────────────────────────────────────────────
 
 FEW_SHOT_DOKUMENTATION = """\
@@ -101,56 +108,117 @@ in dem sie festhalt, wann und wie stark der Anteil aktiv wird.\
 """
 
 FEW_SHOT_ANAMNESE = """\
-BEISPIEL-STRUKTUR (orientiert an AMDP und sysTelios-Standard):
+BEISPIEL (Anamnese nach sysTelios-Standard – ca. 350-500 Woerter, direkte Patientenzitate nutzen):
 
-Vorstellungsanlass: Auf Eigeninitiative / Zuweisung durch [Zuweiser]. \
-Hauptbeschwerde: [konkrete Symptomdarstellung in eigenen Worten des Patienten].
+Frau X. stellt sich zur stationaeren Aufnahme vor mit der Einweisungsdiagnose einer \
+mittelgradigen depressiven Episode (F32.1). Auf Eigeninitiative / Zuweisung durch [Zuweiser].
 
-Aktuelle Erkrankung: Erstmanifestation [Zeitpunkt], Verlauf [Beschreibung], \
-ausloesende Faktoren [psychosozial/somatisch], aufrechterhaltende Faktoren [Beschreibung].
+Vorstellungsanlass und Hauptbeschwerde:
+Im Vordergrund stehen seit mehreren Monaten anhaltende Erschoepfung, Antriebsminderung \
+und ein Gefuehl innerer Entfremdung. Frau X. beschreibt, sich "nicht mehr dazugehoerig zum \
+normalen Leben" zu fuehlen – Taetigkeiten, die ihr frueher selbstverstaendlich gelungen seien, \
+erschienen ihr nun wie durch einen "zaehen Brei" hindurch. [Direkte Patientenzitate aus der \
+Selbstauskunft verwenden.]
 
-Psychopathologischer Befund: bewusstseinsklar, zur Person, Zeit, Ort und Situation \
-orientiert. Aufmerksamkeit und Konzentration unauffaellig. \
-Formales Denken geordnet, Gedankengang zielfuehrend. Keine Ich-Stoerungen, \
-keine Wahrnehmungsstoerungen. Affekt [Beschreibung, Schwingungsfaehigkeit]. \
-Antrieb [Beschreibung]. Suizidale Gedanken verneint. \
+Aktuelle Erkrankung:
+Erstmanifestation [Zeitpunkt aus Selbstauskunft]. Ausloesende Faktoren: [konkret aus Unterlagen]. \
+Aufrechterhaltende Faktoren: [konkret aus Unterlagen].
+
+Begleitend berichtet Frau X. ueber [spezifische Symptome aus der Selbstauskunft]. \
+Schlafst oerungen, Anspannung und Konzentrationsprobleme verstaerken die depressive Symptomatik.
+
+Sozialanamnese:
+[Beruf, Familienstand, Kinder, Wohnsituation – alle Angaben aus der Selbstauskunft, \
+nichts erfinden. Fehlende Angaben als 'nicht erhoben' kennzeichnen.]
+
+Psychiatrische und somatische Vorgeschichte:
+[Aus Unterlagen – wenn nicht vorhanden: 'Keine Vorbehandlungen bekannt.']
+
+Ressourcen:
+[Aus der Selbstauskunft: Was gibt Kraft? Hobbys, Beziehungen, Faehigkeiten?]
+
+Psychopathologischer Befund (AMDP):
+[Patientenname] praesentiert sich bewusstseinsklar, zur Person, Zeit, Ort und Situation \
+orientiert. Aufmerksamkeit und Konzentration [Beschreibung]. Formales Denken geordnet, \
+Gedankengang zielfuehrend. Keine Ich-Stoerungen, keine Wahrnehmungsstoerungen. \
+Affekt [Beschreibung, Schwingungsfaehigkeit]. Antrieb [Beschreibung]. \
+Suizidale Gedanken [verneint / Beschreibung]. \
 Vegetativum: Schlaf [Beschreibung], Appetit [Beschreibung].\
 """
 
 FEW_SHOT_VERLAENGERUNG = """\
-BEISPIEL-ABSCHNITT (medizinische Notwendigkeit):
+BEISPIEL (Bisheriger Verlauf und Begruendung der Verlaengerung - ca. 400-600 Woerter):
 
-Begruendung der Verlaengerung:
-Trotz erster therapeutischer Fortschritte - insbesondere im Bereich der \
-Affektregulation und der Identifikation zentraler Schutzanteile - \
-sind die vereinbarten Therapieziele noch nicht vollstaendig erreicht. \
-Die Patientin zeigt weiterhin eine deutlich eingeschraenkte Belastbarkeit \
-im sozialen und beruflichen Kontext sowie anhaltende Schlafstoerungen, \
-die eine ambulante Weiterfuehrung der Behandlung zum jetzigen Zeitpunkt \
-noch nicht ermoeglichen. Eine Verlaengerung um [X] Wochen erscheint aus \
-fachaerztlicher Sicht medizinisch notwendig, um die begonnene \
-Stabilisierungsarbeit zu konsolidieren und die Entlassfaehigkeit herzustellen.\
+Frau X. zeigte sich im bisherigen Verlauf des stationaeren Aufenthaltes unter anhaltendem \
+innerem Druck mit ausgepraegte Anspannung und emotionaler Ambivalenz. Gleichzeitig wurde \
+eine zunehmende Bereitschaft erkennbar, sich auf den therapeutischen Prozess einzulassen \
+und auch sehr vulnerable innere Themen zu explorieren.
+
+Im hypnosystemischen Einzelprozess konnte mithilfe der Anteilearbeit insbesondere ein \
+dominanter Kontrollanteil differenziert werden, der biographisch vor dem Hintergrund von \
+invalidierenden Beziehungserfahrungen in der Herkunftsfamilie verstaendlich wurde. \
+Parallel traten juengere, verletzliche Anteile in Erscheinung, die mit starken Gefuehlen \
+von Wertlosigkeit und Trauer einhergehen. Durch Stuhlarbeit, Netzwerk- und Koerperarbeit \
+gelang es Frau X. in ersten Schritten, eine Beobachterposition einzunehmen und eine \
+wohlwollendere innere Haltung zu entwickeln.
+
+In den therapeutischen Gruppen zeigte sich Frau X. zunehmend aktiv und beziehungsfaehig. \
+Gleichzeitig fuehrten gruppale Trigger und Naehedistanzthemen wiederholt zu Ueberlastung, \
+was die weiterhin hohe Vulnerabilitaet des Systems unterstreicht.
+
+Insgesamt zeigen sich erste positive Entwicklungen wie eine verbesserte Reflexionsfaehigkeit, \
+punktuell aufgehellte Stimmung und wachsendes Verstaendnis fuer die Funktionalitaet alter Muster. \
+Dennoch bestehen weiterhin hohe Anspannungszustaende und eine eingeschraenkte Emotionsregulation. \
+Eine fuer den ambulanten Kontext notwendige tragfaehige Stabilitaet ist derzeit noch nicht \
+ausreichend gegeben. Zur weiteren Festigung der Steuerungsposition und Vorbereitung eines \
+gelingenden Transfers in den haeuslichen Alltag ist eine Verlaengerung um weitere 14 Tage \
+aus psychotherapeutischer Sicht dringend indiziert.\
 """
 
 FEW_SHOT_ENTLASSBERICHT = """\
-BEISPIEL-ABSCHNITT (Behandlungsverlauf und Epikrise):
+BEISPIEL (psychotherapeutischer Entlassbericht - ca. 600-900 Woerter, Wir-Perspektive):
 
-Behandlungsverlauf:
-In der Einzelpsychotherapie standen zunaechst die Stabilisierung und \
-Psychoedukation im Vordergrund. Im weiteren Verlauf erfolgte eine \
-vertiefte Arbeit mit inneren Anteilen nach dem IFS-Modell, \
-wobei insbesondere der Kontakt zu einem zentralen Manager-Anteil \
-(Leistungsorientierung, Selbstkritik) und einem verletzlichen Exile \
-(fruehkindliche Erfahrungen emotionaler Vernachlaessigung) therapeutisch \
-bearbeitet wurde. Die Patientin entwickelte zunehmend Zugang zu \
-Self-Energy und konnte erste Erfahrungen von Selbstmitgefuehl machen.
+Psychotherapeutischer Behandlungsverlauf
 
-Epikrise:
-Frau X. stellte sich mit einer mittelgradigen depressiven Episode \
-vor dem Hintergrund chronischer Belastung und erschoepfter Schutzanteile vor. \
-Im stationaeren Rahmen konnte eine deutliche Symptomreduktion erreicht werden. \
-Die praemorbide Persoenlichkeitsstruktur mit hoher Leistungsorientierung \
-und eingeschraenkter Selbstfuersorge bleibt langfristig therapeutisch relevant.\
+Zu Beginn des stationaeren Aufenthaltes formulierte Herr/Frau X. als zentrales Anliegen, \
+wieder inneren Halt zu finden und sich aus einem ueber Jahre verfestigten Erleben von \
+innerer Ueberforderung und Selbstwertzweifeln zu loesen. Wir erlebten ihn/sie zu \
+Therapiebeginn deutlich erschoepft, innerlich angespannt und in seinem/ihrem Selbstwert \
+erheblich verunsichert. Gleichzeitig war bereits frueh eine differenzierte \
+Selbstwahrnehmung und ein grundsaetzliches Vertrauen in den therapeutischen Prozess \
+erkennbar, was eine tragfaehige Arbeitsbasis ermoeglichte.
+
+Im Einzelprozess stand die hypnosystemische Anteilearbeit im Zentrum. Es zeigte sich \
+eine innere Dynamik aus stark leistungsorientierten, kontrollierenden Anteilen, die \
+biographisch eng mit fruehen Beziehungserfahrungen verknuepft waren. Diese Anteile \
+hatten ueber lange Zeit eine schuetzende Funktion, gingen jedoch mit massiver innerer \
+Abwertung und emotionaler Selbstentfremdung einher. Im Verlauf gelang es zunehmend, \
+diese inneren Ebenen voneinander zu differenzieren und aus einer erwachseneren, \
+selbstfuersorgelicheren Perspektive in Kontakt zu bringen.
+
+Die therapeutischen Gruppen stellten zunaechst eine erhebliche Herausforderung dar. \
+Mit zunehmender Sicherheit nutzte er/sie die Gruppe als Resonanzraum, um eigene \
+Beziehungsmuster zu erkennen. Rueckmeldungen der Gruppe wirkten dabei korrigierend \
+auf das kritisch verzerrte Selbstbild und unterstuetzten den Aufbau eines stabilen \
+Selbstwertgefuehls.
+
+Im Gesamtverlauf zeigte sich eine deutliche Entwicklung hin zu mehr innerer \
+Differenzierung, affektiver Stabilitaet und Selbstwirksamkeit.
+
+Epikrise und Beurteilung
+
+Herr/Frau X. stellte sich mit [Hauptdiagnose] vor dem Hintergrund [biographischer \
+Belastungskontext] vor. Im stationaeren Rahmen konnte eine deutliche Symptomreduktion \
+erreicht werden. Die praemorbide Persoenlichkeitsstruktur mit hoher Leistungsorientierung \
+und eingeschraenkter Selbstfuersorge bleibt langfristig therapeutisch relevant.
+
+Empfehlungen und Weiteres Procedere
+
+Fuer den weiteren Verlauf ist eine kontinuierliche ambulante psychotherapeutische \
+Begleitung mit traumatherapeutischem Schwerpunkt dringend zu empfehlen. Insbesondere \
+die weitere Arbeit an Beziehungs- und Selbstwertthemen sowie die achtsame Begleitung \
+bei anstehenden Veraenderungsprozessen erscheinen wesentlich, um die erreichten \
+Fortschritte nachhaltig im Alltag zu verankern.\
 """
 
 
@@ -198,24 +266,33 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "anamnese": (
-        "Erstelle eine vollstaendige Anamnese und einen AMDP-konformen "
-        "psychopathologischen Befund auf Basis der bereitgestellten Unterlagen. "
-        "Nutze das klinische Fachwissen aus dem Referenzwissen oben.\n\n"
-        "ANAMNESE:\n"
-        "- Vorstellungsanlass und Hauptbeschwerde (Patientenperspektive)\n"
+        "Erstelle eine vollstaendige Anamnese UND einen psychopathologischen Befund "
+        "auf Basis der bereitgestellten Unterlagen.\n\n"
+        "TEIL 1 – ANAMNESE:\n"
+        "- Vorstellungsanlass und Hauptbeschwerde: in eigenen Worten des Patienten, "
+        "direkte Zitate aus der Selbstauskunft wenn charakteristisch\n"
         "- Aktuelle Erkrankung (Beginn, Verlauf, ausloesende und aufrechterhaltende Faktoren)\n"
         "- Psychiatrische Vorgeschichte (Diagnosen, Behandlungen, Krankenhausaufenthalte)\n"
         "- Somatische Vorgeschichte und aktuelle Medikation\n"
         "- Familienanamnese (psychische und somatische Erkrankungen)\n"
         "- Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungsstatus, Kinder, Wohnsituation)\n"
         "- Vegetativum (Schlaf, Appetit/Gewicht, Sexualitaet, Schmerzen)\n"
-        "- Suchtmittelanamnese (Alkohol, Nikotin, Medikamente, illegale Substanzen)\n\n"
-        "PSYCHOPATHOLOGISCHER BEFUND (AMDP-Schema):\n"
-        "Bewusstsein | Orientierung | Aufmerksamkeit und Gedaechtnis | Formales Denken |\n"
-        "Inhaltliches Denken | Wahrnehmung | Ich-Erleben | Affektivitaet |\n"
-        "Antrieb und Psychomotorik | Suizidalitaet und Selbstverletzung | Vegetativum\n\n"
+        "- Suchtmittelanamnese (Alkohol, Nikotin, Medikamente, illegale Substanzen)\n"
+        "- Ressourcen: Was gibt Kraft? Interessen, tragende Beziehungen, Faehigkeiten\n\n"
         "DIAGNOSEN gemaess ICD: {diagnosen}\n\n"
-        "Fehlende Angaben klar als 'nicht erhoben' oder 'verneint' kennzeichnen.\n\n"
+        "TEIL 2 – PSYCHOPATHOLOGISCHER BEFUND:\n"
+        "Verwende EXAKT die folgende Vorlage. Fuelle alle Luecken mit Informationen "
+        "aus der Selbstauskunft. Kuerze Mehrfachoptionen auf die zutreffende Variante. "
+        "Wenn eine Information nicht vorhanden ist, waehle die klinisch plausibelste "
+        "Option oder schreibe 'nicht erhoben'.\n"
+        "Trenne die beiden Teile mit der Zeile: ###BEFUND###\n\n"
+        "BEFUND-VORLAGE (exakt so ausfuellen):\n"
+        + BEFUND_VORLAGE + "\n\n"
+        "QUALITAETSANFORDERUNGEN:\n"
+        "- Alle Informationen aus den Unterlagen verwenden – nichts weglassen\n"
+        "- Direkte Patientenzitate in Anfuehrungszeichen\n"
+        "- NIEMALS Informationen erfinden die nicht in den Unterlagen stehen\n"
+        "- LAENGE Anamnese: Mindestens 350 Woerter\n\n"
         + FEW_SHOT_ANAMNESE
     ),
 
@@ -240,9 +317,13 @@ BASE_PROMPTS: dict[str, str] = {
         "- Geplante Massnahmen und realistische Prognose fuer den Verlaengerungszeitraum\n\n"
         "STIL:\n"
         "Professionelles klinisches Gutachten. Aktiv und konkret formuliert. "
+        "Schreibe aus der Wir-Perspektive des Therapeutenteams: "
+        "'Im bisherigen Verlauf konnten wir beobachten...', 'Es zeigte sich...', "
+        "'Wir erlebten die Klientin als...'. "
         "Systemische Fachsprache (IFS, Self-Energy, Manager-Anteile etc.) wo inhaltlich "
         "passend – nicht als Dekoration. Alle Aussagen aus der Verlaufsdokumentation "
-        "belegbar. Fliesstext, keine Aufzaehlungen.\n\n"
+        "belegbar. Fliesstext, keine Aufzaehlungen.\n"
+        "LAENGE: Mindestens 400 Woerter. Konkret und differenziert – keine Allgemeinplaetze.\n\n"
         "WICHTIG – STILBEISPIEL:\n"
         "Falls ein Stilbeispiel bereitgestellt wird: Uebernimm AUSSCHLIESSLICH den "
         "Schreibstil (Satzbau, Tonalitaet, Fachbegriffsdichte). "
@@ -274,8 +355,14 @@ BASE_PROMPTS: dict[str, str] = {
         "Medikation, Diagnosen-Kodierung – diese Felder werden separat befuellt.\n\n"
         "STIL:\n"
         "Professionell, kollegial, fuer den Zuweiser verstaendlich. "
+        "Schreibe aus der Wir-Perspektive des Therapeutenteams: "
+        "'Im Verlauf erlebten wir Herrn/Frau X. als...', 'Es gelang zunehmend...', "
+        "'Wir beobachteten...'. "
         "Systemische Fachsprache wo inhaltlich passend. Fliesstext pro Sektion. "
-        "Alle Aussagen aus der Verlaufsdokumentation belegbar.\n\n"
+        "Alle Aussagen aus der Verlaufsdokumentation belegbar.\n"
+        "LAENGE: Behandlungsverlauf mindestens 500 Woerter, "
+        "Epikrise mindestens 150 Woerter, Empfehlungen mindestens 100 Woerter. "
+        "Konkret und patientenspezifisch – keine Allgemeinplaetze.\n\n"
         "WICHTIG – STILBEISPIEL:\n"
         "Falls ein Stilbeispiel bereitgestellt wird: Uebernimm AUSSCHLIESSLICH den "
         "Schreibstil (Satzbau, Tonalitaet, Fachbegriffsdichte). "
@@ -299,20 +386,52 @@ def build_system_prompt(
     """
     Baut den finalen System-Prompt zusammen:
     1. Rolle-Praembel + Fachglossar
-    2. Custom-Prompt des Therapeuten ODER Basis-Prompt des Workflows
-    3. Stilprofil des Therapeuten (falls vorhanden)
+    2. Basis-Prompt des Workflows (immer – strukturierte Anweisungen)
+    3. Stilprofil des Therapeuten – unterschiedliche Rahmung je Workflow:
+       - dokumentation (P1): nur Schreibstil (Struktur ist festgelegt)
+       - anamnese/verlaengerung/entlassbericht: strukturelle Schablone
+         (Gliederung, Laenge, Absatztiefe werden uebernommen)
     4. Abschliessende Anweisung
     """
-    base = custom_prompt.strip() if custom_prompt and custom_prompt.strip() \
-        else BASE_PROMPTS.get(workflow, "")
+    base = BASE_PROMPTS.get(workflow, "")
 
     diag_str = ", ".join(diagnosen) if diagnosen else "noch nicht festgelegt"
     base = base.replace("{diagnosen}", diag_str)
 
     parts = [ROLE_PREAMBLE, base]
 
+    # Wenn strukturelle Schablone vorhanden: Laengenhinweis aus BASE_PROMPT
+    # wird durch "aehnliche Laenge wie das Beispiel" ersetzt (kommt weiter unten).
+    # Wenn kein Stilbeispiel: BASE_PROMPT-Laengenhinweise gelten unveraendert.
+
     if style_context and style_context.strip():
-        if style_is_example:
+        # P1 (dokumentation): Struktur ist durch BASE_PROMPT festgelegt →
+        # nur Schreibstil uebernehmen, Struktur NICHT veraendern.
+        # P2/P3/P4: Stilbeispiel ist strukturelle Schablone → Gliederung,
+        # Laenge und Tonalitaet uebernehmen, nur Patienteninhalte ersetzen.
+        is_structural = workflow in ("anamnese", "verlaengerung", "entlassbericht")
+
+        if is_structural:
+            parts.append(
+                "\nSTRUKTURELLE SCHABLONE DES THERAPEUTEN:\n"
+                "Das folgende Beispiel zeigt wie dieser Therapeut einen solchen Bericht verfasst. "
+                "Es handelt sich um einen ANDEREN PATIENTEN.\n\n"
+                "ARBEITSANWEISUNG – ZWEI SCHRITTE:\n"
+                "Schritt 1: Lies das Beispiel und identifiziere die Struktur:\n"
+                "  – Wie viele Abschnitte / Absaetze?\n"
+                "  – Welche Themen in welcher Reihenfolge?\n"
+                "  – Ungefaehre Gesamtlaenge und Absatztiefe?\n"
+                "  – Tonalitaet, Fachbegriffsdichte, Formulierungsgewohnheiten?\n\n"
+                "Schritt 2: Schreibe den neuen Bericht in EXAKT dieser Struktur "
+                "(gleiche Gliederung, aehnliche Laenge, gleiche Abschnittstiefe). "
+                "Ersetze ausschliesslich alle patientenspezifischen Inhalte "
+                "(Namen, Diagnosen, konkrete Ereignisse, Therapiethemen) "
+                "durch die Informationen aus der aktuellen Verlaufsdokumentation.\n\n"
+                "NIEMALS aus dem Beispiel uebernehmen: Patientennamen, Diagnosen, "
+                "ICD-Codes, konkrete Therapieinhalte, Daten – nur Struktur und Stil.\n\n"
+                f"{style_context.strip()}"
+            )
+        elif style_is_example:
             parts.append(
                 "\nSTILBEISPIEL DES THERAPEUTEN – NUR SCHREIBSTIL REFERENZ:\n"
                 "Das folgende Beispiel zeigt den persoenlichen Schreibstil dieses Therapeuten. "
@@ -321,9 +440,7 @@ def build_system_prompt(
                 "Fachbegriffsdichte, Formulierungsgewohnheiten.\n"
                 "NIEMALS UEBERNEHMEN: Diagnosen, ICD-Codes, Patientennamen, Daten, "
                 "Medikamente, konkrete Symptome, Therapieinhalte oder andere "
-                "patientenspezifische Informationen aus diesem Beispiel. "
-                "Diese Informationen beziehen sich auf einen anderen Patienten "
-                "und duerfen nicht in den neuen Bericht einfliessen.\n\n"
+                "patientenspezifische Informationen aus diesem Beispiel.\n\n"
                 f"{style_context.strip()}"
             )
         else:
@@ -335,14 +452,28 @@ def build_system_prompt(
                 f"{style_context.strip()}"
             )
 
-    parts.append(
-        "\nWICHTIG: Du bist ein Dokumentationssystem, kein Therapeut. "
-        "Erstelle ausschliesslich den angeforderten klinischen Text. "
-        "Beginne sofort mit dem Dokumentationstext - keine Einleitung, "
-        "keine Wiederholung der Anweisungen, kein Prompt-Echo. "
-        "Keine Ablehnung, keine Empfehlungen an Patienten, keine therapeutischen Ratschlaege. "
-        "Sprache: Deutsch. Fachlich praezise. Keine Markdown-Formatierung in der Ausgabe."
+    has_structural_template = (
+        style_context and style_context.strip()
+        and workflow in ("anamnese", "verlaengerung", "entlassbericht")
     )
+    if has_structural_template:
+        parts.append(
+            "\nWICHTIG: Du bist ein Dokumentationssystem, kein Therapeut. "
+            "Erstelle ausschliesslich den angeforderten klinischen Text in der Struktur "
+            "des bereitgestellten Stilbeispiels. "
+            "Beginne sofort mit dem Dokumentationstext - keine Einleitung, "
+            "keine Wiederholung der Anweisungen, kein Prompt-Echo. "
+            "Sprache: Deutsch. Fachlich praezise. Keine Markdown-Formatierung in der Ausgabe."
+        )
+    else:
+        parts.append(
+            "\nWICHTIG: Du bist ein Dokumentationssystem, kein Therapeut. "
+            "Erstelle ausschliesslich den angeforderten klinischen Text. "
+            "Beginne sofort mit dem Dokumentationstext - keine Einleitung, "
+            "keine Wiederholung der Anweisungen, kein Prompt-Echo. "
+            "Keine Ablehnung, keine Empfehlungen an Patienten, keine therapeutischen Ratschlaege. "
+            "Sprache: Deutsch. Fachlich praezise. Keine Markdown-Formatierung in der Ausgabe."
+        )
 
     return "\n".join(parts)
 
@@ -355,8 +486,16 @@ def build_user_content(
     vorbefunde_text: Optional[str] = None,
     verlauf_text: Optional[str] = None,
     diagnosen: Optional[list[str]] = None,
+    custom_prompt: Optional[str] = None,
+    antrag_text: Optional[str] = None,
 ) -> str:
-    """Baut den User-Content-Block zusammen."""
+    """
+    Baut den User-Content-Block zusammen.
+
+    custom_prompt (Therapeuten-Fokus) wird als letzter Block vor der
+    Generierungsaufforderung eingebettet – damit bleibt der BASE_PROMPT
+    vollstaendig erhalten und der Therapeut kann trotzdem Schwerpunkte setzen.
+    """
     parts = []
 
     if workflow == "dokumentation":
@@ -385,28 +524,82 @@ def build_user_content(
         parts.append("Anamnese und psychopathologischen Befund erstellen.")
 
     elif workflow == "verlaengerung":
+        if antrag_text:
+            parts.append(
+                f"ANTRAGSVORLAGE / VORHERIGER ANTRAG"
+                f" (Quelle fuer Diagnosen, Anamnese, Name, Geschlecht):\n{antrag_text}\n"
+                "Entnimm Diagnosen, Anamnese-Informationen, Name und Geschlecht aus dieser Vorlage."
+            )
         if verlauf_text:
-            parts.append(f"VERLAUFSDOKUMENTATION (Grundlage fuer den Bericht):\n{verlauf_text}")
+            parts.append(f"VERLAUFSDOKUMENTATION (aktuelle Sitzungen):\n{verlauf_text}")
         if diagnosen:
             parts.append(f"DIAGNOSEN DES AKTUELLEN PATIENTEN: {', '.join(diagnosen)}")
+        if bullets:
+            parts.append(f"THERAPEUTISCHE STICHPUNKTE / BESONDERE EREIGNISSE:\n{bullets}")
         parts.append(
+            "NAME UND ANREDE: Entnimm den Nachnamen und das Geschlecht aus der Antragsvorlage. "
+            "Verwende durchgehend nur den ERSTEN BUCHSTABEN des Nachnamens mit Punkt: "
+            "'Frau M.' / 'Herr R.' sowie 'die Klientin' / 'der Klient'. "
+            "Beispiele: 'Im Verlauf erlebten wir Frau M. als...', 'Herr R. zeigte...', "
+            "'die Klientin berichtete...'. "
+            "Wenn kein Name erkennbar: nur 'die Klientin' / 'der Klient' verwenden.\n\n"
             "Schreibe jetzt die Sektion 'Bisheriger Verlauf und Begruendung der Verlaengerung'. "
             "Nur diese Sektion – keine anderen Teile des Antrags. "
-            "Ausschliesslich auf Basis der obigen Verlaufsdokumentation – "
+            "Mindestens 400 Woerter. "
+            "Ausschliesslich auf Basis der obigen Quellen – "
+            "keine Informationen erfinden die nicht in den Quellen stehen, "
             "keine Informationen aus einem Stilbeispiel uebernehmen."
         )
 
     elif workflow == "entlassbericht":
+        if antrag_text:
+            parts.append(
+                f"VORHANDENER VERLÄNGERUNGSANTRAG / VORBERICHT"
+                f" (Quelle fuer Diagnosen, Anamnese, Befund, Name, Geschlecht):\n{antrag_text}\n"
+                "Entnimm Diagnosen, Anamnese, psychopathologischen Befund, Name und Geschlecht aus diesem Dokument."
+            )
         if verlauf_text:
             parts.append(f"VERLAUFSDOKUMENTATION (alle Sitzungen):\n{verlauf_text}")
         if diagnosen:
             parts.append(f"DIAGNOSEN DES AKTUELLEN PATIENTEN: {', '.join(diagnosen)}")
+        if bullets:
+            parts.append(f"THERAPEUTISCHE SCHWERPUNKTE / BESONDERE THEMEN:\n{bullets}")
         parts.append(
-            "Schreibe jetzt die drei psychotherapeutischen Sektionen des Entlassberichts: "
-            "Psychotherapeutischer Behandlungsverlauf, Epikrise und Beurteilung, "
-            "Empfehlungen und Weiteres Procedere. "
-            "Ausschliesslich auf Basis der obigen Verlaufsdokumentation – "
+            "NAME UND ANREDE: Entnimm den Nachnamen und das Geschlecht aus dem Vorbericht/Antrag. "
+            "Verwende durchgehend nur den ERSTEN BUCHSTABEN des Nachnamens mit Punkt: "
+            "'Frau M.' / 'Herr R.' sowie 'die Klientin' / 'der Klient'. "
+            "Beispiele: 'Im Verlauf erlebten wir Herrn R. als...', 'Frau M. zeigte...', "
+            "'die Klientin berichtete...'. "
+            "Wenn kein Name erkennbar: nur 'die Klientin' / 'der Klient' verwenden.\n\n"
+            "Schreibe jetzt die drei psychotherapeutischen Sektionen: "
+            "Psychotherapeutischer Behandlungsverlauf (mind. 500 Woerter), "
+            "Epikrise und Beurteilung (mind. 150 Woerter), "
+            "Empfehlungen und Weiteres Procedere (mind. 100 Woerter). "
+            "Ausschliesslich auf Basis der obigen Quellen – "
+            "keine Informationen erfinden die nicht in den Quellen stehen, "
             "keine Informationen aus einem Stilbeispiel uebernehmen."
         )
+
+    # Therapeuten-Fokus: patientenspezifische Schwerpunkte.
+    # Fuer P2/P3/P4 mit Stilbeispiel: Modell soll pruefen wo diese Themen
+    # strukturell ins Stilbeispiel passen wuerden und sie dort einbauen.
+    if custom_prompt and custom_prompt.strip():
+        focus = custom_prompt.strip()
+        is_structural = workflow in ("anamnese", "verlaengerung", "entlassbericht")
+        if is_structural:
+            parts.append(
+                f"THERAPEUTEN-HINWEIS – SCHWERPUNKTTHEMEN:\n{focus}\n\n"
+                "Wenn ein Stilbeispiel bereitgestellt wurde: Pruefe an welcher Stelle "
+                "im Stilbeispiel diese Themen strukturell platziert waeren und "
+                "baue sie an genau dieser Position in den neuen Bericht ein. "
+                "Greife diese Themen auf soweit sie in der Verlaufsdokumentation belegt sind – "
+                "erfinde keine Inhalte die nicht in den Quellen stehen."
+            )
+        else:
+            parts.append(
+                f"THERAPEUTEN-HINWEIS – SCHWERPUNKTE FUER DIESEN BERICHT:\n{focus}\n"
+                "Greife diese Themen auf soweit sie in der Verlaufsdokumentation belegt sind. "
+                "Erfinde keine Inhalte die nicht in den Quellen stehen."
+            )
 
     return "\n\n".join(parts)

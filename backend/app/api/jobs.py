@@ -244,141 +244,36 @@ async def create_generate_job(
             style_is_example=style_is_example,
             diagnosen=dx_list,
         )
+        is_p3p4 = workflow in ("verlaengerung", "entlassbericht")
         user = build_user_content(
             workflow=workflow,
             transcript=audio_transcript,
             bullets=bullets,
-            selbstauskunft_text=selbstauskunft_text,
-            vorbefunde_text=vorbefunde_text if workflow not in ("verlaengerung", "entlassbericht") else None,
-            verlauf_text=vorbefunde_text    if workflow in ("verlaengerung", "entlassbericht")    else None,
+            selbstauskunft_text=selbstauskunft_text if not is_p3p4 else None,
+            antrag_text=selbstauskunft_text         if is_p3p4     else None,
+            vorbefunde_text=vorbefunde_text         if not is_p3p4 else None,
+            verlauf_text=vorbefunde_text            if is_p3p4     else None,
             diagnosen=dx_list,
+            custom_prompt=prompt if prompt and prompt.strip() else None,
         )
         result = await generate_text(system, user, model=model)
+        raw = result["text"] or ""
+
+        # Anamnese: Ergebnis bei ###BEFUND### aufteilen
+        if workflow == "anamnese" and "###BEFUND###" in raw:
+            parts_split = raw.split("###BEFUND###", 1)
+            anamnese_part = parts_split[0].strip()
+            befund_part   = parts_split[1].strip()
+        else:
+            anamnese_part = raw
+            befund_part   = None
+
         return {
-            "text":       result["text"],
-            "transcript": audio_transcript or None,
-            "model_used": result["model_used"],
-            "style_info": style_info,
-        }
-
-    background_tasks.add_task(job_queue.run_job, job, _run())
-    return {"job_id": job.job_id, "status": "pending"}
-    """
-    Startet einen asynchronen Generierungs-Job.
-    Gibt sofort {job_id, status: "pending"} zurueck.
-    Frontend pollt GET /api/jobs/{job_id} bis status="done".
-    """
-    # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht thread-safe)
-    audio_bytes         = await audio.read()         if audio         and audio.filename         else None
-    audio_name          = audio.filename              if audio         and audio.filename         else None
-    selbst_bytes        = await selbstauskunft.read() if selbstauskunft and selbstauskunft.filename else None
-    selbst_name         = selbstauskunft.filename     if selbstauskunft and selbstauskunft.filename else None
-    vorbef_bytes        = await vorbefunde.read()     if vorbefunde    and vorbefunde.filename    else None
-    vorbef_name         = vorbefunde.filename         if vorbefunde    and vorbefunde.filename    else None
-    style_bytes         = await style_file.read()     if style_file    and style_file.filename    else None
-    style_name          = style_file.filename         if style_file    and style_file.filename    else None
-
-    dx_list = [d.strip() for d in diagnosen.split(",") if d.strip()] if diagnosen else []
-
-    # Job anlegen
-    job = job_queue.create_job(
-        workflow=workflow,
-        description=f"Workflow: {workflow}" + (f" | Audio: {audio_name}" if audio_name else ""),
-    )
-
-    async def _run():
-        # 1. Audio transkribieren
-        audio_transcript = transcript or ""
-        if audio_bytes and audio_name:
-            from app.core.files import upload_dir
-            import uuid
-            from pathlib import Path
-            suffix = Path(audio_name).suffix.lower()
-            audio_path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
-            audio_path.write_bytes(audio_bytes)
-            tr = await _transcription.transcribe_audio(audio_path)
-            audio_transcript = tr["transcript"]
-
-        # 2. Dokumente extrahieren
-        selbstauskunft_text = ""
-        if selbst_bytes and selbst_name:
-            from app.core.files import upload_dir
-            import uuid
-            from pathlib import Path
-            suffix = Path(selbst_name).suffix.lower()
-            path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
-            path.write_bytes(selbst_bytes)
-            try:
-                selbstauskunft_text = await extract_text(path)
-            except Exception as e:
-                logger.warning("Selbstauskunft-Extraktion fehlgeschlagen: %s", e)
-
-        vorbefunde_text = ""
-        if vorbef_bytes and vorbef_name:
-            from app.core.files import upload_dir
-            import uuid
-            from pathlib import Path
-            suffix = Path(vorbef_name).suffix.lower()
-            path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
-            path.write_bytes(vorbef_bytes)
-            try:
-                vorbefunde_text = await extract_text(path)
-            except Exception as e:
-                logger.warning("Vorbefunde-Extraktion fehlgeschlagen: %s", e)
-
-        # 3. Stilprofil
-        from app.services.llm import truncate_style_context
-        style_context = ""
-        style_is_example = False
-        if style_text and style_text.strip():
-            # Direkt eingefügter Stiltext (C&P) – kein Extraktionsschritt nötig
-            # Deduplizieren falls die eingefügte Vorlage selbst repetitiv ist
-            from app.services.llm import deduplicate_paragraphs
-            cleaned = deduplicate_paragraphs(style_text.strip())
-            style_context = truncate_style_context(cleaned)
-            style_is_example = True   # Rohtext → explizite "nur Stil"-Rahmung
-            logger.info("Stilvorlage via Text-Input (%d Zeichen nach Bereinigung)", len(style_context))
-        elif style_bytes and style_name:
-            from app.core.files import upload_dir
-            import uuid
-            from pathlib import Path
-            suffix = Path(style_name).suffix.lower()
-            path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
-            path.write_bytes(style_bytes)
-            try:
-                style_context = await extract_style_context(path, generate_text)
-                style_context = truncate_style_context(style_context)
-            except Exception as e:
-                logger.warning("Stilprofil-Extraktion fehlgeschlagen: %s", e)
-        elif therapeut_id and therapeut_id.strip():
-            query_text = audio_transcript or transcript or bullets or ""
-            style_context = await retrieve_style_examples(
-                db, therapeut_id.strip(), workflow, query_text
-            )
-
-        # 4. Generieren
-        system = build_system_prompt(
-            workflow=workflow,
-            custom_prompt=prompt,
-            style_context=style_context,
-            style_is_example=style_is_example,
-            diagnosen=dx_list,
-        )
-        user = build_user_content(
-            workflow=workflow,
-            transcript=audio_transcript,
-            bullets=bullets,
-            selbstauskunft_text=selbstauskunft_text,
-            # Für verlaengerung/entlassbericht kommt die Verlaufsdoku als vorbefunde-Upload
-            vorbefunde_text=vorbefunde_text if workflow not in ("verlaengerung", "entlassbericht") else None,
-            verlauf_text=vorbefunde_text    if workflow in ("verlaengerung", "entlassbericht")    else None,
-            diagnosen=dx_list,
-        )
-        result = await generate_text(system, user, model=model)
-        return {
-            "text":       result["text"],
-            "transcript": audio_transcript or None,
-            "model_used": result["model_used"],
+            "text":        anamnese_part,
+            "befund_text": befund_part,
+            "transcript":  audio_transcript or None,
+            "model_used":  result["model_used"],
+            "style_info":  style_info,
         }
 
     background_tasks.add_task(job_queue.run_job, job, _run())

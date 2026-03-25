@@ -1497,3 +1497,92 @@ TK Versicherungsnummer 123456789
         # word_count sollte kleiner sein als der gesamte Text (Diagnose-Block entfernt)
         full_words = len(text.split())
         assert r.json()["word_count"] < full_words
+
+
+# ══════════════════════════════════════════════════════════════════
+# STRUKTURELLE SCHABLONE (workflow-spezifisches Stilframing)
+# ══════════════════════════════════════════════════════════════════
+
+class TestStrukturelleSchablone:
+    """Tests für workflow-abhängige Stil-Rahmung."""
+
+    BEISPIEL = "Frau X. stellte sich mit anhaltender Erschoepfung vor. "\
+               "Im Verlauf zeigte sich ein aktiver Manager-Anteil."
+
+    def test_p1_nur_schreibstil(self):
+        """P1 (dokumentation) nutzt Schreibstil-Modus – keine Strukturvorgabe."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt("dokumentation",
+            style_context=self.BEISPIEL, style_is_example=True)
+        assert "STILBEISPIEL" in p
+        assert "STRUKTURELLE SCHABLONE" not in p
+        assert "Schritt 1" not in p
+
+    def test_p2_strukturelle_schablone(self):
+        """P2 (anamnese) nutzt strukturelle Schablone."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt("anamnese",
+            style_context=self.BEISPIEL, style_is_example=True)
+        assert "STRUKTURELLE SCHABLONE" in p
+        assert "Schritt 1" in p
+        assert "Schritt 2" in p
+        assert "exakt dieser Struktur" in p or "EXAKT" in p
+
+    def test_p3_strukturelle_schablone(self):
+        """P3 (verlaengerung) nutzt strukturelle Schablone."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt("verlaengerung",
+            style_context=self.BEISPIEL, style_is_example=True)
+        assert "STRUKTURELLE SCHABLONE" in p
+        assert "Schritt 2" in p
+
+    def test_p4_strukturelle_schablone(self):
+        """P4 (entlassbericht) nutzt strukturelle Schablone."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt("entlassbericht",
+            style_context=self.BEISPIEL, style_is_example=True)
+        assert "STRUKTURELLE SCHABLONE" in p
+        assert "Schritt 1" in p
+
+    def test_strukturmodus_kein_halluzinationsschutz_geschwaecht(self):
+        """Auch im Strukturmodus: Patientendaten des Beispiels dürfen nicht übernommen werden."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt("verlaengerung",
+            style_context=self.BEISPIEL, style_is_example=True)
+        assert "NIEMALS" in p
+        assert "Patientennamen" in p or "Namen" in p
+
+    def test_ohne_stilbeispiel_kein_strukturmodus(self):
+        """Ohne Stilbeispiel kein struktureller Modus – Mindestlänge aus Prompt gilt."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt("verlaengerung")
+        assert "STRUKTURELLE SCHABLONE" not in p
+        assert "400" in p  # Mindestlänge aus BASE_PROMPT
+
+    def test_abschluss_mit_strukturmodus_angepasst(self):
+        """Abschlussanweisung im Strukturmodus verweist auf Stilbeispiel."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt("entlassbericht",
+            style_context=self.BEISPIEL, style_is_example=True)
+        assert "in der Struktur" in p
+        # kein überflüssiger Hinweis "keine therapeutischen Ratschläge"
+        # (der verwirrt im strukturellen Modus)
+        assert "keine therapeutischen Ratschlaege" not in p
+
+    def test_fokusthemen_mit_themen_mapping_fuer_p3(self):
+        """Fokus-Themen enthalten Strukturmapping-Hinweis für P3/P4."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("verlaengerung",
+            verlauf_text="Sitzung 1: IFS-Arbeit.",
+            custom_prompt="Türsteher-Anteil, Gruppenarbeit")
+        assert "THERAPEUTEN-HINWEIS" in u
+        assert "strukturell" in u or "Stilbeispiel" in u
+
+    def test_fokusthemen_ohne_mapping_fuer_p1(self):
+        """P1 Fokus-Themen ohne Strukturmapping (P1 hat feste Struktur)."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("dokumentation",
+            transcript="Gespräch.",
+            custom_prompt="Ressourcen betonen")
+        assert "THERAPEUTEN-HINWEIS" in u
+        assert "strukturell" not in u

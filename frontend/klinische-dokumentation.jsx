@@ -466,30 +466,21 @@ Hypothesen zu Sinnzusammenhängen, Funktionen der Symptome im System, relevante 
 
 Diagnosen: {diagnosen}`;
 
-const P_VERL = `Erstelle die Begründung für eine Verlängerung des stationären Aufenthalts auf Basis der Verlaufsdokumentation.
+const P_VERL = `Optionale Schwerpunkte für diesen Verlängerungsantrag:
+– Welche Anteile / Themen besonders hervorheben?
+– Besondere Wendepunkte oder Krisen im Verlauf?
+– Spezifische noch ausstehende Therapieziele?
 
-Beschreibe im Fließtext:
-– den bisherigen Behandlungsverlauf aus systemischer Sicht: welche Themen wurden bearbeitet, welche Veränderungen sind erkennbar, welche Muster haben sich gezeigt?
-– die medizinische und therapeutische Notwendigkeit der Verlängerung: was ist noch offen, welche Ziele wurden noch nicht erreicht?
-– konkrete ausstehende Therapieziele, insbesondere bezogen auf das soziale System, Beziehungsgestaltung und Alltagsintegration
-– die Begründung des weiteren stationären Bedarfs gegenüber ambulanter Versorgung
-– Prognose und voraussichtlicher weiterer Verlauf
+Leer lassen wenn keine besonderen Schwerpunkte gesetzt werden sollen.`;
 
-Stil: Fachlich, klar begründet, systemisch-ressourcenorientiert.`;
+const P_ENTL = `Optionale Schwerpunkte für diesen Entlassbericht:
+– Welche Themen / Anteile besonders hervorheben?
+– Besondere therapeutische Wendepunkte?
+– Spezifische Empfehlungen für die Weiterbehandlung?
 
-const P_ENTL = `Erstelle einen vollständigen Entlassbericht aus der vorliegenden Verlaufsdokumentation gemäß der bereitgestellten Vorlage.
+Beispiel: "Wächteranteil Türsteher, Gruppenarbeit, Entschluss zur räumlichen Trennung"
 
-Struktur:
-1. Aufnahme- und Entlassdaten, Verweildauer
-2. Aufnahmegrund und Hauptdiagnosen (ICD-10/11)
-3. Psychischer und somatischer Aufnahmebefund
-4. Behandlungsverlauf – wesentliche Themen, systemische Hypothesen, therapeutische Interventionen, Krisen und Entwicklungsschritte im Fließtext
-5. Psychischer Entlassbefund
-6. Systemische Epikrise – Symptomfunktion im Familien- und Beziehungssystem, relevante Muster, Ressourcen und offene Fragen
-7. Empfehlungen und weiteres Procedere, insbesondere zur ambulanten Weiterbehandlung und Systemeinbindung
-8. Medikation bei Entlassung
-
-Stil: Fließtext, fachlich, systemisch-wertschätzend, ressourcenorientiert.`;
+Leer lassen wenn keine besonderen Schwerpunkte gesetzt werden sollen.`;
 
 // ── Helpers ──────────────────────────────────────────────────────
 function Dropzone({ label, hint, accept, file, onFile, icon }) {
@@ -768,7 +759,12 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   try {
     const job = await pollJob(jobId, 1200);
     clearActiveJob();
-    return { text: job.result_text || "", jobId, hasTranscript: job.has_transcript || false };
+    return {
+      text:        job.result_text   || "",
+      befundText:  job.befund_text   || "",
+      jobId,
+      hasTranscript: job.has_transcript || false,
+    };
   } catch (e) {
     clearActiveJob();
     throw e;
@@ -969,6 +965,17 @@ function P1({ toast, resumeJob, onResumed, model }) {
             extraButtons={hasTranscript ? [
               { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
             ] : []} />
+
+          {out && (
+            <div style={{marginTop:12, textAlign:"right"}}>
+              <button className="btn-secondary" onClick={() => {
+                setAudio(null); setTxtFile(null); setText(""); setBullets("");
+                setStyle(null); setStyleText(""); setOut("");
+                setLastJobId(null); setHasTranscript(false);
+                toast("Formular zurückgesetzt");
+              }}>+ Neue Verlaufsnotiz</button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -986,6 +993,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
   const [styleText, setStyleText] = useState("");
   const [prompt, setPrompt]       = useState(P_ANAMNESE);
   const [out, setOut]             = useState("");
+  const [befundOut, setBefundOut] = useState("");
   const [tab, setTab]             = useState("Anamnese");
   const [lastJobId, setLastJobId] = useState(null);
   const [hasTranscript, setHasTranscript] = useState(false);
@@ -1001,6 +1009,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
+        setBefundOut(job.befund_text || "");
         setLastJobId(resumeJob.jobId);
         setHasTranscript(job.has_transcript || false);
         onResumed();
@@ -1010,7 +1019,6 @@ function P2({ toast, resumeJob, onResumed, model }) {
   }, [resumeJob]);
 
   function cancelRun() {
-    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
     const jobId = loadActiveJob()?.jobId;
     if (jobId) {
       fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
@@ -1023,6 +1031,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
     setBusy(true);
     setLastJobId(null);
     setHasTranscript(false);
+    setBefundOut("");
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
 
     const k = kuerzel.trim().replace(/\.?$/, ".");
@@ -1047,6 +1056,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         model:     model || null,
       }, "p2");
       setOut(result.text || "");
+      setBefundOut(result.befundText || "");
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
     }
@@ -1157,12 +1167,27 @@ function P2({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy}
+          <Output text={tab === "Anamnese" ? out : befundOut} loading={busy}
             tabs={["Anamnese", "Psych. Befund"]} activeTab={tab} onTab={setTab}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }}
+            onCopy={() => {
+              const t = tab === "Anamnese" ? out : befundOut;
+              navigator.clipboard.writeText(t);
+              toast("Kopiert");
+            }}
             extraButtons={hasTranscript ? [
               { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
             ] : []} />
+
+          {(out || befundOut) && (
+            <div style={{marginTop:12, textAlign:"right"}}>
+              <button className="btn-secondary" onClick={() => {
+                setSelbst(null); setBefunde(null); setAudio(null); setTxtFile(null);
+                setText(""); setDx([]); setStyle(null); setStyleText("");
+                setOut(""); setBefundOut(""); setLastJobId(null); setHasTranscript(false);
+                toast("Formular zurückgesetzt");
+              }}>+ Neue Anamnese</button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1174,7 +1199,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
   const [verlauf, setVerlauf]     = useState(null);
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
-  const [prompt, setPrompt]       = useState(P_VERL);
+  const [fokus, setFokus]         = useState("");
   const [out, setOut]             = useState("");
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
@@ -1209,10 +1234,12 @@ function P3({ toast, resumeJob, onResumed, model }) {
     setOut("");
     setLastJobId(null);
     try {
-      const result = await generate("verlaengerung", prompt, "", {
-        vorbef:    verlauf,
+      const result = await generate("verlaengerung", "", "", {
+        selbst:    antrag,   // Antragsvorlage → Diagnosen/Anamnese
+        vorbef:    verlauf,  // Verlaufsdokumentation
         style:     style,
         styleText: styleText || null,
+        bullets:   fokus || null,
         model:     model || null,
       }, "p3");
       setOut(result.text || "");
@@ -1237,8 +1264,8 @@ function P3({ toast, resumeJob, onResumed, model }) {
           </Card>
 
           <Card num="B" title="Antragsvorlage" badge="opt" open={false}>
-            <Dropzone label="Vorlage hochladen" hint=".docx — vorhandene Vorlage mit Feldern" accept=".docx" icon="&#128196;" file={antrag} onFile={setAntrag} />
-            <div className="info-note" style={{marginTop:8}}>Optional: vorhandene DOCX-Vorlage — Felder werden befüllt.</div>
+            <Dropzone label="Vorlage / Vorheriger Antrag hochladen" hint=".docx oder .pdf — Diagnosen und Anamnese werden entnommen" accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
+            <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus dieser Vorlage für den neuen Antrag übernommen.</div>
           </Card>
 
           <Card num="C" title="Stilvorlage" badge="opt" open={false}>
@@ -1258,8 +1285,14 @@ function P3({ toast, resumeJob, onResumed, model }) {
             </InputTabs>
           </Card>
 
-          <Card num="D" title="Prompt anpassen" open={false}>
-            <PromptEditor value={prompt} onChange={setPrompt} def={P_VERL} />
+          <Card num="D" title="Fokus-Themen" badge="opt" open={false}>
+            <label className="field-label">Schwerpunkte für diesen Antrag</label>
+            <textarea rows={4}
+              placeholder={"Optionale Schwerpunkte, z.B.:\n– Wächteranteil Türsteher\n– Gruppenarbeit, soziale Integration\n– Entschluss zur räumlichen Trennung"}
+              value={fokus}
+              onChange={e => setFokus(e.target.value)}
+            />
+            <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
           </Card>
 
           <div className="action-bar">
@@ -1271,6 +1304,16 @@ function P3({ toast, resumeJob, onResumed, model }) {
 
           <Output text={out} loading={busy}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
+
+          {out && (
+            <div style={{marginTop:12, textAlign:"right"}}>
+              <button className="btn-secondary" onClick={() => {
+                setVerlauf(null); setAntrag(null); setStyle(null); setStyleText("");
+                setFokus(""); setOut(""); setLastJobId(null);
+                toast("Formular zurückgesetzt");
+              }}>+ Neuer Verlängerungsantrag</button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1282,7 +1325,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
   const [verlauf, setVerlauf]     = useState(null);
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
-  const [prompt, setPrompt]       = useState(P_ENTL);
+  const [fokus, setFokus]         = useState("");
   const [out, setOut]             = useState("");
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
@@ -1317,10 +1360,12 @@ function P4({ toast, resumeJob, onResumed, model }) {
     setOut("");
     setLastJobId(null);
     try {
-      const result = await generate("entlassbericht", prompt, "", {
-        vorbef:    verlauf,
+      const result = await generate("entlassbericht", "", "", {
+        selbst:    bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund
+        vorbef:    verlauf,  // Verlaufsdokumentation
         style:     style,
         styleText: styleText || null,
+        bullets:   fokus || null,
         model:     model || null,
       }, "p4");
       setOut(result.text || "");
@@ -1366,8 +1411,14 @@ function P4({ toast, resumeJob, onResumed, model }) {
             </InputTabs>
           </Card>
 
-          <Card num="D" title="Prompt anpassen" open={false}>
-            <PromptEditor value={prompt} onChange={setPrompt} def={P_ENTL} />
+          <Card num="D" title="Fokus-Themen" badge="opt" open={false}>
+            <label className="field-label">Schwerpunkte für diesen Entlassbericht</label>
+            <textarea rows={4}
+              placeholder={"Optionale Schwerpunkte, z.B.:\n– Wächteranteil Türsteher, Arbeit mit inneren Anteilen\n– Gruppenarbeit und soziale Integration\n– Familien- und Paardynamik\n– Entschluss zur räumlichen Trennung"}
+              value={fokus}
+              onChange={e => setFokus(e.target.value)}
+            />
+            <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
           </Card>
 
           <div className="action-bar">
@@ -1379,6 +1430,16 @@ function P4({ toast, resumeJob, onResumed, model }) {
 
           <Output text={out} loading={busy}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
+
+          {out && (
+            <div style={{marginTop:12, textAlign:"right"}}>
+              <button className="btn-secondary" onClick={() => {
+                setVerlauf(null); setBericht(null); setStyle(null); setStyleText("");
+                setFokus(""); setOut(""); setLastJobId(null);
+                toast("Formular zurückgesetzt");
+              }}>+ Neuer Entlassbericht</button>
+            </div>
+          )}
         </div>
       </div>
     </div>

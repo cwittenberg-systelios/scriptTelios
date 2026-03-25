@@ -75,6 +75,7 @@ class Job:
         self.status             = JobStatus.PENDING
         self.result_text        : Optional[str] = None
         self.result_transcript  : Optional[str] = None
+        self.result_befund      : Optional[str] = None
         self.result_file        : Optional[str] = None
         self.error_msg          : Optional[str] = None
         self.created_at         = datetime.now(timezone.utc)
@@ -94,6 +95,7 @@ class Job:
             "cancelled":       self._cancel_requested,
             "result_text":     self.result_text,
             "has_transcript":  self.result_transcript is not None,
+            "befund_text":     self.result_befund,
             "result_file":     self.result_file,
             "error_msg":       self.error_msg,
             "created_at":      self.created_at.isoformat(),
@@ -172,6 +174,7 @@ class JobQueue:
             job.status             = JobStatus.DONE
             job.result_text        = result.get("text")
             job.result_transcript  = result.get("transcript")
+            job.result_befund      = result.get("befund_text")
             job.result_file        = result.get("file")
             job.model_used         = result.get("model_used")
             job.style_info         = result.get("style_info")
