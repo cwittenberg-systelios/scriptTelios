@@ -259,8 +259,8 @@ async def _generate_ollama(
     # Für Reasoning-Modelle: mindestens deren Profil-Minimum respektieren
     num_ctx = max(num_ctx, profile.get("min_ctx", 2048))
     logger.debug(
-        "Modell '%s': num_ctx=%d (dynamisch berechnet, Profil-Max: %d)",
-        effective_model, num_ctx, profile["num_ctx"]
+        "Modell '%s': num_ctx=%d (dynamisch berechnet, min_ctx: %d)",
+        effective_model, num_ctx, profile.get("min_ctx", 2048)
     )
 
     async def _call(num_ctx: int) -> httpx.Response:
