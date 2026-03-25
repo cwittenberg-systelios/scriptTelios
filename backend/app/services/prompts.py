@@ -147,7 +147,8 @@ Vegetativum: Schlaf [Beschreibung], Appetit [Beschreibung].\
 """
 
 FEW_SHOT_VERLAENGERUNG = """\
-BEISPIEL (Bisheriger Verlauf und Begruendung der Verlaengerung - ca. 400-600 Woerter):
+BEISPIEL (Bisheriger Verlauf und Begründung der Verlängerung /
+Verlauf und Begründung der weiteren Verlängerung – ca. 400-600 Wörter):
 
 Frau X. zeigte sich im bisherigen Verlauf des stationaeren Aufenthaltes unter anhaltendem \
 innerem Druck mit ausgepraegte Anspannung und emotionaler Ambivalenz. Gleichzeitig wurde \
@@ -297,39 +298,37 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "verlaengerung": (
-        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik fuer "
-        "Psychosomatik und Psychotherapie. Schreibe ausschliesslich die Sektion "
-        "'Bisheriger Verlauf und Begruendung der Verlaengerung' fuer einen Antrag "
-        "auf Verlaengerung der Kostenzusage bei der Krankenversicherung.\n\n"
-        "FOKUS DIESER SEKTION:\n"
-        "Schreibe NUR diesen einen Abschnitt – keine Diagnosen, keine Stammdaten, "
-        "keine anderen Sektionen des Antrags. Diese Felder sind standardisiert "
-        "und werden separat befuellt.\n\n"
-        "INHALT:\n"
-        "- Kurzer Rueckblick auf die bisherige Behandlung: was wurde bearbeitet, "
-        "welche therapeutischen Methoden eingesetzt (IFS, systemisch, hypnosystemisch)\n"
-        "- Konkrete Fortschritte und erzielte Veraenderungen – spezifisch und belegbar "
-        "aus der Verlaufsdokumentation, keine allgemeinen Behauptungen\n"
+        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für "
+        "Psychosomatik und Psychotherapie. Verfasse den Abschnitt "
+        "'Bisheriger Verlauf und Begründung der Verlängerung' "
+        "(auch: 'Verlauf und Begründung der weiteren Verlängerung') "
+        "für einen Antrag auf Verlängerung der Kostenzusage bei der Krankenversicherung.\n\n"
+        "FOKUS:\n"
+        "Schreibe NUR diesen einen Abschnitt als Fließtext – keine Diagnosen, keine Stammdaten, "
+        "keine anderen Sektionen des Antrags. Diese Felder werden separat befüllt.\n\n"
+        "INHALT (Reihenfolge einhalten):\n"
+        "- Bisheriger Verlauf: was wurde konkret bearbeitet, welche Methoden eingesetzt "
+        "(IFS, Anteilearbeit, Hypnosystemik, Körperarbeit, Gruppenarbeit)\n"
+        "- Konkrete Fortschritte – spezifisch und belegbar aus der Verlaufsdokumentation, "
+        "keine allgemeinen Behauptungen\n"
         "- Noch ausstehende Therapieziele: was bleibt zu tun, warum ist weitere "
-        "stationaere Behandlung notwendig (nicht ambulant moeglich)\n"
-        "- Medizinische Begruendung der Verlaengerung: Belastbarkeit, Stabilitaet, "
-        "soziale Integration, Entlassfaehigkeit noch nicht erreicht\n"
-        "- Geplante Massnahmen und realistische Prognose fuer den Verlaengerungszeitraum\n\n"
+        "stationäre Behandlung notwendig\n"
+        "- Medizinische Begründung der Verlängerung: Belastbarkeit, Stabilität, "
+        "soziale Integration, Entlassfähigkeit noch nicht erreicht\n"
+        "- Geplante Maßnahmen und Prognose für den Verlängerungszeitraum\n\n"
         "STIL:\n"
-        "Professionelles klinisches Gutachten. Aktiv und konkret formuliert. "
-        "Schreibe aus der Wir-Perspektive des Therapeutenteams: "
-        "'Im bisherigen Verlauf konnten wir beobachten...', 'Es zeigte sich...', "
-        "'Wir erlebten die Klientin als...'. "
-        "Systemische Fachsprache (IFS, Self-Energy, Manager-Anteile etc.) wo inhaltlich "
-        "passend – nicht als Dekoration. Alle Aussagen aus der Verlaufsdokumentation "
-        "belegbar. Fliesstext, keine Aufzaehlungen.\n"
-        "LAENGE: Mindestens 400 Woerter. Konkret und differenziert – keine Allgemeinplaetze.\n\n"
+        "Wir-Perspektive des Therapeutenteams: "
+        "'Im bisherigen Verlauf erlebten wir...', 'Es zeigte sich...', "
+        "'Die Klientin/der Klient entwickelte...'. "
+        "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
+        "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
+        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens: 'Frau M.' / 'Herr R.' "
+        "sowie 'die Klientin' / 'der Klient'.\n\n"
+        "HALLUZINATIONSSCHUTZ: Ausschließlich Informationen verwenden die in der "
+        "Verlaufsdokumentation oder Antragsvorlage stehen. Nichts erfinden.\n\n"
         "WICHTIG – STILBEISPIEL:\n"
-        "Falls ein Stilbeispiel bereitgestellt wird: Uebernimm AUSSCHLIESSLICH den "
-        "Schreibstil (Satzbau, Tonalitaet, Fachbegriffsdichte). "
-        "NIEMALS Diagnosen, Patientennamen, Daten oder konkrete Inhalte aus dem "
-        "Stilbeispiel in den neuen Text uebernehmen. "
-        "Das Stilbeispiel handelt von einem anderen Patienten.\n\n"
+        "Falls ein Stilbeispiel bereitgestellt wird: Übernimm Struktur, Gliederung "
+        "und Länge exakt. Ersetze nur die patientenspezifischen Inhalte.\n\n"
         + FEW_SHOT_VERLAENGERUNG
     ),
 
@@ -543,12 +542,15 @@ def build_user_content(
             "Beispiele: 'Im Verlauf erlebten wir Frau M. als...', 'Herr R. zeigte...', "
             "'die Klientin berichtete...'. "
             "Wenn kein Name erkennbar: nur 'die Klientin' / 'der Klient' verwenden.\n\n"
-            "Schreibe jetzt die Sektion 'Bisheriger Verlauf und Begruendung der Verlaengerung'. "
-            "Nur diese Sektion – keine anderen Teile des Antrags. "
-            "Mindestens 400 Woerter. "
-            "Ausschliesslich auf Basis der obigen Quellen – "
-            "keine Informationen erfinden die nicht in den Quellen stehen, "
-            "keine Informationen aus einem Stilbeispiel uebernehmen."
+            "Verfasse jetzt den Abschnitt – er heißt je nach Krankenkasse entweder "
+            "'Bisheriger Verlauf und Begründung der Verlängerung' oder "
+            "'Verlauf und Begründung der weiteren Verlängerung'. "
+            "Verwende den Sektionsnamen der in der Antragsvorlage steht, "
+            "falls vorhanden – sonst: 'Bisheriger Verlauf und Begründung der Verlängerung'. "
+            "Nur diesen Abschnitt – keine anderen Teile des Antrags. "
+            "Mindestens 400 Wörter. "
+            "Ausschließlich auf Basis der obigen Quellen – "
+            "keine Informationen erfinden die nicht in den Quellen stehen."
         )
 
     elif workflow == "entlassbericht":
@@ -571,13 +573,12 @@ def build_user_content(
             "Beispiele: 'Im Verlauf erlebten wir Herrn R. als...', 'Frau M. zeigte...', "
             "'die Klientin berichtete...'. "
             "Wenn kein Name erkennbar: nur 'die Klientin' / 'der Klient' verwenden.\n\n"
-            "Schreibe jetzt die drei psychotherapeutischen Sektionen: "
-            "Psychotherapeutischer Behandlungsverlauf (mind. 500 Woerter), "
-            "Epikrise und Beurteilung (mind. 150 Woerter), "
-            "Empfehlungen und Weiteres Procedere (mind. 100 Woerter). "
-            "Ausschliesslich auf Basis der obigen Quellen – "
-            "keine Informationen erfinden die nicht in den Quellen stehen, "
-            "keine Informationen aus einem Stilbeispiel uebernehmen."
+            "Verfasse jetzt die drei psychotherapeutischen Abschnitte als eigenständigen Text:\n"
+            "1. Psychotherapeutischer Behandlungsverlauf (mind. 500 Wörter)\n"
+            "2. Epikrise und Beurteilung (mind. 150 Wörter)\n"
+            "3. Empfehlungen und Weiteres Procedere (mind. 100 Wörter)\n"
+            "Ausschließlich auf Basis der obigen Quellen – "
+            "keine Informationen erfinden die nicht in den Quellen stehen."
         )
 
     # Therapeuten-Fokus: patientenspezifische Schwerpunkte.

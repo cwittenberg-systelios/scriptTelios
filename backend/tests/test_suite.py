@@ -629,15 +629,17 @@ class TestPrompts:
         assert "ICD" in p or "Diagnosen" in p or "ICD-Codes" in p
 
     def test_stilvorlage_rahmung_auch_bei_extrahiertem_stil(self):
-        """Auch extrahierte Stilvorlagen (style_is_example=False) haben Abgrenzungshinweis."""
+        """Extrahierte Stilvorlagen (style_is_example=False) für P3/P4 nutzen
+        den strukturellen Schablonen-Modus (nicht STILVORLAGE-Label)."""
         from app.services.prompts import build_system_prompt
         p = build_system_prompt(
             workflow="entlassbericht",
             style_context="Schreibe in praegnantem Stil.",
             style_is_example=False,
         )
-        assert "STILVORLAGE" in p
-        assert "nicht" in p.lower() or "NICHT" in p
+        # P3/P4 nutzen jetzt strukturelle Schablone unabhängig von style_is_example
+        assert "STRUKTURELLE SCHABLONE" in p
+        assert "NICHT" in p or "nicht" in p.lower()  # Halluzinationsschutz vorhanden
 
     def test_glossar_formulierungshilfen_vorhanden(self):
         """Fachglossar enthält konkrete Formulierungsbeispiele."""
@@ -700,13 +702,16 @@ class TestPrompts:
         assert "STILBEISPIEL" not in p
 
     def test_system_prompt_custom_prompt(self):
-        """Eigener Prompt überschreibt den Standard-Prompt."""
-        from app.services.prompts import build_system_prompt
-        p = build_system_prompt(
+        """custom_prompt fließt in build_user_content als THERAPEUTEN-HINWEIS,
+        nicht mehr in den System-Prompt (würde strukturierte Anweisungen überschreiben)."""
+        from app.services.prompts import build_user_content
+        u = build_user_content(
             workflow="dokumentation",
+            transcript="Gespräch.",
             custom_prompt="Mein eigener Prompt fuer diesen Therapeuten."
         )
-        assert "Mein eigener Prompt" in p
+        assert "Mein eigener Prompt" in u
+        assert "THERAPEUTEN-HINWEIS" in u
 
     def test_user_content_dokumentation_transkript(self):
         """User-Content für Dokumentation enthält Transkript."""
