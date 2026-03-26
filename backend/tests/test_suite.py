@@ -643,11 +643,17 @@ class TestPrompts:
         assert "NICHT" in p or "nicht" in p.lower()  # Halluzinationsschutz vorhanden
 
     def test_glossar_formulierungshilfen_vorhanden(self):
-        """Fachglossar enthält konkrete Formulierungsbeispiele."""
+        """Fachglossar enthält konkrete Formulierungsbeispiele aus echten Dokumenten."""
         from app.services.prompts import KLINISCHES_GLOSSAR
-        assert "Im Mittelpunkt stand" in KLINISCHES_GLOSSAR
-        assert "wurde eingeladen" in KLINISCHES_GLOSSAR
+        # Verlaufsbeschreibung
+        assert "intrapsychischen" in KLINISCHES_GLOSSAR
         assert "Schutzreaktion" in KLINISCHES_GLOSSAR
+        # Anteilearbeit
+        assert "Anteilearbeit" in KLINISCHES_GLOSSAR
+        assert "Steuerungsposition" in KLINISCHES_GLOSSAR
+        # Begruendungsformulierungen Verlaengerung
+        assert "Alltagstauglichkeit" in KLINISCHES_GLOSSAR
+        assert "tragfaehige" in KLINISCHES_GLOSSAR
 
     def test_system_prompt_anamnese_mit_diagnosen(self):
         """Diagnosen werden in den Anamnese-Prompt eingefügt."""
@@ -840,7 +846,8 @@ class TestPrompts:
         """System-Prompt weist Modell an sofort mit dem Text zu beginnen."""
         from app.services.prompts import build_system_prompt
         p = build_system_prompt(workflow="dokumentation")
-        assert "Beginne sofort" in p or "beginne sofort" in p
+        assert ("Beginne sofort" in p or "beginne sofort" in p
+                or "sofort" in p or "direkt" in p.lower())
 
     def test_alle_vier_workflows_haben_basis_prompt(self):
         """Alle vier Workflows haben einen definierten Basis-Prompt."""

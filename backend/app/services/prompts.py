@@ -14,140 +14,41 @@ from typing import Optional
 
 # ── Fachglossar ──────────────────────────────────────────────────────────────
 
-KLINISCHES_GLOSSAR = """\
-FACHLICHES REFERENZWISSEN (sysTelios-Klinik):
+KLINISCHES_GLOSSAR = """FACHLICHES REFERENZWISSEN (sysTelios-Klinik):
 
 Therapeutische Ansaetze:
-- IFS (Internal Family Systems / Anteilemodell): Innere Anteile haben Rollen und Intentionen.
-  Manager-Anteile: schuetzen proaktiv (Kontrolle, Perfektionismus, Rationalisierung,
-  Leistungsorientierung, hohe Loyalitaetsansprueche, Selbstaufgabe).
-  Feuerwehr-Anteile: reagieren reaktiv auf Schmerz (Dissoziation, Sucht, Ablenkung,
-  selbstschaedigendes Verhalten, Risikoverhaltensweisen).
-  Exile: tragen Schmerz, Scham, Trauma, Wertlosigkeit, Verlassenheit – werden von Managern
-  ferngehalten. Jungere, verletzliche Anteile aus biographischen Erfahrungen.
-  Self-Energy / Steuerungsposition: Kernqualitaeten – Ruhe, Neugier, Mitgefuehl, Klarheit,
-  Mut. Ziel: Anteile entlasten, Self uebernimmt Fuehrung (Self-Leadership).
-  Typische Anteilsnamen in sysTelios-Dokumenten: Tuerstehter, Waechterin, Koenig/Koenigin,
-  Fatman, Mr. Motivator, Schutzschild, Abwerteranteil, Kontrollanteil.
-- Systemische Therapie: zirkulaere Fragen, Reframing, Auftragsklarung, Ausnahmen erkunden,
-  Skalierungsfragen, hypothetische Fragen (Wunderfrage), Genogrammarbeit, Externalisierung.
-  Symptome als sinnvolle Anpassungsleistungen des Systems – nicht als Defizit sondern als
-  Schutzreaktion vor biographisch nachvollziehbarem Hintergrund verstehen.
-- Hypnosystemik (G. Schmidt): Ressourcenaktivierung, loesungsorientierte Haltung,
-  Wirklichkeitskonstruktion, Trance-Phaenomene nutzen, Seitenmodell zur Beduerfnisanalyse,
-  Koerpersignale als Rueckkopplungsprozesse, annehmende Beziehung zum Organismus,
-  koerperliche Symptome in anerkennenswerte Beduerfnisse uebersetzen, selbstwirksam
-  Einfluss nehmen. Loesung aus Funktionsmodus – Zugang zu Gefuehlen und Beduerfnissen.
-- Biographiearbeit: Lebenserfahrungen in den Kontext der Lebensgeschichte einbetten,
-  fruehere Sinnhaftigkeit von Kognitionen als Ueberlebensstrategie wuerdigen,
-  Zusammenhaenge zwischen biographischen Erfahrungen und aktuellen Mustern erkennen.
-- Traumafokussierte Arbeit: Stabilisierung vor Bearbeitung, Window of Tolerance weiten,
-  Ressourcenaktivierung, Traumalandkarte, EMDR, Stabilisierungsuebungen, Embodiment.
-- The Work (Byron Katie): Gedanken identifizieren, 4 Fragen stellen, Umkehrungen.
-- Koerpertherapie / nonverbale Verfahren: Koerperarbeit, Musiktherapie, Kunsttherapie,
-  Bewegungstherapie, Imaginationsarbeit, kreative Verfahren, Tai-Chi, Qigong.
+- IFS (Anteilemodell): Manager-Anteile (schuetzen proaktiv: Kontrolle, Perfektionismus,
+  Leistungsorientierung, Selbstaufgabe), Feuerwehr-Anteile (reaktiv: Dissoziation, Sucht,
+  Selbstverletzung), Exile (Schmerz, Scham, Trauma, Wertlosigkeit), Self/Steuerungsposition
+  (Ruhe, Neugier, Mitgefuehl, Klarheit). Ziel: Anteile entlasten, Self-Leadership.
+  Typische Anteilsnamen: Tuerstehter, Waechterin, Koenig/Koenigin, Schutzschild.
+- Anteilearbeit / Hypnosystemik (G. Schmidt): Ressourcenaktivierung, Seitenmodell, Koerpersignale als
+  Beduerfnisrueckmeldung, koerperliche Symptome in Beduerfnisse uebersetzen, annehmende
+  Beziehung zum Organismus, selbstwirksam Einfluss nehmen.
+- Systemische Therapie: zirkulaere Fragen, Reframing, Auftragsklarung, Externalisierung,
+  Stuhlarbeit, Netzwerk-/Koerperarbeit. Symptome als sinnvolle Schutzreaktion verstehen.
+- Biographiearbeit: fruehere Sinnhaftigkeit von Kognitionen als Ueberlebensstrategie
+  wuerdigen, biographische Erfahrungen mit aktuellen Mustern verbinden.
+- Traumafokussiert: Window of Tolerance, Stabilisierung, Traumalandkarte, Embodiment.
 - AMDP-Schema: Bewusstsein, Orientierung, Aufmerksamkeit/Gedaechtnis, formales Denken,
-  inhaltliches Denken, Wahrnehmung, Ich-Erleben, Affektivitaet, Antrieb/Psychomotorik,
-  Suizidalitaet, Vegetativum.
+  inhaltliches Denken, Wahrnehmung, Ich-Erleben, Affektivitaet, Antrieb, Suizidalitaet.
 
-Klinisches Therapieangebot sysTelios:
-- Intensive Einzelgespraeche (mindestens 2-3 pro Woche)
-- Gruppentherapeutische Angebote (Bezugsgruppe, Gespraechs-, Kunst-, Musik-,
-  Koerperpsycho- und Bewegungstherapie – mindestens 5 pro Woche)
-- Woechentliche Prozessreflexion in der Bezugsgruppe mit dem therapeutischen Team
-- Paargesprae, Familiengespraeche
-- Konzept: tiefenpsychologisch fundiert, verhaltenstherapeutisch ergaenzt,
-  hypnosystemisch optimiert
+Therapieangebot sysTelios: Einzelgespraeche (2-3/Woche), Gruppentherapie (Gespraechs-,
+Kunst-, Musik-, Koerper-, Bewegungstherapie, mind. 5/Woche), Bezugsgruppe,
+Paar-/Familiengespraeche. Konzept: tiefenpsychologisch fundiert,
+verhaltenstherapeutisch ergaenzt, hypnosystemisch optimiert.
 
-Typische Verlaufsmuster und Formulierungen (aus echten Dokumenten):
-
-Verlaufsbeschreibung Entlassbericht / Verlängerung:
-- "Zu Beginn der stationaeren Behandlung zeigte sich [Name] deutlich erschoepft, innerlich
-  angespannt und in seinem/ihrem Selbstwert erheblich verunsichert."
-- "Mithilfe des beschriebenen Therapiekonzepts gelang es [Name] die intrapsychischen und
-  bisher unbewussten Erlebensmuster und deren Einfluss auf seine/ihre Symptome besser zu
-  verstehen und schrittweise zu beeinflussen."
-- "Anhand des Modells der inneren Anteile gelang es [Name] die fruehere Sinnhaftigkeit
-  seiner/ihrer Kognitionen zu verstehen und ein Verstaendnis fuer seine/ihre
-  Krankheitsgenese zu entwickeln."
-- "Im hypnosystemischen Einzelprozess konnte mithilfe der Anteilearbeit nach G. Schmidt
-  insbesondere ein dominanter [Anteil] differenziert werden, der biographisch vor dem
-  Hintergrund von [Kontext] verstaendlich wurde."
-- "Zentral erwies sich dabei ein ueberwachender, kontrollierender Anteil, den [Name] im
-  therapeutischen Prozess selbst treffend als [Anteilsname] bezeichnete."
-- "Parallel dazu traten verletzlichere, juengere innere Anteile in den Vordergrund, die mit
-  Unsicherheit, Angst vor Verlassenwerden und einem fragilen Selbstwert verbunden waren."
-- "Durch Externalisierung, Stuhlarbeit, Netzwerk- und Koerperarbeit gelang es [Name] in
-  ersten Schritten, sich von diesen inneren Dynamiken zu distanzieren, eine
+Typische Formulierungen:
+- "Mithilfe des Therapiekonzepts gelang es [Name] die intrapsychischen Erlebensmuster
+  und deren Einfluss auf die Symptome zu verstehen und schrittweise zu beeinflussen."
+- "Anhand des Anteilemodells gelang es [Name] die fruehere Sinnhaftigkeit der Kognitionen
+  als Ueberlebensstrategie zu verstehen."
+- "Durch Stuhlarbeit, Netzwerk- und Koerperarbeit gelang es in ersten Schritten eine
   Beobachterposition einzunehmen und eine wohlwollendere innere Haltung zu entwickeln."
-- "Im Verlauf gelang es [Name] zunehmend, den [Anteil] innerlich zu entlasten, ihm neue
-  Aufgaben zuzuweisen und alternative Formen von Selbstschutz zu entwickeln."
-- "Im Rahmen von Biographiearbeit konnte [Name] sein/ihr Erleben mehr und mehr in den
-  Kontext seiner/ihrer Lebensgeschichte (insbesondere [Kontext]) einbetten."
-- "Diese Zusammenhaenge werden von [Name] kognitiv zunehmend verstanden, sind emotional
-  jedoch noch nicht ausreichend integriert."
-
-Gruppenarbeit:
-- "In den therapeutischen Gruppen zeigte sich [Name] zunehmend aktiv, reflektiert und
-  beziehungsfaehig."
-- "Das stationaere Gruppensetting stellt die notwendigen Bedingungen dar, um wiederholt
-  korrigierende emotionale Erfahrungen zu machen und zu verinnerlichen."
-- "Die Gruppe phasenweise als tragenden Resonanzraum erlebte."
-- "Gleichzeitig fuehrten gruppale Trigger, Abschiede und Naehedistanzthemen wiederholt zu
-  Ueberlastung, was die weiterhin hohe Vulnerabilitaet des Systems unterstreicht."
-
-Begruendung Verlaengerung (medizinische Notwendigkeit):
-- "Die Alltagstauglichkeit von [Name] ist derzeit noch nicht vollstaendig gegeben."
-- "Eine fuer den ambulanten Kontext notwendige tragfaehige Stabilitaet ist derzeit noch
-  nicht ausreichend gegeben."
-- "Zusammenfassend befindet sich [Name] aktuell in einer sensiblen Uebergangs- und
-  Stabilisierungsphase. Es sind erste therapeutische Fortschritte erkennbar, diese sind
-  jedoch noch fragil und nicht ausreichend konsolidiert."
-- "Um einen dauerhaften Rueckfall in alte Verhaltensmuster zu verhindern ist es aus
-  therapeutischer Sicht dringend notwendig, die begonnenen Verhaltensaenderungen
-  weiterzufuehren und zu festigen."
-- "Bei einer vorzeitigen Entlassung besteht das erhoehte Risiko einer erneuten psychischen
-  Dekompensation, die eine Erhoehung der weiteren Behandlungskosten nach sich ziehen wuerde."
-- "Halten wir eine Weiterbehandlung im geschuetzten stationaeren, multimodalen Setting
-  mit der Moeglichkeit einer engmaschigen Krisenbegleitung fuer weitere [X] Wochen
-  unabdingbar."
-- "Zur weiteren Festigung der Steuerungsposition, Reduktion von [Symptom], Etablierung
-  alternativer Regulationsstrategien sowie zur Vorbereitung eines gelingenden Transfers
-  in den haeuslichen Alltag ist eine erneute Verlaengerung dringend indiziert."
-
-Akutantrag (Begruendung stationaeres Setting):
-- "Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter
-  Beruecksichtigung der Beurteilung des Einweisers ein stationaeres Krankenhaussetting
-  akut notwendig:"
-- "In Anbetracht der Schwere der [Diagnose], insbesondere [Symptom], ist es aus
-  therapeutischer Sicht dringend angezeigt, einen stabilisierenden stationaeren Rahmen
-  zu etablieren."
-- "Dafuer ist es unbedingt notwendig, die Klientin/den Klienten aus ihrer/seiner
-  symptominduzierenden Umgebung ([Kontext]) herauszunehmen."
-- "Eine ambulante Therapie hat sich in der ueblichen Frequenz als nicht ausreichend erwiesen."
-- "[Name] verfuegt aktuell ueber keine ausreichenden Copingstrategien. Gegenwaertig bedarf
-  der/die Klient/in 24/7 Verfuegbarkeit therapeutischer Unterstuetzung."
-- "Die Behandlung ist zur Durchbrechung chronifizierter Reaktions- und Verhaltensmuster
-  medizinisch unbedingt indiziert, um einer weiteren Verschlechterung entgegen zu wirken."
-
-Entlassung:
-- "Wir entlassen [Name] in einem gebesserten koerperlichen und psychischen
-  Gesundheitszustand."
-- "Aus therapeutischer Sicht entliessen wir [Name] in psychisch deutlich stabilisiertem
-  Zustand bei Rueckgang der depressiven Symptomatik."
-- "Insgesamt ist [Name] im Verlauf des stationaeren Aufenthalts ein bedeutsamer Prozess
-  der Neuorientierung gelungen."
-- "[Name] wird nun in die Phase der Alltagserprobung der veraenderten inneren Haltung
-  eintreten."
-- "Fuer den Fall einer erneuten Zunahme der psychischen Symptomatik empfehlen wir eine
-  fruehzeitige Wiederaufnahme im Sinne einer Intervallbehandlung."
-
-Befund (Standardformulierungen):
-- "bewusstseinsklar, allseits orientiert" / "Aufmerksamkeit unauffaellig"
-- "Affekt situationsadaequat schwingungsfaehig" / "Antrieb leicht reduziert"
-- "formalgedanklich geordnet / gruebelnd, eingeengtes Denken mit Fokus auf [Thema]"
-- "Selbstwertgefuehl ist [Beschreibung], Gefuehlsregulation ist [Beschreibung],
-  Impulskontrolle ist [Beschreibung]"\
+- "Die Alltagstauglichkeit ist derzeit noch nicht gegeben."
+- "Eine tragfaehige Stabilitaet fuer den ambulanten Kontext ist noch nicht erreicht."
+- Befund: "bewusstseinsklar, allseits orientiert" / "Affekt situationsadaequat
+  schwingungsfaehig" / "formalgedanklich gruebelnd, eingeengtes Denken mit Fokus auf [X]"\
 """
 
 

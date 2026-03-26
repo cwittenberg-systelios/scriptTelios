@@ -716,6 +716,24 @@ function clearActiveJob() {
   try { localStorage.removeItem(JOB_STORAGE_KEY); } catch (_) {}
 }
 
+// Wandelt technische Fehlermeldungen in verständliche Texte um.
+function friendlyError(e) {
+  const msg = e?.message || String(e);
+  if (msg === "Failed to fetch" || msg.includes("NetworkError") || msg.includes("fetch"))
+    return "Server nicht erreichbar. Bitte überprüfe die Serveradresse in den Einstellungen.";
+  if (msg.includes("502") || msg.includes("Bad Gateway"))
+    return "Server antwortet nicht (502). Bitte warte einen Moment und versuche es erneut.";
+  if (msg.includes("503") || msg.includes("Service Unavailable"))
+    return "Server überlastet (503). Bitte versuche es in Kürze erneut.";
+  if (msg.includes("401") || msg.includes("403"))
+    return "Zugriff verweigert. Bitte überprüfe die Serveradresse in den Einstellungen.";
+  if (msg.includes("404"))
+    return "Endpunkt nicht gefunden (404). Bitte überprüfe die Serveradresse in den Einstellungen.";
+  if (msg.includes("timeout") || msg.includes("Timeout"))
+    return "Zeitüberschreitung – der Server hat zu lange nicht geantwortet.";
+  return msg;
+}
+
 // Polling fuer eine bekannte job_id – wiederverwendbar fuer Resume.
 // Stoppt automatisch wenn der Server status="cancelled" zurueckgibt.
 async function pollJob(jobId, maxWaitSeconds = 1200) {
@@ -814,7 +832,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
         setHasTranscript(job.has_transcript || false);
         onResumed();
       })
-      .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
+      .catch(e => { setOut("Fehler: " + friendlyError(e)); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
 
@@ -856,7 +874,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
     }
-    catch (e) { setOut("Fehler: " + e.message); }
+    catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
   }
 
@@ -1018,7 +1036,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         setHasTranscript(job.has_transcript || false);
         onResumed();
       })
-      .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
+      .catch(e => { setOut("Fehler: " + friendlyError(e)); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
 
@@ -1066,7 +1084,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
     }
-    catch (e) { setOut("Fehler: " + e.message); }
+    catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
   }
 
@@ -1231,7 +1249,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
         setLastJobId(resumeJob.jobId);
         onResumed();
       })
-      .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
+      .catch(e => { setOut("Fehler: " + friendlyError(e)); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
 
@@ -1261,7 +1279,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
       setOut(result.text || "");
       setLastJobId(result.jobId);
     }
-    catch (e) { setOut("Fehler: " + e.message); }
+    catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
   }
 
@@ -1357,7 +1375,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
         setLastJobId(resumeJob.jobId);
         onResumed();
       })
-      .catch(e => { setOut("Fehler: " + e.message); onResumed(); })
+      .catch(e => { setOut("Fehler: " + friendlyError(e)); onResumed(); })
       .finally(() => setBusy(false));
   }, [resumeJob]);
 
@@ -1387,7 +1405,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
       setOut(result.text || "");
       setLastJobId(result.jobId);
     }
-    catch (e) { setOut("Fehler: " + e.message); }
+    catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
   }
 
@@ -1547,7 +1565,7 @@ function P5({ toast }) {
       setTextInput("");
       await ladeListe();
     } catch (e) {
-      toast("Fehler: " + e.message);
+      toast("Fehler: " + friendlyError(e));
     }
     setBusy(false);
   }
@@ -1560,7 +1578,7 @@ function P5({ toast }) {
       if (!r.ok) throw new Error(r.statusText);
       setListe(await r.json());
     } catch (e) {
-      toast("Fehler beim Laden: " + e.message);
+      toast("Fehler beim Laden: " + friendlyError(e));
     }
     setLadebusy(false);
   }
@@ -1572,7 +1590,7 @@ function P5({ toast }) {
       toast("Beispiel gelöscht");
       await ladeListe();
     } catch (e) {
-      toast("Fehler: " + e.message);
+      toast("Fehler: " + friendlyError(e));
     }
   }
 
