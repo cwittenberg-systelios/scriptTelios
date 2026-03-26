@@ -25,8 +25,8 @@ MAX_USER_CONTENT_CHARS = 500_000
 # Match erfolgt auf Modellname-Prefix (case-insensitive).
 # Quantisierungssuffixe (:q6_K, :q4_K_M etc.) werden ignoriert – Prefix reicht.
 #
-# Empfehlung RTX Pro 4500 (32GB): qwen2.5:32b:q6_K
-# Empfehlung RTX 4090 (24GB):     qwen2.5:32b
+# Empfehlung RTX Pro 4500 (32GB): qwen3:32b-q4_K_M  (~20GB VRAM)
+# Empfehlung RTX 4090 (24GB):     qwen3:32b-q4_K_M  (~20GB VRAM)
 # Reasoning (beide):               deepseek-r1:32b (langsamerer aber tieferer Analyse)
 MODEL_PROFILES: dict[str, dict] = {
     # Reasoning-Modelle: größerer Mindest-Kontext, niedrigere Temperatur
@@ -34,7 +34,7 @@ MODEL_PROFILES: dict[str, dict] = {
     "deepseek":    {"min_ctx": 8192, "temperature": 0.2, "top_p": 0.85},
     # Standard-Modelle: dynamischer Kontext, kein Minimum nötig
     "qwen2.5":     {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
-    "qwen":        {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
+    "qwen3":       {"min_ctx": 2048, "temperature": 0.7, "top_p": 0.8},
     "llama":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
     "gemma":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
     "mistral":     {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
@@ -209,6 +209,12 @@ async def generate_text(
                 original_len, max_user_chars,
             )
 
+    # Qwen3: Thinking-Mode deaktivieren via /no_think am Ende des User-Content.
+    # Verhindert <think>...</think> Blöcke im Output die nicht in klinische Dokumente gehören.
+    effective_model_for_nothink = model or settings.OLLAMA_MODEL
+    if effective_model_for_nothink.lower().startswith("qwen3"):
+        user_content = user_content.rstrip() + "\n\n/no_think"
+
     # Workflow-spezifischer Assistant-Primer: zwingt Modell direkt in den Text
     # ohne Verweigerung oder Erklaerungen. Primer wird dem Output vorangestellt
     # und ist fuer den Therapeuten nicht sichtbar.
@@ -230,9 +236,15 @@ async def generate_text(
     if assistant_primer and result.get("text"):
         result["text"] = assistant_primer + result["text"]
 
-    # Output-Postprocessing: doppelte Absätze entfernen (LLM-Wiederholungsloop)
+    # Output-Postprocessing
     if result.get("text"):
-        result["text"] = deduplicate_paragraphs(result["text"])
+        # Qwen3 Think-Blöcke entfernen falls doch generiert (<think>...</think>)
+        text = result["text"]
+        if "<think>" in text:
+            import re as _re
+            text = _re.sub(r"<think>.*?</think>\s*", "", text, flags=_re.DOTALL)
+            logger.info("Qwen3 Think-Block aus Output entfernt")
+        result["text"] = deduplicate_paragraphs(text)
 
     result["duration_s"] = round(time.time() - t0, 1)
     logger.info(
