@@ -349,9 +349,11 @@ async def _ollama_unload(model: Optional[str] = None) -> None:
     target = model or settings.OLLAMA_MODEL
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
+            # /api/chat mit keep_alive=0 entlädt das Modell (kompatibel mit Ollama ≥ 0.9)
             await client.post(
-                f"{settings.OLLAMA_HOST}/api/generate",
-                json={"model": target, "keep_alive": 0, "prompt": ""},
+                f"{settings.OLLAMA_HOST}/api/chat",
+                json={"model": target, "keep_alive": 0,
+                      "messages": [{"role": "user", "content": ""}]},
             )
         logger.info("Ollama-Modell '%s' aus VRAM entladen (OOM-Recovery)", target)
     except Exception as e:

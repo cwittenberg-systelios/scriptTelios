@@ -153,23 +153,51 @@ echo ""
 echo "${GO}Ollama pruefen..."
 
 OLLAMA_BIN="/workspace/bin/ollama"
+OLLAMA_MIN_VERSION="0.9.0"
 mkdir -p /workspace/bin
 
-# Ollama-Binary auf Network Volume installieren falls nicht vorhanden
-if [ ! -f "$OLLAMA_BIN" ]; then
-    echo "${GO}Ollama installieren (nach /workspace/bin)..."
-    # Offizielles Install-Script nutzen, dann Binary persistent speichern
+# Versionsnummer vergleichen (major.minor.patch)
+_version_gte() {
+    # Gibt 0 (true) zurueck wenn $1 >= $2
+    local a="$1" b="$2"
+    [ "$(printf '%s\n%s' "$a" "$b" | sort -V | head -1)" = "$b" ]
+}
+
+_ollama_version() {
+    "$OLLAMA_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+
+_install_ollama() {
+    echo "${GO}Ollama installieren/aktualisieren..."
     curl -fsSL https://ollama.com/install.sh | sh
-    # Binary auf Network Volume verschieben
     if [ -f /usr/local/bin/ollama ]; then
         mv /usr/local/bin/ollama "$OLLAMA_BIN"
-        echo "${OK}Ollama installiert und nach /workspace/bin verschoben"
+        echo "${OK}Ollama $(${OLLAMA_BIN} --version 2>/dev/null) installiert → /workspace/bin"
+    elif [ -f /usr/bin/ollama ]; then
+        cp /usr/bin/ollama "$OLLAMA_BIN"
+        echo "${OK}Ollama $(_ollama_version) installiert → /workspace/bin"
     else
         echo "${ERR}Ollama-Binary nicht gefunden nach Installation"
         exit 1
     fi
+}
+
+if [ ! -f "$OLLAMA_BIN" ]; then
+    _install_ollama
 else
-    echo "${OK}Ollama vorhanden: $($OLLAMA_BIN --version 2>/dev/null || echo 'version unbekannt')"
+    CURRENT_VER=$(_ollama_version)
+    if [ -z "$CURRENT_VER" ]; then
+        echo "${WARN}Ollama-Version nicht lesbar – neu installieren..."
+        _install_ollama
+    elif _version_gte "$CURRENT_VER" "$OLLAMA_MIN_VERSION"; then
+        echo "${OK}Ollama v${CURRENT_VER} (>= ${OLLAMA_MIN_VERSION} erforderlich fuer qwen3)"
+    else
+        echo "${WARN}Ollama v${CURRENT_VER} zu alt (mind. v${OLLAMA_MIN_VERSION} fuer qwen3) – aktualisiere..."
+        # Ollama stoppen falls laufend
+        pkill -f "ollama serve" 2>/dev/null || true
+        sleep 2
+        _install_ollama
+    fi
 fi
 
 # Symlink damit 'ollama' systemweit verfuegbar ist

@@ -321,11 +321,11 @@ async def _ollama_free_vram() -> None:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(
-                f"{settings.OLLAMA_HOST}/api/generate",
+                f"{settings.OLLAMA_HOST}/api/chat",
                 json={
                     "model": settings.OLLAMA_MODEL,
                     "keep_alive": 0,
-                    "prompt": "",
+                    "messages": [{"role": "user", "content": ""}],
                 },
             )
         logger.info("Ollama-Modell aus VRAM entladen (Platz fuer Whisper)")
@@ -344,11 +344,11 @@ async def _ollama_warmup() -> None:
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             await client.post(
-                f"{settings.OLLAMA_HOST}/api/generate",
+                f"{settings.OLLAMA_HOST}/api/chat",
                 json={
                     "model":      settings.OLLAMA_MODEL,
                     "keep_alive": -1,
-                    "prompt":     "",
+                    "messages":   [{"role": "user", "content": ""}],
                 },
             )
         logger.info("Ollama-Modell vorgewaermt und bereit")
