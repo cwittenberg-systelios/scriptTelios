@@ -387,9 +387,11 @@ else
 fi
 
 if ! python -c "import fastapi" 2>/dev/null; then
-    echo "${GO}Python-Pakete installieren..."
+    echo "${GO}Python-Pakete installieren (requirements.txt, kann 5-10 Min dauern)..."
     python -m pip install --quiet --upgrade pip
-    python -m pip install --quiet -r "$BACKEND_DIR/requirements.txt"
+    python -m pip install --progress-bar on -r "$BACKEND_DIR/requirements.txt" 2>&1 | \
+        grep -E "^Downloading|^Installing|^Collecting|^Successfully|error|Error" | \
+        while IFS= read -r line; do echo "      $line"; done
     echo "${OK}Pakete installiert"
 else
     echo "${OK}Python-Pakete vorhanden"
@@ -401,8 +403,11 @@ DIARIZATION_ENABLED=$(grep "^DIARIZATION_ENABLED=" "$BACKEND_DIR/.env" 2>/dev/nu
 if [ "$DIARIZATION_ENABLED" = "true" ]; then
     # Schnelle Prüfung via pip show – kein torch-Import, keine 20s Wartezeit
     if ! pip show pyannote.audio >/dev/null 2>&1; then
-        echo "${GO}pyannote.audio installieren (Sprecher-Diarization)..."
-        python -m pip install --quiet pyannote.audio
+        echo "${GO}pyannote.audio installieren (Sprecher-Diarization, ~500MB + Abhaengigkeiten)..."
+        echo "      Dies kann 3-8 Minuten dauern – Fortschritt:"
+        python -m pip install --progress-bar on pyannote.audio 2>&1 | \
+            grep -E "^Downloading|^Installing|^Collecting|^Successfully|error|Error" | \
+            while IFS= read -r line; do echo "      $line"; done
         echo "${OK}pyannote.audio installiert"
     else
         echo "${OK}pyannote.audio vorhanden"
