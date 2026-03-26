@@ -8,12 +8,38 @@
 #    3. Backend     (pip + uvicorn)
 #
 #  Aufruf:
-#    bash /workspace/scriptTelios/backend/runpod-start.sh
+#    bash /workspace/scriptTelios/backend/runpod-start.sh [OPTIONEN]
+#
+#  Optionen:
+#    --hf-token   hf_xxxx   HuggingFace Token fuer pyannote Diarization
+#    --confluence  URL       Confluence-Intranet-URL fuer CORS
+#    --model       NAME      Ollama-Modell (Standard: qwen3:32b-q4_K_M)
+#    --help                  Diese Hilfe anzeigen
+#
+#  Beispiel (neuer Pod):
+#    bash runpod-start.sh --hf-token hf_abc123 --confluence https://wiki.klinik.de
 #
 #  Modelle und Daten bleiben auf /workspace erhalten.
 # ════════════════════════════════════════════════════════════════
 
 set -e
+
+# ── Argumente parsen ──────────────────────────────────────────────────────────
+ARG_HF_TOKEN=""
+ARG_CONFLUENCE=""
+ARG_MODEL=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --hf-token)   ARG_HF_TOKEN="$2";   shift 2 ;;
+        --confluence) ARG_CONFLUENCE="$2"; shift 2 ;;
+        --model)      ARG_MODEL="$2";      shift 2 ;;
+        --help)
+            grep "^#  " "$0" | sed 's/^#  //'
+            exit 0 ;;
+        *) echo "Unbekannte Option: $1 (--help fuer Hilfe)"; exit 1 ;;
+    esac
+done
 
 BACKEND_DIR="/workspace/scriptTelios/backend"
 VENV_DIR="/workspace/venv"
@@ -351,9 +377,21 @@ echo ""
 if [ ! -f "$BACKEND_DIR/.env" ]; then
     echo "${WARN}Keine .env - erstelle automatisch..."
     SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+    # Confluence-URL: Argument > Default
+    CONF_URL="${ARG_CONFLUENCE:-http://intranet.systelios.local}"
+    # Modell: Argument > Default
+    MODEL_NAME="${ARG_MODEL:-qwen3:32b-q4_K_M}"
+    # Diarization: automatisch aktivieren wenn Token mitgegeben
+    DIAR_ENABLED="false"
+    DIAR_TOKEN=""
+    if [ -n "$ARG_HF_TOKEN" ]; then
+        DIAR_ENABLED="true"
+        DIAR_TOKEN="$ARG_HF_TOKEN"
+        echo "${OK}HuggingFace Token gesetzt – Diarization wird aktiviert"
+    fi
     cat > "$BACKEND_DIR/.env" << ENVEOF
 OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=qwen3:32b-q4_K_M
+OLLAMA_MODEL=${MODEL_NAME}
 WHISPER_MODEL=large-v3
 WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16
@@ -364,16 +402,14 @@ LOG_LEVEL=INFO
 UPLOAD_DIR=/workspace/uploads
 OUTPUT_DIR=/workspace/outputs
 LOG_FILE=/workspace/systelios.log
-# Confluence-Intranet-URL fuer CORS (anpassen!):
-CONFLUENCE_URL=http://intranet.systelios.local
+# Confluence-Intranet-URL fuer CORS:
+CONFLUENCE_URL=${CONF_URL}
 # Cloudflare-Tunnel und RunPod-Proxy fuer Testphase erlauben:
 ALLOW_RUNPOD_PROXY=true
 ALLOW_CLOUDFLARE_TUNNEL=true
-# Sprecher-Diarization (pyannote.audio) – auf true setzen + HF-Token eintragen:
-# 1. huggingface.co/pyannote/speaker-diarization-3.1 → Zugang beantragen
-# 2. huggingface.co/settings/tokens → Token erstellen
-DIARIZATION_ENABLED=false
-DIARIZATION_HF_TOKEN=
+# Sprecher-Diarization (pyannote.audio):
+DIARIZATION_ENABLED=${DIAR_ENABLED}
+DIARIZATION_HF_TOKEN=${DIAR_TOKEN}
 ENVEOF
     echo "${OK}.env erstellt (SECRET_KEY automatisch generiert)"
 else
@@ -382,6 +418,20 @@ else
     sed -i 's|@localhost:5432|@127.0.0.1:5432|g'   "$BACKEND_DIR/.env"
     sed -i 's|?ssl=false||g'                        "$BACKEND_DIR/.env"
     sed -i 's|?sslmode=disable||g'                  "$BACKEND_DIR/.env"
+    # CLI-Argumente in bestehende .env ueberschreiben
+    if [ -n "$ARG_HF_TOKEN" ]; then
+        sed -i "s|DIARIZATION_HF_TOKEN=.*|DIARIZATION_HF_TOKEN=${ARG_HF_TOKEN}|" "$BACKEND_DIR/.env"
+        sed -i "s|DIARIZATION_ENABLED=false|DIARIZATION_ENABLED=true|"           "$BACKEND_DIR/.env"
+        echo "${OK}HuggingFace Token aktualisiert – Diarization aktiviert"
+    fi
+    if [ -n "$ARG_CONFLUENCE" ]; then
+        sed -i "s|CONFLUENCE_URL=.*|CONFLUENCE_URL=${ARG_CONFLUENCE}|" "$BACKEND_DIR/.env"
+        echo "${OK}Confluence-URL aktualisiert: ${ARG_CONFLUENCE}"
+    fi
+    if [ -n "$ARG_MODEL" ]; then
+        sed -i "s|OLLAMA_MODEL=.*|OLLAMA_MODEL=${ARG_MODEL}|" "$BACKEND_DIR/.env"
+        echo "${OK}Ollama-Modell aktualisiert: ${ARG_MODEL}"
+    fi
     echo "${OK}.env vorhanden"
 fi
 
