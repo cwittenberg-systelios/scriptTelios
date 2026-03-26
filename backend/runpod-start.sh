@@ -304,10 +304,11 @@ if [ "$NEED_RESTART" = "true" ]; then
     done
 
     # Ollama starten – kein CUDA_VISIBLE_DEVICES (verhindert GPU-Erkennung in 0.9+)
-    # kein OLLAMA_NEW_ENGINE (inkompatibel mit 0.9.x)
-    # OLLAMA_LIBRARY_PATH zeigt auf die vom Install-Script gesetzten CUDA-Libraries
+    # OLLAMA_LLM_LIBRARY=cuda_v13 fuer Blackwell-GPUs (RTX 50xx, RTX Pro 4500)
+    # Ohne diesen Flag faellt Ollama auf CPU zurueck (bekanntes Issue mit CUDA 13.0)
     OLLAMA_MODELS="$OLLAMA_MODELS_DIR" \
     OLLAMA_LIBRARY_PATH=/usr/local/lib/ollama \
+    OLLAMA_LLM_LIBRARY=/usr/local/lib/ollama/cuda_v13 \
     nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
     sleep 10
 
