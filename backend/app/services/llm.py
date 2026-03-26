@@ -25,8 +25,8 @@ MAX_USER_CONTENT_CHARS = 500_000
 # Match erfolgt auf Modellname-Prefix (case-insensitive).
 # Quantisierungssuffixe (:q6_K, :q4_K_M etc.) werden ignoriert – Prefix reicht.
 #
-# Empfehlung RTX Pro 4500 (32GB): qwen2.5:32b:q6_K
-# Empfehlung RTX 4090 (24GB):     qwen2.5:32b
+# Empfehlung RTX Pro 4500 (32GB): qwen3:32b-q4_K_M  (~20GB VRAM)
+# Empfehlung RTX 4090 (24GB):     qwen3:32b-q4_K_M  (~20GB VRAM)
 # Reasoning (beide):               deepseek-r1:32b (langsamerer aber tieferer Analyse)
 MODEL_PROFILES: dict[str, dict] = {
     # Reasoning-Modelle: größerer Mindest-Kontext, niedrigere Temperatur
@@ -34,7 +34,7 @@ MODEL_PROFILES: dict[str, dict] = {
     "deepseek":    {"min_ctx": 8192, "temperature": 0.2, "top_p": 0.85},
     # Standard-Modelle: dynamischer Kontext, kein Minimum nötig
     "qwen2.5":     {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
-    "qwen":        {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
+    "qwen3":       {"min_ctx": 2048, "temperature": 0.7, "top_p": 0.8},
     "llama":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
     "gemma":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
     "mistral":     {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
@@ -183,6 +183,7 @@ async def generate_text(
     user_content: str,
     max_tokens: int = 2048,
     model: Optional[str] = None,
+    workflow: Optional[str] = None,
 ) -> dict:
     """
     Generiert Text ausschliesslich via lokalem Ollama-Modell.
@@ -195,26 +196,55 @@ async def generate_text(
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
 
     # Sicherheitscheck: wenn Input + Output > 16384 Tokens, User-Content kuerzen
-    # (System-Prompt bleibt immer vollstaendig)
     MAX_SAFE_CTX = 16384
     estimated_input_tokens = int((len(system_prompt) + len(user_content)) / 3.5)
     if estimated_input_tokens + max_tokens > MAX_SAFE_CTX:
-        # Wieviel Zeichen duerfen im User-Content stehen?
         available_tokens = MAX_SAFE_CTX - max_tokens - int(len(system_prompt) / 3.5) - 200
         max_user_chars = int(available_tokens * 3.5)
         if max_user_chars > 0 and len(user_content) > max_user_chars:
+            original_len = len(user_content)
             user_content = _sample_uniformly(user_content, max_user_chars)
             logger.warning(
                 "User-Content fuer VRAM-Sicherheit gekuerzt: %d → %d Zeichen",
-                len(user_content), max_user_chars,
+                original_len, max_user_chars,
             )
 
-    t0 = time.time()
-    result = await _generate_ollama(system_prompt, user_content, max_tokens, model=model)
+    # Qwen3: Thinking-Mode deaktivieren via /no_think am Ende des User-Content.
+    # Verhindert <think>...</think> Blöcke im Output die nicht in klinische Dokumente gehören.
+    effective_model_for_nothink = model or settings.OLLAMA_MODEL
+    if effective_model_for_nothink.lower().startswith("qwen3"):
+        user_content = user_content.rstrip() + "\n\n/no_think"
 
-    # Output-Postprocessing: doppelte Absätze entfernen (LLM-Wiederholungsloop)
+    # Workflow-spezifischer Assistant-Primer: zwingt Modell direkt in den Text
+    # ohne Verweigerung oder Erklaerungen. Primer wird dem Output vorangestellt
+    # und ist fuer den Therapeuten nicht sichtbar.
+    PRIMERS = {
+        "entlassbericht": "Zu Beginn des stationären Aufenthalts",
+        "verlaengerung":  "Im bisherigen Verlauf des stationären Aufenthalts",
+        "anamnese":       "Die Klientin/der Klient stellt sich vor",
+        "dokumentation":  "Auftragsklärung\n\n",
+    }
+    assistant_primer = PRIMERS.get(workflow or "", "")
+
+    t0 = time.time()
+    result = await _generate_ollama(
+        system_prompt, user_content, max_tokens,
+        model=model, assistant_primer=assistant_primer,
+    )
+
+    # Primer war Teil des Outputs – wieder voranstellen damit der Text vollständig ist
+    if assistant_primer and result.get("text"):
+        result["text"] = assistant_primer + result["text"]
+
+    # Output-Postprocessing
     if result.get("text"):
-        result["text"] = deduplicate_paragraphs(result["text"])
+        # Qwen3 Think-Blöcke entfernen falls doch generiert (<think>...</think>)
+        text = result["text"]
+        if "<think>" in text:
+            import re as _re
+            text = _re.sub(r"<think>.*?</think>\s*", "", text, flags=_re.DOTALL)
+            logger.info("Qwen3 Think-Block aus Output entfernt")
+        result["text"] = deduplicate_paragraphs(text)
 
     result["duration_s"] = round(time.time() - t0, 1)
     logger.info(
@@ -333,15 +363,14 @@ async def _generate_ollama(
     user_content: str,
     max_tokens: int,
     model: Optional[str] = None,
+    assistant_primer: str = "",
 ) -> dict:
     """
     Ollama REST API (lokal, kein externer Aufruf).
 
-    model: Optionales Modell-Override. Wenn None, wird settings.OLLAMA_MODEL verwendet.
-    VRAM-OOM-Strategie (3 Stufen):
-    1. Normalaufruf mit num_ctx=32768
-    2. Bei OOM: Modell entladen + neu laden, num_ctx auf 8192 reduzieren
-    3. Bei erneutem OOM: Klare Fehlermeldung an den Therapeuten
+    assistant_primer: Optionaler Einstiegstext der als Assistant-Nachricht
+    vorangestellt wird. Zwingt das Modell den Text direkt fortzusetzen
+    statt sich zu weigern oder Erklaerungen voranzustellen.
     """
     effective_model = model or settings.OLLAMA_MODEL
 
@@ -358,7 +387,7 @@ async def _generate_ollama(
         payload = {
             "model":      effective_model,
             "stream":     False,
-            "keep_alive": -1,   # Modell nach Generierung im VRAM behalten
+            "keep_alive": -1,
             "options": {
                 "num_predict": max_tokens,
                 "num_ctx":     num_ctx,
@@ -369,8 +398,7 @@ async def _generate_ollama(
                 {"role": "system",    "content": system_prompt},
                 {"role": "user",      "content": user_content},
                 # Assistant-Primer: zwingt das Modell direkt mit dem Text zu beginnen
-                # statt sich zu weigern oder Erklaerungen voranzustellen
-                {"role": "assistant", "content": ""},
+                {"role": "assistant", "content": assistant_primer},
             ],
         }
         async with httpx.AsyncClient(timeout=300.0) as client:
