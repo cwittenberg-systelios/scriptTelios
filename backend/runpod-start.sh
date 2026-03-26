@@ -222,6 +222,15 @@ else
         _install_ollama
     elif _version_gte "$CURRENT_VER" "$OLLAMA_MIN_VERSION"; then
         echo "${OK}Ollama v${CURRENT_VER} (>= ${OLLAMA_MIN_VERSION} erforderlich fuer qwen3)"
+        # Pruefen ob GPU-Libraries vorhanden – fehlen wenn lshw/pciutils beim
+        # letzten Install nicht installiert waren. In dem Fall neu installieren.
+        if ! ls /usr/local/lib/ollama/cuda_v12/libggml-cuda.so >/dev/null 2>&1 && \
+           ! ls /usr/local/lib/ollama/cuda_v13/libggml-cuda.so >/dev/null 2>&1; then
+            echo "${WARN}Ollama CUDA-Libraries fehlen – neu installieren mit GPU-Support..."
+            pkill -f "ollama serve" 2>/dev/null || true
+            sleep 2
+            _install_ollama
+        fi
     else
         echo "${WARN}Ollama v${CURRENT_VER} zu alt (mind. v${OLLAMA_MIN_VERSION} fuer qwen3) – aktualisiere..."
         pkill -f "ollama serve" 2>/dev/null || true
@@ -245,13 +254,32 @@ if systemctl is-active ollama >/dev/null 2>&1; then
 fi
 
 # Laufenden Ollama-Prozess pruefen
+# Strategie: Wenn Ollama laeuft UND GPU erkennt → nicht neu starten.
+# Nur neu starten wenn kein Prozess laeuft oder GPU nicht erkannt wird.
 NEED_RESTART=false
-if ! pgrep -f "ollama serve" >/dev/null 2>&1; then
-    NEED_RESTART=true
-elif ! pgrep -f "$OLLAMA_BIN serve" >/dev/null 2>&1; then
-    echo "${WARN}Fremder Ollama-Prozess – neu starten mit korrekten GPU-Pfaden..."
-    pkill -f "ollama serve" 2>/dev/null || true
-    sleep 3
+OLLAMA_GPU_OK=false
+
+if pgrep -f "ollama serve" >/dev/null 2>&1; then
+    # Ollama laeuft – GPU-Status per API pruefen (schneller als Log-Analyse)
+    sleep 2
+    if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+        # Kurzen Testaufruf machen und VRAM pruefen
+        GPU_INFO=$(curl -s http://localhost:11434/api/ps 2>/dev/null)
+        if grep -q "library=cuda" "$LOG_DIR/ollama.log" 2>/dev/null; then
+            OLLAMA_GPU_OK=true
+            echo "${OK}Ollama laeuft mit GPU-Support"
+        else
+            echo "${WARN}Ollama laeuft aber ohne GPU – neu starten..."
+            pkill -f "ollama serve" 2>/dev/null || true
+            sleep 3
+            NEED_RESTART=true
+        fi
+    else
+        pkill -f "ollama serve" 2>/dev/null || true
+        sleep 3
+        NEED_RESTART=true
+    fi
+else
     NEED_RESTART=true
 fi
 
