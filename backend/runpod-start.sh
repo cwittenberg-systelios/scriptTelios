@@ -200,19 +200,21 @@ echo "${GO}Modelle pruefen..."
 
 # .env-Migration: alten/falschen Modellnamen korrigieren
 if [ -f "$BACKEND_DIR/.env" ]; then
-    if grep -q "OLLAMA_MODEL=mistral-nemo\|OLLAMA_MODEL=qwen2.5\|OLLAMA_MODEL=qwen2.5:32b" "$BACKEND_DIR/.env"; then
-        echo "${WARN}.env enthaelt veralteten Modellnamen – migriere auf qwen3:32b-q4_K_M..."
-        sed -i 's|OLLAMA_MODEL=.*|OLLAMA_MODEL=qwen3:32b-q4_K_M|' "$BACKEND_DIR/.env"
-        echo "${OK}OLLAMA_MODEL=qwen3:32b-q4_K_M gesetzt"
+    if grep -q "OLLAMA_MODEL=mistral-nemo\|OLLAMA_MODEL=qwen2.5:32b:q6_K\|OLLAMA_MODEL=qwen2.5:32b$" "$BACKEND_DIR/.env"; then
+        echo "${WARN}.env enthaelt veralteten Modellnamen – korrigiere auf qwen2.5:32b-instruct-q6_K..."
+        sed -i 's|OLLAMA_MODEL=mistral-nemo|OLLAMA_MODEL=qwen2.5:32b-instruct-q6_K|' "$BACKEND_DIR/.env"
+        sed -i 's|OLLAMA_MODEL=qwen2.5:32b:q6_K|OLLAMA_MODEL=qwen2.5:32b-instruct-q6_K|' "$BACKEND_DIR/.env"
+        sed -i 's|OLLAMA_MODEL=qwen2.5:32b$|OLLAMA_MODEL=qwen2.5:32b-instruct-q6_K|' "$BACKEND_DIR/.env"
+        echo "${OK}OLLAMA_MODEL=qwen2.5:32b-instruct-q6_K gesetzt"
     fi
 fi
 
 # Empfohlene Modelle:
-#   RTX Pro 4500 / 32GB:  qwen3:32b-q4_K_M       (~20GB)  <- Empfehlung
+#   RTX Pro 4500 / 32GB:  qwen2.5:32b-instruct-q6_K (~24GB)  <- Empfehlung
 #   RTX 4090 / 24GB:      qwen2.5:32b-instruct-q4_K_M (~19GB)  <- Empfehlung
 #   Alternative:          gemma3:27b         (~17GB)
 #   Reasoning:            deepseek-r1:32b    (~19GB)
-LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b-q4_K_M")
+LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen2.5:32b-instruct-q6_K")
 for model in "$LLM_MODEL" "nomic-embed-text"; do
     if OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama list 2>/dev/null | grep -q "$model"; then
         echo "${OK}$model vorhanden"
@@ -325,7 +327,7 @@ if [ ! -f "$BACKEND_DIR/.env" ]; then
     SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     cat > "$BACKEND_DIR/.env" << ENVEOF
 OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=qwen3:32b-q4_K_M
+OLLAMA_MODEL=qwen2.5:32b-instruct-q6_K
 WHISPER_MODEL=large-v3
 WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16
@@ -399,7 +401,7 @@ done
 
 # 8b. Ollama-Modell in VRAM vorwaermen (verhindert 25-30s Kaltstart beim ersten Request)
 echo "${GO}Ollama-Modell vorwaermen (kann bei grossen Modellen 30-60s dauern)..."
-OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b-q4_K_M")
+OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen2.5:32b-instruct-q6_K")
 WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": \"\", \"keep_alive\": -1}" \
