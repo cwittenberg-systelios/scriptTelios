@@ -197,8 +197,8 @@ _ollama_version() {
 }
 
 _install_ollama() {
-    echo "${GO}Ollama installieren/aktualisieren..."
-    curl -fsSL https://ollama.com/install.sh | sh
+    echo "${GO}Ollama installieren/aktualisieren (v0.9.0 – GPU-kompatibel mit Blackwell)..."
+    curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.9.0 sh
     # Nach Installation: Binary in /workspace/bin sichern (bleibt bei Pod-Neustart)
     if [ -f /usr/local/bin/ollama ]; then
         cp /usr/local/bin/ollama "$OLLAMA_BIN"
@@ -211,6 +211,9 @@ _install_ollama() {
     if [ -d /usr/local/lib/ollama ]; then
         echo "${OK}Ollama-Libraries: $(ls /usr/local/lib/ollama/ | grep -c cuda) CUDA-Varianten gefunden"
     fi
+    # Nach Installation immer neu starten damit cuda_v13 aktiv wird
+    pkill -f "ollama serve" 2>/dev/null || true
+    sleep 2
 }
 
 if [ ! -f "$OLLAMA_BIN" ]; then
