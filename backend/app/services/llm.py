@@ -196,7 +196,7 @@ async def generate_text(
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
 
     # Sicherheitscheck: wenn Input + Output > 16384 Tokens, User-Content kuerzen
-    MAX_SAFE_CTX = 16384
+    MAX_SAFE_CTX = 8192
     estimated_input_tokens = int((len(system_prompt) + len(user_content)) / 3.5)
     if estimated_input_tokens + max_tokens > MAX_SAFE_CTX:
         available_tokens = MAX_SAFE_CTX - max_tokens - int(len(system_prompt) / 3.5) - 200
@@ -275,8 +275,9 @@ def _estimate_num_ctx(system_prompt: str, user_content: str, max_tokens: int) ->
     needed = int(estimated_tokens * 1.2) + max_tokens
     # Auf nächstes Vielfaches von 512 aufrunden, Minimum 2048
     rounded = max(2048, ((needed + 511) // 512) * 512)
-    # Hartes Maximum: 16384 Tokens – sicher für qwen32b auf 32GB VRAM
-    return min(rounded, 16384)
+    # Hartes Maximum: 8192 Tokens – bei 16384 crasht qwen3:32b-q4_K_M Runner
+    # (benötigt dann 28.5GB, zu knapp an 31GB VRAM-Grenze)
+    return min(rounded, 8192)
 
 
 def _sample_uniformly(text: str, max_chars: int, n_windows: int = 10) -> str:
