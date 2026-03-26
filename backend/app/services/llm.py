@@ -403,7 +403,7 @@ async def _generate_ollama(
                 {"role": "assistant", "content": assistant_primer},
             ],
         }
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=600.0) as client:
             try:
                 r = await client.post(
                     f"{settings.OLLAMA_HOST}/api/chat",

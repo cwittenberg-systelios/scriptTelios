@@ -196,15 +196,17 @@ _ollama_version() {
 _install_ollama() {
     echo "${GO}Ollama installieren/aktualisieren..."
     curl -fsSL https://ollama.com/install.sh | sh
+    # Nach Installation: Binary in /workspace/bin sichern (bleibt bei Pod-Neustart)
     if [ -f /usr/local/bin/ollama ]; then
-        mv /usr/local/bin/ollama "$OLLAMA_BIN"
-        echo "${OK}Ollama $(${OLLAMA_BIN} --version 2>/dev/null) installiert → /workspace/bin"
-    elif [ -f /usr/bin/ollama ]; then
-        cp /usr/bin/ollama "$OLLAMA_BIN"
-        echo "${OK}Ollama $(_ollama_version) installiert → /workspace/bin"
+        cp /usr/local/bin/ollama "$OLLAMA_BIN"
+        echo "${OK}Ollama $("$OLLAMA_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) installiert → $OLLAMA_BIN"
     else
         echo "${ERR}Ollama-Binary nicht gefunden nach Installation"
         exit 1
+    fi
+    # Ollama-Libraries nach Installation in /usr/local/lib/ollama pruefen
+    if [ -d /usr/local/lib/ollama ]; then
+        echo "${OK}Ollama-Libraries: $(ls /usr/local/lib/ollama/ | grep -c cuda) CUDA-Varianten gefunden"
     fi
 }
 
@@ -219,7 +221,6 @@ else
         echo "${OK}Ollama v${CURRENT_VER} (>= ${OLLAMA_MIN_VERSION} erforderlich fuer qwen3)"
     else
         echo "${WARN}Ollama v${CURRENT_VER} zu alt (mind. v${OLLAMA_MIN_VERSION} fuer qwen3) – aktualisiere..."
-        # Ollama stoppen falls laufend
         pkill -f "ollama serve" 2>/dev/null || true
         sleep 2
         _install_ollama
@@ -227,16 +228,66 @@ else
 fi
 
 # Symlink damit 'ollama' systemweit verfuegbar ist
-ln -sf "$OLLAMA_BIN" /usr/local/bin/ollama 2>/dev/null || true
+ln -sf "$OLLAMA_BIN" /usr/local/bin/ollama 2>/dev/null || \
+    ln -sf "$OLLAMA_BIN" /usr/bin/ollama 2>/dev/null || true
+
+# systemd-Ollama-Service deaktivieren – er laeuft ohne OLLAMA_MODELS und
+# ohne korrekte Library-Pfade → GPU wird nicht erkannt.
+if systemctl is-active ollama >/dev/null 2>&1; then
+    echo "${WARN}systemd-Ollama-Service aktiv – wird deaktiviert..."
+    systemctl stop ollama 2>/dev/null || true
+    systemctl disable ollama 2>/dev/null || true
+    sleep 2
+    echo "${OK}systemd-Ollama-Service gestoppt"
+fi
+
+# Laufenden Ollama-Prozess pruefen
+NEED_RESTART=false
+if ! pgrep -f "ollama serve" >/dev/null 2>&1; then
+    NEED_RESTART=true
+elif ! pgrep -f "$OLLAMA_BIN serve" >/dev/null 2>&1; then
+    echo "${WARN}Fremder Ollama-Prozess – neu starten mit korrekten GPU-Pfaden..."
+    pkill -f "ollama serve" 2>/dev/null || true
+    sleep 3
+    NEED_RESTART=true
+fi
 
 export OLLAMA_MODELS="$OLLAMA_MODELS_DIR"
-if ! pgrep -x ollama >/dev/null 2>&1; then
-    echo "${GO}Ollama starten (GPU)..."
+if [ "$NEED_RESTART" = "true" ]; then
+    echo "${GO}Ollama starten..."
+
+    # CUDA-Library-Pfad ermitteln: CUDA 12.x zuerst, dann 13.x
+    # Ollama 0.18.x bringt eigene CUDA-Libraries unter /usr/local/lib/ollama mit
+    OLLAMA_LIB_PATH=""
+    for cuda_dir in \
+        /usr/local/lib/ollama/cuda_v12 \
+        /usr/local/lib/ollama/cuda_v13 \
+        /usr/local/lib/ollama \
+        /workspace/lib/ollama/cuda_v12 \
+        /workspace/lib/ollama; do
+        if [ -d "$cuda_dir" ] && ls "$cuda_dir"/libggml-cuda.so >/dev/null 2>&1; then
+            OLLAMA_LIB_PATH="$cuda_dir"
+            echo "${OK}Ollama CUDA-Libraries: $cuda_dir"
+            break
+        fi
+    done
+
+    # Ollama starten – CUDA_VISIBLE_DEVICES NICHT setzen (verhindert GPU-Erkennung)
     OLLAMA_MODELS="$OLLAMA_MODELS_DIR" \
-    CUDA_VISIBLE_DEVICES=0 \
-    LD_LIBRARY_PATH=/workspace/lib/ollama/cuda_v12:/workspace/lib/ollama:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
-    /workspace/bin/ollama serve > "$LOG_DIR/ollama.log" 2>&1 &
-    sleep 8
+    OLLAMA_LIBRARY_PATH=/usr/local/lib/ollama \
+    OLLAMA_NEW_ENGINE=1 \
+    nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
+    sleep 10
+
+    # GPU-Erkennung pruefen
+    if grep -q "total_vram.*0 B" "$LOG_DIR/ollama.log" 2>/dev/null; then
+        echo "${WARN}GPU nicht erkannt (VRAM=0) – pruefe CUDA-Kompatibilitaet"
+        echo "${WARN}Empfehlung: RunPod-Template mit CUDA 12.x verwenden"
+        echo "${WARN}Aktuell laufend auf CPU – Generierung dauert laenger"
+    else
+        VRAM=$(grep "total_vram" "$LOG_DIR/ollama.log" 2>/dev/null | tail -1 | grep -oE '[0-9.]+ [GM]iB' | head -1)
+        echo "${OK}GPU erkannt: ${VRAM} VRAM verfuegbar"
+    fi
 fi
 
 MAX=12
