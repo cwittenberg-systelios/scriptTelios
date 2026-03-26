@@ -196,6 +196,10 @@ async def create_generate_job(
             path.write_bytes(vorbef_bytes)
             try:
                 vorbefunde_text = await extract_text(path)
+                # Verlaufsdoku bereinigen: Seitenheader und reine Teilnahmeeintraege entfernen
+                if workflow in ("verlaengerung", "entlassbericht"):
+                    from app.services.llm import clean_verlauf_text
+                    vorbefunde_text = clean_verlauf_text(vorbefunde_text)
             except Exception as e:
                 logger.warning("Vorbefunde-Extraktion fehlgeschlagen: %s", e)
 

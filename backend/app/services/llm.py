@@ -99,6 +99,83 @@ def deduplicate_paragraphs(text: str) -> str:
     return "\n\n".join(result)
 
 
+def clean_verlauf_text(text: str) -> str:
+    """
+    Bereinigt extrahierten Verlaufsdokumentationstext vor dem LLM-Aufruf:
+    1. Entfernt wiederkehrende PDF-Seitenheader (Name, Zimmernummer, Datum, Seite X von Y)
+    2. Entfernt reine Teilnahmeeintraege ohne inhaltliche Information
+       ("hat teilgenommen", "nicht teilgenommen", "entschuldigt" allein in einem Block)
+    3. Entfernt leere Zeitblock-Eintraege (nur Datum + Uhrzeit + Therapiename + Teilnahme)
+    """
+    import re
+
+    lines = text.split("\n")
+    cleaned = []
+    i = 0
+
+    # Pattern fuer PDF-Seitenheader
+    header_patterns = [
+        re.compile(r"Verlaufsdokumentation\s*[-–]\s*Stand:", re.IGNORECASE),
+        re.compile(r"Seite\s+\d+\s+von\s+\d+", re.IGNORECASE),
+        re.compile(r"\(A\d+\)\s+Zi\.\s+\d+"),   # (A12345) Zi. 123
+        re.compile(r"^[A-ZÄÖÜ][a-zäöüß]+,\s+[A-ZÄÖÜ][a-zäöüß-]+\s+\(A\d+\)"),  # Name (Anummer)
+    ]
+
+    # Pattern fuer inhaltsleere Teilnahmezeilen
+    participation_only = re.compile(
+        r"^(hat teilgenommen|nicht teilgenommen|entschuldigt fehlt|"
+        r"hat nicht teilgenommen|teilgenommen|abgebrochen|krankgemeldet"
+        r"|unentschuldigt gefehlt)[\.\s]*$",
+        re.IGNORECASE,
+    )
+
+    # Pattern fuer reine Zeiteintraege (HH:MM - HH:MM Therapiename)
+    time_entry = re.compile(r"^\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}\s+\S.*$")
+
+    # Pattern fuer Datumszeilen allein (DD.MM.YYYY)
+    date_only = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
+
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Seitenheader ueberspringen
+        if any(p.search(line) for p in header_patterns):
+            i += 1
+            continue
+
+        # Reinen Teilnahme-Block erkennen und ueberspringen:
+        # Muster: [Datum] / [Zeit - Therapiename] / hat teilgenommen
+        if participation_only.match(line):
+            # Pruefen ob vorherige Zeilen nur Datum/Zeit waren → rueckwirkend entfernen
+            while cleaned and (
+                date_only.match(cleaned[-1].strip())
+                or time_entry.match(cleaned[-1].strip())
+                or cleaned[-1].strip() == ""
+            ):
+                cleaned.pop()
+            i += 1
+            continue
+
+        cleaned.append(lines[i])
+        i += 1
+
+    result = "\n".join(cleaned)
+
+    # Mehr als 2 aufeinanderfolgende Leerzeilen auf 1 reduzieren
+    result = re.sub(r"\n{3,}", "\n\n", result)
+
+    original_len = len(text)
+    cleaned_len = len(result)
+    if original_len > cleaned_len:
+        reduction = int((1 - cleaned_len / original_len) * 100)
+        logger.info(
+            "Verlaufsdoku bereinigt: %d → %d Zeichen (-%d%% Overhead entfernt)",
+            original_len, cleaned_len, reduction,
+        )
+
+    return result.strip()
+
+
 async def generate_text(
     system_prompt: str,
     user_content: str,
@@ -266,8 +343,6 @@ async def _generate_ollama(
     async def _call(num_ctx: int) -> httpx.Response:
         payload = {
             "model":      effective_model,
-            "system":     system_prompt,
-            "prompt":     user_content,
             "stream":     False,
             "keep_alive": -1,   # Modell nach Generierung im VRAM behalten
             "options": {
@@ -276,11 +351,18 @@ async def _generate_ollama(
                 "temperature": profile["temperature"],
                 "top_p":       profile["top_p"],
             },
+            "messages": [
+                {"role": "system",    "content": system_prompt},
+                {"role": "user",      "content": user_content},
+                # Assistant-Primer: zwingt das Modell direkt mit dem Text zu beginnen
+                # statt sich zu weigern oder Erklaerungen voranzustellen
+                {"role": "assistant", "content": ""},
+            ],
         }
         async with httpx.AsyncClient(timeout=300.0) as client:
             try:
                 r = await client.post(
-                    f"{settings.OLLAMA_HOST}/api/generate",
+                    f"{settings.OLLAMA_HOST}/api/chat",
                     json=payload,
                 )
                 r.raise_for_status()
@@ -319,7 +401,11 @@ async def _generate_ollama(
             ) from e2
 
     data = r.json()
-    text = data.get("response", "").strip()
+    # /api/chat gibt message.content zurück (statt response bei /api/generate)
+    text = (
+        data.get("message", {}).get("content", "")
+        or data.get("response", "")  # Fallback fuer aeltere Versionen
+    ).strip()
     return {
         "text": text,
         "model_used": f"ollama/{effective_model}",
