@@ -194,6 +194,21 @@ async def generate_text(
     if len(user_content) > MAX_USER_CONTENT_CHARS:
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
 
+    # Sicherheitscheck: wenn Input + Output > 16384 Tokens, User-Content kuerzen
+    # (System-Prompt bleibt immer vollstaendig)
+    MAX_SAFE_CTX = 16384
+    estimated_input_tokens = int((len(system_prompt) + len(user_content)) / 3.5)
+    if estimated_input_tokens + max_tokens > MAX_SAFE_CTX:
+        # Wieviel Zeichen duerfen im User-Content stehen?
+        available_tokens = MAX_SAFE_CTX - max_tokens - int(len(system_prompt) / 3.5) - 200
+        max_user_chars = int(available_tokens * 3.5)
+        if max_user_chars > 0 and len(user_content) > max_user_chars:
+            user_content = _sample_uniformly(user_content, max_user_chars)
+            logger.warning(
+                "User-Content fuer VRAM-Sicherheit gekuerzt: %d → %d Zeichen",
+                len(user_content), max_user_chars,
+            )
+
     t0 = time.time()
     result = await _generate_ollama(system_prompt, user_content, max_tokens, model=model)
 
@@ -219,18 +234,19 @@ def _estimate_num_ctx(system_prompt: str, user_content: str, max_tokens: int) ->
     Puffer: 20% Sicherheitsmarge + max_tokens für den Output.
     Rundet auf das nächste Vielfache von 512 für Ollama-Effizienz.
 
-    Warum nicht immer 32768:
-    Ein Therapiegespräch (System ~2k + Transkript ~6k Zeichen) braucht
-    ~2500 Tokens Kontext. num_ctx=32768 erzwingt einen 13x größeren KV-Cache
-    der bei jedem Request neu alloziert wird → ~20s Overhead.
+    VRAM-Limit: qwen2.5:32b-instruct-q6_K belegt ~22GB VRAM.
+    Bei RTX Pro 4500 (32GB) bleiben ~10GB für den KV-Cache.
+    Ein KV-Cache von 16384 Tokens braucht bei q6_K ca. 4-6GB → sicher.
+    32768 Tokens KV-Cache = 8-12GB → kritisch, führt zu OOM.
+    Daher: hartes Maximum von 16384 Tokens für qwen32b.
     """
     total_chars = len(system_prompt) + len(user_content)
     estimated_tokens = int(total_chars / 3.5)
     needed = int(estimated_tokens * 1.2) + max_tokens
     # Auf nächstes Vielfaches von 512 aufrunden, Minimum 2048
     rounded = max(2048, ((needed + 511) // 512) * 512)
-    # Niemals über das Modell-Limit
-    return min(rounded, 32768)
+    # Hartes Maximum: 16384 Tokens – sicher für qwen32b auf 32GB VRAM
+    return min(rounded, 16384)
 
 
 def _sample_uniformly(text: str, max_chars: int, n_windows: int = 10) -> str:
