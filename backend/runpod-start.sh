@@ -250,7 +250,8 @@ fi
 DIARIZATION_ENABLED=$(grep "^DIARIZATION_ENABLED=" "$BACKEND_DIR/.env" 2>/dev/null \
     | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
 if [ "$DIARIZATION_ENABLED" = "true" ]; then
-    if ! python -c "import pyannote.audio" 2>/dev/null; then
+    # Schnelle Prüfung via pip show – kein torch-Import, keine 20s Wartezeit
+    if ! pip show pyannote.audio >/dev/null 2>&1; then
         echo "${GO}pyannote.audio installieren (Sprecher-Diarization)..."
         pip install --quiet pyannote.audio
         echo "${OK}pyannote.audio installiert"

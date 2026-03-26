@@ -15,9 +15,11 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Maximale Zeichen im User-Content (ca. 80k Tokens bei durchschnittlichen Texten)
-# Verhindert EOF-Fehler bei sehr langen Transkripten
-MAX_USER_CONTENT_CHARS = 60_000
+# Maximale Zeichen im User-Content – nur noch als harte Notbremse
+# fuer extrem lange Audio-Transkripte (>500k Zeichen).
+# Fuer Verlaufsdokus greift stattdessen clean_verlauf_text() als Preprocessing.
+# num_ctx wird dynamisch berechnet, qwen2.5:32b hat 128k Token Kontextfenster.
+MAX_USER_CONTENT_CHARS = 500_000
 
 # Modell-spezifische Generierungsparameter.
 # Match erfolgt auf Modellname-Prefix (case-insensitive).
@@ -245,14 +247,10 @@ def _sample_uniformly(text: str, max_chars: int, n_windows: int = 10) -> str:
     """
     lines = text.splitlines(keepends=True)
     total = len(lines)
-    window_size = total // n_windows
+    window_size = max(1, total // n_windows)
     chars_per_window = max_chars // n_windows
 
     sampled = []
-    sampled.append(
-        f"[Hinweis: Transkript war zu lang – gleichmaessig auf {n_windows} "
-        f"Abschnitte reduziert, jeder Abschnitt anteilig vertreten]\n\n"
-    )
 
     for i in range(n_windows):
         start_line = i * window_size
@@ -271,7 +269,7 @@ def _sample_uniformly(text: str, max_chars: int, n_windows: int = 10) -> str:
             sampled.append(truncated)
 
         if i < n_windows - 1:
-            sampled.append(f"\n[— Abschnitt {i+1}/{n_windows} —]\n")
+            sampled.append("\n")
 
     result = "".join(sampled)
     logger.warning(
