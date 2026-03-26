@@ -260,7 +260,18 @@ async def create_generate_job(
             diagnosen=dx_list,
             custom_prompt=prompt if prompt and prompt.strip() else None,
         )
-        result = await generate_text(system, user, model=model)
+        # Workflow-spezifische max_tokens:
+        # Entlassbericht/Verlängerung: langer Fliesstext, mind. 800 Wörter → 4000 Tokens
+        # Anamnese: zwei Teile (Anamnese + Befund) → 3000 Tokens
+        # Dokumentation: kompakter → 2048 Tokens (Default)
+        max_tokens_map = {
+            "entlassbericht": 4000,
+            "verlaengerung":  3000,
+            "anamnese":       3000,
+            "dokumentation":  2048,
+        }
+        max_tok = max_tokens_map.get(workflow, 2048)
+        result = await generate_text(system, user, max_tokens=max_tok, model=model)
         raw = result["text"] or ""
 
         # Anamnese: Ergebnis bei ###BEFUND### und optional ###AKUT### aufteilen
