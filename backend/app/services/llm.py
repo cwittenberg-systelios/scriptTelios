@@ -183,7 +183,6 @@ async def generate_text(
     user_content: str,
     max_tokens: int = 2048,
     model: Optional[str] = None,
-    workflow: Optional[str] = None,
 ) -> dict:
     """
     Generiert Text ausschliesslich via lokalem Ollama-Modell.
@@ -196,39 +195,22 @@ async def generate_text(
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
 
     # Sicherheitscheck: wenn Input + Output > 16384 Tokens, User-Content kuerzen
+    # (System-Prompt bleibt immer vollstaendig)
     MAX_SAFE_CTX = 16384
     estimated_input_tokens = int((len(system_prompt) + len(user_content)) / 3.5)
     if estimated_input_tokens + max_tokens > MAX_SAFE_CTX:
+        # Wieviel Zeichen duerfen im User-Content stehen?
         available_tokens = MAX_SAFE_CTX - max_tokens - int(len(system_prompt) / 3.5) - 200
         max_user_chars = int(available_tokens * 3.5)
         if max_user_chars > 0 and len(user_content) > max_user_chars:
-            original_len = len(user_content)
             user_content = _sample_uniformly(user_content, max_user_chars)
             logger.warning(
                 "User-Content fuer VRAM-Sicherheit gekuerzt: %d → %d Zeichen",
-                original_len, max_user_chars,
+                len(user_content), max_user_chars,
             )
 
-    # Workflow-spezifischer Assistant-Primer: zwingt Modell direkt in den Text
-    # ohne Verweigerung oder Erklaerungen. Primer wird dem Output vorangestellt
-    # und ist fuer den Therapeuten nicht sichtbar.
-    PRIMERS = {
-        "entlassbericht": "Zu Beginn des stationären Aufenthalts",
-        "verlaengerung":  "Im bisherigen Verlauf des stationären Aufenthalts",
-        "anamnese":       "Die Klientin/der Klient stellt sich vor",
-        "dokumentation":  "Auftragsklärung\n\n",
-    }
-    assistant_primer = PRIMERS.get(workflow or "", "")
-
     t0 = time.time()
-    result = await _generate_ollama(
-        system_prompt, user_content, max_tokens,
-        model=model, assistant_primer=assistant_primer,
-    )
-
-    # Primer war Teil des Outputs – wieder voranstellen damit der Text vollständig ist
-    if assistant_primer and result.get("text"):
-        result["text"] = assistant_primer + result["text"]
+    result = await _generate_ollama(system_prompt, user_content, max_tokens, model=model)
 
     # Output-Postprocessing: doppelte Absätze entfernen (LLM-Wiederholungsloop)
     if result.get("text"):
@@ -351,14 +333,15 @@ async def _generate_ollama(
     user_content: str,
     max_tokens: int,
     model: Optional[str] = None,
-    assistant_primer: str = "",
 ) -> dict:
     """
     Ollama REST API (lokal, kein externer Aufruf).
 
-    assistant_primer: Optionaler Einstiegstext der als Assistant-Nachricht
-    vorangestellt wird. Zwingt das Modell den Text direkt fortzusetzen
-    statt sich zu weigern oder Erklaerungen voranzustellen.
+    model: Optionales Modell-Override. Wenn None, wird settings.OLLAMA_MODEL verwendet.
+    VRAM-OOM-Strategie (3 Stufen):
+    1. Normalaufruf mit num_ctx=32768
+    2. Bei OOM: Modell entladen + neu laden, num_ctx auf 8192 reduzieren
+    3. Bei erneutem OOM: Klare Fehlermeldung an den Therapeuten
     """
     effective_model = model or settings.OLLAMA_MODEL
 
@@ -375,7 +358,7 @@ async def _generate_ollama(
         payload = {
             "model":      effective_model,
             "stream":     False,
-            "keep_alive": -1,
+            "keep_alive": -1,   # Modell nach Generierung im VRAM behalten
             "options": {
                 "num_predict": max_tokens,
                 "num_ctx":     num_ctx,
@@ -386,7 +369,8 @@ async def _generate_ollama(
                 {"role": "system",    "content": system_prompt},
                 {"role": "user",      "content": user_content},
                 # Assistant-Primer: zwingt das Modell direkt mit dem Text zu beginnen
-                {"role": "assistant", "content": assistant_primer},
+                # statt sich zu weigern oder Erklaerungen voranzustellen
+                {"role": "assistant", "content": ""},
             ],
         }
         async with httpx.AsyncClient(timeout=300.0) as client:

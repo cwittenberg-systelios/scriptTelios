@@ -271,7 +271,7 @@ async def create_generate_job(
             "dokumentation":  2048,
         }
         max_tok = max_tokens_map.get(workflow, 2048)
-        result = await generate_text(system, user, max_tokens=max_tok, model=model, workflow=workflow)
+        result = await generate_text(system, user, max_tokens=max_tok, model=model)
         raw = result["text"] or ""
 
         # Anamnese: Ergebnis bei ###BEFUND### und optional ###AKUT### aufteilen
