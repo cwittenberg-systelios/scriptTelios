@@ -1,0 +1,80 @@
+##
+## scriptTelios – Confluence User Macro
+## ════════════════════════════════════════════════════
+##
+## INSTALLATION (einmalig, als Confluence-Admin):
+##   1. Administration → User Macros → Create User Macro
+##   2. Macro name:   scriptTelios
+##   3. Macro title:  scriptTelios
+##   4. Body:         No macro body
+##   5. Template:     Kompletten Inhalt dieser Datei einfügen → Save
+##
+## VERWENDUNG:
+##   Seite bearbeiten → Insert → Other Macros → "scriptTelios" einfügen
+##
+##   Beim ersten Aufruf erscheint ein Einstellungs-Dialog wo die
+##   Backend-URL eingetragen wird. Diese wird im Browser gespeichert
+##   und gilt für alle Therapeuten auf diesem Gerät.
+##
+##   URL nach Pod-Neustart: Im Frontend oben rechts auf das
+##   Zahnrad-Icon klicken → neue URL eintragen → Speichern.
+##
+## ════════════════════════════════════════════════════════════════════════
+## @param backendUrl:title=Backend URL|type=string|required=false|default=
+
+## Container – äusserer Wrapper (vom Macro befüllt) + innerer leerer Mount-Punkt
+<div id="systelios-root-$action.hashCode()">
+  <div id="systelios-app"></div>
+</div>
+
+## Konfiguration
+<script>
+  // Confluence-Benutzername
+  window.SYSTELIOS_USER = AJS && AJS.Data ? (AJS.Data.get("current-user-fullname") || "") : "";
+
+  // Backend-URL: Macro-Parameter hat immer Vorrang (empfohlen!)
+  // localStorage kann in manchen Browsern/Confluence-Versionen blockiert sein.
+  var macroUrl = "$!{parambackendUrl}".trim().replace(/\/+$/, "");
+  if (macroUrl && !macroUrl.startsWith("http://") && !macroUrl.startsWith("https://")) {
+    macroUrl = "https://" + macroUrl;
+  }
+
+  var storedUrl = "";
+  try { storedUrl = localStorage.getItem("systelios_backend_url") || ""; } catch(e) {}
+
+  // Priorität: Macro-Parameter > localStorage > leer
+  window.SYSTELIOS_API_BASE = macroUrl || storedUrl;
+
+  // Macro-Parameter in localStorage synchronisieren (best-effort)
+  if (macroUrl) {
+    try { localStorage.setItem("systelios_backend_url", macroUrl); } catch(e) {}
+  }
+</script>
+
+## Bundle laden - erst wenn Container im DOM ist
+<script>
+  (function() {
+    function loadBundle() {
+      var container = document.getElementById("systelios-app");
+      if (!container) return;
+      var s = document.createElement("script");
+      s.type = "module";
+      s.src = AJS.contextPath() + "/download/attachments/$content.id/systelios.js";
+      document.head.appendChild(s);
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", loadBundle);
+    } else {
+      loadBundle();
+    }
+  })();
+</script>
+
+## Basis-Styling
+<style>
+  #systelios-root-$action.hashCode() {
+    all: initial;
+    display: block;
+    width: 100%;
+  }
+</style>
