@@ -762,6 +762,7 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
     return {
       text:        job.result_text   || "",
       befundText:  job.befund_text   || "",
+      akutText:    job.akut_text     || "",
       jobId,
       hasTranscript: job.has_transcript || false,
     };
@@ -994,6 +995,8 @@ function P2({ toast, resumeJob, onResumed, model }) {
   const [prompt, setPrompt]       = useState(P_ANAMNESE);
   const [out, setOut]             = useState("");
   const [befundOut, setBefundOut] = useState("");
+  const [akutOut, setAkutOut]     = useState("");
+  const [akutantrag, setAkutantrag] = useState(false);
   const [tab, setTab]             = useState("Anamnese");
   const [lastJobId, setLastJobId] = useState(null);
   const [hasTranscript, setHasTranscript] = useState(false);
@@ -1010,6 +1013,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
         setBefundOut(job.befund_text || "");
+        setAkutOut(job.akut_text || "");
         setLastJobId(resumeJob.jobId);
         setHasTranscript(job.has_transcript || false);
         onResumed();
@@ -1032,6 +1036,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
     setLastJobId(null);
     setHasTranscript(false);
     setBefundOut("");
+    setAkutOut("");
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
 
     const k = kuerzel.trim().replace(/\.?$/, ".");
@@ -1052,11 +1057,12 @@ function P2({ toast, resumeJob, onResumed, model }) {
         audio:     audio,
         style:     style,
         styleText: styleText || null,
-        bullets:   text || null,
+        bullets:   akutantrag ? "akutantrag" : (text || null),
         model:     model || null,
       }, "p2");
       setOut(result.text || "");
       setBefundOut(result.befundText || "");
+      setAkutOut(result.akutText || "");
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
     }
@@ -1163,14 +1169,23 @@ function P2({ toast, resumeJob, onResumed, model }) {
             </div>
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button className="btn-primary" onClick={run} disabled={!selbst}>Anamnese und Befund generieren</button>
+              : <>
+                  <label style={{display:"flex", alignItems:"center", gap:6, cursor:"pointer",
+                    fontSize:12, color:"var(--st-text-soft)", marginRight:8}}>
+                    <input type="checkbox" checked={akutantrag}
+                      onChange={e => setAkutantrag(e.target.checked)} style={{cursor:"pointer"}} />
+                    Akutantrag
+                  </label>
+                  <button className="btn-primary" onClick={run} disabled={!selbst}>Anamnese und Befund generieren</button>
+                </>
             }
           </div>
 
-          <Output text={tab === "Anamnese" ? out : befundOut} loading={busy}
-            tabs={["Anamnese", "Psych. Befund"]} activeTab={tab} onTab={setTab}
+          <Output text={tab === "Anamnese" ? out : tab === "Psych. Befund" ? befundOut : akutOut} loading={busy}
+            tabs={akutOut ? ["Anamnese", "Psych. Befund", "Akutantrag"] : ["Anamnese", "Psych. Befund"]}
+            activeTab={tab} onTab={setTab}
             onCopy={() => {
-              const t = tab === "Anamnese" ? out : befundOut;
+              const t = tab === "Anamnese" ? out : tab === "Psych. Befund" ? befundOut : akutOut;
               navigator.clipboard.writeText(t);
               toast("Kopiert");
             }}
@@ -1183,7 +1198,8 @@ function P2({ toast, resumeJob, onResumed, model }) {
               <button className="btn-secondary" onClick={() => {
                 setSelbst(null); setBefunde(null); setAudio(null); setTxtFile(null);
                 setText(""); setDx([]); setStyle(null); setStyleText("");
-                setOut(""); setBefundOut(""); setLastJobId(null); setHasTranscript(false);
+                setOut(""); setBefundOut(""); setAkutOut(""); setAkutantrag(false);
+                setLastJobId(null); setHasTranscript(false);
                 toast("Formular zurückgesetzt");
               }}>+ Neue Anamnese</button>
             </div>

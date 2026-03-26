@@ -625,7 +625,8 @@ class TestPrompts:
             style_is_example=True,
         )
         assert "NIEMALS" in p
-        assert "anderen Patienten" in p
+        # Strukturelle Schablone kennzeichnet den anderen Patienten in Großbuchstaben
+        assert "ANDEREN PATIENTEN" in p or "anderen Patienten" in p
         assert "ICD" in p or "Diagnosen" in p or "ICD-Codes" in p
 
     def test_stilvorlage_rahmung_auch_bei_extrahiertem_stil(self):
@@ -755,8 +756,10 @@ class TestPrompts:
             verlauf_text="14 Tage Behandlung, guter Verlauf.",
         )
         assert "VERLAUFSDOKUMENTATION" in u
-        assert "Bisheriger Verlauf" in u  # explizite Sektion
-        assert "Stilbeispiel" in u        # Warnung gegen Stilübernahme
+        assert "Bisheriger Verlauf" in u   # explizite Sektion
+        # Stilbeispiel-Warnung steht im System-Prompt (build_system_prompt),
+        # User-Content enthält Halluzinations-Schutz
+        assert "erfinden" in u or "Quellen" in u
 
     def test_user_content_verlaengerung_mit_diagnosen(self):
         """Diagnosen landen im User-Content als 'DIAGNOSEN DES AKTUELLEN PATIENTEN'."""
@@ -779,7 +782,9 @@ class TestPrompts:
         )
         assert "VERLAUFSDOKUMENTATION" in u
         assert "Epikrise" in u or "EPIKRISE" in u or "Behandlungsverlauf" in u
-        assert "Stilbeispiel" in u  # Warnung gegen Stilübernahme
+        # Stilbeispiel-Warnung steht im System-Prompt (build_system_prompt),
+        # User-Content enthält Halluzinations-Schutz
+        assert "erfinden" in u or "Quellen" in u
 
     def test_user_content_dokumentation_bullets_getrennt_von_transkript(self):
         """Bullets und Transkript landen als getrennte Blöcke – nicht zusammengemischt."""

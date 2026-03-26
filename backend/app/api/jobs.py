@@ -259,11 +259,18 @@ async def create_generate_job(
         result = await generate_text(system, user, model=model)
         raw = result["text"] or ""
 
-        # Anamnese: Ergebnis bei ###BEFUND### aufteilen
+        # Anamnese: Ergebnis bei ###BEFUND### und optional ###AKUT### aufteilen
+        akut_part = None
         if workflow == "anamnese" and "###BEFUND###" in raw:
             parts_split = raw.split("###BEFUND###", 1)
             anamnese_part = parts_split[0].strip()
-            befund_part   = parts_split[1].strip()
+            rest = parts_split[1].strip()
+            if "###AKUT###" in rest:
+                akut_split = rest.split("###AKUT###", 1)
+                befund_part = akut_split[0].strip()
+                akut_part   = akut_split[1].strip()
+            else:
+                befund_part = rest
         else:
             anamnese_part = raw
             befund_part   = None
@@ -271,6 +278,7 @@ async def create_generate_job(
         return {
             "text":        anamnese_part,
             "befund_text": befund_part,
+            "akut_text":   akut_part,
             "transcript":  audio_transcript or None,
             "model_used":  result["model_used"],
             "style_info":  style_info,

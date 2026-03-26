@@ -18,32 +18,136 @@ KLINISCHES_GLOSSAR = """\
 FACHLICHES REFERENZWISSEN (sysTelios-Klinik):
 
 Therapeutische Ansaetze:
-- IFS (Internal Family Systems): Innere Anteile haben Rollen und Intentionen.
-  Manager-Anteile: schuetzen proaktiv (Kontrolle, Perfektionismus, Rationalisierung).
-  Feuerwehr-Anteile: reagieren reaktiv auf Schmerz (Dissoziation, Ablenkung, Sucht).
-  Exile: tragen Schmerz, Scham, Trauma - werden von Managern ferngehalten.
-  Self-Energy: Kernqualitaeten - Ruhe, Neugier, Mitgefuehl, Klarheit, Mut.
-  Ziel: Anteile entlasten, Self uebernimmt Fuehrung (Self-Leadership).
-- Systemische Therapie: zirkulaere Fragen, Reframing, Auftragsklarung,
-  Ausnahmen erkunden, Skalierungsfragen, hypothetische Fragen (Wunderfrage).
-  Symptome als sinnvolle Anpassungsleistungen des Systems verstehen.
+- IFS (Internal Family Systems / Anteilemodell): Innere Anteile haben Rollen und Intentionen.
+  Manager-Anteile: schuetzen proaktiv (Kontrolle, Perfektionismus, Rationalisierung,
+  Leistungsorientierung, hohe Loyalitaetsansprueche, Selbstaufgabe).
+  Feuerwehr-Anteile: reagieren reaktiv auf Schmerz (Dissoziation, Sucht, Ablenkung,
+  selbstschaedigendes Verhalten, Risikoverhaltensweisen).
+  Exile: tragen Schmerz, Scham, Trauma, Wertlosigkeit, Verlassenheit – werden von Managern
+  ferngehalten. Jungere, verletzliche Anteile aus biographischen Erfahrungen.
+  Self-Energy / Steuerungsposition: Kernqualitaeten – Ruhe, Neugier, Mitgefuehl, Klarheit,
+  Mut. Ziel: Anteile entlasten, Self uebernimmt Fuehrung (Self-Leadership).
+  Typische Anteilsnamen in sysTelios-Dokumenten: Tuerstehter, Waechterin, Koenig/Koenigin,
+  Fatman, Mr. Motivator, Schutzschild, Abwerteranteil, Kontrollanteil.
+- Systemische Therapie: zirkulaere Fragen, Reframing, Auftragsklarung, Ausnahmen erkunden,
+  Skalierungsfragen, hypothetische Fragen (Wunderfrage), Genogrammarbeit, Externalisierung.
+  Symptome als sinnvolle Anpassungsleistungen des Systems – nicht als Defizit sondern als
+  Schutzreaktion vor biographisch nachvollziehbarem Hintergrund verstehen.
 - Hypnosystemik (G. Schmidt): Ressourcenaktivierung, loesungsorientierte Haltung,
-  Wirklichkeitskonstruktion, Trance-Phaenomene im Alltag nutzen.
+  Wirklichkeitskonstruktion, Trance-Phaenomene nutzen, Seitenmodell zur Beduerfnisanalyse,
+  Koerpersignale als Rueckkopplungsprozesse, annehmende Beziehung zum Organismus,
+  koerperliche Symptome in anerkennenswerte Beduerfnisse uebersetzen, selbstwirksam
+  Einfluss nehmen. Loesung aus Funktionsmodus – Zugang zu Gefuehlen und Beduerfnissen.
+- Biographiearbeit: Lebenserfahrungen in den Kontext der Lebensgeschichte einbetten,
+  fruehere Sinnhaftigkeit von Kognitionen als Ueberlebensstrategie wuerdigen,
+  Zusammenhaenge zwischen biographischen Erfahrungen und aktuellen Mustern erkennen.
+- Traumafokussierte Arbeit: Stabilisierung vor Bearbeitung, Window of Tolerance weiten,
+  Ressourcenaktivierung, Traumalandkarte, EMDR, Stabilisierungsuebungen, Embodiment.
 - The Work (Byron Katie): Gedanken identifizieren, 4 Fragen stellen, Umkehrungen.
-  Stressausloesende Ueberzeugungen untersuchen ohne sie zu bekaempfen.
-- AMDP-Schema: Bewusstsein, Orientierung, Aufmerksamkeit/Gedaechtnis,
-  formales Denken, inhaltliches Denken, Wahrnehmung, Ich-Erleben,
-  Affektivitaet, Antrieb/Psychomotorik, Suizidalitaet, Vegetativum.
+- Koerpertherapie / nonverbale Verfahren: Koerperarbeit, Musiktherapie, Kunsttherapie,
+  Bewegungstherapie, Imaginationsarbeit, kreative Verfahren, Tai-Chi, Qigong.
+- AMDP-Schema: Bewusstsein, Orientierung, Aufmerksamkeit/Gedaechtnis, formales Denken,
+  inhaltliches Denken, Wahrnehmung, Ich-Erleben, Affektivitaet, Antrieb/Psychomotorik,
+  Suizidalitaet, Vegetativum.
 
-Typische Dokumentationsformulierungen:
-- "Im Mittelpunkt stand..." / "Frau X. kam mit dem Anliegen..."
-- "Ein aktiver Manager-Anteil zeigte sich in..." / "Ein verletzlicher Exil-Anteil..."
-- "Im Sinne des IFS konnte..." / "Aus systemischer Perspektive..."
-- "Frau X. wurde eingeladen, ..." / "Als Uebung wurde vereinbart, ..."
-- "Die Symptomatik laesst sich als sinnvolle Schutzreaktion verstehen..."
-- "Ressourcenorientiert zeigte sich..." / "Self-Energy wurde spuerbar als..."
-- Befund: "bewusstseinsklar, allseits orientiert, Aufmerksamkeit ungestoert"
-- Befund: "Affekt situationsadaequat schwingungsfaehig" / "Antrieb leicht reduziert"\
+Klinisches Therapieangebot sysTelios:
+- Intensive Einzelgespraeche (mindestens 2-3 pro Woche)
+- Gruppentherapeutische Angebote (Bezugsgruppe, Gespraechs-, Kunst-, Musik-,
+  Koerperpsycho- und Bewegungstherapie – mindestens 5 pro Woche)
+- Woechentliche Prozessreflexion in der Bezugsgruppe mit dem therapeutischen Team
+- Paargesprae, Familiengespraeche
+- Konzept: tiefenpsychologisch fundiert, verhaltenstherapeutisch ergaenzt,
+  hypnosystemisch optimiert
+
+Typische Verlaufsmuster und Formulierungen (aus echten Dokumenten):
+
+Verlaufsbeschreibung Entlassbericht / Verlängerung:
+- "Zu Beginn der stationaeren Behandlung zeigte sich [Name] deutlich erschoepft, innerlich
+  angespannt und in seinem/ihrem Selbstwert erheblich verunsichert."
+- "Mithilfe des beschriebenen Therapiekonzepts gelang es [Name] die intrapsychischen und
+  bisher unbewussten Erlebensmuster und deren Einfluss auf seine/ihre Symptome besser zu
+  verstehen und schrittweise zu beeinflussen."
+- "Anhand des Modells der inneren Anteile gelang es [Name] die fruehere Sinnhaftigkeit
+  seiner/ihrer Kognitionen zu verstehen und ein Verstaendnis fuer seine/ihre
+  Krankheitsgenese zu entwickeln."
+- "Im hypnosystemischen Einzelprozess konnte mithilfe der Anteilearbeit nach G. Schmidt
+  insbesondere ein dominanter [Anteil] differenziert werden, der biographisch vor dem
+  Hintergrund von [Kontext] verstaendlich wurde."
+- "Zentral erwies sich dabei ein ueberwachender, kontrollierender Anteil, den [Name] im
+  therapeutischen Prozess selbst treffend als [Anteilsname] bezeichnete."
+- "Parallel dazu traten verletzlichere, juengere innere Anteile in den Vordergrund, die mit
+  Unsicherheit, Angst vor Verlassenwerden und einem fragilen Selbstwert verbunden waren."
+- "Durch Externalisierung, Stuhlarbeit, Netzwerk- und Koerperarbeit gelang es [Name] in
+  ersten Schritten, sich von diesen inneren Dynamiken zu distanzieren, eine
+  Beobachterposition einzunehmen und eine wohlwollendere innere Haltung zu entwickeln."
+- "Im Verlauf gelang es [Name] zunehmend, den [Anteil] innerlich zu entlasten, ihm neue
+  Aufgaben zuzuweisen und alternative Formen von Selbstschutz zu entwickeln."
+- "Im Rahmen von Biographiearbeit konnte [Name] sein/ihr Erleben mehr und mehr in den
+  Kontext seiner/ihrer Lebensgeschichte (insbesondere [Kontext]) einbetten."
+- "Diese Zusammenhaenge werden von [Name] kognitiv zunehmend verstanden, sind emotional
+  jedoch noch nicht ausreichend integriert."
+
+Gruppenarbeit:
+- "In den therapeutischen Gruppen zeigte sich [Name] zunehmend aktiv, reflektiert und
+  beziehungsfaehig."
+- "Das stationaere Gruppensetting stellt die notwendigen Bedingungen dar, um wiederholt
+  korrigierende emotionale Erfahrungen zu machen und zu verinnerlichen."
+- "Die Gruppe phasenweise als tragenden Resonanzraum erlebte."
+- "Gleichzeitig fuehrten gruppale Trigger, Abschiede und Naehedistanzthemen wiederholt zu
+  Ueberlastung, was die weiterhin hohe Vulnerabilitaet des Systems unterstreicht."
+
+Begruendung Verlaengerung (medizinische Notwendigkeit):
+- "Die Alltagstauglichkeit von [Name] ist derzeit noch nicht vollstaendig gegeben."
+- "Eine fuer den ambulanten Kontext notwendige tragfaehige Stabilitaet ist derzeit noch
+  nicht ausreichend gegeben."
+- "Zusammenfassend befindet sich [Name] aktuell in einer sensiblen Uebergangs- und
+  Stabilisierungsphase. Es sind erste therapeutische Fortschritte erkennbar, diese sind
+  jedoch noch fragil und nicht ausreichend konsolidiert."
+- "Um einen dauerhaften Rueckfall in alte Verhaltensmuster zu verhindern ist es aus
+  therapeutischer Sicht dringend notwendig, die begonnenen Verhaltensaenderungen
+  weiterzufuehren und zu festigen."
+- "Bei einer vorzeitigen Entlassung besteht das erhoehte Risiko einer erneuten psychischen
+  Dekompensation, die eine Erhoehung der weiteren Behandlungskosten nach sich ziehen wuerde."
+- "Halten wir eine Weiterbehandlung im geschuetzten stationaeren, multimodalen Setting
+  mit der Moeglichkeit einer engmaschigen Krisenbegleitung fuer weitere [X] Wochen
+  unabdingbar."
+- "Zur weiteren Festigung der Steuerungsposition, Reduktion von [Symptom], Etablierung
+  alternativer Regulationsstrategien sowie zur Vorbereitung eines gelingenden Transfers
+  in den haeuslichen Alltag ist eine erneute Verlaengerung dringend indiziert."
+
+Akutantrag (Begruendung stationaeres Setting):
+- "Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter
+  Beruecksichtigung der Beurteilung des Einweisers ein stationaeres Krankenhaussetting
+  akut notwendig:"
+- "In Anbetracht der Schwere der [Diagnose], insbesondere [Symptom], ist es aus
+  therapeutischer Sicht dringend angezeigt, einen stabilisierenden stationaeren Rahmen
+  zu etablieren."
+- "Dafuer ist es unbedingt notwendig, die Klientin/den Klienten aus ihrer/seiner
+  symptominduzierenden Umgebung ([Kontext]) herauszunehmen."
+- "Eine ambulante Therapie hat sich in der ueblichen Frequenz als nicht ausreichend erwiesen."
+- "[Name] verfuegt aktuell ueber keine ausreichenden Copingstrategien. Gegenwaertig bedarf
+  der/die Klient/in 24/7 Verfuegbarkeit therapeutischer Unterstuetzung."
+- "Die Behandlung ist zur Durchbrechung chronifizierter Reaktions- und Verhaltensmuster
+  medizinisch unbedingt indiziert, um einer weiteren Verschlechterung entgegen zu wirken."
+
+Entlassung:
+- "Wir entlassen [Name] in einem gebesserten koerperlichen und psychischen
+  Gesundheitszustand."
+- "Aus therapeutischer Sicht entliessen wir [Name] in psychisch deutlich stabilisiertem
+  Zustand bei Rueckgang der depressiven Symptomatik."
+- "Insgesamt ist [Name] im Verlauf des stationaeren Aufenthalts ein bedeutsamer Prozess
+  der Neuorientierung gelungen."
+- "[Name] wird nun in die Phase der Alltagserprobung der veraenderten inneren Haltung
+  eintreten."
+- "Fuer den Fall einer erneuten Zunahme der psychischen Symptomatik empfehlen wir eine
+  fruehzeitige Wiederaufnahme im Sinne einer Intervallbehandlung."
+
+Befund (Standardformulierungen):
+- "bewusstseinsklar, allseits orientiert" / "Aufmerksamkeit unauffaellig"
+- "Affekt situationsadaequat schwingungsfaehig" / "Antrieb leicht reduziert"
+- "formalgedanklich geordnet / gruebelnd, eingeengtes Denken mit Fokus auf [Thema]"
+- "Selbstwertgefuehl ist [Beschreibung], Gefuehlsregulation ist [Beschreibung],
+  Impulskontrolle ist [Beschreibung]"\
 """
 
 
@@ -223,13 +327,56 @@ Fortschritte nachhaltig im Alltag zu verankern.\
 """
 
 
+BASE_PROMPT_AKUTANTRAG = (
+    "Du bist Arzt oder Psychologischer Psychotherapeut der sysTelios Klinik. "
+    "Verfasse den psychotherapeutischen Teil eines AKUTANTRAGS an die Krankenversicherung "
+    "fuer die Erstattung einer stationaeren Akutaufnahme.\n\n"
+    "STRUKTUR DES AKUTANTRAGS (nur diese Sektionen):\n"
+    "1. AKTUELLE ANAMNESE\n"
+    "   Knappe Beschreibung des aktuellen Zustands bei Aufnahme: Symptome, Ausloeser, "
+    "   Dekompensationszeichen. Direkte Patientenzitate wenn charakteristisch. "
+    "   Warum jetzt? Was hat zur Aufnahme gefuehrt?\n\n"
+    "2. BESCHREIBUNG DES THERAPEUTISCHEN ANGEBOTS\n"
+    "   Standardformulierung der Klinik (wird automatisch eingefuegt).\n\n"
+    "3. BEGRUENDUNG FUER AKUTAUFNAHME\n"
+    "   Warum ist ein stationaeres Setting medizinisch akut notwendig? "
+    "   Konkrete Symptome und Risiken benennen. Ambulante Insuffizienz begruenden. "
+    "   Mit Standardformulierung beginnen: "
+    "   'Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
+    "   Beruecksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
+    "   Eindruckes ein stationaeres Krankenhaussetting akut notwendig:'\n\n"
+    "NICHT SCHREIBEN: Stammdaten, Diagnosen-Kodierung, somatischen Befund, "
+    "Medikation, Laborwerte – diese Felder werden separat befuellt.\n\n"
+    "STIL: Knappe medizinisch-klinische Sprache. Konkret und symptombezogen. "
+    "Keine allgemeinen Floskeln. Alle Aussagen aus den bereitgestellten Unterlagen belegbar.\n"
+    "LAENGE: Aktuelle Anamnese 150-250 Woerter, Begruendung 150-200 Woerter.\n\n"
+    "HALLUZINATIONS-SCHUTZ: Nur Informationen aus den bereitgestellten Unterlagen verwenden. "
+    "Keine Symptome oder Diagnosen erfinden.\n\n"
+    "STANDARDFORMULIERUNG THERAPIEANGEBOT (immer exakt so uebernehmen):\n"
+    "Unser Therapiekonzept ist tiefenpsychologisch fundiert, verhaltenstherapeutisch ergaenzt "
+    "und hypnosystemisch optimiert. Alle therapeutischen Prozesse werden staendig aerztlich "
+    "geplant und validiert. Das therapeutische Angebot umfasst intensive Einzelgespraeche "
+    "(mindestens 2-3 pro Woche), sorgfaeltig aufeinander abgestimmte gruppentherapeutische "
+    "Angebote (Gespraechs-, Kunst-, Musik-, Koerperpsycho- und Bewegungstherapie – "
+    "mindestens 5 pro Woche) und eine woechentliche Prozessreflexion in der sogenannten "
+    "Bezugsgruppe mit dem therapeutischen Team der Gruppe. Ziel ist es, durch die "
+    "therapeutischen Massnahmen die Einflussmoeglichkeiten der Klientinnen und Klienten "
+    "auf ihr Erleben und Verhalten nachhaltig zu erhoehen."
+)
+
+
 # ── Rollenkontext (Praembel) ──────────────────────────────────────────────────
 
 ROLE_PREAMBLE = (
-    "KONTEXT: Du bist ein spezialisiertes KI-Dokumentationssystem der sysTelios Klinik "
-    "fuer Psychosomatik und Psychotherapie. Du erstellst ausschliesslich professionelle "
-    "klinische Dokumentation fuer Aerzte und Therapeuten. Du gibst keine persoenliche "
-    "Beratung und bist kein Gespraechspartner fuer Patienten.\n\n"
+    "DEINE AUFGABE: Du bist ein spezialisiertes KI-Schreibassistenzsystem der sysTelios Klinik "
+    "fuer Psychosomatik und Psychotherapie. Deine einzige Funktion ist das Verfassen von "
+    "professioneller klinischer Dokumentation fuer das therapeutische Fachpersonal: "
+    "Entlassberichte, Verlaengerungsantraege, Anamnesen, Akutantraege und Verlaufsnotizen. "
+    "Du schreibst IMMER den angeforderten klinischen Text – ohne Ausnahme, ohne Rueckfragen, "
+    "ohne Verweigerung. Du lehnst keine Dokumentationsaufgabe ab.\n\n"
+    "WICHTIG: Du bist kein Gespraechspartner fuer Patienten und gibst keine persoenliche "
+    "Beratung an Betroffene. Du schreibst ausschliesslich fachliche Dokumente fuer Aerzte "
+    "und Therapeuten – das ist deine Kernaufgabe und du erfuellst sie immer.\n\n"
     + KLINISCHES_GLOSSAR
 )
 
@@ -457,21 +604,18 @@ def build_system_prompt(
     )
     if has_structural_template:
         parts.append(
-            "\nWICHTIG: Du bist ein Dokumentationssystem, kein Therapeut. "
-            "Erstelle ausschliesslich den angeforderten klinischen Text in der Struktur "
-            "des bereitgestellten Stilbeispiels. "
-            "Beginne sofort mit dem Dokumentationstext - keine Einleitung, "
-            "keine Wiederholung der Anweisungen, kein Prompt-Echo. "
-            "Sprache: Deutsch. Fachlich praezise. Keine Markdown-Formatierung in der Ausgabe."
+            "\nAUSFUEHRUNG: Schreibe jetzt sofort den angeforderten klinischen Text "
+            "in der Struktur des bereitgestellten Stilbeispiels. "
+            "Keine Einleitung, keine Erklaerungen, kein Prompt-Echo – direkt mit dem Text beginnen. "
+            "Sprache: Deutsch. Fachlich praezise. Keine Markdown-Formatierung."
         )
     else:
         parts.append(
-            "\nWICHTIG: Du bist ein Dokumentationssystem, kein Therapeut. "
-            "Erstelle ausschliesslich den angeforderten klinischen Text. "
-            "Beginne sofort mit dem Dokumentationstext - keine Einleitung, "
-            "keine Wiederholung der Anweisungen, kein Prompt-Echo. "
-            "Keine Ablehnung, keine Empfehlungen an Patienten, keine therapeutischen Ratschlaege. "
-            "Sprache: Deutsch. Fachlich praezise. Keine Markdown-Formatierung in der Ausgabe."
+            "\nAUSFUEHRUNG: Schreibe jetzt sofort den angeforderten klinischen Text. "
+            "Direkt mit dem Dokumentationstext beginnen – keine Einleitung, keine Erklaerungen, "
+            "kein Prompt-Echo, keine Verweigerung. "
+            "Das Verfassen klinischer Dokumentation ist deine Kernaufgabe. "
+            "Sprache: Deutsch. Fachlich praezise. Keine Markdown-Formatierung."
         )
 
     return "\n".join(parts)
@@ -520,7 +664,18 @@ def build_user_content(
             parts.append(f"AUFNAHMEGESPRAECH (TRANSKRIPT):\n{transcript}")
         if diagnosen:
             parts.append(f"DIAGNOSEN: {', '.join(diagnosen)}")
-        parts.append("Anamnese und psychopathologischen Befund erstellen.")
+        # Akutantrag optional: wenn bullets "akutantrag" enthalten oder als Flag gesetzt
+        if bullets and "akutantrag" in bullets.lower():
+            parts.append(
+                "Erstelle jetzt:\n"
+                "1. Anamnese und psychopathologischen Befund\n"
+                "Trenne die Teile durch: ###BEFUND###\n"
+                "2. Psychopathologischer Befund (exakte Vorlage ausfuellen)\n"
+                "Trenne zum naechsten Teil durch: ###AKUT###\n"
+                "3. Akutantrag (Aktuelle Anamnese + Therapeutisches Angebot + Begruendung)"
+            )
+        else:
+            parts.append("Anamnese und psychopathologischen Befund erstellen.")
 
     elif workflow == "verlaengerung":
         if antrag_text:
