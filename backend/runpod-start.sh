@@ -80,6 +80,9 @@ dpkg -l libpq-dev              >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED libp
 dpkg -l zstd                   >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED zstd"
 dpkg -l curl                   >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED curl"
 dpkg -l gpg                    >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED gpg"
+# lshw + pciutils: Ollama braucht diese fuer GPU-Erkennung beim Install
+dpkg -l lshw                   >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED lshw"
+dpkg -l pciutils               >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED pciutils"
 
 if [ -n "$PKGS_NEEDED" ]; then
     echo "${GO}Installiere: $PKGS_NEEDED"
@@ -272,21 +275,22 @@ if [ "$NEED_RESTART" = "true" ]; then
         fi
     done
 
-    # Ollama starten – CUDA_VISIBLE_DEVICES NICHT setzen (verhindert GPU-Erkennung)
+    # Ollama starten – kein CUDA_VISIBLE_DEVICES (verhindert GPU-Erkennung in 0.9+)
+    # kein OLLAMA_NEW_ENGINE (inkompatibel mit 0.9.x)
+    # OLLAMA_LIBRARY_PATH zeigt auf die vom Install-Script gesetzten CUDA-Libraries
     OLLAMA_MODELS="$OLLAMA_MODELS_DIR" \
     OLLAMA_LIBRARY_PATH=/usr/local/lib/ollama \
-    OLLAMA_NEW_ENGINE=1 \
     nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
     sleep 10
 
     # GPU-Erkennung pruefen
-    if grep -q "total_vram.*0 B" "$LOG_DIR/ollama.log" 2>/dev/null; then
-        echo "${WARN}GPU nicht erkannt (VRAM=0) – pruefe CUDA-Kompatibilitaet"
-        echo "${WARN}Empfehlung: RunPod-Template mit CUDA 12.x verwenden"
-        echo "${WARN}Aktuell laufend auf CPU – Generierung dauert laenger"
-    else
-        VRAM=$(grep "total_vram" "$LOG_DIR/ollama.log" 2>/dev/null | tail -1 | grep -oE '[0-9.]+ [GM]iB' | head -1)
-        echo "${OK}GPU erkannt: ${VRAM} VRAM verfuegbar"
+    if grep -q "library=cuda" "$LOG_DIR/ollama.log" 2>/dev/null; then
+        VRAM=$(grep "total=" "$LOG_DIR/ollama.log" 2>/dev/null | tail -1 | grep -oE 'total="[^"]+"' | head -1)
+        echo "${OK}GPU erkannt: ${VRAM}"
+    elif grep -q "total_vram.*0 B\|library=cpu" "$LOG_DIR/ollama.log" 2>/dev/null; then
+        echo "${WARN}GPU nicht erkannt – lshw/pciutils installiert? Ollama-Version >= 0.9.0?"
+        echo "${WARN}Tipp: apt-get install -y lshw pciutils && Ollama neu installieren"
+        echo "${WARN}Laufend auf CPU – Generierung dauert laenger"
     fi
 fi
 
@@ -332,18 +336,32 @@ done
 echo ""
 echo "${GO}Python-Umgebung pruefen..."
 
-if [ ! -f "$VENV_DIR/bin/activate" ]; then
-    echo "${GO}Virtual Environment anlegen..."
-    python3 -m venv "$VENV_DIR"
-    echo "${OK}venv angelegt"
+# Defektes venv erkennen: activate vorhanden aber pip fehlt oder ist kaputt
+VENV_BROKEN=false
+if [ -f "$VENV_DIR/bin/activate" ]; then
+    source "$VENV_DIR/bin/activate"
+    if ! python -m pip --version >/dev/null 2>&1; then
+        echo "${WARN}venv defekt (pip fehlt) – loesche und erstelle neu..."
+        deactivate 2>/dev/null || true
+        rm -rf "$VENV_DIR"
+        VENV_BROKEN=true
+    fi
 fi
 
-source "$VENV_DIR/bin/activate"
+if [ ! -f "$VENV_DIR/bin/activate" ] || [ "$VENV_BROKEN" = "true" ]; then
+    echo "${GO}Virtual Environment anlegen..."
+    python3 -m venv "$VENV_DIR"
+    source "$VENV_DIR/bin/activate"
+    python -m pip install --quiet --upgrade pip
+    echo "${OK}venv angelegt"
+else
+    source "$VENV_DIR/bin/activate"
+fi
 
 if ! python -c "import fastapi" 2>/dev/null; then
     echo "${GO}Python-Pakete installieren..."
-    pip install --quiet --upgrade pip
-    pip install --quiet -r "$BACKEND_DIR/requirements.txt"
+    python -m pip install --quiet --upgrade pip
+    python -m pip install --quiet -r "$BACKEND_DIR/requirements.txt"
     echo "${OK}Pakete installiert"
 else
     echo "${OK}Python-Pakete vorhanden"
@@ -356,7 +374,7 @@ if [ "$DIARIZATION_ENABLED" = "true" ]; then
     # Schnelle Prüfung via pip show – kein torch-Import, keine 20s Wartezeit
     if ! pip show pyannote.audio >/dev/null 2>&1; then
         echo "${GO}pyannote.audio installieren (Sprecher-Diarization)..."
-        pip install --quiet pyannote.audio
+        python -m pip install --quiet pyannote.audio
         echo "${OK}pyannote.audio installiert"
     else
         echo "${OK}pyannote.audio vorhanden"
