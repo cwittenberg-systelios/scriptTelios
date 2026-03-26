@@ -182,9 +182,7 @@ aus psychotherapeutischer Sicht dringend indiziert.\
 """
 
 FEW_SHOT_ENTLASSBERICHT = """\
-BEISPIEL (psychotherapeutischer Entlassbericht - ca. 600-900 Woerter, Wir-Perspektive):
-
-Psychotherapeutischer Behandlungsverlauf
+BEISPIEL (reiner Fliesstext, keine Ueberschriften, ca. 600-900 Woerter):
 
 Zu Beginn des stationaeren Aufenthaltes formulierte Herr/Frau X. als zentrales Anliegen, \
 wieder inneren Halt zu finden und sich aus einem ueber Jahre verfestigten Erleben von \
@@ -209,16 +207,11 @@ auf das kritisch verzerrte Selbstbild und unterstuetzten den Aufbau eines stabil
 Selbstwertgefuehls.
 
 Im Gesamtverlauf zeigte sich eine deutliche Entwicklung hin zu mehr innerer \
-Differenzierung, affektiver Stabilitaet und Selbstwirksamkeit.
-
-Epikrise und Beurteilung
-
-Herr/Frau X. stellte sich mit [Hauptdiagnose] vor dem Hintergrund [biographischer \
-Belastungskontext] vor. Im stationaeren Rahmen konnte eine deutliche Symptomreduktion \
-erreicht werden. Die praemorbide Persoenlichkeitsstruktur mit hoher Leistungsorientierung \
-und eingeschraenkter Selbstfuersorge bleibt langfristig therapeutisch relevant.
-
-Empfehlungen und Weiteres Procedere
+Differenzierung, affektiver Stabilitaet und Selbstwirksamkeit. Herr/Frau X. stellte \
+sich mit [Hauptdiagnose] vor dem Hintergrund [biographischer Belastungskontext] vor. \
+Im stationaeren Rahmen konnte eine deutliche Symptomreduktion erreicht werden. \
+Die praemorbide Persoenlichkeitsstruktur mit hoher Leistungsorientierung und \
+eingeschraenkter Selbstfuersorge bleibt langfristig therapeutisch relevant.
 
 Fuer den weiteren Verlauf ist eine kontinuierliche ambulante psychotherapeutische \
 Begleitung mit traumatherapeutischem Schwerpunkt dringend zu empfehlen. Insbesondere \
@@ -381,41 +374,29 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "entlassbericht": (
-        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik fuer "
-        "Psychosomatik und Psychotherapie. Schreibe den psychotherapeutischen Teil "
-        "des Entlassberichts – ausschliesslich folgende Sektionen:\n\n"
-        "1. PSYCHOTHERAPEUTISCHER BEHANDLUNGSVERLAUF\n"
-        "Beschreibe den gesamten Verlauf der Psychotherapie: Phasen, eingesetzte Methoden "
-        "(IFS, systemisch, hypnosystemisch, The Work), Arbeit mit inneren Anteilen, "
-        "Krisenmomente und Wendepunkte, Entwicklung der therapeutischen Beziehung. "
-        "Synthetisiere alle Verlaufsnotizen zu einem kohaerenten Fliesstext – "
-        "nicht als Aufzaehlung der Einzelsitzungen.\n\n"
-        "2. EPIKRISE UND BEURTEILUNG\n"
-        "Systemische Zusammenschau: Wie hat sich die Symptomatik entwickelt? "
-        "Welche Schutzanteile konnten entlastet werden, wo besteht weiter Bedarf? "
-        "Self-Energy-Entwicklung. Ressourcen und Risikofaktoren fuer die Zeit nach "
-        "der Entlassung. Prognose.\n\n"
-        "3. EMPFEHLUNGEN UND WEITERES PROCEDERE\n"
-        "Konkrete Empfehlungen fuer die Weiterbehandlung: ambulante Psychotherapie "
-        "(Frequenz, Schwerpunkt), Nachsorge, Selbsthilfe, Krisenplan.\n\n"
-        "NICHT SCHREIBEN: Stammdaten, Aufnahme-/Entlassdaten, somatischer Befund, "
-        "Medikation, Diagnosen-Kodierung – diese Felder werden separat befuellt.\n\n"
-        "STIL:\n"
-        "Professionell, kollegial, fuer den Zuweiser verstaendlich. "
-        "Schreibe aus der Wir-Perspektive des Therapeutenteams: "
-        "'Im Verlauf erlebten wir Herrn/Frau X. als...', 'Es gelang zunehmend...', "
-        "'Wir beobachteten...'. "
-        "Systemische Fachsprache wo inhaltlich passend. Fliesstext pro Sektion. "
-        "Alle Aussagen aus der Verlaufsdokumentation belegbar.\n"
-        "LAENGE: Behandlungsverlauf mindestens 500 Woerter, "
-        "Epikrise mindestens 150 Woerter, Empfehlungen mindestens 100 Woerter. "
-        "Konkret und patientenspezifisch – keine Allgemeinplaetze.\n\n"
-        "WICHTIG – STILBEISPIEL:\n"
-        "Falls ein Stilbeispiel bereitgestellt wird: Uebernimm AUSSCHLIESSLICH den "
-        "Schreibstil (Satzbau, Tonalitaet, Fachbegriffsdichte). "
-        "NIEMALS Diagnosen, Patientennamen, Daten, ICD-Codes oder konkrete Inhalte "
-        "aus dem Stilbeispiel uebernehmen. "
-        "Das Stilbeispiel handelt von einem anderen Patienten.\n\n"
+        "Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts "
+        "als zusammenhaengenden Fliesstext ohne Ueberschriften, ohne Aufzaehlungen, "
+        "ohne Einleitung und ohne Abschluss.\n\n"
+        "INHALT – drei Abschnitte nahtlos ineinander:\n"
+        "Abschnitt 1 (Behandlungsverlauf): Eingesetzte Methoden (IFS/Anteilearbeit, "
+        "hypnosystemisch, Stuhlarbeit, Biographiearbeit), konkrete Wendepunkte, "
+        "Entwicklung der Klientin/des Klienten. Wir-Perspektive: "
+        "'Wir erlebten...', 'Es gelang zunehmend...', 'Im Verlauf zeigte sich...'\n"
+        "Abschnitt 2 (Epikrise): Symptomatik-Entwicklung, entlastete Schutzanteile, "
+        "verbliebener Bedarf, Ressourcen, Prognose.\n"
+        "Abschnitt 3 (Empfehlungen): Ambulante Weiterbehandlung, Schwerpunkte, Nachsorge.\n\n"
+        "NICHT SCHREIBEN:\n"
+        "– Keine Ueberschriften (kein 'Psychotherapeutischer Behandlungsverlauf', "
+        "kein 'Epikrise', keine nummerierten Abschnitte)\n"
+        "– Keine Einleitungspräambel ('Im Folgenden...', 'Die Behandlung erstreckte sich...')\n"
+        "– Keine Beschreibung des Therapieangebots der Klinik "
+        "(kein Block ueber Einzelgespraeche, Gruppentherapie, Bezugsgruppe etc.)\n"
+        "– Keine 'Einladungen' (nur in Verlaufsnotizen)\n"
+        "– Keine Unterschrift, kein Briefkopf, kein Grussatz\n"
+        "– Keine Stammdaten, Diagnosen-Kodierung, Medikation\n\n"
+        "STIL: Fliesstext, Wir-Perspektive, systemische Fachsprache, "
+        "konkret und patientenspezifisch – keine Allgemeinplaetze.\n"
+        "LAENGE: mind. 600 Woerter gesamt.\n\n"
         + FEW_SHOT_ENTLASSBERICHT
     ),
 }
@@ -557,6 +538,13 @@ def build_user_content(
             )
 
     elif workflow == "anamnese":
+        # Namensregel ZUERST
+        parts.append(
+            "DATENSCHUTZ – NAMENSFORMAT (gilt fuer den gesamten Text):\n"
+            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
+            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "Selbst wenn der volle Name in den Unterlagen steht: nur Initiale verwenden."
+        )
         if selbstauskunft_text:
             parts.append(f"SELBSTAUSKUNFT DES KLIENTEN:\n{selbstauskunft_text}")
         if vorbefunde_text:
@@ -579,6 +567,14 @@ def build_user_content(
             parts.append("Anamnese und psychopathologischen Befund erstellen.")
 
     elif workflow == "verlaengerung":
+        # Namensregel ZUERST – bevor das Modell Quellen liest
+        parts.append(
+            "DATENSCHUTZ – NAMENSFORMAT (gilt fuer den gesamten Text):\n"
+            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
+            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "Auch 'die Klientin' / 'der Klient' als Alternative. "
+            "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
+        )
         if antrag_text:
             parts.append(
                 f"ANTRAGSVORLAGE / VORHERIGER ANTRAG"
@@ -592,12 +588,6 @@ def build_user_content(
         if bullets:
             parts.append(f"THERAPEUTISCHE STICHPUNKTE / BESONDERE EREIGNISSE:\n{bullets}")
         parts.append(
-            "NAME UND ANREDE: Entnimm den Nachnamen und das Geschlecht aus der Antragsvorlage. "
-            "Verwende durchgehend nur den ERSTEN BUCHSTABEN des Nachnamens mit Punkt: "
-            "'Frau M.' / 'Herr R.' sowie 'die Klientin' / 'der Klient'. "
-            "Beispiele: 'Im Verlauf erlebten wir Frau M. als...', 'Herr R. zeigte...', "
-            "'die Klientin berichtete...'. "
-            "Wenn kein Name erkennbar: nur 'die Klientin' / 'der Klient' verwenden.\n\n"
             "Verfasse jetzt den Abschnitt – er heißt je nach Krankenkasse entweder "
             "'Bisheriger Verlauf und Begründung der Verlängerung' oder "
             "'Verlauf und Begründung der weiteren Verlängerung'. "
@@ -610,6 +600,14 @@ def build_user_content(
         )
 
     elif workflow == "entlassbericht":
+        # Namensregel ZUERST – bevor das Modell Quellen liest
+        parts.append(
+            "DATENSCHUTZ – NAMENSFORMAT (gilt fuer den gesamten Text):\n"
+            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
+            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "Auch 'die Klientin' / 'der Klient' als Alternative. "
+            "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
+        )
         if antrag_text:
             parts.append(
                 f"VORHANDENER VERLÄNGERUNGSANTRAG / VORBERICHT"
@@ -623,17 +621,11 @@ def build_user_content(
         if bullets:
             parts.append(f"THERAPEUTISCHE SCHWERPUNKTE / BESONDERE THEMEN:\n{bullets}")
         parts.append(
-            "NAME UND ANREDE: Entnimm den Nachnamen und das Geschlecht aus dem Vorbericht/Antrag. "
-            "Verwende durchgehend nur den ERSTEN BUCHSTABEN des Nachnamens mit Punkt: "
-            "'Frau M.' / 'Herr R.' sowie 'die Klientin' / 'der Klient'. "
-            "Beispiele: 'Im Verlauf erlebten wir Herrn R. als...', 'Frau M. zeigte...', "
-            "'die Klientin berichtete...'. "
-            "Wenn kein Name erkennbar: nur 'die Klientin' / 'der Klient' verwenden.\n\n"
-            "Verfasse jetzt die drei psychotherapeutischen Abschnitte als eigenständigen Text:\n"
-            "1. Psychotherapeutischer Behandlungsverlauf (mind. 500 Wörter)\n"
-            "2. Epikrise und Beurteilung (mind. 150 Wörter)\n"
-            "3. Empfehlungen und Weiteres Procedere (mind. 100 Wörter)\n"
-            "Ausschließlich auf Basis der obigen Quellen – "
+            "Verfasse jetzt den psychotherapeutischen Verlaufsteil als zusammenhaengenden "
+            "Fliesstext ohne Ueberschriften. "
+            "Behandlungsverlauf (mind. 500 Woerter), Epikrise (mind. 150 Woerter) und "
+            "Empfehlungen (mind. 100 Woerter) fliessen nahtlos ineinander. "
+            "Ausschliesslich auf Basis der obigen Quellen – "
             "keine Informationen erfinden die nicht in den Quellen stehen."
         )
 
