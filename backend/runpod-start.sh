@@ -585,11 +585,11 @@ done
 # 8b. Ollama-Modell in VRAM vorwaermen (verhindert 25-30s Kaltstart beim ersten Request)
 echo "${GO}Ollama-Modell vorwaermen (kann bei grossen Modellen 30-60s dauern)..."
 OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b-q4_K_M")
-WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
+WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/chat \
     -H "Content-Type: application/json" \
-    -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": \"\", \"keep_alive\": -1}" \
-    --max-time 120 2>/dev/null)
-if echo "$WARMUP_RESPONSE" | grep -q "done"; then
+    -d "{\"model\": \"${OLLAMA_MODEL}\", \"messages\": [{\"role\": \"user\", \"content\": \"\"}], \"keep_alive\": -1, \"stream\": false}" \
+    --max-time 120 2>/dev/null) || true
+if echo "$WARMUP_RESPONSE" | grep -q "message\|done"; then
     echo "${OK}${OLLAMA_MODEL} im VRAM geladen – erster Request sofort bereit"
 else
     echo "${WARN}Warmup-Ping fehlgeschlagen (ignoriert) – erster Request laedt Modell"
