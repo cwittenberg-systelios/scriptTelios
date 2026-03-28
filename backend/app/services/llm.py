@@ -15,6 +15,23 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Persistenter HTTP-Client fuer Ollama-Anfragen.
+# Vermeidet TCP-Handshake-Overhead bei jedem Request (Connection Pooling).
+# Timeout 600s fuer langsame Generierungen (grosse Modelle, lange Texte).
+_ollama_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_ollama_client() -> httpx.AsyncClient:
+    """Gibt den persistenten Ollama-HTTP-Client zurueck, erstellt ihn bei Bedarf."""
+    global _ollama_client
+    if _ollama_client is None or _ollama_client.is_closed:
+        _ollama_client = httpx.AsyncClient(
+            base_url=settings.OLLAMA_HOST,
+            timeout=httpx.Timeout(600.0, connect=10.0),
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
+        )
+    return _ollama_client
+
 # Maximale Zeichen im User-Content – nur noch als harte Notbremse
 # fuer extrem lange Audio-Transkripte (>500k Zeichen).
 # Fuer Verlaufsdokus greift stattdessen clean_verlauf_text() als Preprocessing.
@@ -382,13 +399,12 @@ async def _ollama_unload(model: Optional[str] = None) -> None:
     """Entlädt das angegebene Ollama-Modell aus dem VRAM (keep_alive=0)."""
     target = model or settings.OLLAMA_MODEL
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            # /api/chat mit keep_alive=0 entlädt das Modell (kompatibel mit Ollama ≥ 0.9)
-            await client.post(
-                f"{settings.OLLAMA_HOST}/api/chat",
-                json={"model": target, "keep_alive": 0,
-                      "messages": [{"role": "user", "content": ""}]},
-            )
+        client = _get_ollama_client()
+        await client.post(
+            "/api/chat",
+            json={"model": target, "keep_alive": 0,
+                  "messages": [{"role": "user", "content": ""}]},
+        )
         logger.info("Ollama-Modell '%s' aus VRAM entladen (OOM-Recovery)", target)
     except Exception as e:
         logger.debug("Ollama-Entladen nicht moeglich: %s", e)
@@ -437,22 +453,19 @@ async def _generate_ollama(
                 {"role": "assistant", "content": assistant_primer},
             ],
         }
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            try:
-                r = await client.post(
-                    f"{settings.OLLAMA_HOST}/api/chat",
-                    json=payload,
-                )
-                r.raise_for_status()
-                return r
-            except httpx.ConnectError:
-                raise RuntimeError(
-                    f"Ollama nicht erreichbar unter {settings.OLLAMA_HOST}. "
-                    "Bitte sicherstellen, dass Ollama laeuft."
-                )
-            except httpx.HTTPStatusError as e:
-                body = e.response.text
-                raise _classify_ollama_error(e.response.status_code, body)
+        client = _get_ollama_client()
+        try:
+            r = await client.post("/api/chat", json=payload)
+            r.raise_for_status()
+            return r
+        except httpx.ConnectError:
+            raise RuntimeError(
+                f"Ollama nicht erreichbar unter {settings.OLLAMA_HOST}. "
+                "Bitte sicherstellen, dass Ollama laeuft."
+            )
+        except httpx.HTTPStatusError as e:
+            body = e.response.text
+            raise _classify_ollama_error(e.response.status_code, body)
 
     # Versuch 1: Normal mit dynamisch berechnetem Kontext
     try:

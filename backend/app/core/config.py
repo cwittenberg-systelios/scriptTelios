@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     OLLAMA_HOST:  str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen3:32b"
 
+    # Vision-Modell fuer OCR-Fallback (Stufe 3: wenn pdfplumber + Tesseract scheitern)
+    # Modell einmalig laden: ollama pull llava
+    VISION_MODEL: str = "llava"
+
     @property
     def LLM_MODEL(self) -> str:
         return f"ollama/{self.OLLAMA_MODEL}"

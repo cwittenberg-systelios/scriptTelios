@@ -64,6 +64,11 @@ async def fill_document(
             logger.warning("Stilprofil-Extraktion fehlgeschlagen: %s", e)
 
     # ── LLM-Generierung ──────────────────────────────────────────
+    # Verlaufsdoku bereinigen (Seitenheader, Teilnahmeeintraege entfernen)
+    from app.services.llm import clean_verlauf_text
+    if workflow in ("verlaengerung", "entlassbericht"):
+        verlauf_text = clean_verlauf_text(verlauf_text)
+
     system = build_system_prompt(
         workflow=workflow,
         custom_prompt=prompt,
@@ -71,7 +76,7 @@ async def fill_document(
     )
     user = build_user_content(
         workflow=workflow,
-        verlauf_text=verlauf_text[:8000],   # Token-Limit beachten
+        verlauf_text=verlauf_text,  # dynamische Kuerzung erfolgt in generate_text()
     )
 
     try:

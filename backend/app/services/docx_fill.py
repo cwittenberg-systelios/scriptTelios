@@ -111,11 +111,9 @@ def _fill_by_placeholder(doc, generated_text: str, placeholders: list[str]) -> N
 
 def _append_generated(doc, generated_text: str) -> None:
     """Fuegt generierten Text als neuen Abschnitt am Ende ein."""
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Pt
 
     doc.add_page_break()
-    header = doc.add_heading("Generierter Inhalt (KI-Entwurf)", level=1)
 
     for line in generated_text.split("\n"):
         line = line.strip()

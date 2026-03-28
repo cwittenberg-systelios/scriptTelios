@@ -1,6 +1,7 @@
 """
 sysTelios KI-Dokumentation – FastAPI Backend
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,11 +20,45 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+async def _cleanup_old_uploads():
+    """
+    Loescht Upload-Dateien aelter als 24 Stunden.
+    Laeuft als Hintergrund-Task alle 60 Minuten.
+    Audio-Dateien werden separat per DELETE_AUDIO_AFTER_TRANSCRIPTION behandelt,
+    aber PDFs/DOCXs bleiben sonst fuer immer liegen.
+    """
+    import time
+    MAX_AGE_HOURS = 24
+
+    while True:
+        try:
+            upload_path = Path(settings.UPLOAD_DIR)
+            if upload_path.exists():
+                cutoff = time.time() - (MAX_AGE_HOURS * 3600)
+                count = 0
+                for f in upload_path.iterdir():
+                    if f.is_file() and f.stat().st_mtime < cutoff:
+                        f.unlink(missing_ok=True)
+                        count += 1
+                if count > 0:
+                    logger.info("Upload-Bereinigung: %d Dateien aelter als %dh geloescht", count, MAX_AGE_HOURS)
+        except Exception as e:
+            logger.debug("Upload-Bereinigung fehlgeschlagen: %s", e)
+        await asyncio.sleep(3600)  # alle 60 Minuten
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("sysTelios Backend startet (Modell: %s)", settings.LLM_MODEL)
     await init_db()
+    # Upload-Bereinigung im Hintergrund starten
+    cleanup_task = asyncio.create_task(_cleanup_old_uploads())
     yield
+    cleanup_task.cancel()
+    # Persistenten Ollama-Client schliessen
+    from app.services.llm import _ollama_client
+    if _ollama_client and not _ollama_client.is_closed:
+        await _ollama_client.aclose()
     logger.info("sysTelios Backend beendet")
 
 

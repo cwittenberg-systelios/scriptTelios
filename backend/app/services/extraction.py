@@ -43,7 +43,6 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-VISION_MODEL = "llava"
 MIN_CHARS = 80
 MIN_READABILITY = 0.72
 MIN_CONFIDENCE = 45.0
@@ -256,7 +255,7 @@ async def _check_vision_model_available() -> bool:
             r = await client.get(f"{settings.OLLAMA_HOST}/api/tags")
             if r.status_code == 200:
                 models = [m["name"] for m in r.json().get("models", [])]
-                return any(VISION_MODEL in m for m in models)
+                return any(settings.VISION_MODEL in m for m in models)
     except Exception:
         pass
     return False
@@ -272,7 +271,7 @@ async def _ollama_vision_page(b64_image: str, page_num: int, total_pages: int) -
         "Nur der extrahierte Text, keine Kommentare."
     )
     payload = {
-        "model": VISION_MODEL,
+        "model": settings.VISION_MODEL,
         "prompt": prompt,
         "images": [b64_image],
         "stream": False,
@@ -348,7 +347,7 @@ async def _extract_pdf(file_path: Path) -> ExtractionResult:
     # Stufe 3: Ollama Vision
     logger.debug("[OCR] PDF Stufe 3: Ollama Vision - %s", file_path.name)
     if not await _check_vision_model_available():
-        warnings.append(f"Ollama Vision nicht verfuegbar (ollama pull {VISION_MODEL})")
+        warnings.append(f"Ollama Vision nicht verfuegbar (ollama pull {settings.VISION_MODEL})")
         raise RuntimeError(
             f"PDF '{file_path.name}': Alle Extraktionsstufen fehlgeschlagen. "
             f"Details: {chr(59).join(warnings)}"
@@ -445,7 +444,7 @@ async def _extract_image(file_path: Path) -> ExtractionResult:
     if not await _check_vision_model_available():
         raise RuntimeError(
             f"Bild-OCR fehlgeschlagen und Ollama Vision nicht verfuegbar. "
-            f"Bitte: ollama pull {VISION_MODEL}"
+            f"Bitte: ollama pull {settings.VISION_MODEL}"
         )
     try:
         text = await _ollama_vision_extract_image(img)

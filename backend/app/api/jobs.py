@@ -160,14 +160,15 @@ async def create_generate_job(
     )
 
     async def _run():
+        import uuid as _uuid
+        from pathlib import Path as _Path
+        from app.core.files import upload_dir
+
         # 1. Audio transkribieren
         audio_transcript = transcript or ""
         if audio_bytes and audio_name:
-            from app.core.files import upload_dir
-            import uuid
-            from pathlib import Path
-            suffix = Path(audio_name).suffix.lower()
-            audio_path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
+            suffix = _Path(audio_name).suffix.lower()
+            audio_path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
             audio_path.write_bytes(audio_bytes)
             tr = await _transcription.transcribe_audio(audio_path)
             audio_transcript = tr["transcript"]
@@ -175,11 +176,8 @@ async def create_generate_job(
         # 2. Dokumente extrahieren
         selbstauskunft_text = ""
         if selbst_bytes and selbst_name:
-            from app.core.files import upload_dir
-            import uuid
-            from pathlib import Path
-            suffix = Path(selbst_name).suffix.lower()
-            path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
+            suffix = _Path(selbst_name).suffix.lower()
+            path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
             path.write_bytes(selbst_bytes)
             try:
                 selbstauskunft_text = await extract_text(path)
@@ -188,11 +186,8 @@ async def create_generate_job(
 
         vorbefunde_text = ""
         if vorbef_bytes and vorbef_name:
-            from app.core.files import upload_dir
-            import uuid
-            from pathlib import Path
-            suffix = Path(vorbef_name).suffix.lower()
-            path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
+            suffix = _Path(vorbef_name).suffix.lower()
+            path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
             path.write_bytes(vorbef_bytes)
             try:
                 vorbefunde_text = await extract_text(path)
@@ -216,11 +211,8 @@ async def create_generate_job(
             style_info = {"source": "text_input", "chars": len(style_context), "words": len(style_context.split())}
             logger.info("Stilvorlage via Text-Input (%d Zeichen nach Bereinigung)", len(style_context))
         elif style_bytes and style_name:
-            from app.core.files import upload_dir
-            import uuid
-            from pathlib import Path
-            suffix = Path(style_name).suffix.lower()
-            path = upload_dir() / f"{uuid.uuid4().hex}{suffix}"
+            suffix = _Path(style_name).suffix.lower()
+            path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
             path.write_bytes(style_bytes)
             try:
                 style_context = await extract_style_context(path, generate_text)

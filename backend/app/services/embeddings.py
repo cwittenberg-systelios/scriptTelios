@@ -32,37 +32,36 @@ async def get_embedding(text: str) -> list[float] | None:
     Erzeugt einen Vektor fuer den gegebenen Text via Ollama.
     Gibt None zurueck wenn Ollama nicht erreichbar oder Modell fehlt.
     """
-    payload = {"model": EMBEDDING_MODEL, "input": text}
+    from app.services.llm import _get_ollama_client
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            r = await client.post(
-                f"{settings.OLLAMA_HOST}/api/embed",
-                json=payload,
-            )
-            r.raise_for_status()
-            data = r.json()
-            # /api/embed gibt {"embeddings": [[...]]} zurück (Array of arrays)
-            embeddings = data.get("embeddings")
-            embedding = embeddings[0] if embeddings else data.get("embedding")
-            if not embedding or len(embedding) != EMBEDDING_DIM:
-                logger.warning(
-                    "Unerwartete Embedding-Dimension: %d (erwartet %d)",
-                    len(embedding) if embedding else 0,
-                    EMBEDDING_DIM,
-                )
-                return None
-            return embedding
-        except httpx.ConnectError:
+    payload = {"model": EMBEDDING_MODEL, "input": text}
+    client = _get_ollama_client()
+
+    try:
+        r = await client.post("/api/embed", json=payload)
+        r.raise_for_status()
+        data = r.json()
+        # /api/embed gibt {"embeddings": [[...]]} zurück (Array of arrays)
+        embeddings = data.get("embeddings")
+        embedding = embeddings[0] if embeddings else data.get("embedding")
+        if not embedding or len(embedding) != EMBEDDING_DIM:
             logger.warning(
-                "Ollama nicht erreichbar fuer Embeddings (%s). "
-                "Statische Beispiele werden verwendet.",
-                settings.OLLAMA_HOST,
+                "Unerwartete Embedding-Dimension: %d (erwartet %d)",
+                len(embedding) if embedding else 0,
+                EMBEDDING_DIM,
             )
             return None
-        except Exception as e:
-            logger.warning("Embedding-Fehler: %s", e)
-            return None
+        return embedding
+    except httpx.ConnectError:
+        logger.warning(
+            "Ollama nicht erreichbar fuer Embeddings (%s). "
+            "Statische Beispiele werden verwendet.",
+            settings.OLLAMA_HOST,
+        )
+        return None
+    except Exception as e:
+        logger.warning("Embedding-Fehler: %s", e)
+        return None
 
 
 async def retrieve_style_examples(
