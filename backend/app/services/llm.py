@@ -223,9 +223,9 @@ async def generate_text(
     #     → 5GB / ~0.75GB pro 1024 Tokens ≈ 6144 Token sicher
     #   Mit OLLAMA_KV_CACHE_TYPE=q8_0: KV-Cache halbiert → doppelte Kontextlaenge
     #
-    # Konservativ: 10240 als Default (passt auf beide GPUs mit q8_0 KV-Cache).
-    # Fuer RTX Pro 4500 ohne KV-Quant: kann auf 16384 erhoeht werden via .env.
-    MAX_SAFE_CTX = 10240
+    # Konservativ: 16384 – passt auf RTX Pro 4500 (32GB) mit FP16 KV-Cache.
+    # Fuer RTX 4090 (24GB): auf 8192 reduzieren oder OLLAMA_KV_CACHE_TYPE=q8_0 setzen.
+    MAX_SAFE_CTX = 16384
     estimated_input_tokens = int((len(system_prompt) + len(user_content)) / 3.5)
     if estimated_input_tokens + max_tokens > MAX_SAFE_CTX:
         available_tokens = MAX_SAFE_CTX - max_tokens - int(len(system_prompt) / 3.5) - 200
@@ -308,9 +308,9 @@ def _estimate_num_ctx(system_prompt: str, user_content: str, max_tokens: int) ->
     needed = int(estimated_tokens * 1.2) + max_tokens
     # Auf nächstes Vielfaches von 512 aufrunden, Minimum 2048
     rounded = max(2048, ((needed + 511) // 512) * 512)
-    # Hartes Maximum: 12288 Tokens – sicher auf RTX 4090 (q4_K_S + q8_0 KV-Cache)
-    # und RTX Pro 4500 (q4_K_M + FP16 KV-Cache).
-    return min(rounded, 12288)
+    # Hartes Maximum: 16384 Tokens – sicher auf RTX Pro 4500 (q4_K_M + FP16 KV-Cache).
+    # Fuer RTX 4090: auf 8192 reduzieren oder OLLAMA_KV_CACHE_TYPE=q8_0 verwenden.
+    return min(rounded, 16384)
 
 
 def _sample_uniformly(text: str, max_chars: int, n_windows: int = 10) -> str:
