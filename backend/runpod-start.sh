@@ -431,40 +431,27 @@ if [ "$NEED_RESTART" = "true" ]; then
 
     # Ollama starten – kein CUDA_VISIBLE_DEVICES (verhindert GPU-Erkennung in 0.9+)
     export OLLAMA_MODELS="$OLLAMA_MODELS_DIR"
+    export OLLAMA_DEBUG=1
     if [ -n "$OLLAMA_LLM_LIB" ]; then
         export OLLAMA_LLM_LIBRARY="$OLLAMA_LLM_LIB"
     fi
     nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
     sleep 10
 
-    # GPU-Erkennung pruefen (per API, nicht Log-Grep – zuverlaessiger)
-    # Ollama 0.18+ zeigt GPU-Info erst beim ersten Modell-Load im Log,
-    # nicht beim Start. Daher: kurzen API-Call machen und VRAM pruefen.
-    GPU_CHECK=$(curl -s -X POST http://localhost:11434/api/chat \
-        -H "Content-Type: application/json" \
-        -d '{"model":"qwen3:4b","messages":[{"role":"user","content":"hi"}],"stream":false,"options":{"num_predict":1}}' \
-        --max-time 60 2>/dev/null) || true
-    sleep 2
-    GPU_PS=$(curl -s http://localhost:11434/api/ps 2>/dev/null)
-    if echo "$GPU_PS" | grep -qi "GPU\|cuda"; then
-        VRAM_USED=$(echo "$GPU_PS" | grep -oE '"size_vram":[0-9]+' | head -1 | cut -d: -f2)
-        if [ -n "$VRAM_USED" ] && [ "$VRAM_USED" -gt 0 ] 2>/dev/null; then
-            VRAM_GB=$(echo "scale=1; $VRAM_USED / 1073741824" | bc 2>/dev/null || echo "?")
-            echo "${OK}GPU aktiv (${VRAM_GB} GB VRAM belegt)"
-        else
-            echo "${OK}GPU erkannt"
-        fi
-    elif echo "$GPU_PS" | grep -qi "cpu"; then
-        echo "${WARN}Ollama laeuft auf CPU – GPU nicht erkannt"
-        echo "${WARN}Pruefe: ollama ps | nvidia-smi | OLLAMA_LLM_LIBRARY"
+    # GPU-Erkennung pruefen.
+    # Ollama 0.18+ loggt GPU-Info beim Start wenn OLLAMA_DEBUG gesetzt ist.
+    # Wir pruefen den Log direkt statt ein Modell zu laden (das blockiert).
+    if grep -q "library=CUDA" "$LOG_DIR/ollama.log" 2>/dev/null; then
+        VRAM=$(grep "total=" "$LOG_DIR/ollama.log" 2>/dev/null | grep -oE 'total="[^"]+"' | tail -1)
+        GPU_NAME=$(grep "description=" "$LOG_DIR/ollama.log" 2>/dev/null | grep -oE 'description="[^"]+"' | tail -1)
+        echo "${OK}GPU aktiv: ${GPU_NAME} (${VRAM})"
+    elif grep -q "initial_count=0\|total_vram.*0 B" "$LOG_DIR/ollama.log" 2>/dev/null; then
+        echo "${WARN}GPU nicht erkannt – Ollama laeuft auf CPU"
+        echo "${WARN}Pruefe: Libraries in /workspace/lib/ollama/cuda_v13/ vorhanden?"
     else
-        echo "${WARN}GPU-Status nicht pruefbar (Ollama antwortet nicht auf /api/ps)"
+        # Kein Debug-Log → kann GPU-Status nicht pruefen, wird beim Warmup klar
+        echo "${OK}Ollama gestartet (GPU-Status wird beim Warmup geprueft)"
     fi
-    # Test-Modell wieder entladen
-    curl -s -X POST http://localhost:11434/api/chat \
-        -H "Content-Type: application/json" \
-        -d '{"model":"qwen3:4b","keep_alive":0,"messages":[{"role":"user","content":""}]}' \
-        --max-time 10 >/dev/null 2>&1 || true
 fi
 
 MAX=12
@@ -495,7 +482,7 @@ fi
 #   Alternative (beide):  qwen3:14b-q5_K_M        (~10GB)
 #   Reasoning:            deepseek-r1:32b          (~19GB)
 LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b")
-for model in "$LLM_MODEL" "qwen3:4b" "nomic-embed-text"; do
+for model in "$LLM_MODEL" "nomic-embed-text"; do
     if OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama list 2>/dev/null | grep -q "$model"; then
         echo "${OK}$model vorhanden"
     else
@@ -724,16 +711,18 @@ for i in $(seq 1 $MAX); do
 done
 
 # 8b. Ollama-Modell in VRAM vorwaermen (verhindert 25-30s Kaltstart beim ersten Request)
-echo "${GO}Ollama-Modell vorwaermen (kann bei grossen Modellen 30-60s dauern)..."
+# Strategie: /api/generate mit num_predict=1 und /no_think → laedt Modell in VRAM,
+# generiert nur 1 Token, blockiert nicht. keep_alive=-1 haelt Modell permanent geladen.
+echo "${GO}Ollama-Modell vorwaermen..."
 OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b")
-WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/chat \
+WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
     -H "Content-Type: application/json" \
-    -d "{\"model\": \"${OLLAMA_MODEL}\", \"messages\": [{\"role\": \"user\", \"content\": \"\"}], \"keep_alive\": -1, \"stream\": false}" \
+    -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": \"/no_think\", \"keep_alive\": -1, \"stream\": false, \"options\": {\"num_predict\": 1}}" \
     --max-time 120 2>/dev/null) || true
-if echo "$WARMUP_RESPONSE" | grep -q "message\|done"; then
-    echo "${OK}${OLLAMA_MODEL} im VRAM geladen – erster Request sofort bereit"
+if echo "$WARMUP_RESPONSE" | grep -q "response\|done"; then
+    echo "${OK}${OLLAMA_MODEL} im VRAM geladen"
 else
-    echo "${WARN}Warmup-Ping fehlgeschlagen (ignoriert) – erster Request laedt Modell"
+    echo "${WARN}Warmup fehlgeschlagen (ignoriert) – erster Request laedt Modell"
 fi
 
 # 9. Cloudflare Tunnel starten
