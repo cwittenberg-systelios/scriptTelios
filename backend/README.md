@@ -47,7 +47,9 @@ backend/
 │   ├── test_api.py              # API-Integrationstests
 │   ├── test_extraction.py       # Extraktions-Unit-Tests
 │   ├── test_services.py         # Service-Unit-Tests
+│   ├── test_eval.py             # Evaluations-Framework (Qualitätsmessung)
 │   └── fixtures/                # Testdaten (Audio, PDF, DOCX, TXT)
+│       └── eval/                # Evaluations-Fixtures und Dokumentation
 ├── .env.example
 ├── docker-compose.yml
 ├── Dockerfile
@@ -133,6 +135,27 @@ pytest --cov=app --cov-report=term-missing --cov-fail-under=70
 # Kurze Tracebacks
 pytest -v --tb=short
 ```
+
+### Qualitätsevaluation (LLM-Output)
+
+Automatisierte Prüfung der Generierungsqualität gegen definierte Erwartungen.
+Testet Wortanzahl, Keywords, Datenschutz, Halluzinationen und Struktur
+über alle vier Workflows mit echten Patientendaten.
+
+```bash
+# Alle Workflows evaluieren (braucht laufendes Backend + Ollama)
+pytest tests/test_eval.py -v --tb=short
+
+# Nur einen Workflow
+pytest tests/test_eval.py -v -k "entlassbericht"
+
+# Ergebnisse speichern für manuelles Review
+pytest tests/test_eval.py -v --eval-output /workspace/eval_results/
+```
+
+Testdaten (PDFs, Audio) werden aus `/workspace/eval_data/` geladen –
+**nicht im Git** (Datenschutz). Setup und Details:
+→ **[tests/fixtures/eval/README.md](tests/fixtures/eval/README.md)**
 
 ### Frontend (Jest)
 

@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_URL = os.environ.get("EVAL_BACKEND_URL", "http://localhost:8000")
 FIXTURES_PATH = Path(__file__).parent / "fixtures" / "eval" / "fixtures.json"
+EVAL_DATA_DIR = Path(os.environ.get("EVAL_DATA_DIR", "/workspace/eval_data"))
 TIMEOUT = 300  # 5 Minuten pro Generierung (lang wegen GPU-Kaltstart)
 
 
@@ -70,8 +71,19 @@ def _all_test_cases():
 
 # ── API-Helfer ───────────────────────────────────────────────────────────────
 
-async def _generate(workflow: str, prompt: str, diagnosen: list[str] | None = None) -> dict:
-    """Sendet einen Generierungs-Job und wartet auf das Ergebnis."""
+async def _generate(
+    workflow: str,
+    prompt: str,
+    diagnosen: list[str] | None = None,
+    input_files: dict | None = None,
+) -> dict:
+    """
+    Sendet einen Generierungs-Job und wartet auf das Ergebnis.
+
+    input_files: optionales Dict mit Datei-Feldern, z.B.
+      {"vorbefunde": "/workspace/eval_data/EB-FrauM/verlauf.pdf",
+       "selbstauskunft": "/workspace/eval_data/Anamnese-FrauT/selbstauskunft.pdf"}
+    """
     form_data = {
         "workflow": workflow,
         "prompt": prompt,
@@ -79,29 +91,52 @@ async def _generate(workflow: str, prompt: str, diagnosen: list[str] | None = No
     if diagnosen:
         form_data["diagnosen"] = ",".join(diagnosen)
 
-    async with httpx.AsyncClient(base_url=BACKEND_URL, timeout=30.0) as client:
-        # Job erstellen
-        r = await client.post("/api/jobs/generate", data=form_data)
-        r.raise_for_status()
-        job_id = r.json()["job_id"]
+    # Dateien vorbereiten (optional)
+    files_to_upload = {}
+    if input_files:
+        for field_name, file_path in input_files.items():
+            p = Path(file_path)
+            # Relative Pfade gegen EVAL_DATA_DIR aufloesen
+            if not p.is_absolute():
+                p = EVAL_DATA_DIR / p
+            if p.exists():
+                files_to_upload[field_name] = (p.name, open(p, "rb"))
+                logger.info("Eval-Input: %s = %s", field_name, p)
+            else:
+                logger.warning("Eval-Input nicht gefunden: %s (uebersprungen)", p)
 
-        # Pollen bis fertig
-        t0 = time.time()
-        while time.time() - t0 < TIMEOUT:
-            r = await client.get(f"/api/jobs/{job_id}")
+    try:
+        async with httpx.AsyncClient(base_url=BACKEND_URL, timeout=30.0) as client:
+            # Job erstellen – mit oder ohne Dateien
+            r = await client.post(
+                "/api/jobs/generate",
+                data=form_data,
+                files=files_to_upload or None,
+            )
             r.raise_for_status()
-            job = r.json()
+            job_id = r.json()["job_id"]
 
-            if job["status"] == "done":
-                return job
-            if job["status"] == "error":
-                raise RuntimeError(f"Job fehlgeschlagen: {job.get('error_msg', '?')}")
-            if job["status"] == "cancelled":
-                raise RuntimeError("Job wurde abgebrochen")
+            # Pollen bis fertig
+            t0 = time.time()
+            while time.time() - t0 < TIMEOUT:
+                r = await client.get(f"/api/jobs/{job_id}")
+                r.raise_for_status()
+                job = r.json()
 
-            await _async_sleep(3)
+                if job["status"] == "done":
+                    return job
+                if job["status"] == "error":
+                    raise RuntimeError(f"Job fehlgeschlagen: {job.get('error_msg', '?')}")
+                if job["status"] == "cancelled":
+                    raise RuntimeError("Job wurde abgebrochen")
 
-        raise TimeoutError(f"Job {job_id} nicht in {TIMEOUT}s fertig geworden")
+                await _async_sleep(3)
+
+            raise TimeoutError(f"Job {job_id} nicht in {TIMEOUT}s fertig geworden")
+    finally:
+        # Datei-Handles schliessen
+        for _name, (_, fh) in files_to_upload.items():
+            fh.close()
 
 
 async def _async_sleep(seconds: float):
@@ -220,9 +255,24 @@ async def test_eval_workflow(workflow, test_case, request):
     # Generieren
     prompt = test_case["prompt"]
     diagnosen = test_case.get("diagnosen")
+    input_files = test_case.get("input_files")
+
+    # Pruefen ob Input-Dateien vorhanden sind (optional)
+    if input_files:
+        missing = []
+        for field, path in input_files.items():
+            p = Path(path) if Path(path).is_absolute() else EVAL_DATA_DIR / path
+            if not p.exists():
+                missing.append(f"{field}: {p}")
+        if missing:
+            logger.warning(
+                "Eval-Input-Dateien nicht gefunden (Test laeuft ohne):\n  %s",
+                "\n  ".join(missing),
+            )
+            input_files = None  # Ohne Dateien weitermachen
 
     try:
-        job = await _generate(workflow, prompt, diagnosen)
+        job = await _generate(workflow, prompt, diagnosen, input_files)
     except (RuntimeError, TimeoutError) as e:
         pytest.fail(f"Generierung fehlgeschlagen: {e}")
 
