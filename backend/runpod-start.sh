@@ -44,7 +44,7 @@ done
 BACKEND_DIR="/workspace/scriptTelios/backend"
 VENV_DIR="/workspace/venv"
 LOG_DIR="/workspace"
-PG_DATA="/home/systelios_pg/postgres"
+PG_DATA="/workspace/postgres_data"
 OLLAMA_MODELS_DIR="/workspace/ollama"
 PG_USER="systelios_pg"
 
@@ -130,7 +130,12 @@ chown "$PG_USER" /var/run/postgresql
 chmod 775 /var/run/postgresql
 
 # Verzeichnis immer als PG_USER anlegen (nie als root)
-su -m "$PG_USER" -c "mkdir -p $PG_DATA"
+# PG_DATA liegt auf /workspace → ueberlebt Pod-Neustarts (Stilbibliothek, Jobs)
+su -m "$PG_USER" -c "mkdir -p $PG_DATA" 2>/dev/null || {
+    # Falls /workspace root gehoert: Verzeichnis als root anlegen, dann chown
+    mkdir -p "$PG_DATA"
+    chown -R "$PG_USER" "$PG_DATA"
+}
 
 # Pruefen ob Postgres schon laeuft
 if su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA status" 2>/dev/null | grep -q "server is running"; then

@@ -1,0 +1,122 @@
+{
+  "description": "Evaluations-Fixtures fuer scriptTelios Qualitaetsmessung. 2 Testfaelle pro Workflow.",
+  "version": "1.0",
+
+  "entlassbericht": [
+    {
+      "id": "eb-01-depression-anteilearbeit",
+      "name": "Depression mit Anteilearbeit (Frau)",
+      "prompt": "Schreibe den psychotherapeutischen Verlaufsteil des Entlassberichts. Schwerpunkte: hypnosystemische Anteilearbeit, Selbstwertthematik, biographische Belastungen, Gruppenarbeit.",
+      "diagnosen": ["F32.1", "F60.8"],
+      "expected": {
+        "min_words": 550,
+        "max_words": 900,
+        "required_keywords": ["Anteile", "Selbstwert", "Gruppe", "ambulant"],
+        "forbidden_patterns": ["**", "##", "Epikrise:", "Procedere:", "I.", "II."],
+        "must_contain_sections": ["Behandlungsverlauf", "Empfehlung"],
+        "name_format": "Frau M.",
+        "forbidden_names": ["Mayer", "Isdek", "A28094"]
+      }
+    },
+    {
+      "id": "eb-02-ads-trennung",
+      "name": "ADS und Paarkrise (Mann)",
+      "prompt": "Schreibe den psychotherapeutischen Verlaufsteil des Entlassberichts. Schwerpunkte: Tuersteer-Anteil, raeumliche Trennung, Beziehungsdynamik, Kunsttherapie als Ressource.",
+      "diagnosen": ["F33.1", "F90.0"],
+      "expected": {
+        "min_words": 550,
+        "max_words": 900,
+        "required_keywords": ["Anteile", "Trennung", "Gruppe", "ambulant"],
+        "forbidden_patterns": ["**", "##", "Epikrise:", "Procedere:"],
+        "must_contain_sections": ["Behandlungsverlauf", "Empfehlung"],
+        "name_format": "Herr R.",
+        "forbidden_names": ["Reif", "28032"]
+      }
+    }
+  ],
+
+  "verlaengerung": [
+    {
+      "id": "va-01-borderline-stabilisierung",
+      "name": "Borderline-Struktur mit Stabilisierungsbedarf (Frau)",
+      "prompt": "Schreibe den Abschnitt Bisheriger Verlauf und Begruendung der Verlaengerung. Schwerpunkte: Anteilearbeit, Abwerter-Anteil, Steuerungsposition, Naehe-Distanz-Thematik.",
+      "diagnosen": ["F60.31", "F32.1"],
+      "expected": {
+        "min_words": 350,
+        "max_words": 650,
+        "required_keywords": ["Anteilearbeit", "Verlängerung", "Stabilität"],
+        "forbidden_patterns": ["**", "##", "Diagnose:", "Stammdaten"],
+        "must_contain_sections": ["Verlauf", "Verlängerung"]
+      }
+    },
+    {
+      "id": "va-02-angst-regression",
+      "name": "Angststoerung mit regressiver Dynamik (Mann)",
+      "prompt": "Schreibe den Abschnitt Verlauf und Begruendung der weiteren Verlaengerung. Schwerpunkte: Expositionsarbeit, Koerperarbeit, soziale Kompetenz, Rueckfallprophylaxe.",
+      "diagnosen": ["F40.1", "F41.0"],
+      "expected": {
+        "min_words": 350,
+        "max_words": 650,
+        "required_keywords": ["Verlängerung", "ambulant"],
+        "forbidden_patterns": ["**", "##"],
+        "must_contain_sections": ["Verlauf", "Verlängerung"]
+      }
+    }
+  ],
+
+  "anamnese": [
+    {
+      "id": "an-01-depression-lehrerin",
+      "name": "Mittelgradige Depression (Frau, Lehrerin)",
+      "prompt": "Erstelle eine vollstaendige Anamnese und einen psychopathologischen Befund.",
+      "diagnosen": ["F32.1"],
+      "expected": {
+        "min_words": 300,
+        "max_words": 600,
+        "required_keywords": ["Vorstellungsanlass", "Ressourcen"],
+        "forbidden_patterns": ["SYSTEMISCHE EINSCHÄTZUNG", "---", "Diagnosen:"],
+        "must_not_hallucinate": ["Marketingmanagerin", "Betriebswirtschaft", "5 kg abgenommen"],
+        "befund_separator": "###BEFUND###"
+      }
+    },
+    {
+      "id": "an-02-schulangst-jugendliche",
+      "name": "Schulangst und ADS (Jugendliche 18)",
+      "prompt": "Erstelle eine vollstaendige Anamnese und einen psychopathologischen Befund.",
+      "diagnosen": ["F40.1", "F90.0"],
+      "expected": {
+        "min_words": 300,
+        "max_words": 600,
+        "required_keywords": ["Vorstellungsanlass", "Ressourcen"],
+        "forbidden_patterns": ["SYSTEMISCHE EINSCHÄTZUNG", "---"],
+        "must_not_hallucinate": ["Marketingmanagerin", "Betriebswirtschaft", "berufliche Überlastung"],
+        "befund_separator": "###BEFUND###"
+      }
+    }
+  ],
+
+  "dokumentation": [
+    {
+      "id": "dok-01-familienkonflikt",
+      "name": "Familienkonflikt und innere Anteile (Frau)",
+      "prompt": "Erstelle eine systemische Gespraechsdokumentation.",
+      "expected": {
+        "min_words": 200,
+        "max_words": 500,
+        "required_sections": ["Auftragsklärung", "Relevante Gesprächsinhalte", "Hypothesen", "Einladungen"],
+        "forbidden_patterns": ["SYSTEMISCHE EINSCHÄTZUNG"]
+      }
+    },
+    {
+      "id": "dok-02-paarthematik",
+      "name": "Paarthematik und Abgrenzung (Mann)",
+      "prompt": "Erstelle eine systemische Gespraechsdokumentation.",
+      "expected": {
+        "min_words": 200,
+        "max_words": 500,
+        "required_sections": ["Auftragsklärung", "Relevante Gesprächsinhalte", "Hypothesen", "Einladungen"],
+        "forbidden_patterns": ["SYSTEMISCHE EINSCHÄTZUNG"]
+      }
+    }
+  ]
+}

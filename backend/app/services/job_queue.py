@@ -94,10 +94,10 @@ class Job:
             "description":     self.description,
             "status":          self.status.value,
             "cancelled":       self._cancel_requested,
-            "result_text":     self.result_text,
+            "result_text":     self.result_text or "",
             "has_transcript":  self.result_transcript is not None,
-            "befund_text":     self.result_befund,
-            "akut_text":       self.result_akut,
+            "befund_text":     self.result_befund or "",
+            "akut_text":       self.result_akut or "",
             "result_file":     self.result_file,
             "error_msg":       self.error_msg,
             "created_at":      self.created_at.isoformat(),
@@ -166,14 +166,8 @@ class JobQueue:
 
             result = await coro
 
-            # Nach dem LLM-Call: inzwischen abgebrochen?
-            if job._cancel_requested:
-                job.status = JobStatus.CANCELLED
-                job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
-                logger.info("Job abgebrochen (nach Generierung): %s", job.job_id)
-                return
-
-            job.status             = JobStatus.DONE
+            # Ergebnis IMMER speichern – auch wenn inzwischen Abbruch angefordert.
+            # Der Text wurde bereits generiert (GPU-Zeit verbraucht), also behalten.
             job.result_text        = result.get("text")
             job.result_transcript  = result.get("transcript")
             job.result_befund      = result.get("befund_text")
@@ -182,19 +176,24 @@ class JobQueue:
             job.model_used         = result.get("model_used")
             job.style_info         = result.get("style_info")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
-            logger.info(
-                "Job abgeschlossen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s
-            )
-        except Exception as e:
+
             if job._cancel_requested:
                 job.status = JobStatus.CANCELLED
-                job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
-                logger.info("Job abgebrochen (Exception während Abbruch): %s", job.job_id)
-                return
-            job.status    = JobStatus.ERROR
-            job.error_msg = str(e)
+                logger.info("Job abgebrochen (nach Generierung, Text behalten): %s", job.job_id)
+            else:
+                job.status = JobStatus.DONE
+                logger.info(
+                    "Job abgeschlossen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s
+                )
+        except Exception as e:
             job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
-            logger.error("Job fehlgeschlagen: %s (%s) in %.1fs – %s", job.job_id, job.workflow, job.duration_s, e)
+            if job._cancel_requested:
+                job.status = JobStatus.CANCELLED
+                logger.info("Job abgebrochen (Exception während Abbruch): %s", job.job_id)
+            else:
+                job.status    = JobStatus.ERROR
+                job.error_msg = str(e)
+                logger.error("Job fehlgeschlagen: %s (%s) in %.1fs – %s", job.job_id, job.workflow, job.duration_s, e)
         finally:
             job.finished_at = datetime.now(timezone.utc)
             queue_size = len([j for j in self._jobs.values() if j.status in (JobStatus.PENDING, JobStatus.RUNNING)])

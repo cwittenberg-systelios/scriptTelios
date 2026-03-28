@@ -145,6 +145,9 @@ def clean_verlauf_text(text: str) -> str:
     2. Entfernt reine Teilnahmeeintraege ohne inhaltliche Information
        ("hat teilgenommen", "nicht teilgenommen", "entschuldigt" allein in einem Block)
     3. Entfernt leere Zeitblock-Eintraege (nur Datum + Uhrzeit + Therapiename + Teilnahme)
+    4. Entfernt Therapeutennamen-Header (nur Name ohne Inhalt)
+    5. Entfernt reine Terminplanungs-Zeilen und Administratives
+    6. Komprimiert wiederholte Leerzeilen
     """
     import re
 
@@ -164,7 +167,9 @@ def clean_verlauf_text(text: str) -> str:
     participation_only = re.compile(
         r"^(hat teilgenommen|nicht teilgenommen|entschuldigt fehlt|"
         r"hat nicht teilgenommen|teilgenommen|abgebrochen|krankgemeldet"
-        r"|unentschuldigt gefehlt)[\.\s]*$",
+        r"|unentschuldigt gefehlt|entschuldigt|ausgefallen|fiel aus"
+        r"|fand nicht statt|wurde abgesagt|Termin entfaellt"
+        r"|Pat\.\s+(hat\s+)?teilgenommen)[\.\s]*$",
         re.IGNORECASE,
     )
 
@@ -174,11 +179,40 @@ def clean_verlauf_text(text: str) -> str:
     # Pattern fuer Datumszeilen allein (DD.MM.YYYY)
     date_only = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
 
+    # Pattern fuer reine Therapeutennamen-Header
+    # z.B. "Dr. Müller" oder "Therapeutin Schmidt:" allein auf einer Zeile
+    therapist_header = re.compile(
+        r"^(Dr\.\s+|Dipl\.\s*-?\s*Psych\.\s+|M\.?A\.?\s+)?"
+        r"[A-ZÄÖÜ][a-zäöüß]+([-\s][A-ZÄÖÜ][a-zäöüß]+)*:?\s*$"
+    )
+
+    # Pattern fuer administrative Zeilen ohne therapeutischen Inhalt
+    admin_patterns = [
+        re.compile(r"^\s*Termin(e|planung)?\s*(am|fuer|:)", re.IGNORECASE),
+        re.compile(r"^\s*Raum\s*\d+", re.IGNORECASE),
+        re.compile(r"^\s*Tel\.\s*\d+", re.IGNORECASE),
+        re.compile(r"^\s*Rezept\s*(ausgestellt|verlängert|erneuert)", re.IGNORECASE),
+        re.compile(r"^\s*Ueberweisung\s*(an|ausgestellt)", re.IGNORECASE),
+        re.compile(r"^\s*Krankmeldung\s*(bis|ausgestellt|verlängert)", re.IGNORECASE),
+        re.compile(r"^\s*AU[-\s]?(Bescheinigung|bis)", re.IGNORECASE),
+    ]
+
     while i < len(lines):
         line = lines[i].strip()
 
+        # Leere Zeilen durchlassen (werden spaeter komprimiert)
+        if not line:
+            cleaned.append("")
+            i += 1
+            continue
+
         # Seitenheader ueberspringen
         if any(p.search(line) for p in header_patterns):
+            i += 1
+            continue
+
+        # Administrative Zeilen ueberspringen
+        if any(p.match(line) for p in admin_patterns):
             i += 1
             continue
 
@@ -194,6 +228,36 @@ def clean_verlauf_text(text: str) -> str:
                 cleaned.pop()
             i += 1
             continue
+
+        # Reine Zeiteintraege ohne nachfolgenden Inhalt ueberspringen
+        # (Zeile mit nur "09:00 - 10:00 Einzeltherapie" gefolgt von Teilnahme oder Leerzeile)
+        if time_entry.match(line):
+            # Vorausschauen: naechste nicht-leere Zeile
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and participation_only.match(lines[j].strip()):
+                # Zeitblock + Teilnahme → beides ueberspringen
+                i = j + 1
+                continue
+            if j >= len(lines) or date_only.match(lines[j].strip()):
+                # Zeitblock ohne Inhalt → ueberspringen
+                i += 1
+                continue
+
+        # Therapeutennamen allein auf einer Zeile → ueberspringen
+        # (nur wenn keine inhaltliche Zeile folgt in den naechsten 2 Zeilen)
+        if therapist_header.match(line) and len(line) < 40:
+            j = i + 1
+            while j < len(lines) and not lines[j].strip() and j - i < 3:
+                j += 1
+            if j < len(lines) and (
+                participation_only.match(lines[j].strip())
+                or date_only.match(lines[j].strip())
+                or time_entry.match(lines[j].strip())
+            ):
+                i += 1
+                continue
 
         cleaned.append(lines[i])
         i += 1
@@ -243,17 +307,42 @@ async def generate_text(
     # Konservativ: 16384 – passt auf RTX Pro 4500 (32GB) mit FP16 KV-Cache.
     # Fuer RTX 4090 (24GB): auf 8192 reduzieren oder OLLAMA_KV_CACHE_TYPE=q8_0 setzen.
     MAX_SAFE_CTX = 16384
+    # Workflow-spezifische Mindest-Output-Tokens:
+    # Der Output darf nie unter dieses Minimum fallen, sonst wird der Input gekuerzt.
+    MIN_OUTPUT_TOKENS = {
+        "entlassbericht": 2000,  # mind. 600 Woerter → ~2000 Tokens
+        "verlaengerung":  1500,  # mind. 400 Woerter → ~1500 Tokens
+        "anamnese":       1500,  # mind. 350 Woerter + Befund → ~1500 Tokens
+        "dokumentation":  1000,  # mind. 250 Woerter → ~1000 Tokens
+    }
+    min_output = MIN_OUTPUT_TOKENS.get(workflow, 1000) if workflow else 1000
+
     estimated_input_tokens = int((len(system_prompt) + len(user_content)) / 3.5)
+
+    # max_tokens dynamisch anpassen: so viel wie moeglich, aber mindestens min_output
     if estimated_input_tokens + max_tokens > MAX_SAFE_CTX:
-        available_tokens = MAX_SAFE_CTX - max_tokens - int(len(system_prompt) / 3.5) - 200
-        max_user_chars = int(available_tokens * 3.5)
-        if max_user_chars > 0 and len(user_content) > max_user_chars:
-            original_len = len(user_content)
-            user_content = _sample_uniformly(user_content, max_user_chars)
-            logger.warning(
-                "User-Content fuer VRAM-Sicherheit gekuerzt: %d → %d Zeichen",
-                original_len, max_user_chars,
+        # Zuerst: max_tokens auf das Maximum setzen das nach Input noch passt
+        available_for_output = MAX_SAFE_CTX - estimated_input_tokens - 200
+        if available_for_output >= min_output:
+            # Genug Platz → max_tokens auf verfuegbaren Raum anpassen
+            max_tokens = min(max_tokens, available_for_output)
+            logger.info(
+                "max_tokens dynamisch angepasst: %d (Input: ~%d Tokens, Budget: %d)",
+                max_tokens, estimated_input_tokens, MAX_SAFE_CTX,
             )
+        else:
+            # Nicht genug Platz → Input kuerzen um min_output zu garantieren
+            max_tokens = max(max_tokens, min_output)
+            available_input = MAX_SAFE_CTX - max_tokens - int(len(system_prompt) / 3.5) - 200
+            max_user_chars = int(available_input * 3.5)
+            if max_user_chars > 0 and len(user_content) > max_user_chars:
+                original_len = len(user_content)
+                user_content = _sample_uniformly(user_content, max_user_chars)
+                logger.warning(
+                    "User-Content gekuerzt um min. %d Output-Tokens zu garantieren: "
+                    "%d → %d Zeichen",
+                    min_output, original_len, max_user_chars,
+                )
 
     # Qwen3: Thinking-Mode deaktivieren via /no_think am Ende des User-Content.
     # Verhindert <think>...</think> Blöcke im Output die nicht in klinische Dokumente gehören.
