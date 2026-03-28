@@ -13,7 +13,7 @@
 #  Optionen:
 #    --hf-token   hf_xxxx   HuggingFace Token fuer pyannote Diarization
 #    --confluence  URL       Confluence-Intranet-URL fuer CORS
-#    --model       NAME      Ollama-Modell (Standard: qwen3:32b-q4_K_M)
+#    --model       NAME      Ollama-Modell (Standard: qwen3:32b)
 #    --help                  Diese Hilfe anzeigen
 #
 #  Beispiel (neuer Pod):
@@ -413,15 +413,34 @@ if [ "$NEED_RESTART" = "true" ]; then
     nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
     sleep 10
 
-    # GPU-Erkennung pruefen
-    if grep -q "library=cuda" "$LOG_DIR/ollama.log" 2>/dev/null; then
-        VRAM=$(grep "total=" "$LOG_DIR/ollama.log" 2>/dev/null | tail -1 | grep -oE 'total="[^"]+"' | head -1)
-        echo "${OK}GPU erkannt: ${VRAM}"
-    elif grep -q "total_vram.*0 B\|library=cpu" "$LOG_DIR/ollama.log" 2>/dev/null; then
-        echo "${WARN}GPU nicht erkannt – lshw/pciutils installiert? Ollama-Version >= 0.9.0?"
-        echo "${WARN}Tipp: apt-get install -y lshw pciutils && Ollama neu installieren"
-        echo "${WARN}Laufend auf CPU – Generierung dauert laenger"
+    # GPU-Erkennung pruefen (per API, nicht Log-Grep – zuverlaessiger)
+    # Ollama 0.18+ zeigt GPU-Info erst beim ersten Modell-Load im Log,
+    # nicht beim Start. Daher: kurzen API-Call machen und VRAM pruefen.
+    GPU_CHECK=$(curl -s -X POST http://localhost:11434/api/chat \
+        -H "Content-Type: application/json" \
+        -d '{"model":"qwen3:4b","messages":[{"role":"user","content":"hi"}],"stream":false,"options":{"num_predict":1}}' \
+        --max-time 60 2>/dev/null) || true
+    sleep 2
+    GPU_PS=$(curl -s http://localhost:11434/api/ps 2>/dev/null)
+    if echo "$GPU_PS" | grep -qi "GPU\|cuda"; then
+        VRAM_USED=$(echo "$GPU_PS" | grep -oE '"size_vram":[0-9]+' | head -1 | cut -d: -f2)
+        if [ -n "$VRAM_USED" ] && [ "$VRAM_USED" -gt 0 ] 2>/dev/null; then
+            VRAM_GB=$(echo "scale=1; $VRAM_USED / 1073741824" | bc 2>/dev/null || echo "?")
+            echo "${OK}GPU aktiv (${VRAM_GB} GB VRAM belegt)"
+        else
+            echo "${OK}GPU erkannt"
+        fi
+    elif echo "$GPU_PS" | grep -qi "cpu"; then
+        echo "${WARN}Ollama laeuft auf CPU – GPU nicht erkannt"
+        echo "${WARN}Pruefe: ollama ps | nvidia-smi | OLLAMA_LLM_LIBRARY"
+    else
+        echo "${WARN}GPU-Status nicht pruefbar (Ollama antwortet nicht auf /api/ps)"
     fi
+    # Test-Modell wieder entladen
+    curl -s -X POST http://localhost:11434/api/chat \
+        -H "Content-Type: application/json" \
+        -d '{"model":"qwen3:4b","keep_alive":0,"messages":[{"role":"user","content":""}]}' \
+        --max-time 10 >/dev/null 2>&1 || true
 fi
 
 MAX=12
@@ -439,20 +458,20 @@ echo "${GO}Modelle pruefen..."
 
 # .env-Migration: alten/falschen Modellnamen korrigieren
 if [ -f "$BACKEND_DIR/.env" ]; then
-    if grep -q "OLLAMA_MODEL=mistral-nemo\|OLLAMA_MODEL=qwen2.5\|OLLAMA_MODEL=qwen2.5:32b" "$BACKEND_DIR/.env"; then
-        echo "${WARN}.env enthaelt veralteten Modellnamen – migriere auf qwen3:32b-q4_K_M..."
-        sed -i 's|OLLAMA_MODEL=.*|OLLAMA_MODEL=qwen3:32b-q4_K_M|' "$BACKEND_DIR/.env"
-        echo "${OK}OLLAMA_MODEL=qwen3:32b-q4_K_M gesetzt"
+    if grep -q "OLLAMA_MODEL=mistral-nemo\|OLLAMA_MODEL=qwen2.5\|OLLAMA_MODEL=qwen2.5:32b\|OLLAMA_MODEL=qwen3:30b" "$BACKEND_DIR/.env"; then
+        echo "${WARN}.env enthaelt veralteten/suboptimalen Modellnamen – migriere auf qwen3:32b..."
+        sed -i 's|OLLAMA_MODEL=.*|OLLAMA_MODEL=qwen3:32b|' "$BACKEND_DIR/.env"
+        echo "${OK}OLLAMA_MODEL=qwen3:32b gesetzt"
     fi
 fi
 
 # Empfohlene Modelle:
-#   RTX Pro 4500 / 32GB:  qwen3:32b-q4_K_M       (~19GB)  <- Empfehlung
+#   RTX Pro 4500 / 32GB:  qwen3:32b       (~19GB)  <- Empfehlung
 #   RTX 4090 / 24GB:      qwen3:32b-q4_K_S        (~18GB)  <- Empfehlung
 #   Alternative (beide):  qwen3:14b-q5_K_M        (~10GB)
 #   Reasoning:            deepseek-r1:32b          (~19GB)
-LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b-q4_K_M")
-for model in "$LLM_MODEL" "nomic-embed-text"; do
+LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b")
+for model in "$LLM_MODEL" "qwen3:4b" "nomic-embed-text"; do
     if OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama list 2>/dev/null | grep -q "$model"; then
         echo "${OK}$model vorhanden"
     else
@@ -585,7 +604,7 @@ if [ ! -f "$BACKEND_DIR/.env" ]; then
     # Confluence-URL: Argument > Default
     CONF_URL="${ARG_CONFLUENCE:-http://intranet.systelios.local}"
     # Modell: Argument > Default
-    MODEL_NAME="${ARG_MODEL:-qwen3:32b-q4_K_M}"
+    MODEL_NAME="${ARG_MODEL:-qwen3:32b}"
     # Diarization: automatisch aktivieren wenn Token mitgegeben
     DIAR_ENABLED="false"
     DIAR_TOKEN=""
@@ -682,7 +701,7 @@ done
 
 # 8b. Ollama-Modell in VRAM vorwaermen (verhindert 25-30s Kaltstart beim ersten Request)
 echo "${GO}Ollama-Modell vorwaermen (kann bei grossen Modellen 30-60s dauern)..."
-OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b-q4_K_M")
+OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b")
 WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/chat \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${OLLAMA_MODEL}\", \"messages\": [{\"role\": \"user\", \"content\": \"\"}], \"keep_alive\": -1, \"stream\": false}" \
