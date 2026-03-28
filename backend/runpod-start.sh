@@ -406,8 +406,10 @@ if [ "$NEED_RESTART" = "true" ]; then
     fi
 
     # Ollama starten – kein CUDA_VISIBLE_DEVICES (verhindert GPU-Erkennung in 0.9+)
-    OLLAMA_MODELS="$OLLAMA_MODELS_DIR" \
-    ${OLLAMA_LLM_LIB:+OLLAMA_LLM_LIBRARY=$OLLAMA_LLM_LIB} \
+    export OLLAMA_MODELS="$OLLAMA_MODELS_DIR"
+    if [ -n "$OLLAMA_LLM_LIB" ]; then
+        export OLLAMA_LLM_LIBRARY="$OLLAMA_LLM_LIB"
+    fi
     nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
     sleep 10
 
