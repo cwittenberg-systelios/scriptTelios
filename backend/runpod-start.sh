@@ -182,7 +182,7 @@ echo ""
 echo "${GO}Ollama pruefen..."
 
 OLLAMA_BIN="/workspace/bin/ollama"
-OLLAMA_MIN_VERSION="0.9.0"
+OLLAMA_MIN_VERSION="0.17.0"
 mkdir -p /workspace/bin
 
 # Versionsnummer vergleichen (major.minor.patch)
@@ -197,8 +197,21 @@ _ollama_version() {
 }
 
 _install_ollama() {
-    echo "${GO}Ollama installieren/aktualisieren (v0.9.0 – GPU-kompatibel mit Blackwell)..."
-    curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.9.0 sh
+    echo "${GO}Ollama installieren/aktualisieren..."
+
+    # zstd MUSS installiert sein BEVOR Ollama installiert wird!
+    # Ohne zstd laed das Install-Skript das abgespeckte .tgz-Fallback-Archiv,
+    # dem cuda_v13-Runner UND libggml-base.so.0 fehlen.
+    # → GPU wird nicht erkannt, Ollama faellt still auf CPU zurueck.
+    if ! command -v zstd >/dev/null 2>&1; then
+        echo "${GO}zstd installieren (benoetigt fuer Ollama GPU-Support)..."
+        apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd
+    fi
+
+    # Ollama installieren – OHNE Version-Pin, damit die neueste Version kommt.
+    # Blackwell-GPUs (RTX Pro 4500, RTX 50xx) benoetigen Ollama >= 0.17 (cuda_v13).
+    curl -fsSL https://ollama.com/install.sh | sh
+
     # Nach Installation: Binary in /workspace/bin sichern (bleibt bei Pod-Neustart)
     if [ -f /usr/local/bin/ollama ]; then
         cp /usr/local/bin/ollama "$OLLAMA_BIN"
@@ -207,13 +220,77 @@ _install_ollama() {
         echo "${ERR}Ollama-Binary nicht gefunden nach Installation"
         exit 1
     fi
-    # Ollama-Libraries nach Installation in /usr/local/lib/ollama pruefen
-    if [ -d /usr/local/lib/ollama ]; then
-        echo "${OK}Ollama-Libraries: $(ls /usr/local/lib/ollama/ | grep -c cuda) CUDA-Varianten gefunden"
-    fi
+
+    # Verifizieren: cuda_v13 UND libggml-base.so muessen vorhanden sein.
+    # Fehlen sie, wurde das .tgz-Fallback geladen (zstd war beim Install nicht da).
+    _verify_ollama_cuda_libs
+
     # Nach Installation immer neu starten damit cuda_v13 aktiv wird
     pkill -f "ollama serve" 2>/dev/null || true
     sleep 2
+}
+
+# ── Ollama CUDA-Library Verifikation ──────────────────────────────────────────
+# Stellt sicher dass cuda_v13 UND libggml-base.so.0 vorhanden sind.
+# Ohne diese Files erkennt Ollama Blackwell-GPUs nicht und faellt auf CPU zurueck.
+# Ursache: Ollama install.sh ohne zstd → .tgz-Fallback enthält nur cuda_v12.
+_verify_ollama_cuda_libs() {
+    local OLLAMA_LIB="/usr/local/lib/ollama"
+    local NEEDS_FIX=false
+
+    # Pruefung 1: cuda_v13-Verzeichnis mit libggml-cuda.so
+    if [ ! -f "$OLLAMA_LIB/cuda_v13/libggml-cuda.so" ]; then
+        echo "${WARN}cuda_v13/libggml-cuda.so fehlt"
+        NEEDS_FIX=true
+    fi
+
+    # Pruefung 2: libggml-base.so.0 im Hauptverzeichnis
+    if ! ls "$OLLAMA_LIB"/libggml-base.so* >/dev/null 2>&1; then
+        echo "${WARN}libggml-base.so fehlt (kritisch fuer GPU-Erkennung!)"
+        NEEDS_FIX=true
+    fi
+
+    if [ "$NEEDS_FIX" = "true" ]; then
+        echo "${GO}Fehlende CUDA-Libraries aus .tar.zst-Vollarchiv nachladen..."
+
+        # zstd sicherstellen
+        if ! command -v zstd >/dev/null 2>&1; then
+            apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd
+        fi
+
+        # Vollarchiv herunterladen (.tar.zst enthaelt ALLE Libraries)
+        local ARCH=$(uname -m)
+        [ "$ARCH" = "x86_64" ] && ARCH="amd64"
+        local ZST_URL="https://ollama.com/download/ollama-linux-${ARCH}.tar.zst"
+        local TMP_ZST="/tmp/ollama-full.tar.zst"
+        local TMP_EXTRACT="/tmp/ollama-lib-extract"
+
+        echo "${GO}Lade $ZST_URL ..."
+        curl -fsSL "$ZST_URL" -o "$TMP_ZST"
+
+        # Alle Libraries extrahieren (cuda_v12, cuda_v13, libggml-base, etc.)
+        rm -rf "$TMP_EXTRACT"
+        mkdir -p "$TMP_EXTRACT"
+        tar --use-compress-program=unzstd -xf "$TMP_ZST" -C "$TMP_EXTRACT" --wildcards 'lib/ollama/*'
+
+        # Alles nach /usr/local/lib/ollama/ kopieren
+        if [ -d "$TMP_EXTRACT/lib/ollama" ]; then
+            cp -rf "$TMP_EXTRACT/lib/ollama/"* "$OLLAMA_LIB/"
+            chmod -R 755 "$OLLAMA_LIB/"
+            echo "${OK}CUDA-Libraries installiert:"
+            echo "       cuda_v12: $(ls $OLLAMA_LIB/cuda_v12/libggml-cuda.so 2>/dev/null && echo 'OK' || echo 'FEHLT')"
+            echo "       cuda_v13: $(ls $OLLAMA_LIB/cuda_v13/libggml-cuda.so 2>/dev/null && echo 'OK' || echo 'FEHLT')"
+            echo "       libggml-base: $(ls $OLLAMA_LIB/libggml-base.so* 2>/dev/null | head -1 || echo 'FEHLT')"
+        else
+            echo "${ERR}Konnte Libraries nicht aus Archiv extrahieren"
+        fi
+
+        # Aufraeumen
+        rm -f "$TMP_ZST"
+        rm -rf "$TMP_EXTRACT"
+    else
+        echo "${OK}Ollama CUDA-Libraries vollstaendig (cuda_v12 + cuda_v13 + libggml-base)"
+    fi
 }
 
 if [ ! -f "$OLLAMA_BIN" ]; then
@@ -224,15 +301,18 @@ else
         echo "${WARN}Ollama-Version nicht lesbar – neu installieren..."
         _install_ollama
     elif _version_gte "$CURRENT_VER" "$OLLAMA_MIN_VERSION"; then
-        echo "${OK}Ollama v${CURRENT_VER} (>= ${OLLAMA_MIN_VERSION} erforderlich fuer qwen3)"
-        # Pruefen ob GPU-Libraries vorhanden – fehlen wenn lshw/pciutils beim
-        # letzten Install nicht installiert waren. In dem Fall neu installieren.
+        echo "${OK}Ollama v${CURRENT_VER} (>= ${OLLAMA_MIN_VERSION} erforderlich fuer Blackwell + qwen3)"
+        # Pruefen ob GPU-Libraries vorhanden – fehlen wenn zstd beim
+        # letzten Install nicht installiert war (tgz-Fallback hat nur cuda_v12).
         if ! ls /usr/local/lib/ollama/cuda_v12/libggml-cuda.so >/dev/null 2>&1 && \
            ! ls /usr/local/lib/ollama/cuda_v13/libggml-cuda.so >/dev/null 2>&1; then
             echo "${WARN}Ollama CUDA-Libraries fehlen – neu installieren mit GPU-Support..."
             pkill -f "ollama serve" 2>/dev/null || true
             sleep 2
             _install_ollama
+        else
+            # Libraries da, aber vollstaendig? (libggml-base.so kann fehlen)
+            _verify_ollama_cuda_libs
         fi
     else
         echo "${WARN}Ollama v${CURRENT_VER} zu alt (mind. v${OLLAMA_MIN_VERSION} fuer qwen3) – aktualisiere..."
@@ -290,13 +370,14 @@ export OLLAMA_MODELS="$OLLAMA_MODELS_DIR"
 if [ "$NEED_RESTART" = "true" ]; then
     echo "${GO}Ollama starten..."
 
-    # CUDA-Library-Pfad ermitteln: CUDA 12.x zuerst, dann 13.x
+    # CUDA-Library-Pfad ermitteln
     # Ollama 0.18.x bringt eigene CUDA-Libraries unter /usr/local/lib/ollama mit
     OLLAMA_LIB_PATH=""
     for cuda_dir in \
-        /usr/local/lib/ollama/cuda_v12 \
         /usr/local/lib/ollama/cuda_v13 \
+        /usr/local/lib/ollama/cuda_v12 \
         /usr/local/lib/ollama \
+        /workspace/lib/ollama/cuda_v13 \
         /workspace/lib/ollama/cuda_v12 \
         /workspace/lib/ollama; do
         if [ -d "$cuda_dir" ] && ls "$cuda_dir"/libggml-cuda.so >/dev/null 2>&1; then
@@ -306,12 +387,27 @@ if [ "$NEED_RESTART" = "true" ]; then
         fi
     done
 
+    # Blackwell-GPU erkennen (Compute Capability 12.0 = sm_120)
+    # Betrifft: RTX Pro 4500/5000/6000 Blackwell, RTX 5070/5080/5090
+    # Diese GPUs brauchen cuda_v13 – ohne OLLAMA_LLM_LIBRARY=cuda_v13
+    # faellt Ollama still auf CPU zurueck.
+    OLLAMA_LLM_LIB=""
+    GPU_COMPUTE=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d ' ')
+    if [ -n "$GPU_COMPUTE" ]; then
+        GPU_MAJOR=$(echo "$GPU_COMPUTE" | cut -d. -f1)
+        if [ "$GPU_MAJOR" -ge 12 ] 2>/dev/null; then
+            echo "${OK}Blackwell-GPU erkannt (Compute $GPU_COMPUTE) → cuda_v13 wird verwendet"
+            OLLAMA_LLM_LIB="cuda_v13"
+        else
+            echo "${OK}GPU erkannt (Compute $GPU_COMPUTE) → cuda_v12 wird verwendet"
+        fi
+    else
+        echo "${WARN}GPU Compute Capability nicht lesbar – Ollama waehlt automatisch"
+    fi
+
     # Ollama starten – kein CUDA_VISIBLE_DEVICES (verhindert GPU-Erkennung in 0.9+)
-    # OLLAMA_LLM_LIBRARY=cuda_v13 fuer Blackwell-GPUs (RTX 50xx, RTX Pro 4500)
-    # Ohne diesen Flag faellt Ollama auf CPU zurueck (bekanntes Issue mit CUDA 13.0)
     OLLAMA_MODELS="$OLLAMA_MODELS_DIR" \
-    OLLAMA_LIBRARY_PATH=/usr/local/lib/ollama \
-    OLLAMA_LLM_LIBRARY=/usr/local/lib/ollama/cuda_v13 \
+    ${OLLAMA_LLM_LIB:+OLLAMA_LLM_LIBRARY=$OLLAMA_LLM_LIB} \
     nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
     sleep 10
 
@@ -349,10 +445,10 @@ if [ -f "$BACKEND_DIR/.env" ]; then
 fi
 
 # Empfohlene Modelle:
-#   RTX Pro 4500 / 32GB:  qwen3:32b-q4_K_M       (~20GB)  <- Empfehlung
-#   RTX 4090 / 24GB:      qwen2.5:32b-instruct-q4_K_M (~19GB)  <- Empfehlung
-#   Alternative:          gemma3:27b         (~17GB)
-#   Reasoning:            deepseek-r1:32b    (~19GB)
+#   RTX Pro 4500 / 32GB:  qwen3:32b-q4_K_M       (~19GB)  <- Empfehlung
+#   RTX 4090 / 24GB:      qwen3:32b-q4_K_S        (~18GB)  <- Empfehlung
+#   Alternative (beide):  qwen3:14b-q5_K_M        (~10GB)
+#   Reasoning:            deepseek-r1:32b          (~19GB)
 LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b-q4_K_M")
 for model in "$LLM_MODEL" "nomic-embed-text"; do
     if OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama list 2>/dev/null | grep -q "$model"; then

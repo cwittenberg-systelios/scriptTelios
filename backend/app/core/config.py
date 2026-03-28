@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # ── LLM (ausschliesslich Ollama, lokal) ──────────────────────
     OLLAMA_HOST:  str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "llama3.2"
+    OLLAMA_MODEL: str = "qwen3:32b"
 
     @property
     def LLM_MODEL(self) -> str:

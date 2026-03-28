@@ -25,16 +25,36 @@ MAX_USER_CONTENT_CHARS = 500_000
 # Match erfolgt auf Modellname-Prefix (case-insensitive).
 # Quantisierungssuffixe (:q6_K, :q4_K_M etc.) werden ignoriert – Prefix reicht.
 #
-# Empfehlung RTX Pro 4500 (32GB): qwen3:32b-q4_K_M  (~20GB VRAM)
-# Empfehlung RTX 4090 (24GB):     qwen3:32b-q4_K_M  (~20GB VRAM)
-# Reasoning (beide):               deepseek-r1:32b (langsamerer aber tieferer Analyse)
+# ── GPU-Empfehlungen (Stand März 2026) ──────────────────────────
+#
+# RTX Pro 4500 Blackwell (32GB):
+#   qwen3:32b-q4_K_M  ~19GB Modell + ~4GB KV-Cache = ~23GB    <- EMPFEHLUNG
+#   HINWEIS: Blackwell-GPUs (Compute 12.0, CUDA 13) benoetigen Ollama >= 0.17.
+#   Aeltere Ollama-Versionen fallen stillschweigend auf CPU zurueck!
+#   Pruefe mit: ollama ps → Processor-Spalte muss "100% GPU" zeigen.
+#   Bei Problemen: Ollama aktualisieren (curl -fsSL https://ollama.com/install.sh | sh)
+#
+# RTX 4090 (24GB):
+#   qwen3:32b-q4_K_S  ~18GB Modell, passt mit kleinem KV-Cache (num_ctx ≤ 6144)
+#   WICHTIG: q4_K_M (~19GB) + KV-Cache (~4.8GB bei 8k ctx) = 23.8GB → 100MB zu viel!
+#   Daher: q4_K_S verwenden (~1GB kleiner) ODER KV-Cache-Quantisierung aktivieren:
+#     OLLAMA_FLASH_ATTENTION=true + OLLAMA_KV_CACHE_TYPE=q8_0 (halbiert KV-Cache)
+#   Alternativ: qwen3:14b-q5_K_M (~10GB) – deutlich mehr Headroom, gute Qualitaet
+#
+# Fallback (beide GPUs):
+#   qwen3:14b          ~8.3GB  Sehr gute Qualitaet, grosszuegiger Kontext moeglich
+#   qwen3:30b-a3b      ~17GB   MoE, nur 3B aktive Params – schnell aber duennerer Fliesstext
+#
 MODEL_PROFILES: dict[str, dict] = {
-    # Reasoning-Modelle: größerer Mindest-Kontext, niedrigere Temperatur
+    # Reasoning-Modelle: groesserer Mindest-Kontext, niedrigere Temperatur
     "deepseek-r1": {"min_ctx": 8192, "temperature": 0.2, "top_p": 0.85},
     "deepseek":    {"min_ctx": 8192, "temperature": 0.2, "top_p": 0.85},
-    # Standard-Modelle: dynamischer Kontext, kein Minimum nötig
+    # Standard-Modelle: dynamischer Kontext
     "qwen2.5":     {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
-    "qwen3":       {"min_ctx": 2048, "temperature": 0.7, "top_p": 0.8},
+    # Qwen3: temperature 0.4 fuer klinische Dokumentation (niedrig = faktentreu,
+    # hoch = kreativer). Qwen3-Dokumentation empfiehlt 0.7 fuer Chat, aber fuer
+    # medizinische Berichte ist 0.3-0.4 der Sweet Spot.
+    "qwen3":       {"min_ctx": 2048, "temperature": 0.4, "top_p": 0.85},
     "llama":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
     "gemma":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
     "mistral":     {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
@@ -195,8 +215,17 @@ async def generate_text(
     if len(user_content) > MAX_USER_CONTENT_CHARS:
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
 
-    # Sicherheitscheck: wenn Input + Output > 16384 Tokens, User-Content kuerzen
-    MAX_SAFE_CTX = 8192
+    # Sicherheitscheck: wenn Input + Output > MAX_SAFE_CTX, User-Content kuerzen.
+    # VRAM-Budget haengt von der GPU ab:
+    #   RTX Pro 4500 (32GB): 32GB - 19GB Modell - 1GB Overhead = ~12GB fuer KV-Cache
+    #     → 12GB / ~0.75GB pro 1024 Tokens ≈ 16384 Token sicher
+    #   RTX 4090 (24GB):     24GB - 18GB Modell(q4_K_S) - 1GB = ~5GB fuer KV-Cache
+    #     → 5GB / ~0.75GB pro 1024 Tokens ≈ 6144 Token sicher
+    #   Mit OLLAMA_KV_CACHE_TYPE=q8_0: KV-Cache halbiert → doppelte Kontextlaenge
+    #
+    # Konservativ: 10240 als Default (passt auf beide GPUs mit q8_0 KV-Cache).
+    # Fuer RTX Pro 4500 ohne KV-Quant: kann auf 16384 erhoeht werden via .env.
+    MAX_SAFE_CTX = 10240
     estimated_input_tokens = int((len(system_prompt) + len(user_content)) / 3.5)
     if estimated_input_tokens + max_tokens > MAX_SAFE_CTX:
         available_tokens = MAX_SAFE_CTX - max_tokens - int(len(system_prompt) / 3.5) - 200
@@ -264,20 +293,24 @@ def _estimate_num_ctx(system_prompt: str, user_content: str, max_tokens: int) ->
     Puffer: 20% Sicherheitsmarge + max_tokens für den Output.
     Rundet auf das nächste Vielfache von 512 für Ollama-Effizienz.
 
-    VRAM-Limit: qwen2.5:32b-instruct-q6_K belegt ~22GB VRAM.
-    Bei RTX Pro 4500 (32GB) bleiben ~10GB für den KV-Cache.
-    Ein KV-Cache von 16384 Tokens braucht bei q6_K ca. 4-6GB → sicher.
-    32768 Tokens KV-Cache = 8-12GB → kritisch, führt zu OOM.
-    Daher: hartes Maximum von 16384 Tokens für qwen32b.
+    VRAM-Budget fuer KV-Cache (nach Modell-Gewichten):
+      RTX Pro 4500 (32GB): ~12GB frei → 16384 Tokens sicher (FP16 KV)
+                                        32768 mit OLLAMA_KV_CACHE_TYPE=q8_0
+      RTX 4090 (24GB):     ~5GB frei  → 6144 Tokens sicher (FP16 KV)
+                                        12288 mit OLLAMA_KV_CACHE_TYPE=q8_0
+
+    Hartes Maximum: 12288 Tokens – konservativer Wert der auf beiden GPUs
+    funktioniert (RTX 4090 mit q8_0 KV-Cache, RTX Pro 4500 ohne).
+    Fuer RTX Pro 4500 mit mehr Headroom: MAX_SAFE_CTX in generate_text() erhoehen.
     """
     total_chars = len(system_prompt) + len(user_content)
     estimated_tokens = int(total_chars / 3.5)
     needed = int(estimated_tokens * 1.2) + max_tokens
     # Auf nächstes Vielfaches von 512 aufrunden, Minimum 2048
     rounded = max(2048, ((needed + 511) // 512) * 512)
-    # Hartes Maximum: 8192 Tokens – bei 16384 crasht qwen3:32b-q4_K_M Runner
-    # (benötigt dann 28.5GB, zu knapp an 31GB VRAM-Grenze)
-    return min(rounded, 8192)
+    # Hartes Maximum: 12288 Tokens – sicher auf RTX 4090 (q4_K_S + q8_0 KV-Cache)
+    # und RTX Pro 4500 (q4_K_M + FP16 KV-Cache).
+    return min(rounded, 12288)
 
 
 def _sample_uniformly(text: str, max_chars: int, n_windows: int = 10) -> str:

@@ -1,5 +1,4 @@
 # scriptTelios – Backend
-sdsdf
 
 FastAPI-Backend für die KI-gestützte klinische Dokumentation der
 **sysTelios Klinik für Psychosomatik und Psychotherapie**.
