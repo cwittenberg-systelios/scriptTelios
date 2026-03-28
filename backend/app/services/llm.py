@@ -267,7 +267,7 @@ async def generate_text(
     PRIMERS = {
         "entlassbericht": "Zu Beginn des stationären Aufenthalts",
         "verlaengerung":  "Im bisherigen Verlauf des stationären Aufenthalts",
-        "anamnese":       "Die Klientin/der Klient stellt sich vor",
+        "anamnese":       "",  # Kein Primer – Modell soll selbst mit Patientenname beginnen
         "dokumentation":  "Auftragsklärung\n\n",
     }
     assistant_primer = PRIMERS.get(workflow or "", "")
@@ -284,12 +284,41 @@ async def generate_text(
 
     # Output-Postprocessing
     if result.get("text"):
-        # Qwen3 Think-Blöcke entfernen falls doch generiert (<think>...</think>)
+        import re as _re
         text = result["text"]
-        if "<think>" in text:
-            import re as _re
+
+        # Qwen3 Think-Blöcke entfernen – alle Varianten:
+        # 1. Vollstaendige <think>...</think> Blöcke
+        # 2. Orphan </think> ohne oeffnendes Tag (Primer hat <think> abgeschnitten)
+        # 3. Orphan <think> ohne schliessendes Tag (Output abgebrochen)
+        if "<think>" in text or "</think>" in text:
+            # Erst vollstaendige Bloecke
             text = _re.sub(r"<think>.*?</think>\s*", "", text, flags=_re.DOTALL)
+            # Dann orphan </think> und alles davor bis zum letzten Absatzumbruch
+            # (der Think-Content steht vor dem </think>)
+            text = _re.sub(r"^.*?</think>\s*", "", text, flags=_re.DOTALL)
+            # Orphan <think> am Ende (unvollstaendiger Block)
+            text = _re.sub(r"<think>.*$", "", text, flags=_re.DOTALL)
             logger.info("Qwen3 Think-Block aus Output entfernt")
+
+        # Doppelten Text erkennen und entfernen:
+        # Manchmal generiert Qwen3 den Text zweimal (vor und nach </think>).
+        # Wenn der Text die Anamnese-Primer-Phrase doppelt enthaelt,
+        # nur den zweiten (besseren) Teil behalten.
+        primer_phrases = [
+            "stellt sich vor", "stellt sich zur", "Vorstellungsanlass",
+            "Zu Beginn des stationären", "Im bisherigen Verlauf",
+        ]
+        for phrase in primer_phrases:
+            parts = text.split(phrase)
+            if len(parts) >= 3:
+                # Phrase kommt mindestens 2x vor → Text ist doppelt
+                # Zweiten Teil behalten (nach dem zweiten Vorkommen)
+                second_start = text.index(phrase, text.index(phrase) + 1)
+                text = text[second_start:]
+                logger.warning("Doppelten Text erkannt und bereinigt (Phrase: '%s')", phrase)
+                break
+
         result["text"] = deduplicate_paragraphs(text)
 
     result["duration_s"] = round(time.time() - t0, 1)

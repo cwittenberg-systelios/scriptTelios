@@ -113,45 +113,42 @@ in dem sie festhalt, wann und wie stark der Anteil aktiv wird.\
 """
 
 FEW_SHOT_ANAMNESE = """\
-BEISPIEL (Anamnese nach sysTelios-Standard – zeigt Struktur und Stil, NICHT den Inhalt uebernehmen):
+STRUKTURVORLAGE (zeigt NUR die Gliederung – KEINE Inhalte uebernehmen):
 
-WICHTIG: Das Beispiel zeigt wie fehlende Informationen behandelt werden: 
-mit 'nicht erhoben' oder 'keine Angabe' – NIEMALS mit erfundenen Daten.
+Die Anamnese folgt dieser Gliederung. Fuelle JEDEN Abschnitt ausschliesslich \
+mit Informationen aus der Selbstauskunft des aktuellen Patienten. \
+Steht eine Information NICHT in der Selbstauskunft: schreibe 'nicht erhoben'.
 
-Frau X. stellt sich zur stationaeren Aufnahme vor mit der Einweisungsdiagnose einer \
-mittelgradigen depressiven Episode (F32.1). Auf Eigeninitiative.
+  Vorstellungsanlass und Hauptbeschwerde:
+    → Eigene Worte des Patienten, direkte Zitate NUR wenn woertlich in Selbstauskunft
 
-Vorstellungsanlass und Hauptbeschwerde:
-Im Vordergrund stehen seit mehreren Monaten anhaltende Erschoepfung, Antriebsminderung \
-und ein Gefuehl innerer Entfremdung. Frau X. beschreibt, sich "nicht mehr dazugehoerig zum \
-normalen Leben" zu fuehlen. (Direkte Patientenzitate NUR aus der Selbstauskunft verwenden.)
+  Aktuelle Erkrankung:
+    → Beginn, Verlauf, ausloesende und aufrechterhaltende Faktoren AUS DER SELBSTAUSKUNFT
 
-Aktuelle Erkrankung:
-Erstmanifestation laut Selbstauskunft vor ca. einem Jahr. Ausloesende Faktoren: \
-berufliche Ueberlastung und familiaere Konflikte (gemaess Selbstauskunft). \
-Aufrechterhaltende Faktoren: hoher Perfektionismus und fehlende Selbstfuersorge.
+  Psychiatrische Vorgeschichte:
+    → Fruehere Diagnosen, Behandlungen, Aufenthalte – oder 'nicht erhoben'
 
-Sozialanamnese:
-Beruf: Lehrerin (laut Selbstauskunft). Familienstand: nicht erhoben. \
-Kinder: drei Kinder (laut Selbstauskunft). Wohnsituation: nicht erhoben.
+  Somatische Vorgeschichte und aktuelle Medikation:
+    → Koerperliche Erkrankungen, Medikamente – oder 'nicht erhoben'
 
-Psychiatrische und somatische Vorgeschichte:
-Keine psychiatrischen Vorbehandlungen bekannt (laut Selbstauskunft). \
-Somatisch: keine Angaben in der Selbstauskunft.
+  Familienanamnese:
+    → Psychische/somatische Erkrankungen in der Familie – oder 'nicht erhoben'
 
-Familienanamnese:
-Nicht erhoben.
+  Sozialanamnese:
+    → Beruf, Familienstand, Kinder, Wohnsituation – oder 'nicht erhoben'
 
-Vegetativum:
-Schlaf: Einschlaf- und Durchschlafstörungen (laut Selbstauskunft). \
-Appetit: nicht erhoben. Sexualitaet: nicht erhoben.
+  Vegetativum:
+    → Schlaf, Appetit/Gewicht, Sexualitaet, Schmerzen – oder 'nicht erhoben'
 
-Suchtmittelanamnese:
-Keine Angaben in der Selbstauskunft.
+  Suchtmittelanamnese:
+    → Alkohol, Nikotin, Medikamente, illegale Substanzen – oder 'nicht erhoben'
 
-Ressourcen:
-Freude an Sprache und Ausdruck, Musik, Kunst und Bewegung \
-sowie die Naehe zu ihren Kindern (laut Selbstauskunft).\
+  Ressourcen:
+    → Was gibt Kraft? Aus der Selbstauskunft – oder 'nicht erhoben'
+
+WICHTIG: Die Diagnosen, Symptome, Berufe, Zitate und alle anderen Inhalte muessen \
+von DIESEM Patienten stammen. Das Few-Shot-Beispiel dient NUR als Strukturvorlage. \
+Uebernimm KEINE konkreten Inhalte, Formulierungen oder Zitate aus diesem Beispiel.\
 """
 
 FEW_SHOT_VERLAENGERUNG = """\
@@ -337,17 +334,19 @@ BASE_PROMPTS: dict[str, str] = {
         "Trenne die beiden Teile mit der Zeile: ###BEFUND###\n\n"
         "BEFUND-VORLAGE (exakt so ausfuellen):\n"
         + BEFUND_VORLAGE + "\n\n"
+        "NICHT SCHREIBEN:\n"
+        "– Keine 'SYSTEMISCHE EINSCHÄTZUNG' oder Hypothesen-Abschnitte\n"
+        "– Keine Diagnosen-Wiederholung am Ende\n"
+        "– Keine Therapieempfehlungen oder Behandlungsplaene\n"
+        "– Keine Abschnitte die nicht oben in der Gliederung stehen\n"
+        "– Kein Markdown (keine **, keine ##, keine ---)\n\n"
         "QUALITAETSANFORDERUNGEN:\n"
-        "- QUELLENREGEL: Jeder Satz im Bericht MUSS auf eine konkrete Stelle in den "
+        "- QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in den "
         "bereitgestellten Unterlagen (Selbstauskunft, Vorbefunde, Aufnahmegespraech) "
-        "zurueckfuehrbar sein. Wenn du einen Satz schreibst, pruefe: "
-        "Wo genau in den Unterlagen steht diese Information? "
-        "Findest du keine Quelle → schreibe 'nicht erhoben' oder lasse den Punkt weg.\n"
-        "- Alle Informationen aus den Unterlagen verwenden – nichts weglassen\n"
-        "- Direkte Patientenzitate NUR verwenden wenn sie WOERTLICH in der "
-        "Selbstauskunft stehen – keine Zitate erfinden oder umformulieren\n"
-        "- Wenn eine Information NICHT in den Unterlagen steht, schreibe 'nicht erhoben' "
-        "oder 'keine Angabe in der Selbstauskunft'\n"
+        "zurueckfuehrbar sein. Findest du keine Quelle → 'nicht erhoben'.\n"
+        "- Lies die Selbstauskunft des AKTUELLEN Patienten sorgfaeltig. "
+        "Schreibe ueber DIESEN Patienten – nicht ueber einen Beispielpatienten.\n"
+        "- Direkte Patientenzitate NUR wenn WOERTLICH in der Selbstauskunft\n"
         "- NIEMALS erfinden: Beruf, Familienstand, Kinder, Wohnsituation, "
         "Vorbehandlungen, Medikamente, Suchtmittel, Diagnosen, Zeitangaben, "
         "ausloesende Ereignisse, Testwerte, Zitate\n"
