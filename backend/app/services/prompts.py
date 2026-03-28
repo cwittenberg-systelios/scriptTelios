@@ -113,42 +113,45 @@ in dem sie festhalt, wann und wie stark der Anteil aktiv wird.\
 """
 
 FEW_SHOT_ANAMNESE = """\
-BEISPIEL (Anamnese nach sysTelios-Standard – ca. 350-500 Woerter, direkte Patientenzitate nutzen):
+BEISPIEL (Anamnese nach sysTelios-Standard – zeigt Struktur und Stil, NICHT den Inhalt uebernehmen):
+
+WICHTIG: Das Beispiel zeigt wie fehlende Informationen behandelt werden: 
+mit 'nicht erhoben' oder 'keine Angabe' – NIEMALS mit erfundenen Daten.
 
 Frau X. stellt sich zur stationaeren Aufnahme vor mit der Einweisungsdiagnose einer \
-mittelgradigen depressiven Episode (F32.1). Auf Eigeninitiative / Zuweisung durch [Zuweiser].
+mittelgradigen depressiven Episode (F32.1). Auf Eigeninitiative.
 
 Vorstellungsanlass und Hauptbeschwerde:
 Im Vordergrund stehen seit mehreren Monaten anhaltende Erschoepfung, Antriebsminderung \
 und ein Gefuehl innerer Entfremdung. Frau X. beschreibt, sich "nicht mehr dazugehoerig zum \
-normalen Leben" zu fuehlen – Taetigkeiten, die ihr frueher selbstverstaendlich gelungen seien, \
-erschienen ihr nun wie durch einen "zaehen Brei" hindurch. [Direkte Patientenzitate aus der \
-Selbstauskunft verwenden.]
+normalen Leben" zu fuehlen. (Direkte Patientenzitate NUR aus der Selbstauskunft verwenden.)
 
 Aktuelle Erkrankung:
-Erstmanifestation [Zeitpunkt aus Selbstauskunft]. Ausloesende Faktoren: [konkret aus Unterlagen]. \
-Aufrechterhaltende Faktoren: [konkret aus Unterlagen].
-
-Begleitend berichtet Frau X. ueber [spezifische Symptome aus der Selbstauskunft]. \
-Schlafst oerungen, Anspannung und Konzentrationsprobleme verstaerken die depressive Symptomatik.
+Erstmanifestation laut Selbstauskunft vor ca. einem Jahr. Ausloesende Faktoren: \
+berufliche Ueberlastung und familiaere Konflikte (gemaess Selbstauskunft). \
+Aufrechterhaltende Faktoren: hoher Perfektionismus und fehlende Selbstfuersorge.
 
 Sozialanamnese:
-[Beruf, Familienstand, Kinder, Wohnsituation – alle Angaben aus der Selbstauskunft, \
-nichts erfinden. Fehlende Angaben als 'nicht erhoben' kennzeichnen.]
+Beruf: Lehrerin (laut Selbstauskunft). Familienstand: nicht erhoben. \
+Kinder: drei Kinder (laut Selbstauskunft). Wohnsituation: nicht erhoben.
 
 Psychiatrische und somatische Vorgeschichte:
-[Aus Unterlagen – wenn nicht vorhanden: 'Keine Vorbehandlungen bekannt.']
+Keine psychiatrischen Vorbehandlungen bekannt (laut Selbstauskunft). \
+Somatisch: keine Angaben in der Selbstauskunft.
+
+Familienanamnese:
+Nicht erhoben.
+
+Vegetativum:
+Schlaf: Einschlaf- und Durchschlafstörungen (laut Selbstauskunft). \
+Appetit: nicht erhoben. Sexualitaet: nicht erhoben.
+
+Suchtmittelanamnese:
+Keine Angaben in der Selbstauskunft.
 
 Ressourcen:
-[Aus der Selbstauskunft: Was gibt Kraft? Hobbys, Beziehungen, Faehigkeiten?]
-
-Psychopathologischer Befund (AMDP):
-[Patientenname] praesentiert sich bewusstseinsklar, zur Person, Zeit, Ort und Situation \
-orientiert. Aufmerksamkeit und Konzentration [Beschreibung]. Formales Denken geordnet, \
-Gedankengang zielfuehrend. Keine Ich-Stoerungen, keine Wahrnehmungsstoerungen. \
-Affekt [Beschreibung, Schwingungsfaehigkeit]. Antrieb [Beschreibung]. \
-Suizidale Gedanken [verneint / Beschreibung]. \
-Vegetativum: Schlaf [Beschreibung], Appetit [Beschreibung].\
+Freude an Sprache und Ausdruck, Musik, Kunst und Bewegung \
+sowie die Naehe zu ihren Kindern (laut Selbstauskunft).\
 """
 
 FEW_SHOT_VERLAENGERUNG = """\
@@ -305,6 +308,9 @@ BASE_PROMPTS: dict[str, str] = {
         "'Als Uebung wurde vereinbart, ...'\n\n"
         "Stil: Fliestext pro Abschnitt, aktiv, konkret, systemisch-wertschaetzend. "
         "Keine Sektion ueber den Gespraechsstil.\n\n"
+        "QUELLENREGEL: Alle Inhalte muessen aus dem Transkript oder den Stichpunkten "
+        "ableitbar sein. Keine Symptome, Diagnosen, Interventionen oder Zitate "
+        "erfinden die nicht im Gespraech vorkamen.\n\n"
         + FEW_SHOT_DOKUMENTATION
     ),
 
@@ -326,15 +332,25 @@ BASE_PROMPTS: dict[str, str] = {
         "TEIL 2 – PSYCHOPATHOLOGISCHER BEFUND:\n"
         "Verwende EXAKT die folgende Vorlage. Fuelle alle Luecken mit Informationen "
         "aus der Selbstauskunft. Kuerze Mehrfachoptionen auf die zutreffende Variante. "
-        "Wenn eine Information nicht vorhanden ist, waehle die klinisch plausibelste "
-        "Option oder schreibe 'nicht erhoben'.\n"
+        "Wenn eine Information nicht in den Unterlagen steht, schreibe 'nicht erhoben' – "
+        "NIEMALS eine klinisch plausible Option raten oder erfinden.\n"
         "Trenne die beiden Teile mit der Zeile: ###BEFUND###\n\n"
         "BEFUND-VORLAGE (exakt so ausfuellen):\n"
         + BEFUND_VORLAGE + "\n\n"
         "QUALITAETSANFORDERUNGEN:\n"
+        "- QUELLENREGEL: Jeder Satz im Bericht MUSS auf eine konkrete Stelle in den "
+        "bereitgestellten Unterlagen (Selbstauskunft, Vorbefunde, Aufnahmegespraech) "
+        "zurueckfuehrbar sein. Wenn du einen Satz schreibst, pruefe: "
+        "Wo genau in den Unterlagen steht diese Information? "
+        "Findest du keine Quelle → schreibe 'nicht erhoben' oder lasse den Punkt weg.\n"
         "- Alle Informationen aus den Unterlagen verwenden – nichts weglassen\n"
-        "- Direkte Patientenzitate in Anfuehrungszeichen\n"
-        "- NIEMALS Informationen erfinden die nicht in den Unterlagen stehen\n"
+        "- Direkte Patientenzitate NUR verwenden wenn sie WOERTLICH in der "
+        "Selbstauskunft stehen – keine Zitate erfinden oder umformulieren\n"
+        "- Wenn eine Information NICHT in den Unterlagen steht, schreibe 'nicht erhoben' "
+        "oder 'keine Angabe in der Selbstauskunft'\n"
+        "- NIEMALS erfinden: Beruf, Familienstand, Kinder, Wohnsituation, "
+        "Vorbehandlungen, Medikamente, Suchtmittel, Diagnosen, Zeitangaben, "
+        "ausloesende Ereignisse, Testwerte, Zitate\n"
         "- LAENGE Anamnese: Mindestens 350 Woerter\n\n"
         + FEW_SHOT_ANAMNESE
     ),
@@ -366,8 +382,11 @@ BASE_PROMPTS: dict[str, str] = {
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
         "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens: 'Frau M.' / 'Herr R.' "
         "sowie 'die Klientin' / 'der Klient'.\n\n"
-        "HALLUZINATIONSSCHUTZ: Ausschließlich Informationen verwenden die in der "
-        "Verlaufsdokumentation oder Antragsvorlage stehen. Nichts erfinden.\n\n"
+        "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
+        "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation "
+        "oder Antragsvorlage zurueckfuehrbar sein. Keine Therapieinhalte, Methoden, "
+        "Fortschritte oder Zitate erfinden die nicht in den Quellen stehen. "
+        "Im Zweifel weglassen statt erfinden.\n\n"
         "WICHTIG – STILBEISPIEL:\n"
         "Falls ein Stilbeispiel bereitgestellt wird: Übernimm Struktur, Gliederung "
         "und Länge exakt. Ersetze nur die patientenspezifischen Inhalte.\n\n"
@@ -398,6 +417,10 @@ BASE_PROMPTS: dict[str, str] = {
         "STIL: Fliesstext, Wir-Perspektive, systemische Fachsprache, "
         "konkret und patientenspezifisch – keine Allgemeinplaetze.\n"
         "LAENGE: mind. 600 Woerter gesamt.\n\n"
+        "QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in der "
+        "Verlaufsdokumentation oder Antragsvorlage zurueckfuehrbar sein. "
+        "Keine Therapieinhalte, Diagnosen, Methoden oder Zitate erfinden "
+        "die nicht in den Quellen stehen. Im Zweifel weglassen.\n\n"
         + FEW_SHOT_ENTLASSBERICHT
     ),
 }
