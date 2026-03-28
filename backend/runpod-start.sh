@@ -233,19 +233,26 @@ _install_ollama() {
 # ── Ollama CUDA-Library Verifikation ──────────────────────────────────────────
 # Stellt sicher dass cuda_v13 UND libggml-base.so.0 vorhanden sind.
 # Ohne diese Files erkennt Ollama Blackwell-GPUs nicht und faellt auf CPU zurueck.
-# Ursache: Ollama install.sh ohne zstd → .tgz-Fallback enthält nur cuda_v12.
+#
+# WICHTIG: Ollama sucht Libraries relativ zum Binary-Pfad.
+#   Binary in /usr/local/bin/ollama  → sucht /usr/local/lib/ollama/
+#   Binary in /workspace/bin/ollama  → sucht /workspace/lib/ollama/
+# Das Install-Skript installiert nach /usr/local/, wir kopieren das Binary
+# nach /workspace/bin/ (persistent ueber Pod-Neustarts). Daher muessen die
+# Libraries an BEIDEN Stellen liegen.
 _verify_ollama_cuda_libs() {
-    local OLLAMA_LIB="/usr/local/lib/ollama"
+    local INSTALL_LIB="/usr/local/lib/ollama"
+    local WORKSPACE_LIB="/workspace/lib/ollama"
     local NEEDS_FIX=false
 
-    # Pruefung 1: cuda_v13-Verzeichnis mit libggml-cuda.so
-    if [ ! -f "$OLLAMA_LIB/cuda_v13/libggml-cuda.so" ]; then
-        echo "${WARN}cuda_v13/libggml-cuda.so fehlt"
+    # Pruefung 1: cuda_v13-Verzeichnis mit libggml-cuda.so (am Install-Ort)
+    if [ ! -f "$INSTALL_LIB/cuda_v13/libggml-cuda.so" ]; then
+        echo "${WARN}cuda_v13/libggml-cuda.so fehlt in $INSTALL_LIB"
         NEEDS_FIX=true
     fi
 
     # Pruefung 2: libggml-base.so.0 im Hauptverzeichnis
-    if ! ls "$OLLAMA_LIB"/libggml-base.so* >/dev/null 2>&1; then
+    if ! ls "$INSTALL_LIB"/libggml-base.so* >/dev/null 2>&1; then
         echo "${WARN}libggml-base.so fehlt (kritisch fuer GPU-Erkennung!)"
         NEEDS_FIX=true
     fi
@@ -275,12 +282,9 @@ _verify_ollama_cuda_libs() {
 
         # Alles nach /usr/local/lib/ollama/ kopieren
         if [ -d "$TMP_EXTRACT/lib/ollama" ]; then
-            cp -rf "$TMP_EXTRACT/lib/ollama/"* "$OLLAMA_LIB/"
-            chmod -R 755 "$OLLAMA_LIB/"
-            echo "${OK}CUDA-Libraries installiert:"
-            echo "       cuda_v12: $(ls $OLLAMA_LIB/cuda_v12/libggml-cuda.so 2>/dev/null && echo 'OK' || echo 'FEHLT')"
-            echo "       cuda_v13: $(ls $OLLAMA_LIB/cuda_v13/libggml-cuda.so 2>/dev/null && echo 'OK' || echo 'FEHLT')"
-            echo "       libggml-base: $(ls $OLLAMA_LIB/libggml-base.so* 2>/dev/null | head -1 || echo 'FEHLT')"
+            cp -rf "$TMP_EXTRACT/lib/ollama/"* "$INSTALL_LIB/"
+            chmod -R 755 "$INSTALL_LIB/"
+            echo "${OK}CUDA-Libraries nach $INSTALL_LIB installiert"
         else
             echo "${ERR}Konnte Libraries nicht aus Archiv extrahieren"
         fi
@@ -290,6 +294,26 @@ _verify_ollama_cuda_libs() {
         rm -rf "$TMP_EXTRACT"
     else
         echo "${OK}Ollama CUDA-Libraries vollstaendig (cuda_v12 + cuda_v13 + libggml-base)"
+    fi
+
+    # Libraries nach /workspace/lib/ollama/ synchronisieren.
+    # Das Binary in /workspace/bin/ollama sucht relativ zu seinem Pfad,
+    # also in /workspace/lib/ollama/ — NICHT in /usr/local/lib/ollama/.
+    # Ohne diesen Sync findet das Binary cuda_v13 nicht → GPU = CPU Fallback.
+    if [ -d "$INSTALL_LIB" ]; then
+        mkdir -p "$WORKSPACE_LIB"
+        rsync -a --delete "$INSTALL_LIB/" "$WORKSPACE_LIB/" 2>/dev/null || \
+            cp -rf "$INSTALL_LIB/"* "$WORKSPACE_LIB/" 2>/dev/null || true
+        chmod -R 755 "$WORKSPACE_LIB/"
+        echo "${OK}Libraries synchronisiert: $INSTALL_LIB → $WORKSPACE_LIB"
+
+        # Ergebnis pruefen
+        for check_dir in "$INSTALL_LIB" "$WORKSPACE_LIB"; do
+            local v12="$(ls $check_dir/cuda_v12/libggml-cuda.so 2>/dev/null && echo 'OK' || echo 'FEHLT')"
+            local v13="$(ls $check_dir/cuda_v13/libggml-cuda.so 2>/dev/null && echo 'OK' || echo 'FEHLT')"
+            local base="$(ls $check_dir/libggml-base.so* 2>/dev/null | head -1 && echo 'OK' || echo 'FEHLT')"
+            echo "       $check_dir: cuda_v12=$v12 cuda_v13=$v13 base=$base"
+        done
     fi
 }
 
