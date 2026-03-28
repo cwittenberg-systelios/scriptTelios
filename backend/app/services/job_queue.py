@@ -25,12 +25,18 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # Separater Performance-Logger – schreibt JSON-Zeilen in eigene Datei
+# Pfad: /workspace/performance.log (persistent über Pod-Neustarts)
 perf_logger = logging.getLogger("systelios.performance")
 
 
 def _setup_perf_logger() -> None:
     """Richtet den Performance-Logger mit eigenem Logfile ein."""
-    perf_log_path = Path(settings.LOG_FILE).parent / "performance.log"
+    # Persistent auf /workspace falls vorhanden, sonst neben LOG_FILE
+    import os
+    if os.path.isdir("/workspace"):
+        perf_log_path = "/workspace/performance.log"
+    else:
+        perf_log_path = str(Path(settings.LOG_FILE).parent / "performance.log")
     try:
         handler = logging.FileHandler(str(perf_log_path), encoding="utf-8")
         handler.setFormatter(logging.Formatter("%(message)s"))  # nur die JSON-Zeile
@@ -55,6 +61,11 @@ def _log_performance(job: "Job", queue_size: int) -> None:
         "queue_size":   queue_size,
         "model":        job.model_used,
         "error":        job.error_msg if job.status.value == "error" else None,
+        # Input-Metadaten
+        "input":        job.input_meta,
+        # Output-Statistiken
+        "output_words": len(job.result_text.split()) if job.result_text else 0,
+        "output_chars": len(job.result_text) if job.result_text else 0,
     }
     perf_logger.info(json.dumps(entry, ensure_ascii=False))
 
@@ -86,6 +97,8 @@ class Job:
         self.duration_s         : Optional[float] = None
         self.style_info         : Optional[dict] = None   # Stil-Metadaten: source, chars, words
         self._cancel_requested  : bool = False  # gesetzt via cancel_job()
+        # Performance-Tracking: Input-Metadaten
+        self.input_meta         : Optional[dict] = None   # {has_audio, has_pdf, has_style, ...}
 
     def to_dict(self) -> dict:
         return {

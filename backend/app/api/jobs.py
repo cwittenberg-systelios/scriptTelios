@@ -159,6 +159,19 @@ async def create_generate_job(
         description=f"Workflow: {workflow}" + (f" | Audio: {audio_name}" if audio_name else ""),
     )
 
+    # Performance-Tracking: welche Inputs hat dieser Job?
+    job.input_meta = {
+        "has_audio":       bool(audio_bytes),
+        "audio_mb":        round(len(audio_bytes) / 1e6, 1) if audio_bytes else 0,
+        "has_selbst_pdf":  bool(selbst_bytes),
+        "has_vorbef_pdf":  bool(vorbef_bytes),
+        "has_style":       bool(style_bytes) or bool(style_text and style_text.strip()),
+        "has_transcript":  bool(transcript and transcript.strip()),
+        "has_bullets":     bool(bullets and bullets.strip()),
+        "diagnosen":       dx_list,
+        "model_requested": model or "default",
+    }
+
     async def _run():
         import uuid as _uuid
         from pathlib import Path as _Path

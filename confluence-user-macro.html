@@ -12,18 +12,22 @@
 ## VERWENDUNG:
 ##   Seite bearbeiten → Insert → Other Macros → "scriptTelios" einfügen
 ##
-##   Beim ersten Aufruf erscheint ein Einstellungs-Dialog wo die
-##   Backend-URL eingetragen wird. Diese wird im Browser gespeichert
-##   und gilt für alle Therapeuten auf diesem Gerät.
+## BACKEND-URL KONFIGURIEREN (empfohlen):
+##   Beim Einfügen des Macros den Parameter "Backend URL" setzen.
+##   Damit müssen Therapeuten die URL nicht selbst eingeben.
+##   Beispiel: https://abc123-8000.proxy.runpod.net
 ##
-##   URL nach Pod-Neustart: Im Frontend oben rechts auf das
-##   Zahnrad-Icon klicken → neue URL eintragen → Speichern.
+##   Bei Pod-Neustart: Macro bearbeiten → neue URL eintragen → Speichern.
+##   Alle Nutzer der Seite bekommen automatisch die neue URL.
+##
+##   Alternativ: URL-Feld leer lassen → Therapeuten konfigurieren
+##   die URL beim ersten Aufruf selbst (wird im Browser gespeichert).
 ##
 ## ════════════════════════════════════════════════════════════════════════
-## @param backendUrl:title=Backend URL|type=string|required=false|default=
+## @param backendUrl:title=Backend URL|type=string|required=false|default=|desc=URL des scriptTelios-Backends (z.B. https://abc123-8000.proxy.runpod.net). Wenn gesetzt, müssen Therapeuten nichts konfigurieren.
 
 ## Container – äusserer Wrapper (vom Macro befüllt) + innerer leerer Mount-Punkt
-<div id="systelios-root-$action.hashCode()">
+<div id="systelios-root-$action.hashCode()" data-api="$!{parambackendUrl}">
   <div id="systelios-app"></div>
 </div>
 

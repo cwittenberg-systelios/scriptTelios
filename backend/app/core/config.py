@@ -122,7 +122,7 @@ class Settings(BaseSettings):
 
     # ── Logging ───────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"
-    LOG_FILE:  str = "systelios.log"
+    LOG_FILE:  str = "/workspace/systelios.log"
 
 
 settings = Settings()

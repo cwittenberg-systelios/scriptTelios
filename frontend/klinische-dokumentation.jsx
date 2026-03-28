@@ -1824,6 +1824,16 @@ export default function App() {
     catch (_) { return window.SYSTELIOS_API_BASE || ""; }
   });
 
+  // URL aus Confluence-Macro-Parameter (data-api am Container)?
+  // Wenn gesetzt, brauchen Therapeuten den Settings-Dialog nicht.
+  const [urlFromMacro] = useState(() => {
+    try {
+      const container = document.querySelector('[id^="systelios-root-"]');
+      const macroApi = container?.dataset?.api?.trim();
+      return !!macroApi;
+    } catch (_) { return false; }
+  });
+
   // Modell-Wahl persistent speichern
   function handleModelChange(m) {
     setSelectedModel(m);
@@ -1861,6 +1871,7 @@ export default function App() {
     window.SYSTELIOS_API_BASE = url;
     setBackendUrl(url);
     setUrlInput(url);
+    setBackendOffline(false); // Reset – wird beim nächsten Health-Check aktualisiert
     setShowSettings(false);
     toast("Backend-URL gespeichert");
   };
@@ -1871,7 +1882,23 @@ export default function App() {
   }, []);
 
   // Beim ersten Start ohne URL: Settings automatisch öffnen
-  const firstRun = !backendUrl;
+  // NICHT wenn die URL aus dem Confluence-Macro kommt (data-api)
+  const firstRun = !backendUrl && !urlFromMacro;
+
+  // Backend-Erreichbarkeit prüfen (alle 30 Sekunden)
+  const [backendOffline, setBackendOffline] = useState(false);
+  useEffect(() => {
+    if (!backendUrl) return;
+    let cancelled = false;
+    const check = () => {
+      fetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(5000) })
+        .then(r => { if (!cancelled) setBackendOffline(!r.ok); })
+        .catch(() => { if (!cancelled) setBackendOffline(true); });
+    };
+    check(); // sofort prüfen
+    const interval = setInterval(check, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [backendUrl]);
 
   return (
     <div id="st-root" style={{
@@ -1951,16 +1978,34 @@ export default function App() {
       </main>
 
       {/* Settings Modal – via Portal damit position:fixed korrekt funktioniert */}
-      {(showSettings || firstRun) && createPortal(
+      {(showSettings || firstRun || backendOffline) && createPortal(
         <div style={{
           position:"fixed", inset:0, background:"rgba(0,0,0,0.55)",
           display:"flex", alignItems:"center", justifyContent:"center",
           zIndex:1000
-        }} onClick={(e) => { if(e.target===e.currentTarget && !firstRun) setShowSettings(false); }}>
+        }} onClick={(e) => { if(e.target===e.currentTarget && !firstRun && !backendOffline) setShowSettings(false); }}>
           <div style={{
             background:"#fff", borderRadius:8, padding:"32px 28px", width:480,
             boxShadow:"0 8px 40px rgba(0,0,0,0.25)"
           }}>
+            {/* Offline-Banner */}
+            {backendOffline && !firstRun && (
+              <div style={{
+                background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6,
+                padding:"12px 16px", marginBottom:20, display:"flex", alignItems:"flex-start", gap:10
+              }}>
+                <span style={{fontSize:20, lineHeight:1}}>⚠</span>
+                <div>
+                  <div style={{fontSize:14, fontWeight:600, color:"#991b1b", marginBottom:4}}>
+                    Backend nicht erreichbar
+                  </div>
+                  <div style={{fontSize:12, color:"#7f1d1d", lineHeight:1.5}}>
+                    Verbindung zu <code style={{background:"#fee2e2", padding:"1px 4px", borderRadius:3, fontSize:11}}>{backendUrl}</code> fehlgeschlagen.
+                    Bitte prüfe ob der Server läuft oder ändere die URL.
+                  </div>
+                </div>
+              </div>
+            )}
             <div style={{marginBottom:20}}>
               <div style={{fontSize:18, fontWeight:700, color:"#2c2c2c", marginBottom:6}}>
                 ⚙ Backend-URL einstellen
@@ -1988,6 +2033,11 @@ export default function App() {
               }}
             />
             <div style={{fontSize:11, color:"#a0a49e", marginBottom:20, lineHeight:1.6}}>
+              {urlFromMacro && (
+                <span style={{color:"#16a34a", fontWeight:500}}>
+                  ✓ URL wird über das Confluence-Macro konfiguriert.<br />
+                </span>
+              )}
               Testphase RunPod: <code style={{background:"#f0eeea",padding:"1px 5px",borderRadius:3}}>https://&lt;pod-id&gt;-8000.proxy.runpod.net</code><br />
               Produktion: <code style={{background:"#f0eeea",padding:"1px 5px",borderRadius:3}}>http://systelios-server:8000</code>
             </div>
@@ -2004,7 +2054,7 @@ export default function App() {
             </div>
 
             <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>
-              {!firstRun && (
+              {!firstRun && !backendOffline && (
                 <button onClick={() => setShowSettings(false)} style={{
                   padding:"8px 20px", borderRadius:4, border:"1px solid #ccc",
                   background:"#fff", cursor:"pointer", fontSize:13, color:"#666"
