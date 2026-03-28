@@ -296,24 +296,22 @@ _verify_ollama_cuda_libs() {
         echo "${OK}Ollama CUDA-Libraries vollstaendig (cuda_v12 + cuda_v13 + libggml-base)"
     fi
 
-    # Libraries nach /workspace/lib/ollama/ synchronisieren.
-    # Das Binary in /workspace/bin/ollama sucht relativ zu seinem Pfad,
-    # also in /workspace/lib/ollama/ — NICHT in /usr/local/lib/ollama/.
-    # Ohne diesen Sync findet das Binary cuda_v13 nicht → GPU = CPU Fallback.
+    # Libraries fuer /workspace/bin/ollama verfuegbar machen.
+    # Das Binary sucht relativ zu seinem Pfad → /workspace/lib/ollama/.
+    # Statt Kopie: Symlink auf /usr/local/lib/ollama (kein Duplikat,
+    # bleibt automatisch aktuell bei Ollama-Updates).
     if [ -d "$INSTALL_LIB" ]; then
-        mkdir -p "$WORKSPACE_LIB"
-        rsync -a --delete "$INSTALL_LIB/" "$WORKSPACE_LIB/" 2>/dev/null || \
-            cp -rf "$INSTALL_LIB/"* "$WORKSPACE_LIB/" 2>/dev/null || true
-        chmod -R 755 "$WORKSPACE_LIB/"
-        echo "${OK}Libraries synchronisiert: $INSTALL_LIB → $WORKSPACE_LIB"
-
-        # Ergebnis pruefen
-        for check_dir in "$INSTALL_LIB" "$WORKSPACE_LIB"; do
-            local v12="$(ls $check_dir/cuda_v12/libggml-cuda.so 2>/dev/null && echo 'OK' || echo 'FEHLT')"
-            local v13="$(ls $check_dir/cuda_v13/libggml-cuda.so 2>/dev/null && echo 'OK' || echo 'FEHLT')"
-            local base="$(ls $check_dir/libggml-base.so* 2>/dev/null | head -1 && echo 'OK' || echo 'FEHLT')"
-            echo "       $check_dir: cuda_v12=$v12 cuda_v13=$v13 base=$base"
-        done
+        local WORKSPACE_LIB_PARENT="/workspace/lib"
+        local WORKSPACE_LIB="$WORKSPACE_LIB_PARENT/ollama"
+        mkdir -p "$WORKSPACE_LIB_PARENT"
+        # Altes Verzeichnis/Symlink entfernen falls vorhanden
+        if [ -L "$WORKSPACE_LIB" ]; then
+            rm -f "$WORKSPACE_LIB"
+        elif [ -d "$WORKSPACE_LIB" ]; then
+            rm -rf "$WORKSPACE_LIB"
+        fi
+        ln -sf "$INSTALL_LIB" "$WORKSPACE_LIB"
+        echo "${OK}Libraries verlinkt: $WORKSPACE_LIB → $INSTALL_LIB"
     fi
 }
 
@@ -710,20 +708,21 @@ for i in $(seq 1 $MAX); do
     fi
 done
 
-# 8b. Ollama-Modell in VRAM vorwaermen (verhindert 25-30s Kaltstart beim ersten Request)
-# Strategie: /api/generate mit num_predict=1 und /no_think → laedt Modell in VRAM,
-# generiert nur 1 Token, blockiert nicht. keep_alive=-1 haelt Modell permanent geladen.
-echo "${GO}Ollama-Modell vorwaermen..."
+# 8b. Ollama-Modell in VRAM vorwaermen (im Hintergrund, blockiert Start nicht)
+# Erstmaliges Laden eines 20GB-Modells dauert 60-90s (Disk→VRAM).
 OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b")
-WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
-    -H "Content-Type: application/json" \
-    -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": \"/no_think\", \"keep_alive\": -1, \"stream\": false, \"options\": {\"num_predict\": 1}}" \
-    --max-time 120 2>/dev/null) || true
-if echo "$WARMUP_RESPONSE" | grep -q "response\|done"; then
-    echo "${OK}${OLLAMA_MODEL} im VRAM geladen"
-else
-    echo "${WARN}Warmup fehlgeschlagen (ignoriert) – erster Request laedt Modell"
-fi
+(
+    WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
+        -H "Content-Type: application/json" \
+        -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": \"/no_think\", \"keep_alive\": -1, \"stream\": false, \"options\": {\"num_predict\": 1}}" \
+        --max-time 180 2>/dev/null) || true
+    if echo "$WARMUP_RESPONSE" | grep -q '"done":true'; then
+        echo "[OK]    ${OLLAMA_MODEL} im VRAM geladen (Hintergrund-Warmup abgeschlossen)"
+    else
+        echo "[WARN]  Warmup fehlgeschlagen – erster Request laedt Modell"
+    fi
+) &
+echo "${OK}${OLLAMA_MODEL} Warmup gestartet (Hintergrund, ~60-90s)"
 
 # 9. Cloudflare Tunnel starten
 echo ""
