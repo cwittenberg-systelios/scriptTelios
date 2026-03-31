@@ -38,9 +38,31 @@ cp /pfad/zu/AnamneseFrauK/aufnahme.mp3                  /workspace/eval_data/Ana
 # Gespraechs-Audio kopieren (fuer Gespraechsdoku-Workflow)
 cp /pfad/zu/GESPRAECH-FrauK/aufnahme.mp3               /workspace/eval_data/GESPRAECH-FrauK/
 cp /pfad/zu/GESPRAECH-HerrR/aufnahme.mp3               /workspace/eval_data/GESPRAECH-HerrR/
+
+# Stilvorlagen von verschiedenen Therapeuten (fuer Stil-Evaluation)
+mkdir -p /workspace/eval_data/styles/{TherapeutA,TherapeutB,TherapeutC}
+
+# Pro Therapeut: echte Berichte als DOCX ablegen
+cp /pfad/zu/EntlassberichtTherapeutA.docx      /workspace/eval_data/styles/TherapeutA/Entlassbericht.docx
+cp /pfad/zu/VerlängerungsantragTherapeutA.docx  /workspace/eval_data/styles/TherapeutA/Verlängerungsantrag.docx
+cp /pfad/zu/GesprächszusammenfassungA.docx      /workspace/eval_data/styles/TherapeutA/Gesprächszusammenfassung.docx
+
+# Analog fuer TherapeutB und TherapeutC
+cp /pfad/zu/EntlassberichtTherapeutB.docx      /workspace/eval_data/styles/TherapeutB/Entlassbericht.docx
+# ... etc.
 ```
 
-### 2. Tests ausfuehren
+Das Eval-Framework extrahiert automatisch den relevanten Abschnitt aus
+jedem DOCX anhand der Überschriften:
+
+| Workflow | Abschnitt im DOCX |
+|---|---|
+| Entlassbericht | "Psychotherapeutischer Verlauf" |
+| Verlängerung | "Bisheriger Verlauf und Begründung der Verlängerung" |
+| Anamnese | "Aktuelle Anamnese" |
+| Dokumentation | Gesamtes Dokument (Gesprächszusammenfassung) |
+
+### 2. Tests ausführen
 
 ```bash
 cd /workspace/scriptTelios/backend
@@ -66,6 +88,20 @@ EVAL_BACKEND_URL=http://localhost:8000 pytest tests/test_eval.py -v
 
 # Anderes Eval-Daten-Verzeichnis
 EVAL_DATA_DIR=/pfad/zu/testdaten pytest tests/test_eval.py -v
+
+# ── Stil-Evaluation ──────────────────────────────────────
+
+# Stil-Varianz-Test: prüft ob verschiedene Therapeuten-Stile
+# zu unterschiedlichen Outputs führen (braucht mind. 2 Therapeuten in styles/)
+pytest tests/test_eval.py -v -k "variance"
+
+# LLM-als-Jury: bewertet wie gut der Output zur Stilvorlage passt
+# Braucht vorherigen Run mit --eval-output
+pytest tests/test_eval.py -v -k "test_eval_workflow" --eval-output /workspace/eval_results/
+pytest tests/test_eval.py -v -k "jury" --eval-output /workspace/eval_results/
+
+# Alle Stil-Tests zusammen
+pytest tests/test_eval.py -v -k "variance or jury" --eval-output /workspace/eval_results/
 ```
 
 ### 3. Ergebnisse lesen
@@ -99,8 +135,10 @@ tests/
 /workspace/eval_data/   ← Testdaten (NICHT im Git, nur auf dem Pod)
   EB-FrauM/
     tpVerlaufsdokumentation.pdf
+    vorlage.txt               ← Stilvorlage (Beispieltext eines anderen Therapeuten)
   EB-HerrR/
     tpVerlaufsdokumentation.pdf
+    vorlage.txt
   VA-Frau-v-d-A/
     tpVerlaufsdokumentation.pdf
   Anamnese-FrauT/
@@ -113,6 +151,17 @@ tests/
     aufnahme.mp3          ← Therapiegespräch-Aufnahme
   GESPRAECH-HerrR/
     aufnahme.mp3          ← Therapiegespräch-Aufnahme
+  styles/                   ← Therapeuten-Stilvorlagen (DOCX)
+    TherapeutA/
+      Entlassbericht.docx
+      Verlängerungsantrag.docx
+      Gesprächszusammenfassung.docx
+    TherapeutB/
+      Entlassbericht.docx
+      Verlängerungsantrag.docx
+      Gesprächszusammenfassung.docx
+    TherapeutC/             ← optional, 3. Therapeut für breitere Varianz
+      ...
 
 /workspace/eval_results/ ← Generierte Ergebnisse (optional, via --eval-output)
   entlassbericht/
@@ -130,10 +179,13 @@ In `fixtures.json` einen neuen Eintrag im jeweiligen Workflow-Array:
 {
   "id": "eb-03-mein-neuer-test",
   "name": "Beschreibung",
-  "prompt": "Der Prompt fuer das LLM",
+  "prompt": "Der custom_prompt des Therapeuten – mit Patientenname und Schwerpunkten",
   "diagnosen": ["F32.1"],
   "input_files": {
-    "vorbefunde": "MeinOrdner/verlauf.pdf"
+    "vorbefunde": "MeinOrdner/verlauf.pdf",
+    "style_file": "MeinOrdner/vorlage.txt",
+    "audio": "MeinOrdner/aufnahme.mp3",
+    "selbstauskunft": "MeinOrdner/selbstauskunft.pdf"
   },
   "expected": {
     "min_words": 500,
@@ -146,4 +198,11 @@ In `fixtures.json` einen neuen Eintrag im jeweiligen Workflow-Array:
 }
 ```
 
-Dann die zugehoerige PDF nach `/workspace/eval_data/MeinOrdner/` kopieren.
+Input-Felder:
+- `prompt` – Der Therapeuten-Auftrag (Pflicht). Enthält patientenspezifische Schwerpunkte.
+- `input_files.vorbefunde` – Verlaufsdokumentation (PDF) für EB/VA
+- `input_files.selbstauskunft` – Selbstauskunft (PDF) für Anamnese
+- `input_files.audio` – Aufnahme (MP3) für Anamnese und Gesprächsdoku
+- `input_files.style_file` – Stilvorlage (.txt) eines anderen Therapeuten. Wird als `style_text` gesendet.
+
+Dann die zugehoerigen Dateien nach `/workspace/eval_data/MeinOrdner/` kopieren.

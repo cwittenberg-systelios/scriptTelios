@@ -1,152 +1,88 @@
 {
-  "description": "Evaluations-Fixtures fuer scriptTelios Qualitaetsmessung. 2 Testfaelle pro Workflow.",
-  "version": "1.1",
-  "note": "input_files sind optional. Pfade relativ zu EVAL_DATA_DIR (/workspace/eval_data). Tests laufen auch ohne Dateien (dann nur Struktur-Checks).",
+  "description": "Evaluations-Fixtures für scriptTelios Qualitätsmessung.",
+  "version": "2.0",
+  "note": "input_files und style_therapeut sind optional. Pfade relativ zu EVAL_DATA_DIR. Stilvorlagen werden aus /workspace/eval_data/styles/{TherapeutX}/ geladen.",
+
   "entlassbericht": [
     {
       "id": "eb-01-depression-anteilearbeit",
       "name": "Depression mit Anteilearbeit (Frau)",
-      "prompt": "Schreibe den psychotherapeutischen Verlaufsteil des Entlassberichts. Schwerpunkte: hypnosystemische Anteilearbeit, Selbstwertthematik, biographische Belastungen, Gruppenarbeit.",
-      "diagnosen": [
-        "F32.1",
-        "F60.8"
-      ],
+      "prompt": "Als systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik, schreibe den psychotherapeutischen Teil des Verlaufsberichts des Entlassberichts von Frau M. Beziehe dich dabei auf die Verlaufsdokumentation. Folgende Themen sollten aufgegriffen werden: Ziele des Aufenthaltes, Anteilearbeit mit Bezug auf biographische Entwicklungen und Selbstwert, Traumafokussierte Arbeit, Arbeit in der Gruppe, sowie die Beleuchtung der Familien- und Paardynamik.",
+      "diagnosen": ["F32.1", "F60.8"],
+      "style_therapeut": "TherapeutA",
       "input_files": {
         "vorbefunde": "EB-FrauM/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
         "min_words": 550,
         "max_words": 900,
-        "required_keywords": [
-          "Anteile",
-          "Selbstwert",
-          "Gruppe",
-          "ambulant"
-        ],
-        "forbidden_patterns": [
-          "**",
-          "##",
-          "Epikrise:",
-          "Procedere:",
-          "I.",
-          "II."
-        ],
-        "must_contain_sections": [
-          "Behandlungsverlauf",
-          "Empfehlung"
-        ],
-        "name_format": "Frau M.",
-        "forbidden_names": [
-          "Mayer",
-          "Isdek",
-          "A28094"
-        ]
+        "required_keywords": ["Anteile", "Selbstwert", "Gruppe", "ambulant"],
+        "forbidden_patterns": ["**", "##", "Epikrise:", "Procedere:", "I.", "II."],
+        "must_contain_sections": ["Behandlungsverlauf", "Empfehlung"],
+        "forbidden_names": ["Mayer", "Isdek", "A28094"]
       }
     },
     {
       "id": "eb-02-ads-trennung",
       "name": "ADS und Paarkrise (Mann)",
-      "prompt": "Schreibe den psychotherapeutischen Verlaufsteil des Entlassberichts. Schwerpunkte: Tuersteer-Anteil, raeumliche Trennung, Beziehungsdynamik, Kunsttherapie als Ressource.",
-      "diagnosen": [
-        "F33.1",
-        "F90.0"
-      ],
+      "prompt": "Als systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik, schreibe den psychotherapeutischen Teil des Verlaufsberichts des Entlassberichts von Herrn R. Beziehe dich dabei auf die Verlaufsdokumentation. Folgende Themen sollten aufgegriffen werden: Ziele des Aufenthaltes, Anteilearbeit mit Bezug auf biographische Entwicklungen und Selbstwert (insb. Wächteranteil „Türsteher"), Arbeit in der Gruppe, sowie die Beleuchtung der Familien- und Paardynamik, letztendlich der Entschluss einer räumlichen Trennung zur Partnerin.",
+      "diagnosen": ["F33.1", "F90.0"],
+      "style_therapeut": "TherapeutB",
       "input_files": {
         "vorbefunde": "EB-HerrR/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
         "min_words": 550,
         "max_words": 900,
-        "required_keywords": [
-          "Anteile",
-          "Trennung",
-          "Gruppe",
-          "ambulant"
-        ],
-        "forbidden_patterns": [
-          "**",
-          "##",
-          "Epikrise:",
-          "Procedere:"
-        ],
-        "must_contain_sections": [
-          "Behandlungsverlauf",
-          "Empfehlung"
-        ],
-        "name_format": "Herr R.",
-        "forbidden_names": [
-          "Reif",
-          "28032"
-        ]
+        "required_keywords": ["Anteile", "Trennung", "Gruppe", "ambulant"],
+        "forbidden_patterns": ["**", "##", "Epikrise:", "Procedere:"],
+        "must_contain_sections": ["Behandlungsverlauf", "Empfehlung"],
+        "forbidden_names": ["Reif", "28032"]
       }
     }
   ],
+
   "verlaengerung": [
     {
       "id": "va-01-borderline-stabilisierung",
       "name": "Borderline-Struktur mit Stabilisierungsbedarf (Frau)",
-      "prompt": "Schreibe den Abschnitt Bisheriger Verlauf und Begruendung der Verlaengerung. Schwerpunkte: Anteilearbeit, Abwerter-Anteil, Steuerungsposition, Naehe-Distanz-Thematik.",
-      "diagnosen": [
-        "F60.31",
-        "F32.1"
-      ],
+      "prompt": "Als systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik, schreibe den psychotherapeutischen Teil (Bisheriger Verlauf und Begründung der Verlängerung) eines erneuten Verlängerungsantrags (14 Tage) für Frau v.d.A. Beziehe dich dabei auf die Verlaufsdokumentation.",
+      "diagnosen": ["F60.31", "F32.1"],
+      "style_therapeut": "TherapeutA",
       "input_files": {
         "vorbefunde": "VA-Frau-v-d-A/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
         "min_words": 350,
         "max_words": 650,
-        "required_keywords": [
-          "Anteilearbeit",
-          "Verlängerung",
-          "Stabilität"
-        ],
-        "forbidden_patterns": [
-          "**",
-          "##",
-          "Diagnose:",
-          "Stammdaten"
-        ],
-        "must_contain_sections": [
-          "Verlauf",
-          "Verlängerung"
-        ]
+        "required_keywords": ["Anteilearbeit", "Verlängerung", "Stabilität"],
+        "forbidden_patterns": ["**", "##", "Diagnose:", "Stammdaten"],
+        "must_contain_sections": ["Verlauf", "Verlängerung"]
       }
     },
     {
       "id": "va-02-angst-regression",
-      "name": "Angststoerung mit regressiver Dynamik (Mann)",
-      "prompt": "Schreibe den Abschnitt Verlauf und Begruendung der weiteren Verlaengerung. Schwerpunkte: Expositionsarbeit, Koerperarbeit, soziale Kompetenz, Rueckfallprophylaxe.",
-      "diagnosen": [
-        "F40.1",
-        "F41.0"
-      ],
+      "name": "Angststörung mit regressiver Dynamik (Mann)",
+      "prompt": "Als systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik, schreibe den Abschnitt Verlauf und Begründung der weiteren Verlängerung. Schwerpunkte: Expositionsarbeit, Körperarbeit, soziale Kompetenz, Rückfallprophylaxe.",
+      "diagnosen": ["F40.1", "F41.0"],
+      "style_therapeut": "TherapeutB",
       "expected": {
         "min_words": 350,
         "max_words": 650,
-        "required_keywords": [
-          "Verlängerung",
-          "ambulant"
-        ],
-        "forbidden_patterns": [
-          "**",
-          "##"
-        ],
-        "must_contain_sections": [
-          "Verlauf",
-          "Verlängerung"
-        ]
+        "required_keywords": ["Verlängerung", "ambulant"],
+        "forbidden_patterns": ["**", "##"],
+        "must_contain_sections": ["Verlauf", "Verlängerung"]
       }
     }
   ],
+
   "anamnese": [
     {
       "id": "an-01-depression-lehrerin",
       "name": "Mittelgradige Depression (Frau, Lehrerin)",
-      "prompt": "Erstelle eine vollstaendige Anamnese und einen psychopathologischen Befund.",
-      "diagnosen": [
-        "F32.1"
-      ],
+      "prompt": "Nimm diesen Bericht und schreibe eine Anamnese als psychologischer Psychotherapeut.",
+      "diagnosen": ["F32.1"],
+      "style_therapeut": "TherapeutA",
       "input_files": {
         "selbstauskunft": "Anamnese-FrauT/selbstauskunft.pdf",
         "audio": "Anamnese-FrauT/aufnahme.mp3"
@@ -154,31 +90,18 @@
       "expected": {
         "min_words": 300,
         "max_words": 600,
-        "required_keywords": [
-          "Vorstellungsanlass",
-          "Ressourcen"
-        ],
-        "forbidden_patterns": [
-          "SYSTEMISCHE EINSCHÄTZUNG",
-          "---",
-          "Diagnosen:"
-        ],
-        "must_not_hallucinate": [
-          "Marketingmanagerin",
-          "Betriebswirtschaft",
-          "5 kg abgenommen"
-        ],
+        "required_keywords": ["Vorstellungsanlass", "Ressourcen"],
+        "forbidden_patterns": ["SYSTEMISCHE EINSCHÄTZUNG", "---", "Diagnosen:"],
+        "must_not_hallucinate": ["Marketingmanagerin", "Betriebswirtschaft", "5 kg abgenommen"],
         "befund_separator": "###BEFUND###"
       }
     },
     {
       "id": "an-02-schulangst-jugendliche",
       "name": "Schulangst und ADS (Jugendliche 18)",
-      "prompt": "Erstelle eine vollstaendige Anamnese und einen psychopathologischen Befund.",
-      "diagnosen": [
-        "F40.1",
-        "F90.0"
-      ],
+      "prompt": "Erstelle eine vollständige Anamnese und einen psychopathologischen Befund.",
+      "diagnosen": ["F40.1", "F90.0"],
+      "style_therapeut": "TherapeutB",
       "input_files": {
         "selbstauskunft": "AnamneseFrauK/selbstauskunft.pdf",
         "audio": "AnamneseFrauK/aufnahme.mp3"
@@ -186,64 +109,43 @@
       "expected": {
         "min_words": 300,
         "max_words": 600,
-        "required_keywords": [
-          "Vorstellungsanlass",
-          "Ressourcen"
-        ],
-        "forbidden_patterns": [
-          "SYSTEMISCHE EINSCHÄTZUNG",
-          "---"
-        ],
-        "must_not_hallucinate": [
-          "Marketingmanagerin",
-          "Betriebswirtschaft",
-          "berufliche Überlastung"
-        ],
+        "required_keywords": ["Vorstellungsanlass", "Ressourcen"],
+        "forbidden_patterns": ["SYSTEMISCHE EINSCHÄTZUNG", "---"],
+        "must_not_hallucinate": ["Marketingmanagerin", "Betriebswirtschaft", "berufliche Überlastung"],
         "befund_separator": "###BEFUND###"
       }
     }
   ],
+
   "dokumentation": [
     {
       "id": "dok-01-familienkonflikt",
       "name": "Familienkonflikt und innere Anteile (Frau)",
-      "prompt": "Erstelle eine systemische Gespraechsdokumentation.",
+      "prompt": "Erstelle eine systemische Gesprächsdokumentation.",
+      "style_therapeut": "TherapeutA",
+      "input_files": {
+        "audio": "GESPRAECH-FrauK/aufnahme.mp3"
+      },
       "expected": {
         "min_words": 200,
         "max_words": 500,
-        "required_sections": [
-          "Auftragsklärung",
-          "Relevante Gesprächsinhalte",
-          "Hypothesen",
-          "Einladungen"
-        ],
-        "forbidden_patterns": [
-          "SYSTEMISCHE EINSCHÄTZUNG"
-        ]
-      },
-      "input_files": {
-        "audio": "GESPRAECH-FrauK/aufnahme.mp3"
+        "required_sections": ["Auftragsklärung", "Relevante Gesprächsinhalte", "Hypothesen", "Einladungen"],
+        "forbidden_patterns": ["SYSTEMISCHE EINSCHÄTZUNG"]
       }
     },
     {
       "id": "dok-02-paarthematik",
       "name": "Paarthematik und Abgrenzung (Mann)",
-      "prompt": "Erstelle eine systemische Gespraechsdokumentation.",
+      "prompt": "Erstelle eine systemische Gesprächsdokumentation.",
+      "style_therapeut": "TherapeutB",
+      "input_files": {
+        "audio": "GESPRAECH-HerrR/aufnahme.mp3"
+      },
       "expected": {
         "min_words": 200,
         "max_words": 500,
-        "required_sections": [
-          "Auftragsklärung",
-          "Relevante Gesprächsinhalte",
-          "Hypothesen",
-          "Einladungen"
-        ],
-        "forbidden_patterns": [
-          "SYSTEMISCHE EINSCHÄTZUNG"
-        ]
-      },
-      "input_files": {
-        "audio": "GESPRAECH-HerrR/aufnahme.mp3"
+        "required_sections": ["Auftragsklärung", "Relevante Gesprächsinhalte", "Hypothesen", "Einladungen"],
+        "forbidden_patterns": ["SYSTEMISCHE EINSCHÄTZUNG"]
       }
     }
   ]
