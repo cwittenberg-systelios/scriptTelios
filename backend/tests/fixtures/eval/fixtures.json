@@ -1,7 +1,7 @@
 {
   "description": "Evaluations-Fixtures für scriptTelios Qualitätsmessung.",
-  "version": "2.0",
-  "note": "input_files und style_therapeut sind optional. Pfade relativ zu EVAL_DATA_DIR. Stilvorlagen werden aus /workspace/eval_data/styles/{TherapeutX}/ geladen.",
+  "version": "2.2",
+  "note": "Für EB/VA: selbstauskunft = Berichtsvorlage (DOCX). diagnosen_file = ICD-Codes (TXT, optional – Fallback: diagnosen-Array). audio ist überall optional.",
 
   "entlassbericht": [
     {
@@ -11,6 +11,7 @@
       "diagnosen": ["F32.1", "F60.8"],
       "style_therapeut": "TherapeutA",
       "input_files": {
+        "selbstauskunft": "EB-FrauM/entlassbericht.docx",
         "vorbefunde": "EB-FrauM/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
@@ -29,6 +30,7 @@
       "diagnosen": ["F33.1", "F90.0"],
       "style_therapeut": "TherapeutB",
       "input_files": {
+        "selbstauskunft": "EB-HerrR/entlassbericht.docx",
         "vorbefunde": "EB-HerrR/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
@@ -50,6 +52,7 @@
       "diagnosen": ["F60.31", "F32.1"],
       "style_therapeut": "TherapeutA",
       "input_files": {
+        "selbstauskunft": "VA-Frau-v-d-A/verlängerung.docx",
         "vorbefunde": "VA-Frau-v-d-A/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
@@ -85,6 +88,7 @@
       "style_therapeut": "TherapeutA",
       "input_files": {
         "selbstauskunft": "Anamnese-FrauT/selbstauskunft.pdf",
+        "diagnosen_file": "Anamnese-FrauT/diagnosen.txt",
         "audio": "Anamnese-FrauT/aufnahme.mp3"
       },
       "expected": {
@@ -104,6 +108,7 @@
       "style_therapeut": "TherapeutB",
       "input_files": {
         "selbstauskunft": "AnamneseFrauK/selbstauskunft.pdf",
+        "diagnosen_file": "AnamneseFrauK/diagnosen.txt",
         "audio": "AnamneseFrauK/aufnahme.mp3"
       },
       "expected": {

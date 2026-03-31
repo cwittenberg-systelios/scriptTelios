@@ -171,44 +171,73 @@ def load_style_text(therapeut: str, workflow: str) -> str | None:
     
     Sucht in /workspace/eval_data/styles/{therapeut}/ nach dem
     passenden DOCX und extrahiert den relevanten Abschnitt.
+    Bei mehreren Dateien (Entlassbericht_01.docx, _02.docx, ...) wird
+    die erste gefundene zurückgegeben. Für alle: load_all_style_texts().
+    """
+    texts = load_all_style_texts(therapeut, workflow)
+    return texts[0] if texts else None
+
+
+def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
+    """
+    Lädt ALLE Stilvorlagen eines Therapeuten für einen Workflow.
+    
+    Unterstützt mehrere Dateien pro Workflow:
+      Entlassbericht.docx, Entlassbericht_01.docx, Entlassbericht_02.docx, ...
+    
+    Gibt eine Liste von extrahierten Abschnitten zurück.
     """
     therapeut_dir = STYLES_DIR / therapeut
     if not therapeut_dir.exists():
-        return None
+        return []
 
-    # DOCX-Datei finden
+    # Datei-Prefixe pro Workflow
     if workflow == "dokumentation":
-        candidates = ["Gesprächszusammenfassung.docx", "Gespraechszusammenfassung.docx",
-                       "Dokumentation.docx"]
+        prefixes = ["Gesprächszusammenfassung", "Gespraechszusammenfassung", "Dokumentation"]
     elif workflow == "entlassbericht":
-        candidates = ["Entlassbericht.docx"]
+        prefixes = ["Entlassbericht"]
     elif workflow == "verlaengerung":
-        candidates = ["Verlängerungsantrag.docx", "Verlaengerungsantrag.docx"]
+        prefixes = ["Verlängerungsantrag", "Verlaengerungsantrag"]
     elif workflow == "anamnese":
-        # Anamnese kommt aus dem Entlassbericht oder Verlängerungsantrag
-        candidates = ["Entlassbericht.docx", "Verlängerungsantrag.docx",
-                       "Verlaengerungsantrag.docx"]
+        prefixes = ["Entlassbericht", "Verlängerungsantrag", "Verlaengerungsantrag"]
     else:
-        return None
+        return []
 
-    docx_path = None
-    for c in candidates:
-        p = therapeut_dir / c
-        if p.exists():
-            docx_path = p
-            break
+    # Alle passenden DOCX finden (auch nummerierte: _01, _02, etc.)
+    docx_files = []
+    for f in sorted(therapeut_dir.iterdir()):
+        if f.suffix.lower() not in (".docx", ".doc"):
+            continue
+        fname = f.stem  # Dateiname ohne Extension
+        for prefix in prefixes:
+            if fname == prefix or fname.startswith(prefix + "_"):
+                docx_files.append(f)
+                break
 
-    if not docx_path:
-        logger.warning("Keine DOCX-Vorlage für %s/%s gefunden in %s", therapeut, workflow, therapeut_dir)
-        return None
+    if not docx_files:
+        logger.warning("Keine DOCX-Vorlage für %s/%s in %s", therapeut, workflow, therapeut_dir)
+        return []
 
-    # Abschnitt extrahieren
+    # Abschnitte extrahieren
     headings = STYLE_SECTION_HEADINGS.get(workflow)
-    if headings is None:
-        # Gesprächszusammenfassung = ganzes Dokument
-        return _extract_docx_text(docx_path)
-    else:
-        return _extract_docx_section(docx_path, headings)
+    texts = []
+    for docx_path in docx_files:
+        try:
+            if headings is None:
+                text = _extract_docx_text(docx_path)
+            else:
+                text = _extract_docx_section(docx_path, headings)
+            if text and len(text.split()) >= 20:  # mindestens 20 Wörter
+                texts.append(text)
+        except Exception as e:
+            logger.warning("DOCX-Extraktion fehlgeschlagen: %s (%s)", docx_path.name, e)
+
+    logger.info(
+        "Stilvorlagen geladen: %s/%s → %d Beispiele (%s)",
+        therapeut, workflow, len(texts),
+        ", ".join(f.name for f in docx_files),
+    )
+    return texts
 
 
 def discover_therapeuten() -> list[str]:
@@ -269,7 +298,7 @@ async def _generate(
         "workflow": workflow,
         "prompt": prompt,
     }
-    if diagnosen:
+    if diagnosen and "diagnosen" not in form_data:
         form_data["diagnosen"] = ",".join(diagnosen)
     if extra_form_data:
         form_data.update(extra_form_data)
@@ -286,7 +315,7 @@ async def _generate(
                 logger.warning("Eval-Input nicht gefunden: %s (übersprungen)", p)
                 continue
 
-            # Stilvorlage als Text-Feld senden (nicht als File-Upload)
+            # Spezielle Felder die als Text (nicht File) gesendet werden
             if field_name == "style_file":
                 try:
                     if p.suffix.lower() == ".txt":
@@ -300,6 +329,17 @@ async def _generate(
                         logger.info("Eval-Input: style_text aus %s (%d Zeichen)", p, len(style_content))
                 except Exception as e:
                     logger.warning("Stilvorlage nicht lesbar: %s (%s)", p, e)
+            elif field_name == "diagnosen_file":
+                # diagnosen.txt: ICD-Codes laden und als Komma-Liste senden
+                try:
+                    raw = p.read_text(encoding="utf-8")
+                    # Unterstützt: eine pro Zeile, kommagetrennt, oder gemischt
+                    codes = [c.strip() for c in raw.replace("\n", ",").split(",") if c.strip()]
+                    if codes:
+                        form_data["diagnosen"] = ",".join(codes)
+                        logger.info("Eval-Input: diagnosen aus %s → %s", p, codes)
+                except Exception as e:
+                    logger.warning("Diagnosen nicht lesbar: %s (%s)", p, e)
             else:
                 files_to_upload[field_name] = (p.name, open(p, "rb"))
                 logger.info("Eval-Input: %s = %s", field_name, p)
@@ -495,53 +535,103 @@ class EvalResult:
         else:
             self.passed.append("Kein Think-Block im Output")
 
-    def check_style_consistency(self, style_text: str, tolerance: float = 0.4):
+    def check_style_consistency(self, style_text: str | list[str], tolerance: float = 0.4):
         """
         Ansatz 1: Stil-Konsistenz-Check.
-        Vergleicht messbare Stilmerkmale (Satzlänge, Fachbegriff-Dichte,
-        Absatzlänge) zwischen Vorlage und generiertem Text.
-        tolerance: erlaubte Abweichung (0.4 = ±40%).
+        
+        Bei einem Referenztext: vergleicht Output gegen diesen Text.
+        Bei mehreren Referenztexten: berechnet die Bandbreite des Therapeuten-Stils
+        und prüft ob der Output innerhalb dieser Bandbreite (+ Toleranz) liegt.
         """
-        ref = StyleAnalyzer(style_text)
+        if isinstance(style_text, str):
+            refs = [StyleAnalyzer(style_text)]
+        else:
+            refs = [StyleAnalyzer(t) for t in style_text if t]
+
+        if not refs:
+            return
+
         out = StyleAnalyzer(self.text)
 
+        # Metriken der Referenztexte sammeln
+        def _metric_range(metric_fn):
+            values = [metric_fn(r) for r in refs]
+            values = [v for v in values if v > 0]
+            if not values:
+                return 0, 0, 0
+            return min(values), sum(values) / len(values), max(values)
+
         checks = [
-            ("Satzlänge", ref.avg_sentence_length, out.avg_sentence_length),
-            ("Absatzlänge", ref.avg_paragraph_length, out.avg_paragraph_length),
-            ("Fachbegriff-Dichte", ref.fachbegriff_density, out.fachbegriff_density),
+            ("Satzlänge", lambda r: r.avg_sentence_length, out.avg_sentence_length),
+            ("Absatzlänge", lambda r: r.avg_paragraph_length, out.avg_paragraph_length),
+            ("Fachbegriff-Dichte", lambda r: r.fachbegriff_density, out.fachbegriff_density),
         ]
 
-        for name, ref_val, out_val in checks:
-            if ref_val == 0:
+        for name, metric_fn, out_val in checks:
+            ref_min, ref_avg, ref_max = _metric_range(metric_fn)
+            if ref_avg == 0:
                 continue
-            deviation = abs(out_val - ref_val) / ref_val if ref_val else 0
-            if deviation <= tolerance:
-                self.passed.append(
-                    f"STIL {name} OK: Vorlage={ref_val:.1f} Output={out_val:.1f} "
-                    f"(±{deviation:.0%})"
-                )
-            else:
-                self.issues.append(
-                    f"STIL {name} weicht ab: Vorlage={ref_val:.1f} Output={out_val:.1f} "
-                    f"(±{deviation:.0%}, erlaubt ±{tolerance:.0%})"
-                )
 
-        # Wir-Perspektive: wenn Vorlage sie nutzt, sollte Output auch
-        if ref.wir_perspektive_ratio > 0.1:
+            if len(refs) > 1:
+                # Mehrere Referenzen: Output muss in die Bandbreite fallen (+ Toleranz)
+                band_low = ref_min * (1 - tolerance)
+                band_high = ref_max * (1 + tolerance)
+                in_band = band_low <= out_val <= band_high
+                if in_band:
+                    self.passed.append(
+                        f"STIL {name} OK: Output={out_val:.1f} in Bandbreite "
+                        f"[{ref_min:.1f}–{ref_max:.1f}] ±{tolerance:.0%} "
+                        f"({len(refs)} Referenzen)"
+                    )
+                else:
+                    self.issues.append(
+                        f"STIL {name} außerhalb Bandbreite: Output={out_val:.1f}, "
+                        f"Referenz=[{ref_min:.1f}–{ref_max:.1f}] ±{tolerance:.0%} "
+                        f"({len(refs)} Referenzen)"
+                    )
+            else:
+                # Ein Referenztext: einfacher Vergleich
+                deviation = abs(out_val - ref_avg) / ref_avg if ref_avg else 0
+                if deviation <= tolerance:
+                    self.passed.append(
+                        f"STIL {name} OK: Vorlage={ref_avg:.1f} Output={out_val:.1f} "
+                        f"(±{deviation:.0%})"
+                    )
+                else:
+                    self.issues.append(
+                        f"STIL {name} weicht ab: Vorlage={ref_avg:.1f} Output={out_val:.1f} "
+                        f"(±{deviation:.0%}, erlaubt ±{tolerance:.0%})"
+                    )
+
+        # Wir-Perspektive
+        wir_refs = [r.wir_perspektive_ratio for r in refs]
+        avg_wir = sum(wir_refs) / len(wir_refs) if wir_refs else 0
+        if avg_wir > 0.1:
             if out.wir_perspektive_ratio > 0.05:
                 self.passed.append(
-                    f"STIL Wir-Perspektive OK: Vorlage={ref.wir_perspektive_ratio:.0%} "
+                    f"STIL Wir-Perspektive OK: Referenz={avg_wir:.0%} "
                     f"Output={out.wir_perspektive_ratio:.0%}"
                 )
             else:
                 self.issues.append(
-                    f"STIL Wir-Perspektive fehlt: Vorlage={ref.wir_perspektive_ratio:.0%} "
+                    f"STIL Wir-Perspektive fehlt: Referenz={avg_wir:.0%} "
                     f"Output={out.wir_perspektive_ratio:.0%}"
                 )
 
-        # Stil-Metriken für den Report speichern
+        # Stil-Metriken speichern
         self.style_metrics = {
-            "reference": ref.to_dict(),
+            "reference_count": len(refs),
+            "reference": {
+                "avg": StyleAnalyzer(style_text[0] if isinstance(style_text, list) else style_text).to_dict(),
+                "range": {
+                    "sentence_length": [round(_metric_range(lambda r: r.avg_sentence_length)[0], 1),
+                                        round(_metric_range(lambda r: r.avg_sentence_length)[2], 1)],
+                    "paragraph_length": [round(_metric_range(lambda r: r.avg_paragraph_length)[0], 1),
+                                         round(_metric_range(lambda r: r.avg_paragraph_length)[2], 1)],
+                    "fachbegriff_density": [round(_metric_range(lambda r: r.fachbegriff_density)[0], 2),
+                                            round(_metric_range(lambda r: r.fachbegriff_density)[2], 2)],
+                },
+            },
             "output": out.to_dict(),
         }
 
@@ -678,9 +768,9 @@ async def test_eval_workflow(workflow, test_case, request):
 
     # Zusätzlich: Stil aus Therapeuten-Bibliothek (styles/ Verzeichnis)
     if not style_text and test_case.get("style_therapeut"):
-        style_text = load_style_text(test_case["style_therapeut"], workflow)
-        if style_text:
-            ev.check_style_consistency(style_text)
+        style_texts = load_all_style_texts(test_case["style_therapeut"], workflow)
+        if style_texts:
+            ev.check_style_consistency(style_texts)
 
     # Ergebnis loggen
     print(f"\n{ev.summary()}")
@@ -768,20 +858,24 @@ async def test_style_variance(workflow, test_case, therapeut_a, therapeut_b, req
     except httpx.ConnectError:
         pytest.skip("Backend nicht erreichbar")
 
-    # Stilvorlagen laden
-    style_a = load_style_text(therapeut_a, workflow)
-    style_b = load_style_text(therapeut_b, workflow)
+    # Stilvorlagen laden (alle Beispiele pro Therapeut)
+    styles_a = load_all_style_texts(therapeut_a, workflow)
+    styles_b = load_all_style_texts(therapeut_b, workflow)
 
-    if not style_a or not style_b:
+    if not styles_a or not styles_b:
         pytest.skip("Stilvorlagen nicht verfügbar")
+
+    # Für die API: alle Beispiele zusammenfügen (so wie es der echte Workflow macht)
+    style_text_a = "\n\n---\n\n".join(styles_a)
+    style_text_b = "\n\n---\n\n".join(styles_b)
 
     # Input-Dateien vorbereiten (ohne style — den setzen wir manuell)
     base_input = dict(test_case.get("input_files", {}))
     base_input.pop("style_file", None)
 
     # Generierung A: mit Stil von Therapeut A
-    form_extras_a = {"style_text": style_a}
-    form_extras_b = {"style_text": style_b}
+    form_extras_a = {"style_text": style_text_a}
+    form_extras_b = {"style_text": style_text_b}
 
     try:
         job_a = await _generate(
@@ -820,7 +914,7 @@ async def test_style_variance(workflow, test_case, therapeut_a, therapeut_b, req
 
     variance_score = sum(diffs) / len(diffs) if diffs else 0.0
 
-    print(f"\n[STIL-VARIANZ] {workflow}: {therapeut_a} vs {therapeut_b}")
+    print(f"\n[STIL-VARIANZ] {workflow}: {therapeut_a} ({len(styles_a)} Bsp.) vs {therapeut_b} ({len(styles_b)} Bsp.)")
     print(f"  Therapeut A ({therapeut_a}): Satzlänge={sa.avg_sentence_length:.1f} "
           f"Fachbegriffe={sa.fachbegriff_density:.2f} Wir={sa.wir_perspektive_ratio:.0%}")
     print(f"  Therapeut B ({therapeut_b}): Satzlänge={sb.avg_sentence_length:.1f} "
@@ -839,7 +933,9 @@ async def test_style_variance(workflow, test_case, therapeut_a, therapeut_b, req
             json.dumps({
                 "variance_score": round(variance_score, 3),
                 "therapeut_a": therapeut_a,
+                "therapeut_a_examples": len(styles_a),
                 "therapeut_b": therapeut_b,
+                "therapeut_b_examples": len(styles_b),
                 "style_a": sa.to_dict(),
                 "style_b": sb.to_dict(),
             }, indent=2, ensure_ascii=False),

@@ -22,16 +22,23 @@ Stattdessen auf dem Pod ablegen:
 # Verzeichnisstruktur anlegen
 mkdir -p /workspace/eval_data/{EB-FrauM,EB-HerrR,VA-Frau-v-d-A,Anamnese-FrauT,AnamneseFrauK,GESPRAECH-FrauK,GESPRAECH-HerrR}
 
-# Verlaufsdokumentationen kopieren (aus den Testfaellen)
+# Verlaufsdokumentationen und Berichtsvorlagen kopieren
 cp /pfad/zu/EB-FrauM/tpVerlaufsdokumentation.pdf     /workspace/eval_data/EB-FrauM/
+cp /pfad/zu/EB-FrauM/entlassbericht.docx              /workspace/eval_data/EB-FrauM/
 cp /pfad/zu/EB-HerrR/tpVerlaufsdokumentation.pdf      /workspace/eval_data/EB-HerrR/
+cp /pfad/zu/EB-HerrR/entlassbericht.docx               /workspace/eval_data/EB-HerrR/
 cp /pfad/zu/VA-Frau-v-d-A/tpVerlaufsdokumentation.pdf /workspace/eval_data/VA-Frau-v-d-A/
+cp /pfad/zu/VA-Frau-v-d-A/verlängerung.docx            /workspace/eval_data/VA-Frau-v-d-A/
 
-# Selbstauskunft-PDFs kopieren
+# Selbstauskunft-PDFs und Diagnosen kopieren
 cp /pfad/zu/Anamnese-FrauT/selbstauskunft.pdf          /workspace/eval_data/Anamnese-FrauT/
 cp /pfad/zu/AnamneseFrauK/selbstauskunft.pdf            /workspace/eval_data/AnamneseFrauK/
 
-# Aufnahmegespraech-Audio kopieren (optional, fuer Transkriptionstest)
+# Diagnosen-Dateien anlegen (ICD-Codes)
+echo "F32.1" > /workspace/eval_data/Anamnese-FrauT/diagnosen.txt
+echo -e "F40.1\nF90.0" > /workspace/eval_data/AnamneseFrauK/diagnosen.txt
+
+# Aufnahmegespräch-Audio kopieren (optional)
 cp /pfad/zu/Anamnese-FrauT/aufnahme.mp3                /workspace/eval_data/Anamnese-FrauT/
 cp /pfad/zu/AnamneseFrauK/aufnahme.mp3                  /workspace/eval_data/AnamneseFrauK/
 
@@ -135,29 +142,36 @@ tests/
 /workspace/eval_data/   ← Testdaten (NICHT im Git, nur auf dem Pod)
   EB-FrauM/
     tpVerlaufsdokumentation.pdf
-    vorlage.txt               ← Stilvorlage (Beispieltext eines anderen Therapeuten)
+    entlassbericht.docx       ← Berichtsvorlage (Diagnosen, Anamnese, leerer Verlaufsabschnitt)
+    vorlage.txt               ← Stilvorlage (optional, wenn nicht über styles/ gelöst)
   EB-HerrR/
     tpVerlaufsdokumentation.pdf
+    entlassbericht.docx
     vorlage.txt
   VA-Frau-v-d-A/
     tpVerlaufsdokumentation.pdf
+    verlängerung.docx         ← Berichtsvorlage für Verlängerungsantrag
   Anamnese-FrauT/
     selbstauskunft.pdf
-    aufnahme.mp3          ← Aufnahmegespraech (optional, fuer Transkriptionstest)
+    diagnosen.txt             ← ICD-Codes, z.B. "F32.1" (eine pro Zeile oder kommagetrennt)
+    aufnahme.mp3              ← Aufnahmegespräch (optional)
   AnamneseFrauK/
     selbstauskunft.pdf
-    aufnahme.mp3          ← Aufnahmegespräch (optional)
+    diagnosen.txt
+    aufnahme.mp3              ← optional
   GESPRAECH-FrauK/
     aufnahme.mp3          ← Therapiegespräch-Aufnahme
   GESPRAECH-HerrR/
     aufnahme.mp3          ← Therapiegespräch-Aufnahme
   styles/                   ← Therapeuten-Stilvorlagen (DOCX)
     TherapeutA/
-      Entlassbericht.docx
+      Entlassbericht.docx          ← oder mehrere: Entlassbericht_01.docx, _02.docx, ...
       Verlängerungsantrag.docx
       Gesprächszusammenfassung.docx
     TherapeutB/
-      Entlassbericht.docx
+      Entlassbericht_01.docx       ← mehrere Beispiele = bessere Stil-Bandbreite
+      Entlassbericht_02.docx
+      Entlassbericht_03.docx
       Verlängerungsantrag.docx
       Gesprächszusammenfassung.docx
     TherapeutC/             ← optional, 3. Therapeut für breitere Varianz
@@ -200,9 +214,11 @@ In `fixtures.json` einen neuen Eintrag im jeweiligen Workflow-Array:
 
 Input-Felder:
 - `prompt` – Der Therapeuten-Auftrag (Pflicht). Enthält patientenspezifische Schwerpunkte.
-- `input_files.vorbefunde` – Verlaufsdokumentation (PDF) für EB/VA
-- `input_files.selbstauskunft` – Selbstauskunft (PDF) für Anamnese
-- `input_files.audio` – Aufnahme (MP3) für Anamnese und Gesprächsdoku
-- `input_files.style_file` – Stilvorlage (.txt) eines anderen Therapeuten. Wird als `style_text` gesendet.
+- `input_files.selbstauskunft` – Bei Anamnese: Selbstauskunft (PDF). Bei EB/VA: Berichtsvorlage (DOCX mit Diagnosen, Anamnese, leerem Verlaufsabschnitt).
+- `input_files.vorbefunde` – Verlaufsdokumentation (PDF) für EB/VA.
+- `input_files.audio` – Aufnahme (MP3) für Anamnese und Gesprächsdoku. Optional – Test läuft auch ohne.
+- `input_files.diagnosen_file` – ICD-Codes als Textdatei (eine pro Zeile oder kommagetrennt). Überschreibt `diagnosen`-Array aus der Fixture.
+- `input_files.style_file` – Stilvorlage (TXT/DOCX) als direkte Datei (alternativ zu `style_therapeut`).
+- `style_therapeut` – Name des Therapeuten-Ordners in `styles/`. Stil wird automatisch aus DOCX extrahiert.
 
 Dann die zugehoerigen Dateien nach `/workspace/eval_data/MeinOrdner/` kopieren.
