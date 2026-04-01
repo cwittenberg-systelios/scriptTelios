@@ -40,7 +40,7 @@ class TranscribeResponse(BaseModel):
 
 # ── Generierung ───────────────────────────────────────────────────
 class GenerateRequest(BaseModel):
-    workflow: Literal["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]
+    workflow: Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht"]
     prompt: str = Field(..., description="Angepasster System-Prompt")
     therapeut_id: Optional[str] = Field(None, description="Therapeuten-ID fuer pgvector-Retrieval")
     transcript: Optional[str] = Field(None, description="Transkripttext (optional)")

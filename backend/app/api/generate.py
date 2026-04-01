@@ -55,7 +55,7 @@ async def generate(req: GenerateRequest, db: AsyncSession = Depends(get_db)):
     user = build_user_content(
         workflow=req.workflow,
         transcript=req.transcript,
-        bullets=req.bullets,
+        fokus_themen=req.bullets,
         diagnosen=req.diagnosen,
     )
 
@@ -167,7 +167,7 @@ async def generate_with_files(
     user = build_user_content(
         workflow=workflow,
         transcript=audio_transcript,
-        bullets=bullets,
+        fokus_themen=bullets,
         selbstauskunft_text=selbstauskunft_text,
         vorbefunde_text=vorbefunde_text,
         diagnosen=dx_list,

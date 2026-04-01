@@ -76,7 +76,7 @@ async def fill_document(
     )
     user = build_user_content(
         workflow=workflow,
-        verlauf_text=verlauf_text,  # dynamische Kuerzung erfolgt in generate_text()
+        verlaufsdoku_text=verlauf_text,  # dynamische Kuerzung erfolgt in generate_text()
     )
 
     try:

@@ -137,6 +137,11 @@ su -m "$PG_USER" -c "mkdir -p $PG_DATA" 2>/dev/null || {
     chown -R "$PG_USER" "$PG_DATA"
 }
 
+# PostgreSQL verlangt 0700 auf dem Data-Verzeichnis.
+# Nach Pod-Neustart kann /workspace andere Permissions haben.
+chmod 700 "$PG_DATA"
+chown "$PG_USER" "$PG_DATA"
+
 # Pruefen ob Postgres schon laeuft
 if su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA status" 2>/dev/null | grep -q "server is running"; then
     echo "${OK}PostgreSQL laeuft bereits"

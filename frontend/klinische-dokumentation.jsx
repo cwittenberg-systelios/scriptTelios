@@ -756,15 +756,19 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   fd.append("workflow",   workflow);
   fd.append("prompt",     prompt);
   fd.append("transcript", userContent);
-  if (therapeutId)      fd.append("therapeut_id",  therapeutId);
-  if (files.audio)      fd.append("audio",          files.audio);
-  if (files.selbst)     fd.append("selbstauskunft", files.selbst);
-  if (files.vorbef)     fd.append("vorbefunde",     files.vorbef);
-  if (files.style)      fd.append("style_file",     files.style);
-  if (files.diagnosen)  fd.append("diagnosen",      files.diagnosen);
-  if (files.bullets)    fd.append("bullets",        files.bullets);
-  if (files.styleText)  fd.append("style_text",     files.styleText);
-  if (files.model)      fd.append("model",           files.model);
+  if (therapeutId)          fd.append("therapeut_id",    therapeutId);
+  // Dateien – jedes Feld hat genau EINE Bedeutung
+  if (files.audio)          fd.append("audio",           files.audio);
+  if (files.selbstauskunft) fd.append("selbstauskunft",  files.selbstauskunft);
+  if (files.vorbefunde)     fd.append("vorbefunde",      files.vorbefunde);
+  if (files.verlaufsdoku)   fd.append("verlaufsdoku",    files.verlaufsdoku);
+  if (files.antragsvorlage) fd.append("antragsvorlage",  files.antragsvorlage);
+  if (files.vorantrag)      fd.append("vorantrag",       files.vorantrag);
+  if (files.style)          fd.append("style_file",      files.style);
+  if (files.diagnosen)      fd.append("diagnosen",       files.diagnosen);
+  if (files.fokusThemen)    fd.append("bullets",         files.fokusThemen);
+  if (files.styleText)      fd.append("style_text",      files.styleText);
+  if (files.model)          fd.append("model",           files.model);
 
   // Job starten
   const r = await fetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
@@ -867,7 +871,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
         audio: audio,
         style: style,
         styleText: styleText || null,
-        bullets: bullets || null,
+        fokusThemen: bullets || null,
         model: model || null,
       }, "p1");
       setOut(result.text || "");
@@ -1070,13 +1074,13 @@ function P2({ toast, resumeJob, onResumed, model }) {
     const sys = prompt.replace("{diagnosen}", dxStr) + geschlechtHinweis;
     try {
       const result = await generate("anamnese", sys, "", {
-        selbst:    selbst,
-        vorbef:    befunde,
-        audio:     audio,
-        style:     style,
-        styleText: styleText || null,
-        bullets:   akutantrag ? "akutantrag" : (text || null),
-        model:     model || null,
+        selbstauskunft: selbst,
+        vorbefunde:     befunde,
+        audio:          audio,
+        style:          style,
+        styleText:      styleText || null,
+        fokusThemen:    akutantrag ? "akutantrag" : (text || null),
+        model:          model || null,
       }, "p2");
       setOut(result.text || "");
       setBefundOut(result.befundText || "");
@@ -1229,7 +1233,9 @@ function P2({ toast, resumeJob, onResumed, model }) {
 }
 
 function P3({ toast, resumeJob, onResumed, model }) {
+  const [isFolge, setIsFolge]     = useState(false);  // Toggle: Erst- vs. Folgeverlängerung
   const [antrag, setAntrag]       = useState(null);
+  const [vorantrag, setVorantrag] = useState(null);   // Vorheriger Verlängerungsantrag (nur Folge)
   const [verlauf, setVerlauf]     = useState(null);
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
@@ -1254,7 +1260,6 @@ function P3({ toast, resumeJob, onResumed, model }) {
   }, [resumeJob]);
 
   function cancelRun() {
-    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
     const jobId = loadActiveJob()?.jobId;
     if (jobId) {
       fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
@@ -1268,13 +1273,15 @@ function P3({ toast, resumeJob, onResumed, model }) {
     setOut("");
     setLastJobId(null);
     try {
-      const result = await generate("verlaengerung", "", "", {
-        selbst:    antrag,   // Antragsvorlage → Diagnosen/Anamnese
-        vorbef:    verlauf,  // Verlaufsdokumentation
-        style:     style,
-        styleText: styleText || null,
-        bullets:   fokus || null,
-        model:     model || null,
+      const wf = isFolge ? "folgeverlaengerung" : "verlaengerung";
+      const result = await generate(wf, "", "", {
+        antragsvorlage: antrag,                        // Antragsvorlage (ohne Verlaufsabschnitt)
+        verlaufsdoku:   verlauf,                       // Verlaufsdokumentation
+        vorantrag:      isFolge ? vorantrag : null,    // Vorheriger Antrag (nur Folge)
+        style:          style,
+        styleText:      styleText || null,
+        fokusThemen:    fokus || null,
+        model:          model || null,
       }, "p3");
       setOut(result.text || "");
       setLastJobId(result.jobId);
@@ -1282,6 +1289,8 @@ function P3({ toast, resumeJob, onResumed, model }) {
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
   }
+
+  const canRun = verlauf && (isFolge ? vorantrag : true);
 
   return (
     <div>
@@ -1292,17 +1301,59 @@ function P3({ toast, resumeJob, onResumed, model }) {
       </div>
       <div className="page-body">
         <div className="workflow">
+
+          {/* Toggle: Erst- vs. Folgeverlängerung */}
+          <div style={{
+            display:"flex", gap:0, marginBottom:16, borderRadius:6, overflow:"hidden",
+            border:"1px solid var(--st-gray-border)"
+          }}>
+            <button onClick={() => setIsFolge(false)} style={{
+              flex:1, padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer",
+              border:"none",
+              background: !isFolge ? "var(--st-red)" : "var(--st-white)",
+              color: !isFolge ? "#fff" : "var(--st-text-soft)",
+            }}>Erstverlängerung</button>
+            <button onClick={() => setIsFolge(true)} style={{
+              flex:1, padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer",
+              border:"none", borderLeft:"1px solid var(--st-gray-border)",
+              background: isFolge ? "var(--st-red)" : "var(--st-white)",
+              color: isFolge ? "#fff" : "var(--st-text-soft)",
+            }}>Folgeverlängerung</button>
+          </div>
+
           <Card num="A" title="Verlaufsdokumentation" badge="req">
             <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — alle Verlaufsnotizen des Aufenthalts" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
-            <div className="info-note" style={{marginTop:8}}>Alle Verlaufsnotizen des stationären Aufenthalts als PDF.</div>
+            <div className="info-note" style={{marginTop:8}}>
+              {isFolge
+                ? "Alle Verlaufsnotizen – der Text konzentriert sich auf die Entwicklung seit dem letzten Antrag."
+                : "Alle Verlaufsnotizen des stationären Aufenthalts als PDF."
+              }
+            </div>
           </Card>
 
-          <Card num="B" title="Antragsvorlage" badge="opt" open={false}>
-            <Dropzone label="Vorlage / Vorheriger Antrag hochladen" hint=".docx oder .pdf — Diagnosen und Anamnese werden entnommen" accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
-            <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus dieser Vorlage für den neuen Antrag übernommen.</div>
+          {isFolge && (
+            <Card num="B" title="Vorheriger Verlängerungsantrag" badge="req">
+              <Dropzone label="Vorherigen Antrag hochladen" hint=".docx oder .pdf — Verlauf, Anamnese und Diagnosen werden entnommen" accept=".docx,.pdf" icon="&#128203;" file={vorantrag} onFile={setVorantrag} />
+              <div className="info-note" style={{marginTop:8}}>
+                Der vorherige Verlängerungsantrag. Daraus werden Anamnese, Diagnosen und der bisherige Verlauf entnommen.
+                Der neue Text knüpft an den bisherigen Verlauf an.
+              </div>
+            </Card>
+          )}
+
+          <Card num={isFolge ? "C" : "B"} title={isFolge ? "Folgeantrags-Vorlage" : "Antragsvorlage"} badge="opt" open={false}>
+            <Dropzone label={isFolge ? "Leere Folgeantrags-Vorlage hochladen" : "Vorlage / Vorheriger Antrag hochladen"}
+              hint={isFolge ? ".docx oder .pdf — leere Vorlage für den Folgeantrag" : ".docx oder .pdf — Diagnosen und Anamnese werden entnommen"}
+              accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
+            <div className="info-note" style={{marginTop:8}}>
+              {isFolge
+                ? "Leere Vorlage für den Folgeantrag (ohne Verlaufsabschnitt). Struktur wird übernommen."
+                : "Diagnosen, Anamnese und Befund werden aus dieser Vorlage für den neuen Antrag übernommen."
+              }
+            </div>
           </Card>
 
-          <Card num="C" title="Stilvorlage" badge="opt" open={false}>
+          <Card num={isFolge ? "D" : "C"} title="Stilvorlage" badge="opt" open={false}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -1319,7 +1370,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
             </InputTabs>
           </Card>
 
-          <Card num="D" title="Fokus-Themen" badge="opt" open={false}>
+          <Card num={isFolge ? "E" : "D"} title="Fokus-Themen" badge="opt" open={false}>
             <label className="field-label">Schwerpunkte für diesen Antrag</label>
             <textarea rows={4}
               placeholder={"Optionale Schwerpunkte, z.B.:\n– Wächteranteil Türsteher\n– Gruppenarbeit, soziale Integration\n– Entschluss zur räumlichen Trennung"}
@@ -1332,7 +1383,9 @@ function P3({ toast, resumeJob, onResumed, model }) {
           <div className="action-bar">
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button className="btn-primary" onClick={run} disabled={!verlauf}>Verlängerungsantrag erstellen</button>
+              : <button className="btn-primary" onClick={run} disabled={!canRun}>
+                  {isFolge ? "Folgeverlängerung erstellen" : "Verlängerungsantrag erstellen"}
+                </button>
             }
           </div>
 
@@ -1342,7 +1395,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
-                setVerlauf(null); setAntrag(null); setStyle(null); setStyleText("");
+                setVerlauf(null); setAntrag(null); setVorantrag(null); setStyle(null); setStyleText("");
                 setFokus(""); setOut(""); setLastJobId(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Verlängerungsantrag</button>
@@ -1395,12 +1448,12 @@ function P4({ toast, resumeJob, onResumed, model }) {
     setLastJobId(null);
     try {
       const result = await generate("entlassbericht", "", "", {
-        selbst:    bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund
-        vorbef:    verlauf,  // Verlaufsdokumentation
-        style:     style,
-        styleText: styleText || null,
-        bullets:   fokus || null,
-        model:     model || null,
+        antragsvorlage: bericht,    // Entlassbericht-Vorlage (Diagnosen/Anamnese/Befund)
+        verlaufsdoku:   verlauf,    // Verlaufsdokumentation
+        style:          style,
+        styleText:      styleText || null,
+        fokusThemen:    fokus || null,
+        model:          model || null,
       }, "p4");
       setOut(result.text || "");
       setLastJobId(result.jobId);

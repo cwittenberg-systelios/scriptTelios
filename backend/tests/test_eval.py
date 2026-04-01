@@ -54,6 +54,11 @@ STYLE_SECTION_HEADINGS = {
         "Bisheriger Verlauf",
         "Begründung der Verlängerung",
     ],
+    "folgeverlaengerung": [
+        "Verlauf und Begründung der weiteren Verlängerung",
+        "Bisheriger Verlauf und Begründung der Verlängerung",
+        "Bisheriger Verlauf",
+    ],
     "anamnese": [
         "Aktuelle Anamnese",
         "Anamnese",
@@ -196,7 +201,7 @@ def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
         prefixes = ["Gesprächszusammenfassung", "Gespraechszusammenfassung", "Dokumentation"]
     elif workflow == "entlassbericht":
         prefixes = ["Entlassbericht"]
-    elif workflow == "verlaengerung":
+    elif workflow in ("verlaengerung", "folgeverlaengerung"):
         prefixes = ["Verlängerungsantrag", "Verlaengerungsantrag"]
     elif workflow == "anamnese":
         prefixes = ["Entlassbericht", "Verlängerungsantrag", "Verlaengerungsantrag"]
@@ -273,7 +278,7 @@ FIXTURES = _load_fixtures()
 def _all_test_cases():
     """Generiert (workflow, test_case) Tupel fuer Parametrisierung."""
     cases = []
-    for workflow in ["entlassbericht", "verlaengerung", "anamnese", "dokumentation"]:
+    for workflow in ["entlassbericht", "verlaengerung", "folgeverlaengerung", "anamnese", "dokumentation"]:
         for tc in FIXTURES.get(workflow, []):
             cases.append((workflow, tc))
     return cases
@@ -821,7 +826,7 @@ def _style_variance_fixtures():
         return []
 
     cases = []
-    for workflow in ["entlassbericht", "verlaengerung", "dokumentation"]:
+    for workflow in ["entlassbericht", "verlaengerung", "folgeverlaengerung", "dokumentation"]:
         tcs = FIXTURES.get(workflow, [])
         if not tcs:
             continue

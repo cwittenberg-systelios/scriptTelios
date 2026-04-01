@@ -11,8 +11,8 @@
       "diagnosen": ["F32.1", "F60.8"],
       "style_therapeut": "TherapeutA",
       "input_files": {
-        "selbstauskunft": "EB-FrauM/entlassbericht.docx",
-        "vorbefunde": "EB-FrauM/tpVerlaufsdokumentation.pdf"
+        "antragsvorlage": "EB-FrauM/entlassbericht.docx",
+        "verlaufsdoku": "EB-FrauM/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
         "min_words": 550,
@@ -26,12 +26,12 @@
     {
       "id": "eb-02-ads-trennung",
       "name": "ADS und Paarkrise (Mann)",
-      "prompt": "Als systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik, schreibe den psychotherapeutischen Teil des Verlaufsberichts des Entlassberichts von Herrn R. Beziehe dich dabei auf die Verlaufsdokumentation. Folgende Themen sollten aufgegriffen werden: Ziele des Aufenthaltes, Anteilearbeit mit Bezug auf biographische Entwicklungen und Selbstwert (insb. Wächteranteil „Türsteher"), Arbeit in der Gruppe, sowie die Beleuchtung der Familien- und Paardynamik, letztendlich der Entschluss einer räumlichen Trennung zur Partnerin.",
+      "prompt": "Als systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik, schreibe den psychotherapeutischen Teil des Verlaufsberichts des Entlassberichts von Herrn R. Beziehe dich dabei auf die Verlaufsdokumentation. Folgende Themen sollten aufgegriffen werden: Ziele des Aufenthaltes, Anteilearbeit mit Bezug auf biographische Entwicklungen und Selbstwert (insb. Wächteranteil \"Türsteher\"), Arbeit in der Gruppe, sowie die Beleuchtung der Familien- und Paardynamik, letztendlich der Entschluss einer räumlichen Trennung zur Partnerin.",
       "diagnosen": ["F33.1", "F90.0"],
       "style_therapeut": "TherapeutB",
       "input_files": {
-        "selbstauskunft": "EB-HerrR/entlassbericht.docx",
-        "vorbefunde": "EB-HerrR/tpVerlaufsdokumentation.pdf"
+        "antragsvorlage": "EB-HerrR/entlassbericht.docx",
+        "verlaufsdoku": "EB-HerrR/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
         "min_words": 550,
@@ -52,8 +52,8 @@
       "diagnosen": ["F60.31", "F32.1"],
       "style_therapeut": "TherapeutA",
       "input_files": {
-        "selbstauskunft": "VA-Frau-v-d-A/verlängerung.docx",
-        "vorbefunde": "VA-Frau-v-d-A/tpVerlaufsdokumentation.pdf"
+        "antragsvorlage": "VA-Frau-v-d-A/verlängerung.docx",
+        "verlaufsdoku": "VA-Frau-v-d-A/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
         "min_words": 350,
@@ -73,6 +73,46 @@
         "min_words": 350,
         "max_words": 650,
         "required_keywords": ["Verlängerung", "ambulant"],
+        "forbidden_patterns": ["**", "##"],
+        "must_contain_sections": ["Verlauf", "Verlängerung"]
+      }
+    }
+  ],
+
+  "folgeverlaengerung": [
+    {
+      "id": "fva-01-borderline-folge",
+      "name": "Folgeverlängerung Borderline (Frau)",
+      "prompt": "Als systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik, schreibe den psychotherapeutischen Teil (Verlauf und Begründung der weiteren Verlängerung) eines Folge-Verlängerungsantrags (14 Tage) für Frau v.d.A. Knüpfe an den bisherigen Verlauf aus dem vorherigen Antrag an.",
+      "diagnosen": ["F60.31", "F32.1"],
+      "style_therapeut": "TherapeutA",
+      "input_files": {
+        "antragsvorlage": "FVA-Frau-v-d-A/folgeverlaengerung.docx",
+        "verlaufsdoku": "FVA-Frau-v-d-A/tpVerlaufsdokumentation.pdf",
+        "vorantrag": "FVA-Frau-v-d-A/vorheriger_antrag.docx"
+      },
+      "expected": {
+        "min_words": 350,
+        "max_words": 650,
+        "required_keywords": ["Verlängerung", "Verlauf"],
+        "forbidden_patterns": ["**", "##", "Diagnose:", "Stammdaten", "Anamnese:"],
+        "must_contain_sections": ["Verlauf", "Verlängerung"]
+      }
+    },
+    {
+      "id": "fva-02-depression-folge",
+      "name": "Folgeverlängerung Depression (Mann)",
+      "prompt": "Als systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik, schreibe den Abschnitt Verlauf und Begründung der weiteren Verlängerung. Knüpfe an den bisherigen Verlauf an.",
+      "diagnosen": ["F33.1"],
+      "style_therapeut": "TherapeutB",
+      "input_files": {
+        "verlaufsdoku": "FVA-HerrX/tpVerlaufsdokumentation.pdf",
+        "vorantrag": "FVA-HerrX/vorheriger_antrag.docx"
+      },
+      "expected": {
+        "min_words": 350,
+        "max_words": 650,
+        "required_keywords": ["Verlängerung"],
         "forbidden_patterns": ["**", "##"],
         "must_contain_sections": ["Verlauf", "Verlängerung"]
       }

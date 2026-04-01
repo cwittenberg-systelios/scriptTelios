@@ -392,6 +392,43 @@ BASE_PROMPTS: dict[str, str] = {
         + FEW_SHOT_VERLÄNGERUNG
     ),
 
+    "folgeverlaengerung": (
+        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für "
+        "Psychosomatik und Psychotherapie. Verfasse den Abschnitt "
+        "'Verlauf und Begründung der weiteren Verlängerung' "
+        "für einen FOLGE-Verlängerungsantrag bei der Krankenversicherung.\n\n"
+        "KONTEXT:\n"
+        "Dies ist NICHT der erste Verlängerungsantrag. Es gibt einen vorherigen "
+        "Verlängerungsantrag dessen Verlaufsabschnitt, Anamnese und Diagnosen "
+        "als Referenz dienen. Der neue Text soll an den vorherigen ANKNÜPFEN "
+        "und den Verlauf SEIT DEM LETZTEN ANTRAG beschreiben.\n\n"
+        "FOKUS:\n"
+        "Schreibe NUR den Abschnitt 'Verlauf und Begründung der weiteren Verlängerung' "
+        "als Fließtext – keine Diagnosen, keine Stammdaten, keine Anamnese "
+        "(diese stehen bereits im vorherigen Antrag).\n\n"
+        "INHALT (Reihenfolge einhalten):\n"
+        "- Kurzer Rückbezug auf den bisherigen Verlauf (1-2 Sätze, aus dem vorherigen Antrag)\n"
+        "- Entwicklung SEIT dem letzten Antrag: neue Themen, vertiefte Arbeit, Wendepunkte\n"
+        "- Konkrete Fortschritte seit dem letzten Antrag – spezifisch und belegbar\n"
+        "- Was bleibt noch zu tun? Warum ist weitere stationäre Behandlung notwendig?\n"
+        "- Geplante Maßnahmen und Prognose für den weiteren Verlängerungszeitraum\n\n"
+        "STIL:\n"
+        "Wir-Perspektive des Therapeutenteams. "
+        "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
+        "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
+        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens: 'Frau M.' / 'Herr R.' "
+        "sowie 'die Klientin' / 'der Klient'.\n\n"
+        "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
+        "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation, "
+        "dem vorherigen Antrag oder der Antragsvorlage zurückführbar sein. "
+        "Keine Therapieinhalte, Methoden, Fortschritte oder Zitate erfinden. "
+        "Im Zweifel weglassen statt erfinden.\n\n"
+        "WICHTIG – STILBEISPIEL:\n"
+        "Falls ein Stilbeispiel bereitgestellt wird: Übernimm Struktur, Gliederung "
+        "und Länge exakt. Ersetze nur die patientenspezifischen Inhalte.\n\n"
+        + FEW_SHOT_VERLÄNGERUNG
+    ),
+
     "entlassbericht": (
         "Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts "
         "als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, "
@@ -460,7 +497,7 @@ def build_system_prompt(
         # nur Schreibstil übernehmen, Struktur NICHT verändern.
         # P2/P3/P4: Stilbeispiel ist strukturelle Schablone → Gliederung,
         # Länge und Tonalität übernehmen, nur Patienteninhalte ersetzen.
-        is_structural = workflow in ("anamnese", "verlängerung", "entlassbericht")
+        is_structural = workflow in ("anamnese", "verlängerung", "folgeverlaengerung", "entlassbericht")
 
         if is_structural:
             parts.append(
@@ -525,29 +562,37 @@ def build_system_prompt(
 def build_user_content(
     workflow: str,
     transcript: Optional[str] = None,
-    bullets: Optional[str] = None,
+    fokus_themen: Optional[str] = None,
     selbstauskunft_text: Optional[str] = None,
     vorbefunde_text: Optional[str] = None,
-    verlauf_text: Optional[str] = None,
+    verlaufsdoku_text: Optional[str] = None,
+    antragsvorlage_text: Optional[str] = None,
+    vorantrag_text: Optional[str] = None,
     diagnosen: Optional[list[str]] = None,
     custom_prompt: Optional[str] = None,
-    antrag_text: Optional[str] = None,
 ) -> str:
     """
     Baut den User-Content-Block zusammen.
 
-    custom_prompt (Therapeuten-Fokus) wird als letzter Block vor der
-    Generierungsaufforderung eingebettet – damit bleibt der BASE_PROMPT
-    vollständig erhalten und der Therapeut kann trotzdem Schwerpunkte setzen.
+    Parameter-Zuordnung (jeder hat genau EINE Bedeutung):
+      transcript:          Transkript eines Gesprächs (aus Audio oder direkt eingegeben)
+      fokus_themen:        Therapeuten-Stichpunkte / Fokus-Themen / Schwerpunkte
+      selbstauskunft_text: P2: Selbstauskunft des Klienten
+      vorbefunde_text:     P2: Berichte früherer Therapeuten/Kliniken
+      verlaufsdoku_text:   P3/P4: Verlaufsdokumentation der aktuellen Behandlung
+      antragsvorlage_text: P3/P4: Aktueller Bericht (EB/VA) mit Anamnese/Diagnosen
+      vorantrag_text:      Folgeverlängerung: Vorheriger Bericht mit Verlauf/Anamnese
+      diagnosen:           ICD-Codes (explizit oder aus Antragsvorlage)
+      custom_prompt:       Therapeuten-Fokus (wird am Ende eingebettet)
     """
     parts = []
 
     if workflow == "dokumentation":
         if transcript:
             parts.append(f"TRANSKRIPT DES GESPRÄCHS:\n{transcript}")
-        if bullets:
+        if fokus_themen:
             parts.append(
-                f"THERAPEUTISCHE STICHPUNKTE (vom Therapeuten ergänzt):\n{bullets}"
+                f"THERAPEUTISCHE STICHPUNKTE (vom Therapeuten ergänzt):\n{fokus_themen}"
             )
         if parts:
             parts.append("Erstelle jetzt die klinische Dokumentation gemäß den Anweisungen.")
@@ -572,8 +617,8 @@ def build_user_content(
             parts.append(f"AUFNAHMEGESPRÄCH (TRANSKRIPT):\n{transcript}")
         if diagnosen:
             parts.append(f"DIAGNOSEN: {', '.join(diagnosen)}")
-        # Akutantrag optional: wenn bullets "akutantrag" enthalten oder als Flag gesetzt
-        if bullets and "akutantrag" in bullets.lower():
+        # Akutantrag optional: wenn fokus_themen "akutantrag" enthalten oder als Flag gesetzt
+        if fokus_themen and "akutantrag" in fokus_themen.lower():
             parts.append(
                 "Erstelle jetzt:\n"
                 "1. Anamnese und psychopathologischen Befund\n"
@@ -594,18 +639,18 @@ def build_user_content(
             "Auch 'die Klientin' / 'der Klient' als Alternative. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )
-        if antrag_text:
+        if antragsvorlage_text:
             parts.append(
                 f"ANTRAGSVORLAGE / VORHERIGER ANTRAG"
-                f" (Quelle für Diagnosen, Anamnese, Name, Geschlecht):\n{antrag_text}\n"
+                f" (Quelle für Diagnosen, Anamnese, Name, Geschlecht):\n{antragsvorlage_text}\n"
                 "Entnimm Diagnosen, Anamnese-Informationen, Name und Geschlecht aus dieser Vorlage."
             )
-        if verlauf_text:
-            parts.append(f"VERLAUFSDOKUMENTATION (aktülle Sitzungen):\n{verlauf_text}")
+        if verlaufsdoku_text:
+            parts.append(f"VERLAUFSDOKUMENTATION (aktuelle Sitzungen):\n{verlaufsdoku_text}")
         if diagnosen:
             parts.append(f"DIAGNOSEN DES AKTUELLEN PATIENTEN: {', '.join(diagnosen)}")
-        if bullets:
-            parts.append(f"THERAPEUTISCHE STICHPUNKTE / BESONDERE EREIGNISSE:\n{bullets}")
+        if fokus_themen:
+            parts.append(f"THERAPEUTISCHE STICHPUNKTE / BESONDERE EREIGNISSE:\n{fokus_themen}")
         parts.append(
             "Verfasse jetzt den Abschnitt – er heißt je nach Krankenkasse entweder "
             "'Bisheriger Verlauf und Begründung der Verlängerung' oder "
@@ -618,6 +663,51 @@ def build_user_content(
             "keine Informationen erfinden die nicht in den Quellen stehen."
         )
 
+    elif workflow == "folgeverlaengerung":
+        # Namensregel ZUERST
+        parts.append(
+            "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
+            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
+            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "Auch 'die Klientin' / 'der Klient' als Alternative. "
+            "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
+        )
+        # Vorheriger Verlängerungsantrag: Quelle für Anamnese, Diagnosen, bisherigen Verlauf
+        if vorantrag_text:
+            parts.append(
+                f"VORHERIGER VERLÄNGERUNGSANTRAG"
+                f" (Quelle für Diagnosen, Anamnese, bisherigen Verlauf, Name, Geschlecht):\n"
+                f"{vorantrag_text}\n"
+                "Entnimm Diagnosen, Anamnese, Name und Geschlecht aus diesem Dokument. "
+                "Der bisherige Verlaufsabschnitt zeigt was bereits bearbeitet wurde – "
+                "der NEUE Text soll daran ANKNÜPFEN und den Verlauf SEITDEM beschreiben."
+            )
+        # Folgeverlängerungs-Vorlage (ohne Verlaufsabschnitt)
+        if antragsvorlage_text:
+            parts.append(
+                f"FOLGEVERLÄNGERUNGS-VORLAGE (leere Vorlage für den neuen Antrag):\n{antragsvorlage_text}\n"
+                "Diese Vorlage zeigt die Struktur des neuen Antrags. "
+                "Nur den Verlaufsabschnitt ausfüllen."
+            )
+        if verlaufsdoku_text:
+            parts.append(
+                f"VERLAUFSDOKUMENTATION (Sitzungen seit dem letzten Antrag):\n{verlaufsdoku_text}\n"
+                "WICHTIG: Konzentriere dich auf die Entwicklung SEIT dem letzten "
+                "Verlängerungsantrag. Frühere Sitzungen sind im vorherigen Antrag beschrieben."
+            )
+        if diagnosen:
+            parts.append(f"DIAGNOSEN DES AKTUELLEN PATIENTEN: {', '.join(diagnosen)}")
+        if fokus_themen:
+            parts.append(f"THERAPEUTISCHE STICHPUNKTE / BESONDERE EREIGNISSE:\n{fokus_themen}")
+        parts.append(
+            "Verfasse jetzt den Abschnitt 'Verlauf und Begründung der weiteren Verlängerung'. "
+            "Beginne mit einem kurzen Rückbezug auf den bisherigen Verlauf (aus dem vorherigen Antrag), "
+            "dann beschreibe die Entwicklung SEITDEM. "
+            "Nur diesen Abschnitt – keine Anamnese, keine Diagnosen, keine Stammdaten. "
+            "Mindestens 400 Wörter. "
+            "Ausschließlich auf Basis der obigen Quellen."
+        )
+
     elif workflow == "entlassbericht":
         # Namensregel ZUERST – bevor das Modell Quellen liest
         parts.append(
@@ -627,18 +717,18 @@ def build_user_content(
             "Auch 'die Klientin' / 'der Klient' als Alternative. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )
-        if antrag_text:
+        if antragsvorlage_text:
             parts.append(
                 f"VORHANDENER VERLÄNGERUNGSANTRAG / VORBERICHT"
-                f" (Quelle für Diagnosen, Anamnese, Befund, Name, Geschlecht):\n{antrag_text}\n"
+                f" (Quelle für Diagnosen, Anamnese, Befund, Name, Geschlecht):\n{antragsvorlage_text}\n"
                 "Entnimm Diagnosen, Anamnese, psychopathologischen Befund, Name und Geschlecht aus diesem Dokument."
             )
-        if verlauf_text:
-            parts.append(f"VERLAUFSDOKUMENTATION (alle Sitzungen):\n{verlauf_text}")
+        if verlaufsdoku_text:
+            parts.append(f"VERLAUFSDOKUMENTATION (alle Sitzungen):\n{verlaufsdoku_text}")
         if diagnosen:
             parts.append(f"DIAGNOSEN DES AKTUELLEN PATIENTEN: {', '.join(diagnosen)}")
-        if bullets:
-            parts.append(f"THERAPEUTISCHE SCHWERPUNKTE / BESONDERE THEMEN:\n{bullets}")
+        if fokus_themen:
+            parts.append(f"THERAPEUTISCHE SCHWERPUNKTE / BESONDERE THEMEN:\n{fokus_themen}")
         parts.append(
             "Verfasse jetzt den psychotherapeutischen Verlaufsteil als zusammenhängenden "
             "Fließtext ohne Überschriften. "
@@ -653,7 +743,7 @@ def build_user_content(
     # strukturell ins Stilbeispiel passen würden und sie dort einbauen.
     if custom_prompt and custom_prompt.strip():
         focus = custom_prompt.strip()
-        is_structural = workflow in ("anamnese", "verlängerung", "entlassbericht")
+        is_structural = workflow in ("anamnese", "verlängerung", "folgeverlaengerung", "entlassbericht")
         if is_structural:
             parts.append(
                 f"THERAPEUTEN-HINWEIS – SCHWERPUNKTTHEMEN:\n{focus}\n\n"

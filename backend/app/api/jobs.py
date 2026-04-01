@@ -119,37 +119,50 @@ async def list_jobs():
 @router.post("/jobs/generate")
 async def create_generate_job(
     background_tasks: BackgroundTasks,
-    workflow:       Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "entlassbericht"], Form()],
-    prompt:         Annotated[str,  Form()],
-    therapeut_id:   Annotated[Optional[str], Form()] = None,
-    diagnosen:      Annotated[Optional[str], Form()] = None,
-    transcript:     Annotated[Optional[str], Form()] = None,
-    bullets:        Annotated[Optional[str], Form()] = None,
-    style_text:     Annotated[Optional[str], Form()] = None,
-    model:          Annotated[Optional[str], Form()] = None,
-    audio:          Optional[UploadFile] = File(None),
-    selbstauskunft: Optional[UploadFile] = File(None),
-    vorbefunde:     Optional[UploadFile] = File(None),
-    style_file:     Optional[UploadFile] = File(None),
+    workflow:         Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht"], Form()],
+    prompt:           Annotated[str,  Form()],
+    therapeut_id:     Annotated[Optional[str], Form()] = None,
+    diagnosen:        Annotated[Optional[str], Form()] = None,
+    transcript:       Annotated[Optional[str], Form()] = None,
+    bullets:          Annotated[Optional[str], Form(description="Stichpunkte (P1) oder Fokus-Themen (P3/P4)")] = None,
+    style_text:       Annotated[Optional[str], Form()] = None,
+    model:            Annotated[Optional[str], Form()] = None,
+    # ── Datei-Uploads (jedes Feld hat genau EINE Bedeutung) ──────────
+    audio:            Optional[UploadFile] = File(None, description="Audioaufnahme eines Gesprächs (.mp3/.m4a/.wav)"),
+    selbstauskunft:   Optional[UploadFile] = File(None, description="P2: Selbstauskunft des Klienten (.pdf)"),
+    vorbefunde:       Optional[UploadFile] = File(None, description="P2: Berichte früherer Therapeuten/Kliniken (.pdf)"),
+    verlaufsdoku:     Optional[UploadFile] = File(None, description="P3/P4: Verlaufsdokumentation der aktuellen Behandlung (.pdf)"),
+    antragsvorlage:   Optional[UploadFile] = File(None, description="P3/P4: Aktueller Bericht (EB/VA) ohne Verlaufsabschnitt (.docx/.pdf)"),
+    vorantrag:        Optional[UploadFile] = File(None, description="Folgeverlängerung: Vorheriger Bericht mit Verlauf/Anamnese/Diagnosen (.docx/.pdf)"),
+    style_file:       Optional[UploadFile] = File(None, description="Stilvorlage (Beispieltext)"),
 ):
     """
     Startet einen asynchronen Generierungs-Job.
-    Gibt sofort {job_id, status: "pending"} zurueck.
+    Gibt sofort {job_id, status: "pending"} zurück.
     Frontend pollt GET /api/jobs/{job_id} bis status="done".
 
-    WICHTIG: Keine DB-Session als Dependency – Background-Tasks laufen nach dem
-    Request-Ende, FastAPI würde die Session vorher schließen (Connection Leak).
-    Die Session wird stattdessen innerhalb von _run() explizit geöffnet/geschlossen.
+    Input-Zuordnung pro Workflow:
+      P1 (dokumentation):       audio + transcript + bullets
+      P2 (anamnese):            selbstauskunft + vorbefunde + audio + diagnosen
+      P3 (verlaengerung):       verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
+      P3b (folgeverlaengerung): verlaufsdoku + antragsvorlage + vorantrag + bullets
+      P4 (entlassbericht):      verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
     """
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht thread-safe)
-    audio_bytes         = await audio.read()         if audio         and audio.filename         else None
-    audio_name          = audio.filename              if audio         and audio.filename         else None
-    selbst_bytes        = await selbstauskunft.read() if selbstauskunft and selbstauskunft.filename else None
-    selbst_name         = selbstauskunft.filename     if selbstauskunft and selbstauskunft.filename else None
-    vorbef_bytes        = await vorbefunde.read()     if vorbefunde    and vorbefunde.filename    else None
-    vorbef_name         = vorbefunde.filename         if vorbefunde    and vorbefunde.filename    else None
-    style_bytes         = await style_file.read()     if style_file    and style_file.filename    else None
-    style_name          = style_file.filename         if style_file    and style_file.filename    else None
+    audio_bytes            = await audio.read()          if audio          and audio.filename          else None
+    audio_name             = audio.filename               if audio          and audio.filename          else None
+    selbstauskunft_bytes   = await selbstauskunft.read()  if selbstauskunft  and selbstauskunft.filename else None
+    selbstauskunft_name    = selbstauskunft.filename      if selbstauskunft  and selbstauskunft.filename else None
+    vorbefunde_bytes       = await vorbefunde.read()      if vorbefunde     and vorbefunde.filename     else None
+    vorbefunde_name        = vorbefunde.filename          if vorbefunde     and vorbefunde.filename     else None
+    verlaufsdoku_bytes     = await verlaufsdoku.read()    if verlaufsdoku   and verlaufsdoku.filename   else None
+    verlaufsdoku_name      = verlaufsdoku.filename        if verlaufsdoku   and verlaufsdoku.filename   else None
+    antragsvorlage_bytes   = await antragsvorlage.read()  if antragsvorlage and antragsvorlage.filename else None
+    antragsvorlage_name    = antragsvorlage.filename      if antragsvorlage and antragsvorlage.filename else None
+    vorantrag_bytes        = await vorantrag.read()       if vorantrag      and vorantrag.filename      else None
+    vorantrag_name         = vorantrag.filename           if vorantrag      and vorantrag.filename      else None
+    style_bytes            = await style_file.read()      if style_file     and style_file.filename     else None
+    style_name             = style_file.filename          if style_file     and style_file.filename     else None
 
     dx_list = [d.strip() for d in diagnosen.split(",") if d.strip()] if diagnosen else []
 
@@ -161,15 +174,18 @@ async def create_generate_job(
 
     # Performance-Tracking: welche Inputs hat dieser Job?
     job.input_meta = {
-        "has_audio":       bool(audio_bytes),
-        "audio_mb":        round(len(audio_bytes) / 1e6, 1) if audio_bytes else 0,
-        "has_selbst_pdf":  bool(selbst_bytes),
-        "has_vorbef_pdf":  bool(vorbef_bytes),
-        "has_style":       bool(style_bytes) or bool(style_text and style_text.strip()),
-        "has_transcript":  bool(transcript and transcript.strip()),
-        "has_bullets":     bool(bullets and bullets.strip()),
-        "diagnosen":       dx_list,
-        "model_requested": model or "default",
+        "has_audio":          bool(audio_bytes),
+        "audio_mb":           round(len(audio_bytes) / 1e6, 1) if audio_bytes else 0,
+        "has_selbstauskunft": bool(selbstauskunft_bytes),
+        "has_vorbefunde":     bool(vorbefunde_bytes),
+        "has_verlaufsdoku":   bool(verlaufsdoku_bytes),
+        "has_antragsvorlage": bool(antragsvorlage_bytes),
+        "has_vorantrag":      bool(vorantrag_bytes),
+        "has_style":          bool(style_bytes) or bool(style_text and style_text.strip()),
+        "has_transcript":     bool(transcript and transcript.strip()),
+        "has_fokus_themen":   bool(bullets and bullets.strip()),
+        "diagnosen":          dx_list,
+        "model_requested":    model or "default",
     }
 
     async def _run():
@@ -177,39 +193,74 @@ async def create_generate_job(
         from pathlib import Path as _Path
         from app.core.files import upload_dir
 
-        # 1. Audio transkribieren
-        audio_transcript = transcript or ""
+        # ── 1. Audio transkribieren ──────────────────────────────────
+        transkript_text = transcript or ""
         if audio_bytes and audio_name:
             suffix = _Path(audio_name).suffix.lower()
             audio_path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
             audio_path.write_bytes(audio_bytes)
             tr = await _transcription.transcribe_audio(audio_path)
-            audio_transcript = tr["transcript"]
+            transkript_text = tr["transcript"]
 
-        # 2. Dokumente extrahieren
+        # ── 2. Dokumente extrahieren (jedes Feld → eigene Variable) ──
+
+        # P2: Selbstauskunft des Klienten
         selbstauskunft_text = ""
-        if selbst_bytes and selbst_name:
-            suffix = _Path(selbst_name).suffix.lower()
+        if selbstauskunft_bytes and selbstauskunft_name:
+            suffix = _Path(selbstauskunft_name).suffix.lower()
             path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
-            path.write_bytes(selbst_bytes)
+            path.write_bytes(selbstauskunft_bytes)
             try:
                 selbstauskunft_text = await extract_text(path)
             except Exception as e:
                 logger.warning("Selbstauskunft-Extraktion fehlgeschlagen: %s", e)
 
+        # P2: Vorbefunde (Berichte früherer Therapeuten/Kliniken)
         vorbefunde_text = ""
-        if vorbef_bytes and vorbef_name:
-            suffix = _Path(vorbef_name).suffix.lower()
+        if vorbefunde_bytes and vorbefunde_name:
+            suffix = _Path(vorbefunde_name).suffix.lower()
             path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
-            path.write_bytes(vorbef_bytes)
+            path.write_bytes(vorbefunde_bytes)
             try:
                 vorbefunde_text = await extract_text(path)
-                # Verlaufsdoku bereinigen: Seitenheader und reine Teilnahmeeintraege entfernen
-                if workflow in ("verlaengerung", "entlassbericht"):
-                    from app.services.llm import clean_verlauf_text
-                    vorbefunde_text = clean_verlauf_text(vorbefunde_text)
             except Exception as e:
                 logger.warning("Vorbefunde-Extraktion fehlgeschlagen: %s", e)
+
+        # P3/P4: Verlaufsdokumentation der aktuellen Behandlung
+        verlaufsdoku_text = ""
+        if verlaufsdoku_bytes and verlaufsdoku_name:
+            suffix = _Path(verlaufsdoku_name).suffix.lower()
+            path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
+            path.write_bytes(verlaufsdoku_bytes)
+            try:
+                verlaufsdoku_text = await extract_text(path)
+                from app.services.llm import clean_verlauf_text
+                verlaufsdoku_text = clean_verlauf_text(verlaufsdoku_text)
+            except Exception as e:
+                logger.warning("Verlaufsdoku-Extraktion fehlgeschlagen: %s", e)
+
+        # P3/P4: Antragsvorlage (EB/VA mit Diagnosen, Anamnese, ohne Verlauf)
+        antragsvorlage_text = ""
+        if antragsvorlage_bytes and antragsvorlage_name:
+            suffix = _Path(antragsvorlage_name).suffix.lower()
+            path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
+            path.write_bytes(antragsvorlage_bytes)
+            try:
+                antragsvorlage_text = await extract_text(path)
+            except Exception as e:
+                logger.warning("Antragsvorlage-Extraktion fehlgeschlagen: %s", e)
+
+        # Folgeverlängerung: Vorheriger Bericht (Verlauf + Anamnese + Diagnosen)
+        vorantrag_text = ""
+        if vorantrag_bytes and vorantrag_name:
+            suffix = _Path(vorantrag_name).suffix.lower()
+            path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
+            path.write_bytes(vorantrag_bytes)
+            try:
+                vorantrag_text = await extract_text(path)
+                logger.info("Vorantrag extrahiert: %d Zeichen", len(vorantrag_text))
+            except Exception as e:
+                logger.warning("Vorantrag-Extraktion fehlgeschlagen: %s", e)
 
         # 3. Stilprofil
         from app.services.llm import truncate_style_context
@@ -238,14 +289,14 @@ async def create_generate_job(
             # NICHT die Request-Session nutzen – die ist nach Request-Ende geschlossen.
             from app.core.database import async_session_factory
             async with async_session_factory() as db:
-                query_text = audio_transcript or transcript or bullets or ""
+                query_text = transkript_text or transcript or bullets or ""
                 style_context = await retrieve_style_examples(
                     db, therapeut_id.strip(), workflow, query_text
                 )
             if style_context:
                 style_info = {"source": "style_library", "therapeut_id": therapeut_id.strip(), "chars": len(style_context)}
 
-        # 4. Generieren
+        # 4. Generieren – jede Variable hat genau eine Bedeutung
         system = build_system_prompt(
             workflow=workflow,
             custom_prompt=prompt,
@@ -253,15 +304,15 @@ async def create_generate_job(
             style_is_example=style_is_example,
             diagnosen=dx_list,
         )
-        is_p3p4 = workflow in ("verlaengerung", "entlassbericht")
         user = build_user_content(
             workflow=workflow,
-            transcript=audio_transcript,
-            bullets=bullets,
-            selbstauskunft_text=selbstauskunft_text if not is_p3p4 else None,
-            antrag_text=selbstauskunft_text         if is_p3p4     else None,
-            vorbefunde_text=vorbefunde_text         if not is_p3p4 else None,
-            verlauf_text=vorbefunde_text            if is_p3p4     else None,
+            transcript=transkript_text,
+            fokus_themen=bullets,
+            selbstauskunft_text=selbstauskunft_text,
+            vorbefunde_text=vorbefunde_text,
+            verlaufsdoku_text=verlaufsdoku_text,
+            antragsvorlage_text=antragsvorlage_text,
+            vorantrag_text=vorantrag_text,
             diagnosen=dx_list,
             custom_prompt=prompt if prompt and prompt.strip() else None,
         )
@@ -270,10 +321,11 @@ async def create_generate_job(
         # Anamnese: zwei Teile (Anamnese + Befund) → 3000 Tokens
         # Dokumentation: kompakter → 2048 Tokens (Default)
         max_tokens_map = {
-            "entlassbericht": 4000,
-            "verlaengerung":  3000,
-            "anamnese":       3000,
-            "dokumentation":  2048,
+            "entlassbericht":       4000,
+            "verlaengerung":        3000,
+            "folgeverlaengerung":   3000,
+            "anamnese":             3000,
+            "dokumentation":        2048,
         }
         max_tok = max_tokens_map.get(workflow, 2048)
         result = await generate_text(system, user, max_tokens=max_tok, model=model, workflow=workflow)
@@ -299,7 +351,7 @@ async def create_generate_job(
             "text":        anamnese_part,
             "befund_text": befund_part,
             "akut_text":   akut_part,
-            "transcript":  audio_transcript or None,
+            "transcript":  transkript_text or None,
             "model_used":  result["model_used"],
             "style_info":  style_info,
         }

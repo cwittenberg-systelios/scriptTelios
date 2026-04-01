@@ -735,7 +735,7 @@ class TestPrompts:
         from app.services.prompts import build_user_content
         u = build_user_content(
             workflow="dokumentation",
-            bullets="- Schlaf besser\n- Weniger Anspannung",
+            fokus_themen="- Schlaf besser\n- Weniger Anspannung",
         )
         assert "THERAPEUTISCHE STICHPUNKTE" in u
 
@@ -759,7 +759,7 @@ class TestPrompts:
         from app.services.prompts import build_user_content
         u = build_user_content(
             workflow="verlaengerung",
-            verlauf_text="14 Tage Behandlung, guter Verlauf.",
+            verlaufsdoku_text="14 Tage Behandlung, guter Verlauf.",
         )
         assert "VERLAUFSDOKUMENTATION" in u
         assert "Bisheriger Verlauf" in u   # explizite Sektion
@@ -772,7 +772,7 @@ class TestPrompts:
         from app.services.prompts import build_user_content
         u = build_user_content(
             workflow="verlaengerung",
-            verlauf_text="Sitzung 1: IFS-Arbeit.",
+            verlaufsdoku_text="Sitzung 1: IFS-Arbeit.",
             diagnosen=["F32.1", "Z73.0"],
         )
         assert "DIAGNOSEN DES AKTUELLEN PATIENTEN" in u
@@ -784,7 +784,7 @@ class TestPrompts:
         from app.services.prompts import build_user_content
         u = build_user_content(
             workflow="entlassbericht",
-            verlauf_text="28 Tage Behandlung.",
+            verlaufsdoku_text="28 Tage Behandlung.",
         )
         assert "VERLAUFSDOKUMENTATION" in u
         assert "Epikrise" in u or "EPIKRISE" in u or "Behandlungsverlauf" in u
@@ -798,7 +798,7 @@ class TestPrompts:
         u = build_user_content(
             workflow="dokumentation",
             transcript="[A]: Wie geht es Ihnen?\n[B]: Besser.",
-            bullets="- der innere Löwe\n- Arbeit mit inneren Anteilen nach IFS",
+            fokus_themen="- der innere Löwe\n- Arbeit mit inneren Anteilen nach IFS",
         )
         # Beide Abschnitte vorhanden
         assert "TRANSKRIPT" in u
@@ -813,7 +813,7 @@ class TestPrompts:
         from app.services.prompts import build_user_content
         u = build_user_content(
             workflow="dokumentation",
-            bullets="- Schlafprobleme\n- Kontakt zur Mutter verbessert",
+            fokus_themen="- Schlafprobleme\n- Kontakt zur Mutter verbessert",
         )
         assert "THERAPEUTISCHE STICHPUNKTE" in u
         assert "TRANSKRIPT" not in u
@@ -1248,13 +1248,70 @@ class TestJobQueue:
         assert "job_id" in r.json()
 
     def test_job_mit_selbstauskunft(self, mock_llm, mock_extract_text):
-        """Job mit Selbstauskunft-PDF wird korrekt gestartet."""
+        """Job mit Selbstauskunft-PDF wird korrekt gestartet (P2 Anamnese)."""
         r = client.post(
             "/api/jobs/generate",
             data={"workflow": "anamnese", "prompt": "test", "diagnosen": "F32.1"},
             files={"selbstauskunft": (
                 "selbst.pdf", PDF_SELBST_DIG.read_bytes(), "application/pdf"
             )},
+        )
+        assert r.status_code == 200
+        assert "job_id" in r.json()
+
+    def test_job_mit_verlaufsdoku(self, mock_llm, mock_extract_text):
+        """Job mit Verlaufsdoku-PDF wird korrekt gestartet (P3/P4)."""
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "verlaengerung", "prompt": "test"},
+            files={"verlaufsdoku": (
+                "verlauf.pdf", PDF_VERLAUF.read_bytes(), "application/pdf"
+            )},
+        )
+        assert r.status_code == 200
+        assert "job_id" in r.json()
+
+    def test_job_mit_antragsvorlage(self, mock_llm, mock_extract_text):
+        """Job mit Antragsvorlage wird korrekt gestartet (P3/P4)."""
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "entlassbericht", "prompt": "test"},
+            files={"antragsvorlage": (
+                "entlassbericht.docx", DOCX_ENTLASS_V.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )},
+        )
+        assert r.status_code == 200
+        assert "job_id" in r.json()
+
+    def test_job_entlassbericht_mit_verlaufsdoku_und_antragsvorlage(self, mock_llm, mock_extract_text):
+        """P4 mit beiden Dokumenten: Verlaufsdoku + Antragsvorlage."""
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "entlassbericht", "prompt": "test"},
+            files={
+                "verlaufsdoku": ("verlauf.pdf", PDF_VERLAUF.read_bytes(), "application/pdf"),
+                "antragsvorlage": (
+                    "entlassbericht.docx", DOCX_ENTLASS_V.read_bytes(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                ),
+            },
+        )
+        assert r.status_code == 200
+        assert "job_id" in r.json()
+
+    def test_job_folgeverlaengerung(self, mock_llm, mock_extract_text):
+        """Folgeverlängerung mit verlaufsdoku + vorantrag."""
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "folgeverlaengerung", "prompt": "test"},
+            files={
+                "verlaufsdoku": ("verlauf.pdf", PDF_VERLAUF.read_bytes(), "application/pdf"),
+                "vorantrag": (
+                    "vorantrag.docx", DOCX_VERL_V.read_bytes(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                ),
+            },
         )
         assert r.status_code == 200
         assert "job_id" in r.json()
@@ -1590,7 +1647,7 @@ class TestStrukturelleSchablone:
         """Fokus-Themen enthalten Strukturmapping-Hinweis für P3/P4."""
         from app.services.prompts import build_user_content
         u = build_user_content("verlaengerung",
-            verlauf_text="Sitzung 1: IFS-Arbeit.",
+            verlaufsdoku_text="Sitzung 1: IFS-Arbeit.",
             custom_prompt="Türsteher-Anteil, Gruppenarbeit")
         assert "THERAPEUTEN-HINWEIS" in u
         assert "strukturell" in u or "Stilbeispiel" in u
@@ -1603,3 +1660,64 @@ class TestStrukturelleSchablone:
             custom_prompt="Ressourcen betonen")
         assert "THERAPEUTEN-HINWEIS" in u
         assert "strukturell" not in u
+
+    def test_p3b_folgeverlaengerung_strukturelle_schablone(self):
+        """P3b (folgeverlaengerung) nutzt strukturelle Schablone."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt("folgeverlaengerung",
+            style_context=self.BEISPIEL, style_is_example=True)
+        assert "STRUKTURELLE SCHABLONE" in p
+
+    def test_p3b_folgeverlaengerung_base_prompt(self):
+        """Folgeverlaengerung hat eigenen BASE_PROMPT mit Fokus 'seit dem letzten Antrag'."""
+        from app.services.prompts import BASE_PROMPTS
+        assert "folgeverlaengerung" in BASE_PROMPTS
+        p = BASE_PROMPTS["folgeverlaengerung"]
+        assert "SEIT" in p.upper() or "seit" in p
+        assert "FOLGE" in p.upper() or "Folge" in p
+        assert "vorherigen" in p.lower() or "letzten Antrag" in p.lower()
+
+    def test_p3b_user_content_vorantrag(self):
+        """Folgeverlaengerung: vorantrag_text wird als eigene Quelle eingebettet."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("folgeverlaengerung",
+            verlaufsdoku_text="Sitzung seit letztem Antrag.",
+            antragsvorlage_text="Leere Folgeantrags-Vorlage.",
+            vorantrag_text="Vorheriger Verlauf mit Anamnese und Diagnosen.",
+        )
+        assert "VORHERIGER VERLÄNGERUNGSANTRAG" in u
+        assert "Vorheriger Verlauf" in u
+        assert "VERLAUFSDOKUMENTATION" in u
+        assert "FOLGEVERLÄNGERUNGS-VORLAGE" in u
+        assert "seit" in u.lower() or "SEITDEM" in u.upper()
+
+    def test_p3b_user_content_ohne_vorantrag(self):
+        """Folgeverlaengerung ohne vorantrag – sollte trotzdem funktionieren."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("folgeverlaengerung",
+            verlaufsdoku_text="Aktuelle Sitzungen.",
+        )
+        assert "VERLAUFSDOKUMENTATION" in u
+        assert "VORHERIGER VERLÄNGERUNGSANTRAG" not in u
+
+    def test_user_content_verlaengerung_neue_parameter(self):
+        """Verlängerung nutzt verlaufsdoku_text und antragsvorlage_text korrekt."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("verlaengerung",
+            verlaufsdoku_text="Sitzung 1: IFS-Arbeit.",
+            antragsvorlage_text="Vorlage mit Anamnese und Diagnosen.",
+            diagnosen=["F32.1"],
+        )
+        assert "VERLAUFSDOKUMENTATION" in u
+        assert "ANTRAGSVORLAGE" in u
+        assert "F32.1" in u
+
+    def test_user_content_entlassbericht_neue_parameter(self):
+        """Entlassbericht nutzt verlaufsdoku_text und antragsvorlage_text korrekt."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("entlassbericht",
+            verlaufsdoku_text="28 Tage Behandlung.",
+            antragsvorlage_text="Vorbericht mit Diagnosen.",
+        )
+        assert "VERLAUFSDOKUMENTATION" in u
+        assert "VORHANDENER VERLÄNGERUNGSANTRAG" in u or "VORBERICHT" in u

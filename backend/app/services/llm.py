@@ -310,10 +310,11 @@ async def generate_text(
     # Workflow-spezifische Mindest-Output-Tokens:
     # Der Output darf nie unter dieses Minimum fallen, sonst wird der Input gekuerzt.
     MIN_OUTPUT_TOKENS = {
-        "entlassbericht": 2000,  # mind. 600 Woerter → ~2000 Tokens
-        "verlaengerung":  1500,  # mind. 400 Woerter → ~1500 Tokens
-        "anamnese":       1500,  # mind. 350 Woerter + Befund → ~1500 Tokens
-        "dokumentation":  1000,  # mind. 250 Woerter → ~1000 Tokens
+        "entlassbericht":       2000,  # mind. 600 Woerter → ~2000 Tokens
+        "verlaengerung":        1500,  # mind. 400 Woerter → ~1500 Tokens
+        "folgeverlaengerung":   1500,  # mind. 400 Woerter → ~1500 Tokens
+        "anamnese":             1500,  # mind. 350 Woerter + Befund → ~1500 Tokens
+        "dokumentation":        1000,  # mind. 250 Woerter → ~1000 Tokens
     }
     min_output = MIN_OUTPUT_TOKENS.get(workflow, 1000) if workflow else 1000
 
@@ -354,10 +355,11 @@ async def generate_text(
     # ohne Verweigerung oder Erklaerungen. Primer wird dem Output vorangestellt
     # und ist fuer den Therapeuten nicht sichtbar.
     PRIMERS = {
-        "entlassbericht": "Zu Beginn des stationären Aufenthalts",
-        "verlaengerung":  "Im bisherigen Verlauf des stationären Aufenthalts",
-        "anamnese":       "",  # Kein Primer – Modell soll selbst mit Patientenname beginnen
-        "dokumentation":  "Auftragsklärung\n\n",
+        "entlassbericht":       "Zu Beginn des stationären Aufenthalts",
+        "verlaengerung":        "Im bisherigen Verlauf des stationären Aufenthalts",
+        "folgeverlaengerung":   "Im weiteren Verlauf seit dem letzten Verlängerungsantrag",
+        "anamnese":             "",  # Kein Primer – Modell soll selbst mit Patientenname beginnen
+        "dokumentation":        "Auftragsklärung\n\n",
     }
     assistant_primer = PRIMERS.get(workflow or "", "")
 

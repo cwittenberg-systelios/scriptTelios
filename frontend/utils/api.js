@@ -66,13 +66,19 @@ export async function generate(workflow, prompt, userContent, files = {}, page =
   fd.append("workflow",   workflow);
   fd.append("prompt",     prompt);
   fd.append("transcript", userContent);
-  if (therapeutId)      fd.append("therapeut_id",  therapeutId);
-  if (files.audio)      fd.append("audio",          files.audio);
-  if (files.selbst)     fd.append("selbstauskunft", files.selbst);
-  if (files.vorbef)     fd.append("vorbefunde",     files.vorbef);
-  if (files.style)      fd.append("style_file",     files.style);
-  if (files.diagnosen)  fd.append("diagnosen",      files.diagnosen);
-  if (files.bullets)    fd.append("bullets",        files.bullets);
+  if (therapeutId)          fd.append("therapeut_id",    therapeutId);
+  // Dateien – jedes Feld hat genau EINE Bedeutung
+  if (files.audio)          fd.append("audio",           files.audio);
+  if (files.selbstauskunft) fd.append("selbstauskunft",  files.selbstauskunft);
+  if (files.vorbefunde)     fd.append("vorbefunde",      files.vorbefunde);
+  if (files.verlaufsdoku)   fd.append("verlaufsdoku",    files.verlaufsdoku);
+  if (files.antragsvorlage) fd.append("antragsvorlage",  files.antragsvorlage);
+  if (files.vorantrag)      fd.append("vorantrag",       files.vorantrag);
+  if (files.style)          fd.append("style_file",      files.style);
+  if (files.diagnosen)      fd.append("diagnosen",       files.diagnosen);
+  if (files.fokusThemen)    fd.append("bullets",         files.fokusThemen);
+  if (files.styleText)      fd.append("style_text",      files.styleText);
+  if (files.model)          fd.append("model",           files.model);
 
   const r = await _fetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
   const d = await r.json();
