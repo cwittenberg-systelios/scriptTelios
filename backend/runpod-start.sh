@@ -129,18 +129,30 @@ mkdir -p /var/run/postgresql
 chown "$PG_USER" /var/run/postgresql
 chmod 775 /var/run/postgresql
 
-# Verzeichnis immer als PG_USER anlegen (nie als root)
-# PG_DATA liegt auf /workspace → ueberlebt Pod-Neustarts (Stilbibliothek, Jobs)
-su -m "$PG_USER" -c "mkdir -p $PG_DATA" 2>/dev/null || {
-    # Falls /workspace root gehoert: Verzeichnis als root anlegen, dann chown
-    mkdir -p "$PG_DATA"
-    chown -R "$PG_USER" "$PG_DATA"
-}
+# PostgreSQL Data-Verzeichnis: Muss dem PG_USER gehoeren mit 0700.
+# /workspace kann nach Pod-Neustart andere Permissions haben und chown
+# schlaegt auf gemounteten Volumes oft fehl.
+# Loesung: PG_DATA liegt unter /home/$PG_USER (immer beschreibbar).
+# Die Daten werden beim Start von /workspace geladen und beim Stop zurueckgesichert.
 
-# PostgreSQL verlangt 0700 auf dem Data-Verzeichnis.
-# Nach Pod-Neustart kann /workspace andere Permissions haben.
-chmod 700 "$PG_DATA"
-chown "$PG_USER" "$PG_DATA"
+PG_DATA_LOCAL="/home/$PG_USER/pgdata"
+PG_DATA_PERSIST="$PG_DATA"   # /workspace/postgres_data (persistent, aber ggf. falsche Permissions)
+
+mkdir -p "$PG_DATA_LOCAL"
+chown "$PG_USER" "$PG_DATA_LOCAL"
+chmod 700 "$PG_DATA_LOCAL"
+
+# Persistente Daten vom letzten Run wiederherstellen
+if [ -f "$PG_DATA_PERSIST/PG_VERSION" ] && [ ! -f "$PG_DATA_LOCAL/PG_VERSION" ]; then
+    echo "${GO}PG-Daten aus $PG_DATA_PERSIST wiederherstellen..."
+    cp -a "$PG_DATA_PERSIST/." "$PG_DATA_LOCAL/"
+    chown -R "$PG_USER" "$PG_DATA_LOCAL"
+    chmod 700 "$PG_DATA_LOCAL"
+    echo "${OK}PG-Daten wiederhergestellt"
+fi
+
+# Ab hier arbeitet PostgreSQL mit dem lokalen Verzeichnis
+PG_DATA="$PG_DATA_LOCAL"
 
 # Pruefen ob Postgres schon laeuft
 if su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA status" 2>/dev/null | grep -q "server is running"; then
@@ -801,5 +813,24 @@ echo ""
 echo "  Stop:  pkill -f uvicorn; pkill cloudflared; pkill ollama"
 echo "  Stop PostgreSQL:"
 echo "    su -m $PG_USER -c '$PG_BIN/pg_ctl -D $PG_DATA stop'"
+
+# PG-Daten periodisch nach /workspace sichern (alle 10 Min)
+_sync_pg_data() {
+    if [ -f "$PG_DATA/PG_VERSION" ] && [ "$PG_DATA" != "$PG_DATA_PERSIST" ]; then
+        mkdir -p "$PG_DATA_PERSIST"
+        rsync -a --delete "$PG_DATA/" "$PG_DATA_PERSIST/" 2>/dev/null || \
+            cp -a "$PG_DATA/." "$PG_DATA_PERSIST/" 2>/dev/null || true
+    fi
+}
+(
+    while true; do
+        sleep 600
+        _sync_pg_data
+    done
+) &
+PG_SYNC_PID=$!
+
+# Bei Shutdown: PG-Daten sichern
+trap '_sync_pg_data; kill $PG_SYNC_PID 2>/dev/null' EXIT
 echo "================================================"
 echo ""
