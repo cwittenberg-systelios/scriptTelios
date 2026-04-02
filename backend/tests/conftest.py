@@ -226,3 +226,15 @@ def mock_ollama_unavailable():
         )),
     ):
         yield
+
+
+# ── CLI-Optionen für Eval-Tests ──────────────────────────────────────────────
+
+def pytest_addoption(parser):
+    """CLI-Optionen für das Evaluations-Framework."""
+    parser.addoption(
+        "--eval-output",
+        action="store",
+        default=None,
+        help="Verzeichnis für Evaluations-Ergebnisse (optional, nur für test_eval.py)",
+    )

@@ -255,16 +255,6 @@ def discover_therapeuten() -> list[str]:
     ])
 
 
-def pytest_addoption(parser):
-    """CLI-Option fuer Output-Verzeichnis."""
-    parser.addoption(
-        "--eval-output",
-        action="store",
-        default=None,
-        help="Verzeichnis fuer Evaluations-Ergebnisse (optional)",
-    )
-
-
 # ── Fixtures laden ───────────────────────────────────────────────────────────
 
 def _load_fixtures() -> dict:
@@ -781,7 +771,7 @@ async def test_eval_workflow(workflow, test_case, request):
     print(f"\n{ev.summary()}")
 
     # Optional: Ergebnis speichern
-    output_dir = request.config.getoption("--eval-output")
+    output_dir = request.config.getoption("--eval-output", default=None)
     if output_dir:
         out_path = Path(output_dir) / workflow
         out_path.mkdir(parents=True, exist_ok=True)
@@ -927,7 +917,7 @@ async def test_style_variance(workflow, test_case, therapeut_a, therapeut_b, req
     print(f"  Varianz-Score: {variance_score:.3f} (>0.15 = Stile wirken, <0.05 = ignoriert)")
 
     # Ergebnis speichern
-    output_dir = request.config.getoption("--eval-output")
+    output_dir = request.config.getoption("--eval-output", default=None)
     if output_dir:
         out_path = Path(output_dir) / "style_variance"
         out_path.mkdir(parents=True, exist_ok=True)
@@ -1000,7 +990,7 @@ async def test_style_llm_jury(workflow, test_case, request):
         pytest.skip("Keine Stilvorlage für LLM-Jury verfügbar")
 
     # Generierten Text laden (aus vorherigem Test-Run)
-    output_dir = request.config.getoption("--eval-output")
+    output_dir = request.config.getoption("--eval-output", default=None)
     if not output_dir:
         pytest.skip("--eval-output nicht gesetzt (benötigt für LLM-Jury)")
 

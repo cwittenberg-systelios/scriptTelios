@@ -44,7 +44,8 @@ done
 BACKEND_DIR="/workspace/scriptTelios/backend"
 VENV_DIR="/workspace/venv"
 LOG_DIR="/workspace"
-PG_DATA="/workspace/postgres_data"
+PG_DATA="/home/systelios_pg/pgdata"
+PG_DATA_BACKUP="/workspace/postgres_data"
 OLLAMA_MODELS_DIR="/workspace/ollama"
 PG_USER="systelios_pg"
 
@@ -129,30 +130,22 @@ mkdir -p /var/run/postgresql
 chown "$PG_USER" /var/run/postgresql
 chmod 775 /var/run/postgresql
 
-# PostgreSQL Data-Verzeichnis: Muss dem PG_USER gehoeren mit 0700.
-# /workspace kann nach Pod-Neustart andere Permissions haben und chown
-# schlaegt auf gemounteten Volumes oft fehl.
-# Loesung: PG_DATA liegt unter /home/$PG_USER (immer beschreibbar).
-# Die Daten werden beim Start von /workspace geladen und beim Stop zurueckgesichert.
+# PostgreSQL Data-Verzeichnis: PG_DATA liegt unter /home/$PG_USER (volle
+# Kontrolle ueber Permissions). Persistente Sicherung in /workspace/postgres_data
+# wird beim Start wiederhergestellt und periodisch + bei Shutdown zurueckgeschrieben.
 
-PG_DATA_LOCAL="/home/$PG_USER/pgdata"
-PG_DATA_PERSIST="$PG_DATA"   # /workspace/postgres_data (persistent, aber ggf. falsche Permissions)
+mkdir -p "$PG_DATA"
+chown "$PG_USER" "$PG_DATA"
+chmod 700 "$PG_DATA"
 
-mkdir -p "$PG_DATA_LOCAL"
-chown "$PG_USER" "$PG_DATA_LOCAL"
-chmod 700 "$PG_DATA_LOCAL"
-
-# Persistente Daten vom letzten Run wiederherstellen
-if [ -f "$PG_DATA_PERSIST/PG_VERSION" ] && [ ! -f "$PG_DATA_LOCAL/PG_VERSION" ]; then
-    echo "${GO}PG-Daten aus $PG_DATA_PERSIST wiederherstellen..."
-    cp -a "$PG_DATA_PERSIST/." "$PG_DATA_LOCAL/"
-    chown -R "$PG_USER" "$PG_DATA_LOCAL"
-    chmod 700 "$PG_DATA_LOCAL"
+# Persistente Daten vom letzten Pod-Run wiederherstellen
+if [ -f "$PG_DATA_BACKUP/PG_VERSION" ] && [ ! -f "$PG_DATA/PG_VERSION" ]; then
+    echo "${GO}PG-Daten aus $PG_DATA_BACKUP wiederherstellen..."
+    cp -a "$PG_DATA_BACKUP/." "$PG_DATA/"
+    chown -R "$PG_USER" "$PG_DATA"
+    chmod 700 "$PG_DATA"
     echo "${OK}PG-Daten wiederhergestellt"
 fi
-
-# Ab hier arbeitet PostgreSQL mit dem lokalen Verzeichnis
-PG_DATA="$PG_DATA_LOCAL"
 
 # Pruefen ob Postgres schon laeuft
 if su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA status" 2>/dev/null | grep -q "server is running"; then
@@ -816,10 +809,10 @@ echo "    su -m $PG_USER -c '$PG_BIN/pg_ctl -D $PG_DATA stop'"
 
 # PG-Daten periodisch nach /workspace sichern (alle 10 Min)
 _sync_pg_data() {
-    if [ -f "$PG_DATA/PG_VERSION" ] && [ "$PG_DATA" != "$PG_DATA_PERSIST" ]; then
-        mkdir -p "$PG_DATA_PERSIST"
-        rsync -a --delete "$PG_DATA/" "$PG_DATA_PERSIST/" 2>/dev/null || \
-            cp -a "$PG_DATA/." "$PG_DATA_PERSIST/" 2>/dev/null || true
+    if [ -f "$PG_DATA/PG_VERSION" ]; then
+        mkdir -p "$PG_DATA_BACKUP"
+        rsync -a --delete "$PG_DATA/" "$PG_DATA_BACKUP/" 2>/dev/null || \
+            cp -a "$PG_DATA/." "$PG_DATA_BACKUP/" 2>/dev/null || true
     fi
 }
 (

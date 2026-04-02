@@ -354,7 +354,7 @@ BASE_PROMPTS: dict[str, str] = {
         + FEW_SHOT_ANAMNESE
     ),
 
-    "verlängerung": (
+    "verlaengerung": (
         "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für "
         "Psychosomatik und Psychotherapie. Verfasse den Abschnitt "
         "'Bisheriger Verlauf und Begründung der Verlängerung' "
@@ -497,7 +497,7 @@ def build_system_prompt(
         # nur Schreibstil übernehmen, Struktur NICHT verändern.
         # P2/P3/P4: Stilbeispiel ist strukturelle Schablone → Gliederung,
         # Länge und Tonalität übernehmen, nur Patienteninhalte ersetzen.
-        is_structural = workflow in ("anamnese", "verlängerung", "folgeverlaengerung", "entlassbericht")
+        is_structural = workflow in ("anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht")
 
         if is_structural:
             parts.append(
@@ -542,7 +542,7 @@ def build_system_prompt(
 
     has_structural_template = (
         style_context and style_context.strip()
-        and workflow in ("anamnese", "verlängerung", "entlassbericht")
+        and workflow in ("anamnese", "verlaengerung", "entlassbericht")
     )
     if has_structural_template:
         parts.append(
@@ -630,7 +630,7 @@ def build_user_content(
         else:
             parts.append("Anamnese und psychopathologischen Befund erstellen.")
 
-    elif workflow == "verlängerung":
+    elif workflow == "verlaengerung":
         # Namensregel ZUERST – bevor das Modell Quellen liest
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
@@ -743,7 +743,7 @@ def build_user_content(
     # strukturell ins Stilbeispiel passen würden und sie dort einbauen.
     if custom_prompt and custom_prompt.strip():
         focus = custom_prompt.strip()
-        is_structural = workflow in ("anamnese", "verlängerung", "folgeverlaengerung", "entlassbericht")
+        is_structural = workflow in ("anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht")
         if is_structural:
             parts.append(
                 f"THERAPEUTEN-HINWEIS – SCHWERPUNKTTHEMEN:\n{focus}\n\n"

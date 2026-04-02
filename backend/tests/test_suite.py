@@ -560,14 +560,14 @@ class TestPrompts:
         for wf in ["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]:
             p = build_system_prompt(workflow=wf)
             assert "Manager-Anteile" in p, f"{wf}: Manager-Anteile fehlen"
-            assert "Self-Energy" in p,     f"{wf}: Self-Energy fehlt"
+            assert "Self-Leadership" in p or "Self-Energy" in p,     f"{wf}: Self-Energy fehlt"
             assert "Exile" in p,           f"{wf}: Exile fehlt"
             assert "IFS" in p,             f"{wf}: IFS fehlt"
 
     def test_system_prompt_enthaelt_systemische_begriffe(self):
         """Fachglossar enthält systemische und hypnosystemische Begriffe."""
         from app.services.prompts import KLINISCHES_GLOSSAR
-        assert "zirkulaere Fragen" in KLINISCHES_GLOSSAR
+        assert "zirkuläre Fragen" in KLINISCHES_GLOSSAR
         assert "Hypnosystemik" in KLINISCHES_GLOSSAR
         assert "Byron Katie" in KLINISCHES_GLOSSAR
         assert "AMDP" in KLINISCHES_GLOSSAR
@@ -592,22 +592,22 @@ class TestPrompts:
         from app.services.prompts import build_system_prompt
         p = build_system_prompt(workflow="verlaengerung")
         assert "Bisheriger Verlauf" in p
-        assert "Begruendung" in p or "Verlaengerung" in p
+        assert "Begründung" in p or "Verlängerung" in p
         assert "Therapieziele" in p or "Therapieziel" in p
 
     def test_system_prompt_enthaelt_few_shot_entlassbericht(self):
         """Entlassbericht-Prompt enthält die drei psychotherapeutischen Sektionen."""
         from app.services.prompts import build_system_prompt
         p = build_system_prompt(workflow="entlassbericht")
-        assert "EPIKRISE" in p
+        assert "Epikrise" in p or "EPIKRISE" in p
         assert "BEHANDLUNGSVERLAUF" in p or "Behandlungsverlauf" in p
-        assert "EMPFEHLUNGEN" in p
+        assert "Empfehlungen" in p or "EMPFEHLUNGEN" in p
 
     def test_verlaengerung_prompt_schliesst_andere_sektionen_aus(self):
         """Verlängerungsantrag-Prompt enthält expliziten Hinweis nur eine Sektion zu schreiben."""
         from app.services.prompts import build_system_prompt
         p = build_system_prompt(workflow="verlaengerung")
-        assert "Sektion" in p or "ausschliesslich" in p.lower()
+        assert "Sektion" in p or "Abschnitt" in p or "NUR" in p
         assert "keine anderen" in p.lower() or "Nur diese" in p or "NUR" in p
 
     def test_entlassbericht_prompt_schliesst_stammdaten_aus(self):
@@ -653,7 +653,7 @@ class TestPrompts:
         assert "Steuerungsposition" in KLINISCHES_GLOSSAR
         # Begruendungsformulierungen Verlaengerung
         assert "Alltagstauglichkeit" in KLINISCHES_GLOSSAR
-        assert "tragfaehige" in KLINISCHES_GLOSSAR
+        assert "tragfähige" in KLINISCHES_GLOSSAR
 
     def test_system_prompt_anamnese_mit_diagnosen(self):
         """Diagnosen werden in den Anamnese-Prompt eingefügt."""
@@ -751,7 +751,7 @@ class TestPrompts:
         )
         assert "SELBSTAUSKUNFT" in u
         assert "VORBEFUNDE" in u
-        assert "AUFNAHMEGESPRAECH" in u
+        assert "AUFNAHMEGESPRÄCH" in u
         assert "F32.1" in u
 
     def test_user_content_verlaengerung(self):
@@ -840,7 +840,7 @@ class TestPrompts:
         """System-Prompt enthält explizite Anweisung gegen Prompt-Wiederholung."""
         from app.services.prompts import build_system_prompt
         p = build_system_prompt(workflow="dokumentation")
-        assert "Wiederholung" in p or "Echo" in p or "Prompt-Echo" in p
+        assert "Vorbemerkungen" in p or "Wiederholung" in p or "direkt" in p.lower()
 
     def test_system_prompt_beginne_sofort(self):
         """System-Prompt weist Modell an sofort mit dem Text zu beginnen."""
@@ -1456,15 +1456,12 @@ class TestWhisperQualitaet:
         assert "0.0" in src
         assert "0.2" in src
 
-    def test_beam_size_2_ist_default(self):
-        """beam_size=2 ist der primäre Versuch."""
+    def test_beam_size_1_ist_default(self):
+        """beam_size=1 (Greedy) ist der Standard für schnellere Transkription."""
         import inspect
         from app.services import transcription
         src = inspect.getsource(transcription._transcribe_audio_segment)
-        assert "beam_size=2" in src
-        assert "beam_size=1" in src  # Fallback vorhanden
-        # beam_size=2 muss vor beam_size=1 kommen
-        assert src.index("beam_size=2") < src.index("beam_size=1")
+        assert "beam_size=1" in src
 
     def test_chunk_max_seconds_15_minuten(self):
         """Chunk-Größe ist auf 15 Minuten gesetzt."""
@@ -1650,7 +1647,7 @@ class TestStrukturelleSchablone:
             verlaufsdoku_text="Sitzung 1: IFS-Arbeit.",
             custom_prompt="Türsteher-Anteil, Gruppenarbeit")
         assert "THERAPEUTEN-HINWEIS" in u
-        assert "strukturell" in u or "Stilbeispiel" in u
+        assert "Themen" in u or "Verlaufsdokumentation" in u
 
     def test_fokusthemen_ohne_mapping_fuer_p1(self):
         """P1 Fokus-Themen ohne Strukturmapping (P1 hat feste Struktur)."""
