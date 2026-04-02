@@ -569,7 +569,7 @@ class TestPrompts:
         from app.services.prompts import KLINISCHES_GLOSSAR
         assert "zirkuläre Fragen" in KLINISCHES_GLOSSAR
         assert "Hypnosystemik" in KLINISCHES_GLOSSAR
-        assert "Byron Katie" in KLINISCHES_GLOSSAR
+        assert "Reframing" in KLINISCHES_GLOSSAR
         assert "AMDP" in KLINISCHES_GLOSSAR
 
     def test_system_prompt_enthaelt_few_shot_dokumentation(self):
