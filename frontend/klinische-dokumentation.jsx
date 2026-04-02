@@ -784,7 +784,6 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
     return {
       text:        job.result_text   || "",
       befundText:  job.befund_text   || "",
-      akutText:    job.akut_text     || "",
       jobId,
       hasTranscript: job.has_transcript || false,
     };
@@ -1017,8 +1016,6 @@ function P2({ toast, resumeJob, onResumed, model }) {
   const [prompt, setPrompt]       = useState(P_ANAMNESE);
   const [out, setOut]             = useState("");
   const [befundOut, setBefundOut] = useState("");
-  const [akutOut, setAkutOut]     = useState("");
-  const [akutantrag, setAkutantrag] = useState(false);
   const [tab, setTab]             = useState("Anamnese");
   const [lastJobId, setLastJobId] = useState(null);
   const [hasTranscript, setHasTranscript] = useState(false);
@@ -1035,7 +1032,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
         setBefundOut(job.befund_text || "");
-        setAkutOut(job.akut_text || "");
+        
         setLastJobId(resumeJob.jobId);
         setHasTranscript(job.has_transcript || false);
         onResumed();
@@ -1058,7 +1055,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
     setLastJobId(null);
     setHasTranscript(false);
     setBefundOut("");
-    setAkutOut("");
+    
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
 
     const k = kuerzel.trim().replace(/\.?$/, ".");
@@ -1079,12 +1076,12 @@ function P2({ toast, resumeJob, onResumed, model }) {
         audio:          audio,
         style:          style,
         styleText:      styleText || null,
-        fokusThemen:    akutantrag ? "akutantrag" : (text || null),
+        fokusThemen:    text || null,
         model:          model || null,
       }, "p2");
       setOut(result.text || "");
       setBefundOut(result.befundText || "");
-      setAkutOut(result.akutText || "");
+      
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
     }
@@ -1191,23 +1188,15 @@ function P2({ toast, resumeJob, onResumed, model }) {
             </div>
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <>
-                  <label style={{display:"flex", alignItems:"center", gap:6, cursor:"pointer",
-                    fontSize:12, color:"var(--st-text-soft)", marginRight:8}}>
-                    <input type="checkbox" checked={akutantrag}
-                      onChange={e => setAkutantrag(e.target.checked)} style={{cursor:"pointer"}} />
-                    Akutantrag
-                  </label>
-                  <button className="btn-primary" onClick={run} disabled={!selbst}>Anamnese und Befund generieren</button>
-                </>
+              : <button className="btn-primary" onClick={run} disabled={!selbst}>Anamnese und Befund generieren</button>
             }
           </div>
 
-          <Output text={tab === "Anamnese" ? out : tab === "Psych. Befund" ? befundOut : akutOut} loading={busy}
-            tabs={akutOut ? ["Anamnese", "Psych. Befund", "Akutantrag"] : ["Anamnese", "Psych. Befund"]}
+          <Output text={tab === "Anamnese" ? out : befundOut} loading={busy}
+            tabs={["Anamnese", "Psych. Befund"]}
             activeTab={tab} onTab={setTab}
             onCopy={() => {
-              const t = tab === "Anamnese" ? out : tab === "Psych. Befund" ? befundOut : akutOut;
+              const t = tab === "Anamnese" ? out : befundOut;
               navigator.clipboard.writeText(t);
               toast("Kopiert");
             }}
@@ -1220,7 +1209,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
               <button className="btn-secondary" onClick={() => {
                 setSelbst(null); setBefunde(null); setAudio(null); setTxtFile(null);
                 setText(""); setDx([]); setStyle(null); setStyleText("");
-                setOut(""); setBefundOut(""); setAkutOut(""); setAkutantrag(false);
+                setOut(""); setBefundOut("");
                 setLastJobId(null); setHasTranscript(false);
                 toast("Formular zurückgesetzt");
               }}>+ Neue Anamnese</button>
@@ -1233,9 +1222,9 @@ function P2({ toast, resumeJob, onResumed, model }) {
 }
 
 function P3({ toast, resumeJob, onResumed, model }) {
-  const [isFolge, setIsFolge]     = useState(false);  // Toggle: Erst- vs. Folgeverlängerung
+  const [antragstyp, setAntragstyp] = useState("erst"); // "erst" | "folge" | "akut"
   const [antrag, setAntrag]       = useState(null);
-  const [vorantrag, setVorantrag] = useState(null);   // Vorheriger Verlängerungsantrag (nur Folge)
+  const [vorantrag, setVorantrag] = useState(null);
   const [verlauf, setVerlauf]     = useState(null);
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
@@ -1244,13 +1233,15 @@ function P3({ toast, resumeJob, onResumed, model }) {
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
 
-  // Resume: laufenden Job nach Reload wieder aufnehmen
+  const isAkut  = antragstyp === "akut";
+  const isFolge = antragstyp === "folge";
+
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p3") return;
     setBusy(true);
     pollJob(resumeJob.jobId, 1200)
       .then(job => {
-        if (!job) { setBusy(false); onResumed(); return; } // cancelled
+        if (!job) { setBusy(false); onResumed(); return; }
         setOut(job.result_text || "");
         setLastJobId(resumeJob.jobId);
         onResumed();
@@ -1261,23 +1252,19 @@ function P3({ toast, resumeJob, onResumed, model }) {
 
   function cancelRun() {
     const jobId = loadActiveJob()?.jobId;
-    if (jobId) {
-      fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
-    }
+    if (jobId) fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
     clearActiveJob();
     setBusy(false);
   }
 
   async function run() {
-    setBusy(true);
-    setOut("");
-    setLastJobId(null);
+    setBusy(true); setOut(""); setLastJobId(null);
     try {
-      const wf = isFolge ? "folgeverlaengerung" : "verlaengerung";
+      const wf = isAkut ? "akutantrag" : isFolge ? "folgeverlaengerung" : "verlaengerung";
       const result = await generate(wf, "", "", {
-        antragsvorlage: antrag,                        // Antragsvorlage (ohne Verlaufsabschnitt)
-        verlaufsdoku:   verlauf,                       // Verlaufsdokumentation
-        vorantrag:      isFolge ? vorantrag : null,    // Vorheriger Antrag (nur Folge)
+        antragsvorlage: antrag,
+        verlaufsdoku:   verlauf,
+        vorantrag:      isFolge ? vorantrag : null,
         style:          style,
         styleText:      styleText || null,
         fokusThemen:    fokus || null,
@@ -1290,72 +1277,113 @@ function P3({ toast, resumeJob, onResumed, model }) {
     setBusy(false);
   }
 
-  const canRun = verlauf && (isFolge ? vorantrag : true);
+  const canRun = isAkut
+    ? !!antrag                                // Akut: Antragsvorlage Pflicht
+    : isFolge
+      ? (!!verlauf && !!vorantrag)            // Folge: Verlaufsdoku + Vorantrag
+      : !!verlauf;                            // Erst: Verlaufsdoku
+
+  const tabStyle = (active) => ({
+    flex: 1, padding: "10px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+    border: "none", borderLeft: "1px solid var(--st-gray-border)",
+    background: active ? "var(--st-red)" : "var(--st-white)",
+    color: active ? "#fff" : "var(--st-text-soft)",
+  });
+
+  const buttonLabels = {
+    erst: "Verlängerungsantrag erstellen",
+    folge: "Folgeverlängerung erstellen",
+    akut: "Akutantrag erstellen",
+  };
+
+  // Card-Nummerierung dynamisch
+  let cardNum = 0;
+  const nextCard = () => String.fromCharCode(65 + cardNum++); // A, B, C, ...
 
   return (
     <div>
       <div className="page-header">
         <div className="page-eyebrow">Workflow 3</div>
-        <h2>Verlängerungsantrag</h2>
-        <p>Befüllt vorhandene Antragsvorlagen aus der Verlaufsdokumentation</p>
+        <h2>Anträge</h2>
+        <p>Verlängerungsanträge und Akutanträge aus Verlaufsdokumentation und Antragsvorlagen</p>
       </div>
       <div className="page-body">
         <div className="workflow">
 
-          {/* Toggle: Erst- vs. Folgeverlängerung */}
+          {/* Tab-Leiste: 3 Antragstypen */}
           <div style={{
-            display:"flex", gap:0, marginBottom:16, borderRadius:6, overflow:"hidden",
-            border:"1px solid var(--st-gray-border)"
+            display: "flex", gap: 0, marginBottom: 16, borderRadius: 6, overflow: "hidden",
+            border: "1px solid var(--st-gray-border)"
           }}>
-            <button onClick={() => setIsFolge(false)} style={{
-              flex:1, padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer",
-              border:"none",
-              background: !isFolge ? "var(--st-red)" : "var(--st-white)",
-              color: !isFolge ? "#fff" : "var(--st-text-soft)",
-            }}>Erstverlängerung</button>
-            <button onClick={() => setIsFolge(true)} style={{
-              flex:1, padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer",
-              border:"none", borderLeft:"1px solid var(--st-gray-border)",
-              background: isFolge ? "var(--st-red)" : "var(--st-white)",
-              color: isFolge ? "#fff" : "var(--st-text-soft)",
-            }}>Folgeverlängerung</button>
+            {[
+              { id: "erst",  label: "Erstverlängerung" },
+              { id: "folge", label: "Folgeverlängerung" },
+              { id: "akut",  label: "Akutantrag" },
+            ].map((tab, i) => (
+              <button key={tab.id} onClick={() => setAntragstyp(tab.id)}
+                style={{ ...tabStyle(antragstyp === tab.id), ...(i === 0 ? { borderLeft: "none" } : {}) }}>
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          <Card num="A" title="Verlaufsdokumentation" badge="req">
-            <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — alle Verlaufsnotizen des Aufenthalts" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
-            <div className="info-note" style={{marginTop:8}}>
-              {isFolge
-                ? "Alle Verlaufsnotizen – der Text konzentriert sich auf die Entwicklung seit dem letzten Antrag."
-                : "Alle Verlaufsnotizen des stationären Aufenthalts als PDF."
-              }
-            </div>
-          </Card>
-
-          {isFolge && (
-            <Card num="B" title="Vorheriger Verlängerungsantrag" badge="req">
-              <Dropzone label="Vorherigen Antrag hochladen" hint=".docx oder .pdf — Verlauf, Anamnese und Diagnosen werden entnommen" accept=".docx,.pdf" icon="&#128203;" file={vorantrag} onFile={setVorantrag} />
+          {/* Verlaufsdoku — Pflicht bei VA/FVA, optional bei Akut */}
+          {!isAkut && (
+            <Card num={nextCard()} title="Verlaufsdokumentation" badge="req">
+              <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — alle Verlaufsnotizen" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
               <div className="info-note" style={{marginTop:8}}>
-                Der vorherige Verlängerungsantrag. Daraus werden Anamnese, Diagnosen und der bisherige Verlauf entnommen.
-                Der neue Text knüpft an den bisherigen Verlauf an.
+                {isFolge
+                  ? "Der Text konzentriert sich auf die Entwicklung seit dem letzten Antrag."
+                  : "Alle Verlaufsnotizen des stationären Aufenthalts."
+                }
               </div>
             </Card>
           )}
 
-          <Card num={isFolge ? "C" : "B"} title={isFolge ? "Folgeantrags-Vorlage" : "Antragsvorlage"} badge="opt" open={false}>
-            <Dropzone label={isFolge ? "Leere Folgeantrags-Vorlage hochladen" : "Vorlage / Vorheriger Antrag hochladen"}
-              hint={isFolge ? ".docx oder .pdf — leere Vorlage für den Folgeantrag" : ".docx oder .pdf — Diagnosen und Anamnese werden entnommen"}
-              accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
+          {/* Vorheriger Antrag — nur Folgeverlängerung */}
+          {isFolge && (
+            <Card num={nextCard()} title="Vorheriger Verlängerungsantrag" badge="req">
+              <Dropzone label="Vorherigen Antrag hochladen" hint=".docx oder .pdf — Verlauf, Anamnese und Diagnosen" accept=".docx,.pdf" icon="&#128203;" file={vorantrag} onFile={setVorantrag} />
+              <div className="info-note" style={{marginTop:8}}>
+                Daraus werden Anamnese, Diagnosen und der bisherige Verlauf entnommen.
+              </div>
+            </Card>
+          )}
+
+          {/* Antragsvorlage */}
+          <Card num={nextCard()} title={isAkut ? "Akutantrags-Vorlage" : isFolge ? "Folgeantrags-Vorlage" : "Antragsvorlage"}
+                badge={isAkut ? "req" : "opt"} open={isAkut}>
+            <Dropzone
+              label={isAkut ? "Akutantrag hochladen" : isFolge ? "Folgeantrags-Vorlage hochladen" : "Vorlage hochladen"}
+              hint={isAkut
+                ? ".docx oder .pdf — enthält Anamnese, Befund, Diagnosen"
+                : ".docx oder .pdf — Diagnosen und Anamnese werden entnommen"}
+              accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag}
+            />
             <div className="info-note" style={{marginTop:8}}>
-              {isFolge
-                ? "Leere Vorlage für den Folgeantrag (ohne Verlaufsabschnitt). Struktur wird übernommen."
-                : "Diagnosen, Anamnese und Befund werden aus dieser Vorlage für den neuen Antrag übernommen."
+              {isAkut
+                ? "Akutantrags-Vorlage mit Aktueller Anamnese, Problemrelevanter Vorgeschichte, Psychischem Befund und Einweisungsdiagnosen."
+                : isFolge
+                  ? "Leere Vorlage für den Folgeantrag (ohne Verlaufsabschnitt)."
+                  : "Diagnosen, Anamnese und Befund werden aus dieser Vorlage übernommen."
               }
             </div>
           </Card>
 
-          <Card num={isFolge ? "D" : "C"} title="Stilvorlage" badge="opt" open={false}>
+          {/* Verlaufsdoku für Akut — optional, ergänzende Informationen */}
+          {isAkut && (
+            <Card num={nextCard()} title="Ergänzende Informationen" badge="opt" open={false}>
+              <Dropzone label="Aufnahmegespräch / Verlaufsdoku hochladen" hint=".pdf — optional, ergänzende Informationen" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
+              <div className="info-note" style={{marginTop:8}}>
+                Optional: Aufnahmegespräch oder Verlaufsdokumentation als ergänzende Informationsquelle.
+              </div>
+            </Card>
+          )}
+
+          {/* Stilvorlage */}
+          <Card num={nextCard()} title="Stilvorlage" badge="opt" open={false}>
             <InputTabs tabs={[
-              { id:"file", icon:"📎", label:"Datei"   },
+              { id:"file", icon:"📎", label:"Datei" },
               { id:"text", icon:"✏️", label:"Text C&P" },
             ]}>
               {(activeTab) => (<>
@@ -1363,28 +1391,32 @@ function P3({ toast, resumeJob, onResumed, model }) {
                   <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
                 )}
                 {activeTab === "text" && (<>
-                  <textarea rows={5} placeholder="Beispiel-Verlängerungsantrag einfügen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
+                  <textarea rows={5} placeholder="Beispieltext einfügen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
                   <div className="field-note">Schreibstil des eingefügten Texts wird übernommen</div>
                 </>)}
               </>)}
             </InputTabs>
           </Card>
 
-          <Card num={isFolge ? "E" : "D"} title="Fokus-Themen" badge="opt" open={false}>
-            <label className="field-label">Schwerpunkte für diesen Antrag</label>
+          {/* Fokus-Themen */}
+          <Card num={nextCard()} title={isAkut ? "Besondere Hinweise" : "Fokus-Themen"} badge="opt" open={false}>
+            <label className="field-label">{isAkut ? "Besondere Hinweise für die Begründung" : "Schwerpunkte für diesen Antrag"}</label>
             <textarea rows={4}
-              placeholder={"Optionale Schwerpunkte, z.B.:\n– Wächteranteil Türsteher\n– Gruppenarbeit, soziale Integration\n– Entschluss zur räumlichen Trennung"}
+              placeholder={isAkut
+                ? "Optionale Hinweise, z.B.:\n– Besondere Risikofaktoren\n– Akute Dekompensation\n– Ambulante Vorbehandlung gescheitert"
+                : "Optionale Schwerpunkte, z.B.:\n– Wächteranteil Türsteher\n– Gruppenarbeit, soziale Integration\n– Entschluss zur räumlichen Trennung"
+              }
               value={fokus}
               onChange={e => setFokus(e.target.value)}
             />
-            <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
+            <div className="field-note">Werden als Hinweis an das Modell weitergegeben.</div>
           </Card>
 
           <div className="action-bar">
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button className="btn-primary" onClick={run} disabled={!canRun}>
-                  {isFolge ? "Folgeverlängerung erstellen" : "Verlängerungsantrag erstellen"}
+                  {buttonLabels[antragstyp]}
                 </button>
             }
           </div>
@@ -1398,7 +1430,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
                 setVerlauf(null); setAntrag(null); setVorantrag(null); setStyle(null); setStyleText("");
                 setFokus(""); setOut(""); setLastJobId(null);
                 toast("Formular zurückgesetzt");
-              }}>+ Neuer Verlängerungsantrag</button>
+              }}>+ Neuer Antrag</button>
             </div>
           )}
         </div>
@@ -1854,7 +1886,7 @@ function useHeadStyle(css) {
 const NAVS = [
   { id: "p1", n: "1", title: "Gesprächsdokumentation", sub: "Verlaufsnotiz" },
   { id: "p2", n: "2", title: "Anamnese & Befund",       sub: "Aufnahmegespräch" },
-  { id: "p3", n: "3", title: "Verlängerungsantrag",     sub: "Kostenübernahme" },
+  { id: "p3", n: "3", title: "Anträge",                sub: "Verlängerung & Akut" },
   { id: "p4", n: "4", title: "Entlassbericht",          sub: "Abschlussbericht" },
   { id: "p5", n: "✦", title: "Stilprofil-Bibliothek",   sub: "Beispiele verwalten" },
 ];

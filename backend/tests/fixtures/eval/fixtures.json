@@ -119,6 +119,43 @@
     }
   ],
 
+  "akutantrag": [
+    {
+      "id": "akut-01-depression-krise",
+      "name": "Akutaufnahme depressive Krise (Frau)",
+      "prompt": "Erstelle die Begründung für Akutaufnahme.",
+      "diagnosen": ["F32.2", "F43.1"],
+      "style_therapeut": "TherapeutA",
+      "input_files": {
+        "antragsvorlage": "AKUT-FrauL/akutantrag.docx"
+      },
+      "expected": {
+        "min_words": 200,
+        "max_words": 400,
+        "required_keywords": ["stationär", "akut", "ambulant"],
+        "forbidden_patterns": ["**", "##", "Aktuelle Anamnese:", "Psychischer Befund:"],
+        "must_contain_sections": ["Krankheitssymptomatik"]
+      }
+    },
+    {
+      "id": "akut-02-angst-dekompensation",
+      "name": "Akutaufnahme Angststörung (Mann)",
+      "prompt": "Erstelle die Begründung für Akutaufnahme.",
+      "diagnosen": ["F41.0", "F40.01"],
+      "style_therapeut": "TherapeutB",
+      "input_files": {
+        "antragsvorlage": "AKUT-HerrM/akutantrag.docx"
+      },
+      "expected": {
+        "min_words": 200,
+        "max_words": 400,
+        "required_keywords": ["stationär", "akut"],
+        "forbidden_patterns": ["**", "##"],
+        "must_contain_sections": ["Krankheitssymptomatik"]
+      }
+    }
+  ],
+
   "anamnese": [
     {
       "id": "an-01-depression-lehrerin",

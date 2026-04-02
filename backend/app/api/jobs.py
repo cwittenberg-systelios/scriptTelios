@@ -119,7 +119,7 @@ async def list_jobs():
 @router.post("/jobs/generate")
 async def create_generate_job(
     background_tasks: BackgroundTasks,
-    workflow:         Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht"], Form()],
+    workflow:         Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"], Form()],
     prompt:           Annotated[str,  Form()],
     therapeut_id:     Annotated[Optional[str], Form()] = None,
     diagnosen:        Annotated[Optional[str], Form()] = None,
@@ -146,6 +146,7 @@ async def create_generate_job(
       P2 (anamnese):            selbstauskunft + vorbefunde + audio + diagnosen
       P3 (verlaengerung):       verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
       P3b (folgeverlaengerung): verlaufsdoku + antragsvorlage + vorantrag + bullets
+      P3c (akutantrag):          antragsvorlage (Anamnese/Befund/Diagnosen) + verlaufsdoku (opt)
       P4 (entlassbericht):      verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
     """
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht thread-safe)
@@ -324,6 +325,7 @@ async def create_generate_job(
             "entlassbericht":       4000,
             "verlaengerung":        3000,
             "folgeverlaengerung":   3000,
+            "akutantrag":           2048,
             "anamnese":             3000,
             "dokumentation":        2048,
         }

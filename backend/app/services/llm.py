@@ -313,6 +313,7 @@ async def generate_text(
         "entlassbericht":       2000,  # mind. 600 Woerter → ~2000 Tokens
         "verlaengerung":        1500,  # mind. 400 Woerter → ~1500 Tokens
         "folgeverlaengerung":   1500,  # mind. 400 Woerter → ~1500 Tokens
+        "akutantrag":           800,   # mind. 200 Woerter → ~800 Tokens
         "anamnese":             1500,  # mind. 350 Woerter + Befund → ~1500 Tokens
         "dokumentation":        1000,  # mind. 250 Woerter → ~1000 Tokens
     }
@@ -358,6 +359,7 @@ async def generate_text(
         "entlassbericht":       "Zu Beginn des stationären Aufenthalts",
         "verlaengerung":        "Im bisherigen Verlauf des stationären Aufenthalts",
         "folgeverlaengerung":   "Im weiteren Verlauf seit dem letzten Verlängerungsantrag",
+        "akutantrag":           "Folgende Krankheitssymptomatik macht in der Art und Schwere",
         "anamnese":             "",  # Kein Primer – Modell soll selbst mit Patientenname beginnen
         "dokumentation":        "Auftragsklärung\n\n",
     }
