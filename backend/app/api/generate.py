@@ -24,6 +24,12 @@ from app.services.prompts import build_system_prompt, build_user_content
 import app.services.transcription as _transcription
 
 router = APIRouter()
+def _size_class(n):
+    if n < 1000: return "klein"
+    if n < 5000: return "mittel"
+    if n < 20000: return "groß"
+    return "sehr groß"
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,7 +115,7 @@ async def generate_with_files(
     # ── 1. Audio transkribieren ──────────────────────────────────
     audio_transcript = transcript or ""
     if audio and audio.filename:
-        logger.info("Audio-Upload: %s", audio.filename)
+        logger.info("Audio-Upload empfangen (Typ: %s)", audio.content_type or "audio/*")
         audio_path = await save_upload(audio, ALLOWED_AUDIO)
         try:
             tr = await _transcription.transcribe_audio(audio_path)
@@ -141,7 +147,7 @@ async def generate_with_files(
         path = await save_upload(style_file, ALLOWED_DOCS)
         try:
             style_context = await extract_style_context(path, generate_text)
-            logger.info("Stilprofil aus Datei extrahiert: %d Zeichen", len(style_context))
+            logger.info("Stilprofil aus Datei extrahiert: %s", _size_class(len(style_context)))
         except Exception as e:
             logger.warning("Stilprofil-Extraktion fehlgeschlagen: %s", e)
 

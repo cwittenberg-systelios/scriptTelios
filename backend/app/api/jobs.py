@@ -276,7 +276,7 @@ async def create_generate_job(
             path.write_bytes(vorantrag_bytes)
             try:
                 vorantrag_text = await extract_text(path)
-                logger.info("Vorantrag extrahiert: %d Zeichen", len(vorantrag_text))
+                logger.info("Vorantrag extrahiert: %s", _size_class(len(vorantrag_text)))
             except Exception as e:
                 logger.warning("Vorantrag-Extraktion fehlgeschlagen: %s", e)
 
@@ -291,7 +291,7 @@ async def create_generate_job(
             style_context = truncate_style_context(cleaned)
             style_is_example = True
             style_info = {"source": "text_input", "chars": len(style_context), "words": len(style_context.split())}
-            logger.info("Stilvorlage via Text-Input (%d Zeichen nach Bereinigung)", len(style_context))
+            logger.info("Stilvorlage via Text-Input: %s", _size_class(len(style_context)))
         elif style_bytes and style_name:
             suffix = _Path(style_name).suffix.lower()
             path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"

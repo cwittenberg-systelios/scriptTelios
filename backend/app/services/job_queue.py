@@ -78,7 +78,7 @@ def _log_performance(job: "Job", queue_size: int) -> None:
         "model":        job.model_used,
         "error":        job.error_msg if job.status.value == "error" else None,
         # Input-Metadaten
-        "input":        job.input_meta,
+        "input":        _minimize_input_meta(job.input_meta) if job.input_meta else None,
         # Output-Statistiken
         "output_words": len(job.result_text.split()) if job.result_text else 0,
         "output_chars": len(job.result_text) if job.result_text else 0,
