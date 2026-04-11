@@ -343,3 +343,34 @@ Beispiel-Eintrag:
 - Uploads erhalten UUID-basierte Namen (keine Originalfilenames im Dateisystem)
 - Alle Dateipfade werden per Whitelist validiert (kein Path-Traversal möglich)
 - Testphase: ausschließlich anonymisierte/synthetische Daten verwenden
+
+## Datenschutz Setup-Anleitung
+
+### 1. Secret generieren
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+# z.B. "xY7kN3vP2mQ8rT5jL9nF4bW6cE1sD0aZ"
+```
+
+### 2. Backend konfigurieren
+
+In der Umgebung (`.env` oder Docker-Env):
+
+```bash
+AUTH_ENABLED=true
+CONFLUENCE_SHARED_SECRET=xY7kN3vP2mQ8rT5jL9nF4bW6cE1sD0aZ
+ALLOWED_ORIGINS=https://wiki.systelios.de
+AUDIT_LOG_PATH=/workspace/audit.log
+```
+
+### 3. Confluence-Macro konfigurieren
+
+In `confluence-user-macro.html` den Platzhalter ersetzen:
+
+```javascript
+window.SYSTELIOS_AUTH_SECRET = "xY7kN3vP2mQ8rT5jL9nF4bW6cE1sD0aZ";
+```
+
+**WICHTIG**: Der Confluence-Admin muss das Secret auf beiden Seiten
+synchron halten. Bei Rotation beide Stellen gleichzeitig updaten.

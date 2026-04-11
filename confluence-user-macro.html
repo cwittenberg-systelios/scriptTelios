@@ -25,6 +25,7 @@
 ##
 ## ════════════════════════════════════════════════════════════════════════
 ## @param backendUrl:title=Backend URL|type=string|required=false|default=|desc=URL des scriptTelios-Backends (z.B. https://abc123-8000.proxy.runpod.net). Wenn gesetzt, müssen Therapeuten nichts konfigurieren.
+## @param authSecret:title=Auth Secret|type=string|required=false|default=|desc=Shared-Secret für die HMAC-Authentifizierung mit dem Backend (siehe AUTH-MIGRATION.md). Muss identisch mit CONFLUENCE_SHARED_SECRET im Backend sein.
 
 ## Container – äusserer Wrapper (vom Macro befüllt) + innerer leerer Mount-Punkt
 <div id="systelios-root-$action.hashCode()" data-api="$!{parambackendUrl}">
@@ -33,8 +34,40 @@
 
 ## Konfiguration
 <script>
-  // Confluence-Benutzername
-  window.SYSTELIOS_USER = AJS && AJS.Data ? (AJS.Data.get("current-user-fullname") || "") : "";
+  // Confluence-Benutzername (LDAP-authentifiziert via Confluence-Session)
+  window.SYSTELIOS_USER = AJS && AJS.Data
+    ? (AJS.Data.get("remote-user")
+       || AJS.Data.get("current-username")
+       || AJS.Data.get("current-user-fullname")
+       || "anonymous")
+    : "anonymous";
+
+  // Auth-Secret (HMAC-Shared-Secret mit Backend)
+  window.SYSTELIOS_AUTH_SECRET = "$!{paramauthSecret}".trim();
+
+  // HMAC-SHA256 via Web Crypto API
+  window._hmacSign = async function(user, timestamp) {
+    if (!window.SYSTELIOS_AUTH_SECRET) return "";
+    var enc = new TextEncoder();
+    var key = await crypto.subtle.importKey(
+      "raw", enc.encode(window.SYSTELIOS_AUTH_SECRET),
+      { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+    );
+    var sig = await crypto.subtle.sign("HMAC", key, enc.encode(user + ":" + timestamp));
+    return Array.from(new Uint8Array(sig)).map(function(b) { return b.toString(16).padStart(2, "0"); }).join("");
+  };
+
+  // Signierter fetch-Wrapper: setzt automatisch die Auth-Header
+  window.signedFetch = async function(url, opts) {
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    var ts = Math.floor(Date.now() / 1000).toString();
+    var sig = await window._hmacSign(window.SYSTELIOS_USER, ts);
+    opts.headers["X-Systelios-User"] = window.SYSTELIOS_USER;
+    opts.headers["X-Systelios-Timestamp"] = ts;
+    opts.headers["X-Systelios-Signature"] = sig;
+    return fetch(url, opts);
+  };
 
   // Backend-URL: Macro-Parameter hat immer Vorrang (empfohlen!)
   // localStorage kann in manchen Browsern/Confluence-Versionen blockiert sein.

@@ -85,6 +85,9 @@ class Job:
         self.description        = description
         self.status             = JobStatus.PENDING
         self.result_text        : Optional[str] = None
+        self.progress           : int = 0
+        self.progress_phase     : str = ""
+        self.progress_detail    : str = ""
         self.result_transcript  : Optional[str] = None
         self.result_befund      : Optional[str] = None
         self.result_akut        : Optional[str] = None
@@ -100,6 +103,13 @@ class Job:
         # Performance-Tracking: Input-Metadaten
         self.input_meta         : Optional[dict] = None   # {has_audio, has_pdf, has_style, ...}
 
+    def set_progress(self, pct: int, phase: str = "", detail: str = "") -> None:
+        """Monotoner Progress (0-100). Thread-safe via atomic int write."""
+        self.progress = max(self.progress, min(100, int(pct)))
+        if phase:
+            self.progress_phase = phase
+        self.progress_detail = detail
+
     def to_dict(self) -> dict:
         return {
             "job_id":          self.job_id,
@@ -109,6 +119,9 @@ class Job:
             "cancelled":       self._cancel_requested,
             "result_text":     self.result_text or "",
             "has_transcript":  self.result_transcript is not None,
+            "progress":        self.progress,
+            "progress_phase":  self.progress_phase,
+            "progress_detail": self.progress_detail,
             "befund_text":     self.result_befund or "",
             "akut_text":       self.result_akut or "",
             "result_file":     self.result_file,
@@ -166,6 +179,7 @@ class JobQueue:
     ) -> None:
         """Fuehrt einen Job asynchron aus und aktualisiert den Status."""
         job.status     = JobStatus.RUNNING
+            job.set_progress(5, "Warteschlange")
         job.started_at = datetime.now(timezone.utc)
         t0 = asyncio.get_event_loop().time()
 
@@ -194,6 +208,7 @@ class JobQueue:
                 job.status = JobStatus.CANCELLED
                 logger.info("Job abgebrochen (nach Generierung, Text behalten): %s", job.job_id)
             else:
+                job.set_progress(100, "Fertig")
                 job.status = JobStatus.DONE
                 logger.info(
                     "Job abgeschlossen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s

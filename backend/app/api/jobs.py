@@ -119,7 +119,7 @@ async def list_jobs():
 @router.post("/jobs/generate")
 async def create_generate_job(
     background_tasks: BackgroundTasks,
-    workflow:         Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht"], Form()],
+    workflow:         Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"], Form()],
     prompt:           Annotated[str,  Form()],
     therapeut_id:     Annotated[Optional[str], Form()] = None,
     diagnosen:        Annotated[Optional[str], Form()] = None,
@@ -146,6 +146,7 @@ async def create_generate_job(
       P2 (anamnese):            selbstauskunft + vorbefunde + audio + diagnosen
       P3 (verlaengerung):       verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
       P3b (folgeverlaengerung): verlaufsdoku + antragsvorlage + vorantrag + bullets
+      P3c (akutantrag):          antragsvorlage (Anamnese/Befund/Diagnosen) + verlaufsdoku (opt)
       P4 (entlassbericht):      verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
     """
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht thread-safe)
@@ -199,12 +200,21 @@ async def create_generate_job(
             suffix = _Path(audio_name).suffix.lower()
             audio_path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
             audio_path.write_bytes(audio_bytes)
+            if "transcription" in bands:
+                job.set_progress(bands["transcription"][0], "Audio-Transkription")
+            _t0 = _t.time()
             tr = await _transcription.transcribe_audio(audio_path)
+            phase_times["transcription"] = _t.time() - _t0
+            if "transcription" in bands:
+                job.set_progress(bands["transcription"][1])
             transkript_text = tr["transcript"]
 
         # ── 2. Dokumente extrahieren (jedes Feld → eigene Variable) ──
 
         # P2: Selbstauskunft des Klienten
+        if "extraction" in bands:
+            job.set_progress(bands["extraction"][0], "Dokument-Extraktion")
+        _ex_t0 = _t.time()
         selbstauskunft_text = ""
         if selbstauskunft_bytes and selbstauskunft_name:
             suffix = _Path(selbstauskunft_name).suffix.lower()
@@ -324,11 +334,45 @@ async def create_generate_job(
             "entlassbericht":       4000,
             "verlaengerung":        3000,
             "folgeverlaengerung":   3000,
+            "akutantrag":           2048,
             "anamnese":             3000,
             "dokumentation":        2048,
         }
         max_tok = max_tokens_map.get(workflow, 2048)
-        result = await generate_text(system, user, max_tokens=max_tok, model=model, workflow=workflow)
+        from app.services.progress_bands import compute_bands
+        from app.services.job_queue import perf_logger
+
+        _has_audio = bool(audio_bytes) if 'audio_bytes' in dir() else False
+        _has_docs = bool((verlaufsdoku_bytes if 'verlaufsdoku_bytes' in dir() else None)
+                      or (antragsvorlage_bytes if 'antragsvorlage_bytes' in dir() else None)
+                      or (selbstauskunft_bytes if 'selbstauskunft_bytes' in dir() else None))
+        bands = compute_bands(workflow, has_audio=_has_audio, has_docs=_has_docs)
+
+        phase_times["extraction"] = _t.time() - _ex_t0
+        if "extraction" in bands:
+            job.set_progress(bands["extraction"][1], "Dokument-Extraktion")
+
+        lb = bands["llm"]
+        expected_tok = {"dokumentation":1000,"anamnese":1500,"verlaengerung":1500,
+                        "folgeverlaengerung":1500,"akutantrag":800,"entlassbericht":2000}.get(workflow, 1500)
+        def _on_tok(n):
+            pct = lb[0] + (lb[1] - lb[0]) * min(1.0, n / expected_tok)
+            job.set_progress(int(pct), "KI-Generierung", f"{n} Wörter")
+
+        job.set_progress(lb[0], "KI-Generierung")
+        _t0 = _t.time()
+        result = await generate_text(system, user, max_tokens=max_tok, model=model, workflow=workflow, on_progress=_on_tok)
+        phase_times["llm"] = _t.time() - _t0
+
+        try:
+            perf_logger.info(_j.dumps({
+                "workflow": workflow,
+                "phases": phase_times,
+                "has_audio": _has_audio,
+                "has_docs": _has_docs,
+            }))
+        except Exception:
+            pass
         raw = result["text"] or ""
 
         # Anamnese: Ergebnis bei ###BEFUND### und optional ###AKUT### aufteilen

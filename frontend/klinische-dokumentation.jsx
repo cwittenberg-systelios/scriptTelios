@@ -3,6 +3,15 @@ import { createPortal } from "react-dom";
 
 // sysTelios CI – angepasst an Confluence-Intranet-Screenshot:
 // Sidebar: Dunkelgrau/Anthrazit (#2c2c2c) / Highlight: Dunkelrot #8b1a1a / Neutral Grau-Töne / System-Schrift
+// Auth-Wrapper: nutzt window.signedFetch (Confluence-Macro) für HMAC-Auth.
+// Fallback auf apiFetch() wenn nicht im Confluence-Kontext (z.B. lokale Entwicklung).
+const apiFetch = (url, opts) => {
+  if (typeof window !== "undefined" && window.signedFetch) {
+    return window.signedFetch(url, opts);
+  }
+  return apiFetch(url, opts);
+};
+
 const S = `
   /* Scoped auf #st-root – überschreibt Confluence-CSS zuverlässig */
   #st-root, #st-root *, #st-root *::before, #st-root *::after {
@@ -541,7 +550,7 @@ function ModelSelector({ model, onChange, apiBase }) {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${apiBase}/models`)
+    apiFetch(`${apiBase}/models`)
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data?.models?.length) {
@@ -740,7 +749,7 @@ async function pollJob(jobId, maxWaitSeconds = 1200) {
   const interval = 2;
   for (let i = 0; i < maxWaitSeconds / interval; i++) {
     await new Promise(res => setTimeout(res, interval * 1000));
-    const poll = await fetch(`${getApiBase()}/jobs/${jobId}`);
+    const poll = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
     if (!poll.ok) continue;
     const job = await poll.json();
     if (job.status === "done")      return job;
@@ -756,22 +765,18 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   fd.append("workflow",   workflow);
   fd.append("prompt",     prompt);
   fd.append("transcript", userContent);
-  if (therapeutId)          fd.append("therapeut_id",    therapeutId);
-  // Dateien – jedes Feld hat genau EINE Bedeutung
-  if (files.audio)          fd.append("audio",           files.audio);
-  if (files.selbstauskunft) fd.append("selbstauskunft",  files.selbstauskunft);
-  if (files.vorbefunde)     fd.append("vorbefunde",      files.vorbefunde);
-  if (files.verlaufsdoku)   fd.append("verlaufsdoku",    files.verlaufsdoku);
-  if (files.antragsvorlage) fd.append("antragsvorlage",  files.antragsvorlage);
-  if (files.vorantrag)      fd.append("vorantrag",       files.vorantrag);
-  if (files.style)          fd.append("style_file",      files.style);
-  if (files.diagnosen)      fd.append("diagnosen",       files.diagnosen);
-  if (files.fokusThemen)    fd.append("bullets",         files.fokusThemen);
-  if (files.styleText)      fd.append("style_text",      files.styleText);
-  if (files.model)          fd.append("model",           files.model);
+  if (therapeutId)      fd.append("therapeut_id",  therapeutId);
+  if (files.audio)      fd.append("audio",          files.audio);
+  if (files.selbst)     fd.append("selbstauskunft", files.selbst);
+  if (files.vorbef)     fd.append("vorbefunde",     files.vorbef);
+  if (files.style)      fd.append("style_file",     files.style);
+  if (files.diagnosen)  fd.append("diagnosen",      files.diagnosen);
+  if (files.bullets)    fd.append("bullets",        files.bullets);
+  if (files.styleText)  fd.append("style_text",     files.styleText);
+  if (files.model)      fd.append("model",           files.model);
 
   // Job starten
-  const r = await fetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
+  const r = await apiFetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
   const d = await r.json();
   if (!r.ok) throw new Error(d.detail || r.statusText);
 
@@ -796,7 +801,7 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
 
 // Laedt das Transkript eines Jobs vom Backend und speichert es als .txt
 async function downloadTranscript(jobId, filename = "transkript.txt") {
-  const r = await fetch(`${getApiBase()}/jobs/${jobId}/transcript`);
+  const r = await apiFetch(`${getApiBase()}/jobs/${jobId}/transcript`);
   if (!r.ok) throw new Error("Transkript nicht verfügbar");
   const data = await r.json();
   const blob = new Blob([data.transcript], { type: "text/plain;charset=utf-8" });
@@ -844,7 +849,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
     // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
     const jobId = loadActiveJob()?.jobId;
     if (jobId) {
-      fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+      apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
     }
     clearActiveJob();
     setBusy(false);
@@ -871,7 +876,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
         audio: audio,
         style: style,
         styleText: styleText || null,
-        fokusThemen: bullets || null,
+        bullets: bullets || null,
         model: model || null,
       }, "p1");
       setOut(result.text || "");
@@ -1047,7 +1052,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
   function cancelRun() {
     const jobId = loadActiveJob()?.jobId;
     if (jobId) {
-      fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+      apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
     }
     clearActiveJob();
     setBusy(false);
@@ -1074,13 +1079,13 @@ function P2({ toast, resumeJob, onResumed, model }) {
     const sys = prompt.replace("{diagnosen}", dxStr) + geschlechtHinweis;
     try {
       const result = await generate("anamnese", sys, "", {
-        selbstauskunft: selbst,
-        vorbefunde:     befunde,
-        audio:          audio,
-        style:          style,
-        styleText:      styleText || null,
-        fokusThemen:    akutantrag ? "akutantrag" : (text || null),
-        model:          model || null,
+        selbst:    selbst,
+        vorbef:    befunde,
+        audio:     audio,
+        style:     style,
+        styleText: styleText || null,
+        bullets:   akutantrag ? "akutantrag" : (text || null),
+        model:     model || null,
       }, "p2");
       setOut(result.text || "");
       setBefundOut(result.befundText || "");
@@ -1233,9 +1238,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
 }
 
 function P3({ toast, resumeJob, onResumed, model }) {
-  const [isFolge, setIsFolge]     = useState(false);  // Toggle: Erst- vs. Folgeverlängerung
   const [antrag, setAntrag]       = useState(null);
-  const [vorantrag, setVorantrag] = useState(null);   // Vorheriger Verlängerungsantrag (nur Folge)
   const [verlauf, setVerlauf]     = useState(null);
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
@@ -1260,9 +1263,10 @@ function P3({ toast, resumeJob, onResumed, model }) {
   }, [resumeJob]);
 
   function cancelRun() {
+    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
     const jobId = loadActiveJob()?.jobId;
     if (jobId) {
-      fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+      apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
     }
     clearActiveJob();
     setBusy(false);
@@ -1273,15 +1277,13 @@ function P3({ toast, resumeJob, onResumed, model }) {
     setOut("");
     setLastJobId(null);
     try {
-      const wf = isFolge ? "folgeverlaengerung" : "verlaengerung";
-      const result = await generate(wf, "", "", {
-        antragsvorlage: antrag,                        // Antragsvorlage (ohne Verlaufsabschnitt)
-        verlaufsdoku:   verlauf,                       // Verlaufsdokumentation
-        vorantrag:      isFolge ? vorantrag : null,    // Vorheriger Antrag (nur Folge)
-        style:          style,
-        styleText:      styleText || null,
-        fokusThemen:    fokus || null,
-        model:          model || null,
+      const result = await generate("verlaengerung", "", "", {
+        selbst:    antrag,   // Antragsvorlage → Diagnosen/Anamnese
+        vorbef:    verlauf,  // Verlaufsdokumentation
+        style:     style,
+        styleText: styleText || null,
+        bullets:   fokus || null,
+        model:     model || null,
       }, "p3");
       setOut(result.text || "");
       setLastJobId(result.jobId);
@@ -1289,8 +1291,6 @@ function P3({ toast, resumeJob, onResumed, model }) {
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
   }
-
-  const canRun = verlauf && (isFolge ? vorantrag : true);
 
   return (
     <div>
@@ -1301,59 +1301,17 @@ function P3({ toast, resumeJob, onResumed, model }) {
       </div>
       <div className="page-body">
         <div className="workflow">
-
-          {/* Toggle: Erst- vs. Folgeverlängerung */}
-          <div style={{
-            display:"flex", gap:0, marginBottom:16, borderRadius:6, overflow:"hidden",
-            border:"1px solid var(--st-gray-border)"
-          }}>
-            <button onClick={() => setIsFolge(false)} style={{
-              flex:1, padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer",
-              border:"none",
-              background: !isFolge ? "var(--st-red)" : "var(--st-white)",
-              color: !isFolge ? "#fff" : "var(--st-text-soft)",
-            }}>Erstverlängerung</button>
-            <button onClick={() => setIsFolge(true)} style={{
-              flex:1, padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer",
-              border:"none", borderLeft:"1px solid var(--st-gray-border)",
-              background: isFolge ? "var(--st-red)" : "var(--st-white)",
-              color: isFolge ? "#fff" : "var(--st-text-soft)",
-            }}>Folgeverlängerung</button>
-          </div>
-
           <Card num="A" title="Verlaufsdokumentation" badge="req">
             <Dropzone label="Verlaufsdokumentation hochladen" hint=".pdf — alle Verlaufsnotizen des Aufenthalts" accept=".pdf" icon="&#128202;" file={verlauf} onFile={setVerlauf} />
-            <div className="info-note" style={{marginTop:8}}>
-              {isFolge
-                ? "Alle Verlaufsnotizen – der Text konzentriert sich auf die Entwicklung seit dem letzten Antrag."
-                : "Alle Verlaufsnotizen des stationären Aufenthalts als PDF."
-              }
-            </div>
+            <div className="info-note" style={{marginTop:8}}>Alle Verlaufsnotizen des stationären Aufenthalts als PDF.</div>
           </Card>
 
-          {isFolge && (
-            <Card num="B" title="Vorheriger Verlängerungsantrag" badge="req">
-              <Dropzone label="Vorherigen Antrag hochladen" hint=".docx oder .pdf — Verlauf, Anamnese und Diagnosen werden entnommen" accept=".docx,.pdf" icon="&#128203;" file={vorantrag} onFile={setVorantrag} />
-              <div className="info-note" style={{marginTop:8}}>
-                Der vorherige Verlängerungsantrag. Daraus werden Anamnese, Diagnosen und der bisherige Verlauf entnommen.
-                Der neue Text knüpft an den bisherigen Verlauf an.
-              </div>
-            </Card>
-          )}
-
-          <Card num={isFolge ? "C" : "B"} title={isFolge ? "Folgeantrags-Vorlage" : "Antragsvorlage"} badge="opt" open={false}>
-            <Dropzone label={isFolge ? "Leere Folgeantrags-Vorlage hochladen" : "Vorlage / Vorheriger Antrag hochladen"}
-              hint={isFolge ? ".docx oder .pdf — leere Vorlage für den Folgeantrag" : ".docx oder .pdf — Diagnosen und Anamnese werden entnommen"}
-              accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
-            <div className="info-note" style={{marginTop:8}}>
-              {isFolge
-                ? "Leere Vorlage für den Folgeantrag (ohne Verlaufsabschnitt). Struktur wird übernommen."
-                : "Diagnosen, Anamnese und Befund werden aus dieser Vorlage für den neuen Antrag übernommen."
-              }
-            </div>
+          <Card num="B" title="Antragsvorlage" badge="opt" open={false}>
+            <Dropzone label="Vorlage / Vorheriger Antrag hochladen" hint=".docx oder .pdf — Diagnosen und Anamnese werden entnommen" accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
+            <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus dieser Vorlage für den neuen Antrag übernommen.</div>
           </Card>
 
-          <Card num={isFolge ? "D" : "C"} title="Stilvorlage" badge="opt" open={false}>
+          <Card num="C" title="Stilvorlage" badge="opt" open={false}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -1370,7 +1328,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
             </InputTabs>
           </Card>
 
-          <Card num={isFolge ? "E" : "D"} title="Fokus-Themen" badge="opt" open={false}>
+          <Card num="D" title="Fokus-Themen" badge="opt" open={false}>
             <label className="field-label">Schwerpunkte für diesen Antrag</label>
             <textarea rows={4}
               placeholder={"Optionale Schwerpunkte, z.B.:\n– Wächteranteil Türsteher\n– Gruppenarbeit, soziale Integration\n– Entschluss zur räumlichen Trennung"}
@@ -1383,9 +1341,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
           <div className="action-bar">
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button className="btn-primary" onClick={run} disabled={!canRun}>
-                  {isFolge ? "Folgeverlängerung erstellen" : "Verlängerungsantrag erstellen"}
-                </button>
+              : <button className="btn-primary" onClick={run} disabled={!verlauf}>Verlängerungsantrag erstellen</button>
             }
           </div>
 
@@ -1395,7 +1351,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
-                setVerlauf(null); setAntrag(null); setVorantrag(null); setStyle(null); setStyleText("");
+                setVerlauf(null); setAntrag(null); setStyle(null); setStyleText("");
                 setFokus(""); setOut(""); setLastJobId(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Verlängerungsantrag</button>
@@ -1436,7 +1392,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
     // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
     const jobId = loadActiveJob()?.jobId;
     if (jobId) {
-      fetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+      apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
     }
     clearActiveJob();
     setBusy(false);
@@ -1448,12 +1404,12 @@ function P4({ toast, resumeJob, onResumed, model }) {
     setLastJobId(null);
     try {
       const result = await generate("entlassbericht", "", "", {
-        antragsvorlage: bericht,    // Entlassbericht-Vorlage (Diagnosen/Anamnese/Befund)
-        verlaufsdoku:   verlauf,    // Verlaufsdokumentation
-        style:          style,
-        styleText:      styleText || null,
-        fokusThemen:    fokus || null,
-        model:          model || null,
+        selbst:    bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund
+        vorbef:    verlauf,  // Verlaufsdokumentation
+        style:     style,
+        styleText: styleText || null,
+        bullets:   fokus || null,
+        model:     model || null,
       }, "p4");
       setOut(result.text || "");
       setLastJobId(result.jobId);
@@ -1606,7 +1562,7 @@ function P5({ toast }) {
         fd.append("beispiel_file", file);
       }
 
-      const r = await fetch(`${getApiBase()}/style/upload`, { method: "POST", body: fd });
+      const r = await apiFetch(`${getApiBase()}/style/upload`, { method: "POST", body: fd });
       if (!r.ok) {
         const err = await r.json();
         throw new Error(err.detail || r.statusText);
@@ -1627,7 +1583,7 @@ function P5({ toast }) {
     if (!therapeutId.trim()) return;
     setLadebusy(true);
     try {
-      const r = await fetch(`${getApiBase()}/style/${encodeURIComponent(therapeutId.trim())}`);
+      const r = await apiFetch(`${getApiBase()}/style/${encodeURIComponent(therapeutId.trim())}`);
       if (!r.ok) throw new Error(r.statusText);
       setListe(await r.json());
     } catch (e) {
@@ -1638,7 +1594,7 @@ function P5({ toast }) {
 
   async function loeschen(id) {
     try {
-      const r = await fetch(`${getApiBase()}/style/embedding/${id}`, { method: "DELETE" });
+      const r = await apiFetch(`${getApiBase()}/style/embedding/${id}`, { method: "DELETE" });
       if (!r.ok) throw new Error((await r.json()).detail);
       toast("Beispiel gelöscht");
       await ladeListe();
@@ -1899,7 +1855,7 @@ export default function App() {
     if (!saved) return;
 
     // Job-Status vom Server prüfen
-    fetch(`${getApiBase()}/jobs/${saved.jobId}`)
+    apiFetch(`${getApiBase()}/jobs/${saved.jobId}`)
       .then(r => r.ok ? r.json() : null)
       .then(job => {
         if (!job) { clearActiveJob(); return; }
@@ -1944,7 +1900,7 @@ export default function App() {
     if (!backendUrl) return;
     let cancelled = false;
     const check = () => {
-      fetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(5000) })
+      apiFetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(5000) })
         .then(r => { if (!cancelled) setBackendOffline(!r.ok); })
         .catch(() => { if (!cancelled) setBackendOffline(true); });
     };
