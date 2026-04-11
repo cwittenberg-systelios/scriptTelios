@@ -29,6 +29,22 @@ logger = logging.getLogger(__name__)
 perf_logger = logging.getLogger("systelios.performance")
 
 
+def _minimize_input_meta(meta):
+    """O2: Entfernt Klartextdaten aus Metadaten, behält nur Booleans/Anzahlen."""
+    if not isinstance(meta, dict): return {}
+    out = {}
+    for key, val in meta.items():
+        if isinstance(val, bool):
+            out[key] = val
+        elif isinstance(val, (list, tuple)):
+            out[f"{key}_count"] = len(val)
+        elif isinstance(val, str):
+            out[f"has_{key}"] = bool(val)
+        elif isinstance(val, (int, float)):
+            out[key] = val
+    return out
+
+
 def _setup_perf_logger() -> None:
     """Richtet den Performance-Logger mit eigenem Logfile ein."""
     # Persistent auf /workspace falls vorhanden, sonst neben LOG_FILE
@@ -179,7 +195,7 @@ class JobQueue:
     ) -> None:
         """Fuehrt einen Job asynchron aus und aktualisiert den Status."""
         job.status     = JobStatus.RUNNING
-            job.set_progress(5, "Warteschlange")
+        job.set_progress(5, "Warteschlange")
         job.started_at = datetime.now(timezone.utc)
         t0 = asyncio.get_event_loop().time()
 

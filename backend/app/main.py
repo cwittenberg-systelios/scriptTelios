@@ -53,8 +53,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Upload-Bereinigung im Hintergrund starten
     cleanup_task = asyncio.create_task(_cleanup_old_uploads())
+    from app.services.retention import retention_task
+    retention_task_handle = asyncio.create_task(retention_task())
     yield
     cleanup_task.cancel()
+    try: retention_task_handle.cancel()
+    except: pass
     # Persistenten Ollama-Client schliessen
     from app.services.llm import _ollama_client
     if _ollama_client and not _ollama_client.is_closed:
@@ -68,6 +72,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+from app.middleware.ratelimit import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

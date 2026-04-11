@@ -8,6 +8,14 @@ from typing import Annotated, Literal, Optional
 
 from app.core.config import settings
 from app.core.files import save_upload, ALLOWED_DOCS, ALLOWED_IMAGES, ALLOWED_AUDIO
+
+
+def _size_class(n: int) -> str:
+    """O2: Größenklasse statt exakter Zeichenzahl (Datenminimierung)."""
+    if n < 1000: return "klein"
+    if n < 5000: return "mittel"
+    if n < 20000: return "groß"
+    return "sehr groß"
 from app.services.job_queue import job_queue, JobStatus
 from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_text, extract_style_context

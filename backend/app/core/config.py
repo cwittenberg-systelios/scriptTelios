@@ -66,6 +66,14 @@ class Settings(BaseSettings):
 
     # ── Sicherheit ────────────────────────────────────────────────
     SECRET_KEY:                    str = "BITTE-AENDERN-IN-PRODUKTION"
+
+    # ── Retention (E2) ───────────────────────────────────────────
+    RETENTION_INTERVAL_HOURS: int = 6
+
+    # ── Rate Limit (O1) ──────────────────────────────────────────
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_REQUESTS_PER_HOUR: int = 100
+    RATE_LIMIT_PARALLEL_JOBS: int = 5
     ACCESS_TOKEN_EXPIRE_MINUTES:   int = 480   # 8 Stunden
 
     # ── CORS ──────────────────────────────────────────────────────
