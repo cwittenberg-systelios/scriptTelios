@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 BACKEND_URL = os.environ.get("EVAL_BACKEND_URL", "http://localhost:8000")
 FIXTURES_PATH = Path(__file__).parent / "fixtures" / "eval" / "fixtures.json"
 EVAL_DATA_DIR = Path(os.environ.get("EVAL_DATA_DIR", "/workspace/eval_data"))
+EVAL_RESULTS_DIR = Path(os.environ.get("EVAL_RESULTS_DIR", "/workspace/eval_results"))
 STYLES_DIR = EVAL_DATA_DIR / "styles"
 TIMEOUT = 300  # 5 Minuten pro Generierung (lang wegen GPU-Kaltstart)
 
@@ -68,6 +69,11 @@ STYLE_SECTION_HEADINGS = {
         "Psychischer Befund",
         "Psychopathologischer Befund",
         "Befund",
+    ],
+    "akutantrag": [
+        "Begründung für Akutaufnahme",
+        "Begründung",
+        "Akutbegründung",
     ],
     "dokumentation": None,  # Gesprächszusammenfassung = ganzes Dokument
 }
@@ -203,6 +209,8 @@ def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
         prefixes = ["Entlassbericht"]
     elif workflow in ("verlaengerung", "folgeverlaengerung"):
         prefixes = ["Verlängerungsantrag", "Verlaengerungsantrag"]
+    elif workflow == "akutantrag":
+        prefixes = ["Akutantrag"]
     elif workflow == "anamnese":
         prefixes = ["Entlassbericht", "Verlängerungsantrag", "Verlaengerungsantrag"]
     else:
@@ -268,7 +276,7 @@ FIXTURES = _load_fixtures()
 def _all_test_cases():
     """Generiert (workflow, test_case) Tupel fuer Parametrisierung."""
     cases = []
-    for workflow in ["entlassbericht", "verlaengerung", "folgeverlaengerung", "anamnese", "dokumentation"]:
+    for workflow in ["entlassbericht", "verlaengerung", "folgeverlaengerung", "akutantrag", "anamnese", "dokumentation"]:
         for tc in FIXTURES.get(workflow, []):
             cases.append((workflow, tc))
     return cases
@@ -340,7 +348,7 @@ async def _generate(
                 logger.info("Eval-Input: %s = %s", field_name, p)
 
     try:
-        async with httpx.AsyncClient(base_url=BACKEND_URL, timeout=30.0) as client:
+        async with httpx.AsyncClient(base_url=BACKEND_URL, timeout=120.0) as client:
             # Job erstellen – mit oder ohne Dateien
             r = await client.post(
                 "/api/jobs/generate",
@@ -770,21 +778,20 @@ async def test_eval_workflow(workflow, test_case, request):
     # Ergebnis loggen
     print(f"\n{ev.summary()}")
 
-    # Optional: Ergebnis speichern
-    output_dir = request.config.getoption("--eval-output", default=None)
-    if output_dir:
-        out_path = Path(output_dir) / workflow
-        out_path.mkdir(parents=True, exist_ok=True)
-        result_file = out_path / f"{test_case['id']}.txt"
-        result_file.write_text(text, encoding="utf-8")
-        summary_file = out_path / f"{test_case['id']}.eval.txt"
-        summary_file.write_text(ev.summary(), encoding="utf-8")
-        if hasattr(ev, "style_metrics") and ev.style_metrics:
-            metrics_file = out_path / f"{test_case['id']}.style.json"
-            metrics_file.write_text(
-                json.dumps(ev.style_metrics, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+    # Ergebnis speichern (immer – default: /workspace/eval_results/)
+    output_dir = request.config.getoption("--eval-output", default=None) or EVAL_RESULTS_DIR
+    out_path = Path(output_dir) / workflow
+    out_path.mkdir(parents=True, exist_ok=True)
+    result_file = out_path / f"{test_case['id']}.txt"
+    result_file.write_text(text, encoding="utf-8")
+    summary_file = out_path / f"{test_case['id']}.eval.txt"
+    summary_file.write_text(ev.summary(), encoding="utf-8")
+    if hasattr(ev, "style_metrics") and ev.style_metrics:
+        metrics_file = out_path / f"{test_case['id']}.style.json"
+        metrics_file.write_text(
+            json.dumps(ev.style_metrics, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     # Test failt wenn es kritische Issues gibt
     critical = [i for i in ev.issues if "DATENSCHUTZ" in i or "HALLUZINATION" in i]
@@ -816,7 +823,7 @@ def _style_variance_fixtures():
         return []
 
     cases = []
-    for workflow in ["entlassbericht", "verlaengerung", "folgeverlaengerung", "dokumentation"]:
+    for workflow in ["entlassbericht", "verlaengerung", "folgeverlaengerung", "akutantrag", "dokumentation"]:
         tcs = FIXTURES.get(workflow, [])
         if not tcs:
             continue

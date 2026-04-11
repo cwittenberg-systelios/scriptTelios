@@ -238,3 +238,58 @@ def pytest_addoption(parser):
         default=None,
         help="Verzeichnis für Evaluations-Ergebnisse (optional, nur für test_eval.py)",
     )
+    parser.addoption(
+        "--eval-report",
+        action="store_true",
+        default=False,
+        help="PDF-Report nach eval-Tests generieren",
+    )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Nach dem Test-Run: PDF-Report generieren wenn eval-Tests liefen."""
+    try:
+        generate_report = session.config.getoption("--eval-report", default=False)
+    except (ValueError, AttributeError):
+        return
+
+    if not generate_report:
+        return
+
+    results_dir = session.config.getoption("--eval-output", default=None)
+    if not results_dir:
+        results_dir = os.environ.get("EVAL_RESULTS_DIR", "/workspace/eval_results")
+
+    results_path = Path(results_dir)
+    if not results_path.exists():
+        return
+
+    # Report nur generieren wenn es eval-Ergebnisse gibt
+    eval_files = list(results_path.rglob("*.eval.txt"))
+    if not eval_files:
+        return
+
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "eval_report",
+            Path(__file__).parent.parent / "scripts" / "eval_report.py",
+        )
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+
+            charts_dir = results_path / ".charts"
+            charts_dir.mkdir(exist_ok=True)
+
+            data = mod.load_eval_results(results_path)
+            total = sum(len(v) for v in data["workflows"].values())
+            if total > 0:
+                report_path = results_path / "eval_report.pdf"
+                mod.build_report(data, report_path, charts_dir)
+                print(f"\n{'='*60}")
+                print(f"  PDF-Report erstellt: {report_path}")
+                print(f"  {total} Testfälle in {len(data['workflows'])} Workflows")
+                print(f"{'='*60}")
+    except Exception as e:
+        print(f"\nWarnung: PDF-Report konnte nicht erstellt werden: {e}")

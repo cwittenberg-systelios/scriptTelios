@@ -223,39 +223,30 @@ Fortschritte nachhaltig im Alltag zu verankern.\
 
 BASE_PROMPT_AKUTANTRAG = (
     "Du bist Arzt oder Psychologischer Psychotherapeut der sysTelios Klinik. "
-    "Verfasse den psychotherapeutischen Teil eines AKUTANTRAGS an die Krankenversicherung "
+    "Verfasse die 'Begründung für Akutaufnahme' eines AKUTANTRAGS an die Krankenversicherung "
     "für die Erstattung einer stationären Akutaufnahme.\n\n"
-    "STRUKTUR DES AKUTANTRAGS (nur diese Sektionen):\n"
-    "1. AKTUELLE ANAMNESE\n"
-    "   Knappe Beschreibung des aktuellen Zustands bei Aufnahme: Symptome, Auslöser, "
-    "   Dekompensationszeichen. Direkte Patientenzitate wenn charakteristisch. "
-    "   Warum jetzt? Was hat zur Aufnahme geführt?\n\n"
-    "2. BESCHREIBUNG DES THERAPEUTISCHEN ANGEBOTS\n"
-    "   Standardformulierung der Klinik (wird automatisch eingefügt).\n\n"
-    "3. BEGRÜNDUNG FÜR AKUTAUFNAHME\n"
-    "   Warum ist ein stationäres Setting medizinisch akut notwendig? "
-    "   Konkrete Symptome und Risiken benennen. Ambulante Insuffizienz begründen. "
-    "   Mit Standardformulierung beginnen: "
-    "   'Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
-    "   Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
-    "   Eindruckes ein stationäres Krankenhaussetting akut notwendig:'\n\n"
-    "NICHT SCHREIBEN: Stammdaten, Diagnosen-Kodierung, somatischen Befund, "
-    "Medikation, Laborwerte – diese Felder werden separat befüllt.\n\n"
+    "KONTEXT:\n"
+    "Die Antragsvorlage enthält bereits Aktuelle Anamnese, Problemrelevante Vorgeschichte, "
+    "Psychischen Befund und Einweisungsdiagnosen. Diese Informationen sind deine QUELLEN.\n\n"
+    "FOKUS:\n"
+    "Schreibe NUR den Abschnitt 'Begründung für Akutaufnahme' – keine Anamnese, "
+    "keinen Befund, keine Diagnosen (diese stehen bereits in der Vorlage).\n\n"
+    "INHALT der Begründung:\n"
+    "- Warum ist ein stationäres Setting medizinisch AKUT notwendig?\n"
+    "- Konkrete Symptome und Risiken aus den Quellen benennen\n"
+    "- Ambulante Insuffizienz begründen (warum reicht ambulant nicht?)\n"
+    "- Dekompensationszeichen und aktuelle Krisensituation\n"
+    "- Mit Standardformulierung beginnen:\n"
+    "  'Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
+    "Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
+    "Eindruckes ein stationäres Krankenhaussetting akut notwendig:'\n\n"
     "STIL: Knappe medizinisch-klinische Sprache. Konkret und symptombezogen. "
-    "Keine allgemeinen Floskeln. Alle Aussagen aus den bereitgestellten Unterlagen belegbar.\n"
-    "LÄNGE: Aktuelle Anamnese 150-250 Wörter, Begründung 150-200 Wörter.\n\n"
-    "HALLUZINATIONS-SCHUTZ: Nur Informationen aus den bereitgestellten Unterlagen verwenden. "
-    "Keine Symptome oder Diagnosen erfinden.\n\n"
-    "STANDARDFORMULIERUNG THERAPIEANGEBOT (immer exakt so übernehmen):\n"
-    "Unser Therapiekonzept ist tiefenpsychologisch fundiert, verhaltenstherapeutisch ergänzt "
-    "und hypnosystemisch optimiert. Alle therapeutischen Prozesse werden ständig ärztlich "
-    "geplant und validiert. Das therapeutische Angebot umfasst intensive Einzelgespräche "
-    "(mindestens 2-3 pro Woche), sorgfältig aufeinander abgestimmte gruppentherapeutische "
-    "Angebote (Gesprächs-, Kunst-, Musik-, Körperpsycho- und Bewegungstherapie – "
-    "mindestens 5 pro Woche) und eine wöchentliche Prozessreflexion in der sogenannten "
-    "Bezugsgruppe mit dem therapeutischen Team der Gruppe. Ziel ist es, durch die "
-    "therapeutischen Maßnahmen die Einflussmöglichkeiten der Klientinnen und Klienten "
-    "auf ihr Erleben und Verhalten nachhaltig zu erhöhen."
+    "Keine allgemeinen Floskeln.\n"
+    "LÄNGE: 200-350 Wörter.\n\n"
+    "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens: 'Frau M.' / 'Herr R.'\n\n"
+    "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
+    "Jeder Satz MUSS auf eine konkrete Stelle in der Antragsvorlage "
+    "zurückführbar sein. Keine Symptome, Diagnosen oder Risiken erfinden.\n"
 )
 
 
@@ -459,6 +450,8 @@ BASE_PROMPTS: dict[str, str] = {
         "die nicht in den Quellen stehen. Im Zweifel weglassen.\n\n"
         + FEW_SHOT_ENTLASSBERICHT
     ),
+
+    "akutantrag": BASE_PROMPT_AKUTANTRAG,
 }
 
 
@@ -497,7 +490,7 @@ def build_system_prompt(
         # nur Schreibstil übernehmen, Struktur NICHT verändern.
         # P2/P3/P4: Stilbeispiel ist strukturelle Schablone → Gliederung,
         # Länge und Tonalität übernehmen, nur Patienteninhalte ersetzen.
-        is_structural = workflow in ("anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht")
+        is_structural = workflow in ("anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht")
 
         if is_structural:
             parts.append(
@@ -617,18 +610,7 @@ def build_user_content(
             parts.append(f"AUFNAHMEGESPRÄCH (TRANSKRIPT):\n{transcript}")
         if diagnosen:
             parts.append(f"DIAGNOSEN: {', '.join(diagnosen)}")
-        # Akutantrag optional: wenn fokus_themen "akutantrag" enthalten oder als Flag gesetzt
-        if fokus_themen and "akutantrag" in fokus_themen.lower():
-            parts.append(
-                "Erstelle jetzt:\n"
-                "1. Anamnese und psychopathologischen Befund\n"
-                "Trenne die Teile durch: ###BEFUND###\n"
-                "2. Psychopathologischer Befund (exakte Vorlage ausfüllen)\n"
-                "Trenne zum nächsten Teil durch: ###AKUT###\n"
-                "3. Akutantrag (Aktuelle Anamnese + Therapeutisches Angebot + Begründung)"
-            )
-        else:
-            parts.append("Anamnese und psychopathologischen Befund erstellen.")
+        parts.append("Anamnese und psychopathologischen Befund erstellen.")
 
     elif workflow == "verlaengerung":
         # Namensregel ZUERST – bevor das Modell Quellen liest
@@ -708,6 +690,41 @@ def build_user_content(
             "Ausschließlich auf Basis der obigen Quellen."
         )
 
+    elif workflow == "akutantrag":
+        # Namensregel ZUERST
+        parts.append(
+            "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
+            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
+            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
+        )
+        if antragsvorlage_text:
+            parts.append(
+                f"AKUTANTRAGS-VORLAGE"
+                f" (Quelle für Anamnese, Befund, Diagnosen, Name, Geschlecht):\n{antragsvorlage_text}\n"
+                "Entnimm alle Informationen aus diesem Dokument: "
+                "Aktuelle Anamnese, Problemrelevante Vorgeschichte, Psychischer Befund, "
+                "Einweisungsdiagnosen."
+            )
+        if verlaufsdoku_text:
+            parts.append(
+                f"ERGÄNZENDE INFORMATIONEN (Aufnahmegespräch / Verlaufsdoku):\n{verlaufsdoku_text}"
+            )
+        if diagnosen:
+            parts.append(f"EINWEISUNGSDIAGNOSEN: {', '.join(diagnosen)}")
+        if fokus_themen:
+            parts.append(f"BESONDERE HINWEISE:\n{fokus_themen}")
+        parts.append(
+            "Verfasse jetzt NUR den Abschnitt 'Begründung für Akutaufnahme'. "
+            "Beginne mit der Standardformulierung: "
+            "'Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
+            "Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
+            "Eindruckes ein stationäres Krankenhaussetting akut notwendig:'\n"
+            "Dann konkrete Symptome und Risiken aus der Antragsvorlage benennen. "
+            "200-350 Wörter. "
+            "Ausschließlich auf Basis der obigen Quellen."
+        )
+
     elif workflow == "entlassbericht":
         # Namensregel ZUERST – bevor das Modell Quellen liest
         parts.append(
@@ -743,7 +760,7 @@ def build_user_content(
     # strukturell ins Stilbeispiel passen würden und sie dort einbauen.
     if custom_prompt and custom_prompt.strip():
         focus = custom_prompt.strip()
-        is_structural = workflow in ("anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht")
+        is_structural = workflow in ("anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht")
         if is_structural:
             parts.append(
                 f"THERAPEUTEN-HINWEIS – SCHWERPUNKTTHEMEN:\n{focus}\n\n"

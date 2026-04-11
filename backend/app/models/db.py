@@ -29,7 +29,7 @@ class Job(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     workflow: Mapped[str] = mapped_column(
-        Enum("dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht", name="workflow_enum"),
+        Enum("dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht", name="workflow_enum"),
         nullable=False,
     )
     step: Mapped[str] = mapped_column(
@@ -68,12 +68,13 @@ class StyleProfile(Base):
 
 
 # Dokumenttypen als Konstante (Single Source of Truth)
-DOKUMENTTYPEN = ["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "entlassbericht"]
+DOKUMENTTYPEN = ["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"]
 DOKUMENTTYP_LABELS = {
     "dokumentation":        "Gesprächsdokumentation",
     "anamnese":             "Anamnese",
     "verlaengerung":        "Verlängerungsantrag",
     "folgeverlaengerung":   "Folgeverlängerungsantrag",
+    "akutantrag":           "Akutantrag",
     "entlassbericht":       "Entlassbericht",
 }
 

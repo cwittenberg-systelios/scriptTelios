@@ -569,7 +569,7 @@ class TestPrompts:
         from app.services.prompts import KLINISCHES_GLOSSAR
         assert "zirkuläre Fragen" in KLINISCHES_GLOSSAR
         assert "Hypnosystemik" in KLINISCHES_GLOSSAR
-        assert "Byron Katie" in KLINISCHES_GLOSSAR
+        assert "Reframing" in KLINISCHES_GLOSSAR
         assert "AMDP" in KLINISCHES_GLOSSAR
 
     def test_system_prompt_enthaelt_few_shot_dokumentation(self):
@@ -852,7 +852,7 @@ class TestPrompts:
     def test_alle_vier_workflows_haben_basis_prompt(self):
         """Alle vier Workflows haben einen definierten Basis-Prompt."""
         from app.services.prompts import BASE_PROMPTS
-        for workflow in ["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]:
+        for workflow in ["dokumentation", "anamnese", "verlaengerung", "akutantrag", "entlassbericht"]:
             assert workflow in BASE_PROMPTS
             assert len(BASE_PROMPTS[workflow]) > 100
 
@@ -1221,7 +1221,7 @@ class TestJobQueue:
 
     def test_job_alle_workflows(self, mock_llm):
         """Alle 4 Workflows koennen als Jobs gestartet werden."""
-        for workflow in ["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]:
+        for workflow in ["dokumentation", "anamnese", "verlaengerung", "akutantrag", "entlassbericht"]:
             r = client.post(
                 "/api/jobs/generate",
                 data={"workflow": workflow, "prompt": "test", "transcript": "test"},
@@ -1380,7 +1380,7 @@ class TestJobQueue:
         der beim Zusammenbau immer vorangestellt wird.
         """
         from app.services.prompts import build_system_prompt
-        for workflow in ["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]:
+        for workflow in ["dokumentation", "anamnese", "verlaengerung", "akutantrag", "entlassbericht"]:
             prompt = build_system_prompt(workflow=workflow)
             # ROLE_PREAMBLE oder BASE_PROMPT muss Rollenklarheit enthalten
             has_role = (
@@ -1718,3 +1718,127 @@ class TestStrukturelleSchablone:
         )
         assert "VERLAUFSDOKUMENTATION" in u
         assert "VORHANDENER VERLÄNGERUNGSANTRAG" in u or "VORBERICHT" in u
+
+
+# ══════════════════════════════════════════════════════════════════
+# AKUTANTRAG – EIGENSTÄNDIGER WORKFLOW
+# ══════════════════════════════════════════════════════════════════
+
+class TestAkutantrag:
+    """Tests für den Akutantrag als eigenständigen Workflow in P3."""
+
+    def test_akutantrag_base_prompt_vorhanden(self):
+        """Akutantrag hat einen eigenen BASE_PROMPT."""
+        from app.services.prompts import BASE_PROMPTS
+        assert "akutantrag" in BASE_PROMPTS
+        p = BASE_PROMPTS["akutantrag"]
+        assert len(p) > 100
+        assert "Akutaufnahme" in p or "akut" in p.lower()
+
+    def test_akutantrag_prompt_fokus_begruendung(self):
+        """Akutantrag-Prompt fokussiert auf 'Begründung für Akutaufnahme'."""
+        from app.services.prompts import BASE_PROMPTS
+        p = BASE_PROMPTS["akutantrag"]
+        assert "Begründung" in p
+        assert "Akutaufnahme" in p
+        # Darf nicht Anamnese/Befund selbst generieren
+        assert "NUR" in p
+
+    def test_akutantrag_system_prompt(self, mock_llm):
+        """System-Prompt für Akutantrag enthält Glossar und Basis-Prompt."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(workflow="akutantrag")
+        assert "IFS" in p  # Glossar vorhanden
+        assert "Akutaufnahme" in p or "akut" in p.lower()
+
+    def test_akutantrag_user_content_mit_antragsvorlage(self):
+        """User-Content für Akutantrag enthält Antragsvorlage als Hauptquelle."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("akutantrag",
+            antragsvorlage_text="Anamnese: Patient zeigt schwere depressive Symptomatik. Befund: bewusstseinsklar.",
+            diagnosen=["F32.2"],
+        )
+        assert "AKUTANTRAGS-VORLAGE" in u
+        assert "Anamnese" in u
+        assert "F32.2" in u
+        assert "EINWEISUNGSDIAGNOSEN" in u
+        assert "Begründung" in u.lower() or "Akutaufnahme" in u
+
+    def test_akutantrag_user_content_mit_verlaufsdoku(self):
+        """Verlaufsdoku wird als ergänzende Information eingebettet."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("akutantrag",
+            antragsvorlage_text="Anamnese und Befund.",
+            verlaufsdoku_text="Aufnahmegespräch: Patient in akuter Krise.",
+        )
+        assert "ERGÄNZENDE INFORMATIONEN" in u
+        assert "akuter Krise" in u
+
+    def test_akutantrag_user_content_ohne_verlaufsdoku(self):
+        """Akutantrag funktioniert auch ohne Verlaufsdoku (nur Antragsvorlage)."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("akutantrag",
+            antragsvorlage_text="Nur die Antragsvorlage.",
+        )
+        assert "AKUTANTRAGS-VORLAGE" in u
+        assert "ERGÄNZENDE INFORMATIONEN" not in u
+
+    def test_akutantrag_namensformat(self):
+        """Akutantrag enthält Datenschutz-Namensregel."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("akutantrag",
+            antragsvorlage_text="Text.",
+        )
+        assert "DATENSCHUTZ" in u
+        assert "Initiale" in u or "ersten Buchstaben" in u
+
+    def test_akutantrag_standardformulierung_im_primer(self):
+        """Primer beginnt mit der Standardformulierung für Akutbegründungen."""
+        from app.services.llm import generate_text
+        # Prüfe nur den PRIMERS-Dict
+        import inspect
+        src = inspect.getsource(generate_text)
+        assert "Folgende Krankheitssymptomatik" in src
+
+    def test_akutantrag_min_output_tokens(self):
+        """Akutantrag hat eigene MIN_OUTPUT_TOKENS (kürzer als VA/EB)."""
+        import inspect
+        from app.services.llm import generate_text
+        src = inspect.getsource(generate_text)
+        assert '"akutantrag"' in src
+
+    def test_akutantrag_strukturelle_schablone(self):
+        """Akutantrag nutzt strukturelle Schablone bei Stilbeispiel."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt("akutantrag",
+            style_context="Beispiel Akutbegründung.", style_is_example=True)
+        assert "STRUKTURELLE SCHABLONE" in p
+
+    def test_akutantrag_nicht_in_anamnese(self):
+        """Anamnese-Workflow enthält keine Akutantrag-Logik mehr."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("anamnese",
+            selbstauskunft_text="Selbstauskunft.",
+            diagnosen=["F32.1"],
+        )
+        assert "###AKUT###" not in u
+        assert "Akutantrag" not in u
+
+    def test_akutantrag_in_dokumenttypen(self):
+        """Akutantrag ist in DOKUMENTTYPEN registriert."""
+        from app.models.db import DOKUMENTTYPEN, DOKUMENTTYP_LABELS
+        assert "akutantrag" in DOKUMENTTYPEN
+        assert "akutantrag" in DOKUMENTTYP_LABELS
+
+    def test_job_akutantrag(self, mock_llm, mock_extract_text):
+        """Job mit Akutantrag-Workflow wird korrekt gestartet."""
+        r = client.post(
+            "/api/jobs/generate",
+            data={"workflow": "akutantrag", "prompt": "test"},
+            files={"antragsvorlage": (
+                "akutantrag.docx", DOCX_ENTLASS_V.read_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )},
+        )
+        assert r.status_code == 200
+        assert "job_id" in r.json()
