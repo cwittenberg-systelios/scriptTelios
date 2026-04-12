@@ -11,6 +11,12 @@ from unittest.mock import AsyncMock, patch
 
 # ── Testumgebung konfigurieren ────────────────────────────────────────────────
 os.environ.update({
+    # Datenschutz-Patches in Tests deaktiviert (AUTH_ENABLED=true blockt Form-Requests)
+    "AUTH_ENABLED":                     "false",
+    "RATE_LIMIT_ENABLED":               "false",
+    "AUDIT_LOG_PATH":                   "/tmp/systelios_test_audit.log",
+    "CONFLUENCE_SHARED_SECRET":         "test-secret",
+    "ALLOWED_ORIGINS":                  "",
     "OLLAMA_HOST":                      "http://localhost:11434",
     "OLLAMA_MODEL":                     "mistral-nemo",
     "WHISPER_MODEL":                    "medium",
