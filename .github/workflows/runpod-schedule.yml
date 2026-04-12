@@ -1,44 +1,131 @@
-name: RunPod Debug Resume
+name: RunPod Schedule
+
+# Startet den Pod Mo-Fr um 09:00 Europe/Berlin und stoppt ihn um 20:00.
+# GitHub Actions cron läuft in UTC. MESZ (Sommerzeit) = UTC+2:
+#   09:00 MESZ = 07:00 UTC
+#   20:00 MESZ = 18:00 UTC
+# (Winterzeit MEZ wird ignoriert — Pod startet/stoppt dann eine Stunde früher.)
 
 on:
+  schedule:
+    - cron: '0 7 * * 1-5'   # 09:00 MESZ → start
+    - cron: '0 18 * * 1-5'  # 20:00 MESZ → stop
   workflow_dispatch:
+    inputs:
+      action:
+        description: 'Manuelle Aktion'
+        required: true
+        default: 'start'
+        type: choice
+        options:
+          - start
+          - stop
 
 jobs:
-  test-resume:
+  control-pod:
     runs-on: ubuntu-latest
     steps:
-      - name: Try different resume mutations
+      - name: Determine action (start or stop)
+        id: act
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "action=${{ github.event.inputs.action }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.schedule }}" = "0 7 * * 1-5" ]; then
+            echo "action=start" >> $GITHUB_OUTPUT
+          else
+            echo "action=stop" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Execute RunPod API call
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ secrets.RUNPOD_POD_ID }}
+          ACTION: ${{ steps.act.outputs.action }}
         run: |
-          echo "=== Variante 1: podResume mit gpuCount ==="
-          curl -sS -X POST https://api.runpod.io/graphql \
-            -H "Authorization: Bearer $RUNPOD_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"query\":\"mutation { podResume(input: { podId: \\\"$POD_ID\\\", gpuCount: 1 }) { id desiredStatus } }\"}" \
-            | python3 -m json.tool || echo "(kein JSON)"
+          set -eo pipefail
 
-          echo ""
-          echo "=== Variante 2: podResume ohne gpuCount ==="
-          curl -sS -X POST https://api.runpod.io/graphql \
-            -H "Authorization: Bearer $RUNPOD_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"query\":\"mutation { podResume(input: { podId: \\\"$POD_ID\\\" }) { id desiredStatus } }\"}" \
-            | python3 -m json.tool || echo "(kein JSON)"
+          if [ -z "$RUNPOD_API_KEY" ] || [ -z "$POD_ID" ]; then
+            echo "::error::RUNPOD_API_KEY oder RUNPOD_POD_ID Secret fehlt"
+            exit 1
+          fi
 
-          echo ""
-          echo "=== Variante 3: podBidResume ==="
-          curl -sS -X POST https://api.runpod.io/graphql \
-            -H "Authorization: Bearer $RUNPOD_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"query\":\"mutation { podBidResume(input: { podId: \\\"$POD_ID\\\", bidPerGpu: 0.64, gpuCount: 1 }) { id desiredStatus } }\"}" \
-            | python3 -m json.tool || echo "(kein JSON)"
+          if [ "$ACTION" = "start" ]; then
+            echo "→ Starte Pod $POD_ID"
+            QUERY="{\"query\":\"mutation { podResume(input: { podId: \\\"$POD_ID\\\", gpuCount: 1 }) { id desiredStatus } }\"}"
+            EXPECTED_STATUS="RUNNING"
+          elif [ "$ACTION" = "stop" ]; then
+            echo "→ Stoppe Pod $POD_ID"
+            QUERY="{\"query\":\"mutation { podStop(input: { podId: \\\"$POD_ID\\\" }) { id desiredStatus } }\"}"
+            EXPECTED_STATUS="EXITED"
+          else
+            echo "::error::Unbekannte Aktion: $ACTION"
+            exit 1
+          fi
 
-          echo ""
-          echo "=== Aktueller Status nach Versuchen ==="
-          curl -sS -X POST https://api.runpod.io/graphql \
-            -H "Authorization: Bearer $RUNPOD_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"query\":\"query { pod(input: {podId: \\\"$POD_ID\\\"}) { id desiredStatus } }\"}" \
-            | python3 -m json.tool || echo "(kein JSON)"
+          # Drei Versuche mit 15s Pause — schützt gegen temporäre API-Hänger
+          for attempt in 1 2 3; do
+            echo ""
+            echo "=== Versuch $attempt/3 ==="
+            RESPONSE=$(curl -sS -X POST https://api.runpod.io/graphql \
+              -H "Authorization: Bearer $RUNPOD_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "$QUERY")
+
+            echo "API-Antwort: $RESPONSE"
+
+            if echo "$RESPONSE" | grep -q '"errors"'; then
+              echo "::warning::API-Fehler in Versuch $attempt"
+              if [ "$attempt" -lt 3 ]; then
+                echo "Warte 15s und versuche erneut..."
+                sleep 15
+                continue
+              fi
+            fi
+
+            if echo "$RESPONSE" | grep -q "\"desiredStatus\":\"$EXPECTED_STATUS\""; then
+              echo "✓ Pod $ACTION erfolgreich (Status: $EXPECTED_STATUS)"
+              exit 0
+            fi
+
+            # Response ist nicht eindeutig → separate Statusabfrage zur Bestätigung
+            echo "Prüfe Status direkt über API..."
+            sleep 5
+            STATUS_RESP=$(curl -sS -X POST https://api.runpod.io/graphql \
+              -H "Authorization: Bearer $RUNPOD_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\":\"query { pod(input: {podId: \\\"$POD_ID\\\"}) { id desiredStatus } }\"}")
+
+            echo "Status-Check: $STATUS_RESP"
+
+            if echo "$STATUS_RESP" | grep -q "\"desiredStatus\":\"$EXPECTED_STATUS\""; then
+              echo "✓ Pod $ACTION erfolgreich (nach Statusprüfung)"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Status noch nicht $EXPECTED_STATUS — warte 15s"
+              sleep 15
+            fi
+          done
+
+          echo "::error::Alle 3 Versuche fehlgeschlagen — Pod-Status konnte nicht auf $EXPECTED_STATUS gesetzt werden"
+          exit 1
+
+      - name: Wait and verify backend (only for start)
+        if: steps.act.outputs.action == 'start'
+        run: |
+          set -eo pipefail
+          echo "→ Warte 90 Sekunden auf Backend-Startup..."
+          sleep 90
+
+          for i in 1 2 3 4 5; do
+            echo "Health-Check Versuch $i/5..."
+            if curl -sS --max-time 15 https://scriptelios.win/api/health 2>/dev/null | grep -q '"status":"ok"'; then
+              echo "✓ Backend antwortet auf scriptelios.win"
+              exit 0
+            fi
+            echo "Noch nicht bereit, warte 30s..."
+            sleep 30
+          done
+
+          echo "::warning::Backend antwortete nicht innerhalb von 4 Minuten. Pod läuft, aber Services eventuell noch im Hochfahren."
