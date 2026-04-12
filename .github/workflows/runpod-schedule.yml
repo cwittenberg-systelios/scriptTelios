@@ -1,28 +1,44 @@
-name: RunPod Debug
+name: RunPod Debug Resume
 
 on:
   workflow_dispatch:
 
 jobs:
-  debug:
+  test-resume:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch pod info
+      - name: Try different resume mutations
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ secrets.RUNPOD_POD_ID }}
         run: |
-          echo "=== Mein Pod (per POD_ID) ==="
+          echo "=== Variante 1: podResume mit gpuCount ==="
           curl -sS -X POST https://api.runpod.io/graphql \
             -H "Authorization: Bearer $RUNPOD_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"query\":\"query { pod(input: {podId: \\\"$POD_ID\\\"}) { id name desiredStatus machineId gpuCount costPerHr machine { gpuDisplayName } } }\"}" \
-            | python3 -m json.tool || echo "JSON-Parse fehlgeschlagen"
+            -d "{\"query\":\"mutation { podResume(input: { podId: \\\"$POD_ID\\\", gpuCount: 1 }) { id desiredStatus } }\"}" \
+            | python3 -m json.tool || echo "(kein JSON)"
 
           echo ""
-          echo "=== Alle meine Pods ==="
+          echo "=== Variante 2: podResume ohne gpuCount ==="
           curl -sS -X POST https://api.runpod.io/graphql \
             -H "Authorization: Bearer $RUNPOD_API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"query":"query { myself { pods { id name desiredStatus machineId } } }"}' \
-            | python3 -m json.tool || echo "JSON-Parse fehlgeschlagen"
+            -d "{\"query\":\"mutation { podResume(input: { podId: \\\"$POD_ID\\\" }) { id desiredStatus } }\"}" \
+            | python3 -m json.tool || echo "(kein JSON)"
+
+          echo ""
+          echo "=== Variante 3: podBidResume ==="
+          curl -sS -X POST https://api.runpod.io/graphql \
+            -H "Authorization: Bearer $RUNPOD_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"mutation { podBidResume(input: { podId: \\\"$POD_ID\\\", bidPerGpu: 0.64, gpuCount: 1 }) { id desiredStatus } }\"}" \
+            | python3 -m json.tool || echo "(kein JSON)"
+
+          echo ""
+          echo "=== Aktueller Status nach Versuchen ==="
+          curl -sS -X POST https://api.runpod.io/graphql \
+            -H "Authorization: Bearer $RUNPOD_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"query { pod(input: {podId: \\\"$POD_ID\\\"}) { id desiredStatus } }\"}" \
+            | python3 -m json.tool || echo "(kein JSON)"
