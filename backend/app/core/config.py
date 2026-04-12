@@ -67,6 +67,20 @@ class Settings(BaseSettings):
     # ── Sicherheit ────────────────────────────────────────────────
     SECRET_KEY:                    str = "BITTE-AENDERN-IN-PRODUKTION"
 
+    # ── Datenschutz: Auth (K1) ───────────────────────────────────
+    AUTH_ENABLED:                  bool = True
+    CONFLUENCE_SHARED_SECRET:      str  = "CHANGE-ME-USE-secrets.token_urlsafe-32"
+    AUTH_TIMESTAMP_WINDOW_SEC:     int  = 300
+
+    # ── Datenschutz: CORS-Härtung (K3) ───────────────────────────
+    # Komma-Liste erlaubter Origins, z.B. "http://intranet.systelios.local"
+    # Wenn leer: Fallback auf CORS_ORIGINS (siehe unten)
+    ALLOWED_ORIGINS:               str  = ""
+
+    # ── Datenschutz: Audit-Log (E1) ──────────────────────────────
+    AUDIT_LOG_PATH:                str  = "/workspace/audit.log"
+
+
     # ── Retention (E2) ───────────────────────────────────────────
     RETENTION_INTERVAL_HOURS: int = 6
 
