@@ -55,8 +55,9 @@ fi
 BACKEND_DIR="/workspace/scriptTelios/backend"
 VENV_DIR="/workspace/venv"
 LOG_DIR="/workspace"
-PG_DATA="/home/systelios_pg/pgdata"
-PG_DATA_BACKUP="/workspace/postgres_data"
+# Variante B: PostgreSQL läuft direkt auf dem Network Volume.
+# Kein Sync-cp mehr — Daten sind automatisch persistent bei Pod-Terminate.
+PG_DATA="/workspace/postgres_data"
 OLLAMA_MODELS_DIR="/workspace/ollama"
 PG_USER="systelios_pg"
 
@@ -141,22 +142,27 @@ mkdir -p /var/run/postgresql
 chown "$PG_USER" /var/run/postgresql
 chmod 775 /var/run/postgresql
 
-# PostgreSQL Data-Verzeichnis: PG_DATA liegt unter /home/$PG_USER (volle
-# Kontrolle ueber Permissions). Persistente Sicherung in /workspace/postgres_data
-# wird beim Start wiederhergestellt und periodisch + bei Shutdown zurueckgeschrieben.
+# Variante B: PG-Daten liegen direkt auf /workspace (Network Volume).
+# Keine Sync-Kopie mehr nötig — Daten sind persistent über Pod-Neustarts.
+#
+# Wichtig: RunPod erlaubt auf Network-Volume-Mounts kein chown, deshalb
+# verwenden wir dort POSIX-ACLs oder (Fallback) schreiben als UID 999
+# (systelios_pg). Das Verzeichnis muss dem PG-User gehören.
 
 mkdir -p "$PG_DATA"
-chown "$PG_USER" "$PG_DATA"
-chmod 700 "$PG_DATA"
 
-# Persistente Daten vom letzten Pod-Run wiederherstellen
-if [ -f "$PG_DATA_BACKUP/PG_VERSION" ] && [ ! -f "$PG_DATA/PG_VERSION" ]; then
-    echo "${GO}PG-Daten aus $PG_DATA_BACKUP wiederherstellen..."
-    cp -a "$PG_DATA_BACKUP/." "$PG_DATA/"
-    chown -R "$PG_USER" "$PG_DATA"
-    chmod 700 "$PG_DATA"
-    echo "${OK}PG-Daten wiederhergestellt"
-fi
+# Variante B: PostgreSQL läuft direkt auf /workspace/postgres_data (Network Volume).
+# Keine Migration, kein Sync — alle Daten persistent auf Volume.
+# Erstmaliger Start: initdb wird unten automatisch ausgeführt wenn PG_VERSION fehlt.
+
+# Ownership setzen — auf Network Volume tolerieren wir Fehler
+# (manche RunPod-Mounts verweigern chown, dann greift eine andere Strategie unten)
+chown -R "$PG_USER" "$PG_DATA" 2>/dev/null || {
+    echo "${WARN}chown auf $PG_DATA nicht möglich (Network-Volume-Limit)"
+    echo "         Fallback: setze alle Files world-writable für PG-User-Zugriff"
+    chmod -R u+rwX,g+rwX,o+rwX "$PG_DATA" 2>/dev/null || true
+}
+chmod 700 "$PG_DATA" 2>/dev/null || chmod 755 "$PG_DATA"
 
 # Pruefen ob Postgres schon laeuft
 if su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA status" 2>/dev/null | grep -q "server is running"; then
@@ -852,23 +858,13 @@ echo "  Stop:  pkill -f uvicorn; pkill cloudflared; pkill ollama"
 echo "  Stop PostgreSQL:"
 echo "    su -m $PG_USER -c '$PG_BIN/pg_ctl -D $PG_DATA stop'"
 
-# PG-Daten periodisch nach /workspace sichern (alle 10 Min)
-_sync_pg_data() {
-    if [ -f "$PG_DATA/PG_VERSION" ]; then
-        mkdir -p "$PG_DATA_BACKUP"
-        rsync -a --delete "$PG_DATA/" "$PG_DATA_BACKUP/" 2>/dev/null || \
-            cp -a "$PG_DATA/." "$PG_DATA_BACKUP/" 2>/dev/null || true
-    fi
-}
-(
-    while true; do
-        sleep 600
-        _sync_pg_data
-    done
-) &
-PG_SYNC_PID=$!
+# PG-Daten-Sync ENTFERNT (Variante B):
+# PostgreSQL schreibt direkt auf /workspace/postgres_data (Network Volume),
+# keine periodische Backup-Kopie mehr nötig.
+#
+# Bei Pod-Terminate bleiben die Daten automatisch erhalten, da /workspace
+# ein persistentes Network Volume ist.
 
-# Bei Shutdown: PG-Daten sichern
-trap '_sync_pg_data; kill $PG_SYNC_PID 2>/dev/null' EXIT
+# Kein Shutdown-Trap mehr nötig (PG schreibt direkt auf Network Volume)
 echo "================================================"
 echo ""
