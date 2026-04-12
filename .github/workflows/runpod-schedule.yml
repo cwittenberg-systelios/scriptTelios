@@ -1,0 +1,56 @@
+name: RunPod Schedule
+
+on:
+  schedule:
+    # Start: Mo-Fr 09:00 Europe/Berlin
+    # Berlin ist UTC+1 (Winter) / UTC+2 (Sommer)
+    # GitHub Actions cron läuft in UTC — hier für Winterzeit (08:00 UTC)
+    - cron: '0 8 * * 1-5'
+    # Stop: Mo-Fr 20:00 Europe/Berlin → 19:00 UTC
+    - cron: '0 19 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'start oder stop'
+        required: true
+        default: 'start'
+
+jobs:
+  control-pod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine action
+        id: action
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "action=${{ github.event.inputs.action }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.schedule }}" = "0 8 * * 1-5" ]; then
+            echo "action=start" >> $GITHUB_OUTPUT
+          else
+            echo "action=stop" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Execute pod action
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          POD_ID: ${{ secrets.RUNPOD_POD_ID }}
+          ACTION: ${{ steps.action.outputs.action }}
+        run: |
+          if [ "$ACTION" = "start" ]; then
+            QUERY='mutation { podResume(input: { podId: "'$POD_ID'", gpuCount: 1 }) { id desiredStatus } }'
+          else
+            QUERY='mutation { podStop(input: { podId: "'$POD_ID'" }) { id desiredStatus } }'
+          fi
+          
+          curl -sS -X POST https://api.runpod.io/graphql \
+            -H "Authorization: Bearer $RUNPOD_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"query\":\"$QUERY\"}" \
+            | tee response.json
+          
+          if grep -q '"errors"' response.json; then
+            echo "::error::RunPod API returned an error"
+            exit 1
+          fi
+          
+          echo "Pod $ACTION erfolgreich"
