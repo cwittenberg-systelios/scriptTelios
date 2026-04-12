@@ -41,6 +41,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ── /workspace/.env laden falls vorhanden ────────────────────────────────────
+# Zentraler Ort für alle Secrets:
+#   CLOUDFLARE_TUNNEL_TOKEN, CONFLUENCE_SHARED_SECRET, AUTH_ENABLED,
+#   ALLOWED_ORIGINS, RATE_LIMIT_* etc.
+if [ -f "/workspace/.env" ]; then
+    set -a
+    source /workspace/.env
+    set +a
+    echo "[INFO] Environment aus /workspace/.env geladen"
+fi
+
 BACKEND_DIR="/workspace/scriptTelios/backend"
 VENV_DIR="/workspace/venv"
 LOG_DIR="/workspace"
