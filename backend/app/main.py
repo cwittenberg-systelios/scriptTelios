@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.middleware.audit import AuditMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api import transcribe, generate, documents, health
@@ -76,13 +77,14 @@ app = FastAPI(
 from app.middleware.ratelimit import RateLimitMiddleware
 app.add_middleware(RateLimitMiddleware)
 
+app.add_middleware(AuditMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=[o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()] or settings.CORS_ORIGINS,
     allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Systelios-User", "X-Systelios-Timestamp", "X-Systelios-Signature"],
 )
 
 app.include_router(health.router,            prefix="/api", tags=["Health"])

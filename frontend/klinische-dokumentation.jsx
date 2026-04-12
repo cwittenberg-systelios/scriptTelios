@@ -12,6 +12,40 @@ const apiFetch = (url, opts) => {
   return apiFetch(url, opts);
 };
 
+function JobProgressBar({ jobId }) {
+  const [p, setP] = React.useState({ progress: 0, progress_phase: "Starte...", progress_detail: "" });
+  React.useEffect(() => {
+    if (!jobId) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
+        const j = await r.json();
+        if (cancelled) return;
+        setP({
+          progress: j.progress || 0,
+          progress_phase: j.progress_phase || "",
+          progress_detail: j.progress_detail || "",
+        });
+        if (j.status === "done" || j.status === "error" || j.status === "cancelled") return;
+        setTimeout(tick, 1000);
+      } catch { if (!cancelled) setTimeout(tick, 3000); }
+    };
+    tick();
+    return () => { cancelled = true; };
+  }, [jobId]);
+  return (
+    <div style={{margin:"12px 0"}}>
+      <div style={{height:8, background:"var(--st-gray-bg)", borderRadius:4, overflow:"hidden"}}>
+        <div style={{height:"100%", width:`${p.progress}%`, background:"var(--st-red)", transition:"width 0.4s ease-out"}}/>
+      </div>
+      <div style={{fontSize:12, color:"var(--st-text-soft)", marginTop:4, textAlign:"center"}}>
+        {p.progress_phase} {p.progress_detail && `— ${p.progress_detail}`} ({p.progress}%)
+      </div>
+    </div>
+  );
+}
+
 const S = `
   /* Scoped auf #st-root – überschreibt Confluence-CSS zuverlässig */
   #st-root, #st-root *, #st-root *::before, #st-root *::after {

@@ -3,10 +3,11 @@ GET  /api/jobs/{job_id}   – Job-Status abfragen
 GET  /api/jobs            – Alle Jobs auflisten (optional)
 """
 import logging
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, Depends
 from typing import Annotated, Literal, Optional
 
 from app.core.config import settings
+from app.core.auth import get_current_user
 from app.core.files import save_upload, ALLOWED_DOCS, ALLOWED_IMAGES, ALLOWED_AUDIO
 
 
@@ -69,7 +70,7 @@ async def list_models():
 # ── Job-Status abfragen ───────────────────────────────────────────────────────
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: str, current_user: str = Depends(get_current_user)):
     """Gibt den aktuellen Status eines Jobs zurueck (ohne Transkript)."""
     job = job_queue.get_job(job_id)
     if not job:
@@ -78,7 +79,7 @@ async def get_job(job_id: str):
 
 
 @router.delete("/jobs/{job_id}")
-async def cancel_job(job_id: str):
+async def cancel_job(job_id: str, current_user: str = Depends(get_current_user)):
     """
     Bricht einen laufenden Job ab.
     Setzt das Cancel-Flag – run_job() stoppt nach dem aktuellen Schritt.
@@ -130,6 +131,7 @@ async def create_generate_job(
     workflow:         Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"], Form()],
     prompt:           Annotated[str,  Form()],
     therapeut_id:     Annotated[Optional[str], Form()] = None,
+    current_user:     str = Depends(get_current_user),
     diagnosen:        Annotated[Optional[str], Form()] = None,
     transcript:       Annotated[Optional[str], Form()] = None,
     bullets:          Annotated[Optional[str], Form(description="Stichpunkte (P1) oder Fokus-Themen (P3/P4)")] = None,
@@ -157,6 +159,9 @@ async def create_generate_job(
       P3c (akutantrag):          antragsvorlage (Anamnese/Befund/Diagnosen) + verlaufsdoku (opt)
       P4 (entlassbericht):      verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
     """
+    # K1: Therapeut-ID aus validiertem Auth-Header
+    therapeut_id = current_user
+
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht thread-safe)
     audio_bytes            = await audio.read()          if audio          and audio.filename          else None
     audio_name             = audio.filename               if audio          and audio.filename          else None
