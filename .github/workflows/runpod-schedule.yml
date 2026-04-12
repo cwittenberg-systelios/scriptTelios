@@ -24,6 +24,7 @@ on:
 jobs:
   control-pod:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Determine action (start or stop)
         id: act
@@ -62,7 +63,6 @@ jobs:
             exit 1
           fi
 
-          # Drei Versuche mit 15s Pause — schützt gegen temporäre API-Hänger
           for attempt in 1 2 3; do
             echo ""
             echo "=== Versuch $attempt/3 ==="
@@ -87,7 +87,6 @@ jobs:
               exit 0
             fi
 
-            # Response ist nicht eindeutig → separate Statusabfrage zur Bestätigung
             echo "Prüfe Status direkt über API..."
             sleep 5
             STATUS_RESP=$(curl -sS -X POST https://api.runpod.io/graphql \
@@ -108,24 +107,35 @@ jobs:
             fi
           done
 
-          echo "::error::Alle 3 Versuche fehlgeschlagen — Pod-Status konnte nicht auf $EXPECTED_STATUS gesetzt werden"
+          echo "::error::Alle 3 Versuche fehlgeschlagen"
           exit 1
 
       - name: Wait and verify backend (only for start)
         if: steps.act.outputs.action == 'start'
         run: |
           set -eo pipefail
-          echo "→ Warte 90 Sekunden auf Backend-Startup..."
-          sleep 90
+          echo "→ Warte 60 Sekunden auf initialen Pod-Boot..."
+          sleep 60
 
-          for i in 1 2 3 4 5; do
-            echo "Health-Check Versuch $i/5..."
+          # Bis zu 14 Versuche à 30s = 7 Minuten aktive Polling-Phase
+          # Gesamt-Wartezeit: 60s + 7min = 8 Minuten
+          # Typische Startup-Zeit: 2-4 Min (Ollama-Warmup Qwen3:32b ~90s)
+          for i in $(seq 1 14); do
+            elapsed=$((60 + (i-1) * 30))
+            echo "Health-Check Versuch $i/14 (nach ${elapsed}s)..."
+
             if curl -sS --max-time 15 https://scriptelios.win/api/health 2>/dev/null | grep -q '"status":"ok"'; then
-              echo "✓ Backend antwortet auf scriptelios.win"
+              echo "✓ Backend antwortet auf scriptelios.win (nach ~${elapsed}s)"
               exit 0
             fi
-            echo "Noch nicht bereit, warte 30s..."
-            sleep 30
+
+            if [ "$i" -lt 14 ]; then
+              sleep 30
+            fi
           done
 
-          echo "::warning::Backend antwortete nicht innerhalb von 4 Minuten. Pod läuft, aber Services eventuell noch im Hochfahren."
+          echo "::warning::Backend antwortete nicht innerhalb von 8 Minuten."
+          echo "Mögliche Gründe:"
+          echo "  - Ollama-Modell lädt noch (Qwen3:32b ~90s normal, kann bei Last länger dauern)"
+          echo "  - runpod-start.sh ist fehlgeschlagen → SSH zum Pod und /workspace/backend.log prüfen"
+          echo "  - Cloudflare-Tunnel nicht gestartet → /workspace/cloudflared.log prüfen"

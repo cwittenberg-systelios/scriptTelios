@@ -1928,20 +1928,55 @@ export default function App() {
   // NICHT wenn die URL aus dem Confluence-Macro kommt (data-api)
   const firstRun = !backendUrl && !urlFromMacro;
 
-  // Backend-Erreichbarkeit prüfen (alle 30 Sekunden)
-  const [backendOffline, setBackendOffline] = useState(false);
+  // Backend-Status: "connecting" (startet gerade), "online", "offline"
+  // Startup-aware: während der ersten 10 Minuten gilt "startet gerade" statt "offline"
+  const [backendStatus, setBackendStatus] = useState("connecting");
+  const mountTimeRef = useRef(Date.now());
   useEffect(() => {
     if (!backendUrl) return;
     let cancelled = false;
+    let consecutiveFailures = 0;
+    const STARTUP_GRACE_MS = 10 * 60 * 1000; // 10 Minuten
+    const OFFLINE_THRESHOLD = 3; // erst nach 3 aufeinanderfolgenden Fehlern als offline werten
+
     const check = () => {
-      apiFetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(5000) })
-        .then(r => { if (!cancelled) setBackendOffline(!r.ok); })
-        .catch(() => { if (!cancelled) setBackendOffline(true); });
+      apiFetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(8000) })
+        .then(r => {
+          if (cancelled) return;
+          if (r.ok) {
+            consecutiveFailures = 0;
+            setBackendStatus("online");
+          } else {
+            consecutiveFailures++;
+            handleFailure();
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          consecutiveFailures++;
+          handleFailure();
+        });
     };
-    check(); // sofort prüfen
-    const interval = setInterval(check, 30000);
+
+    const handleFailure = () => {
+      const sinceMount = Date.now() - mountTimeRef.current;
+      // In den ersten 10 Min nach Laden: Status "connecting" (freundlich)
+      // Danach: erst nach 3 aufeinanderfolgenden Fehlern als "offline"
+      if (sinceMount < STARTUP_GRACE_MS) {
+        setBackendStatus("connecting");
+      } else if (consecutiveFailures >= OFFLINE_THRESHOLD) {
+        setBackendStatus("offline");
+      }
+    };
+
+    check();
+    // Häufigeres Polling in der Startup-Phase
+    const interval = setInterval(check, 15000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [backendUrl]);
+
+  // Für Abwärtskompatibilität mit bestehendem Code:
+  const backendOffline = backendStatus === "offline";
 
   return (
     <div id="st-root" style={{
@@ -1997,6 +2032,53 @@ export default function App() {
         </div>
       </div>
 
+      {backendStatus === "connecting" && (
+
+
+        <div style={{
+
+
+          position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
+
+
+          background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 6,
+
+
+          padding: "8px 16px", display: "flex", alignItems: "center", gap: 10,
+
+
+          boxShadow: "0 2px 8px rgba(0,0,0,0.08)", zIndex: 100, fontSize: 13, color: "#92400e"
+
+
+        }}>
+
+
+          <span style={{
+
+
+            display: "inline-block", width: 12, height: 12, border: "2px solid #fbbf24",
+
+
+            borderTopColor: "transparent", borderRadius: "50%",
+
+
+            animation: "spin 1s linear infinite"
+
+
+          }} />
+
+
+          <span>Backend wird verbunden… Bitte kurz warten (Startup ~2 Min werktags ab 9:00 Uhr)</span>
+
+
+        </div>
+
+
+      )}
+
+
+      <style>{"@keyframes spin { to { transform: rotate(360deg); } }"}</style>
+
       <main className="main">
         {/* Resume-Banner wenn ein laufender Job nach Reload wiederhergestellt wird */}
         {resumeJob && (
@@ -2021,7 +2103,7 @@ export default function App() {
       </main>
 
       {/* Settings Modal – via Portal damit position:fixed korrekt funktioniert */}
-      {(showSettings || firstRun || backendOffline) && createPortal(
+      {(showSettings || firstRun || backendStatus === "offline") && createPortal(
         <div style={{
           position:"fixed", inset:0, background:"rgba(0,0,0,0.55)",
           display:"flex", alignItems:"center", justifyContent:"center",
