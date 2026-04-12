@@ -739,15 +739,18 @@ OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -
 ) &
 echo "${OK}${OLLAMA_MODEL} Warmup gestartet (Hintergrund, ~60-90s)"
 
-# 9. Cloudflare Tunnel starten
+# 9. Cloudflare Named Tunnel starten (feste URL: https://scriptelios.win)
 echo ""
-echo "${GO}Cloudflare Tunnel pruefen..."
+echo "${GO}Cloudflare Named Tunnel pruefen..."
 
 CLOUDFLARED_BIN="/workspace/bin/cloudflared"
+TUNNEL_HOSTNAME="scriptelios.win"
+TUNNEL_URL="https://${TUNNEL_HOSTNAME}"
 
 # cloudflared installieren falls nicht vorhanden
 if [ ! -f "$CLOUDFLARED_BIN" ]; then
     echo "${GO}cloudflared installieren..."
+    mkdir -p "$(dirname "$CLOUDFLARED_BIN")"
     curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
         -o "$CLOUDFLARED_BIN"
     chmod +x "$CLOUDFLARED_BIN"
@@ -758,24 +761,54 @@ fi
 pkill -f "cloudflared tunnel" 2>/dev/null || true
 sleep 2
 
-# Neuen Tunnel starten
-nohup "$CLOUDFLARED_BIN" tunnel --url http://localhost:8000 \
-    > "$LOG_DIR/cloudflared.log" 2>&1 &
-
-# Warten bis URL verfuegbar
-echo "${GO}Warte auf Tunnel-URL..."
-TUNNEL_URL=""
-MAX=20
-for i in $(seq 1 $MAX); do
-    TUNNEL_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' \
-        "$LOG_DIR/cloudflared.log" 2>/dev/null | tail -1)
-    if [ -n "$TUNNEL_URL" ]; then
-        echo "${OK}Tunnel aktiv"
-        break
+# Token pruefen
+if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+    # Fallback: Token aus /workspace/cloudflare/.env laden
+    if [ -f "/workspace/cloudflare/.env" ]; then
+        set -a
+        source /workspace/cloudflare/.env
+        set +a
     fi
-    [ "$i" = "$MAX" ] && echo "${WARN}Tunnel-URL nicht gefunden - Log: $LOG_DIR/cloudflared.log"
-    sleep 2
-done
+fi
+
+if [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; then
+    echo "${ERR}CLOUDFLARE_TUNNEL_TOKEN nicht gesetzt."
+    echo "         Entweder als Pod-Env-Variable setzen oder in /workspace/cloudflare/.env:"
+    echo "           CLOUDFLARE_TUNNEL_TOKEN=\"eyJhIjoi...\""
+    echo "${WARN}Tunnel wird nicht gestartet - Backend nur lokal erreichbar."
+    TUNNEL_URL=""
+else
+    # Named Tunnel mit Token starten (Hostname-Config liegt in Cloudflare Zero Trust)
+    nohup "$CLOUDFLARED_BIN" tunnel \
+        --no-autoupdate \
+        run \
+        --token "$CLOUDFLARE_TUNNEL_TOKEN" \
+        > "$LOG_DIR/cloudflared.log" 2>&1 &
+    CLOUDFLARED_PID=$!
+
+    # Auf erfolgreiche Verbindung warten
+    echo "${GO}Warte auf Tunnel-Verbindung..."
+    MAX=15
+    CONNECTED=false
+    for i in $(seq 1 $MAX); do
+        if ! kill -0 "$CLOUDFLARED_PID" 2>/dev/null; then
+            echo "${ERR}cloudflared-Prozess beendet. Letzte Log-Zeilen:"
+            tail -20 "$LOG_DIR/cloudflared.log"
+            TUNNEL_URL=""
+            break
+        fi
+        if grep -q "Registered tunnel connection" "$LOG_DIR/cloudflared.log" 2>/dev/null; then
+            echo "${OK}Tunnel verbunden: $TUNNEL_URL"
+            CONNECTED=true
+            break
+        fi
+        [ "$i" = "$MAX" ] && {
+            echo "${WARN}Tunnel-Verbindung nicht bestaetigt innerhalb ${MAX}s"
+            echo "         Log: $LOG_DIR/cloudflared.log"
+        }
+        sleep 2
+    done
+fi
 
 # 10. Zusammenfassung
 echo ""
@@ -786,15 +819,16 @@ echo "  Ollama:    http://localhost:11434"
 echo ""
 if [ -n "$TUNNEL_URL" ]; then
 echo "  ╔══════════════════════════════════════════════════╗"
-echo "  ║  BACKEND-URL FUER CONFLUENCE (Zahnrad-Icon):     ║"
+echo "  ║  BACKEND-URL (feste Named-Tunnel-URL):           ║"
 echo "  ║                                                  ║"
 echo "  ║  $TUNNEL_URL"
 echo "  ║                                                  ║"
-echo "  ║  Im Frontend unten links auf Zahnrad klicken     ║"
-echo "  ║  und diese URL eintragen → Speichern.            ║"
+echo "  ║  Im Confluence-Macro einmalig eintragen,         ║"
+echo "  ║  danach nie wieder aendern.                      ║"
 echo "  ╚══════════════════════════════════════════════════╝"
 else
-echo "  Tunnel-URL:  siehe $LOG_DIR/cloudflared.log"
+echo "${WARN}  Kein Tunnel aktiv - siehe Fehlermeldung oben"
+echo "         Log: $LOG_DIR/cloudflared.log"
 fi
 echo ""
 echo "  Logs:"
