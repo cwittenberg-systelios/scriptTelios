@@ -120,106 +120,155 @@ else
     echo "${OK}pgvector bereits vorhanden"
 fi
 
-# 2. PostgreSQL
+# 2. PostgreSQL — LOKAL mit pg_dump-Backup ins Network Volume
+# Hintergrund: Network Volumes erlauben kein chown, daher kann PG nicht direkt
+# darauf laufen (PG weigert sich als root zu starten). Lösung: PG läuft lokal
+# im Container (/var/lib/postgresql/data), ein Cronjob dumpt alle 30 Min ins
+# Volume. Beim Pod-Start wird der letzte Dump automatisch restored.
 echo ""
-echo "${GO}PostgreSQL starten..."
+echo "${GO}PostgreSQL starten (lokal, mit Volume-Backup)..."
 
 PG_CTL_PATH=$(find /usr/lib/postgresql -name "pg_ctl" 2>/dev/null | head -1)
 if [ -z "$PG_CTL_PATH" ] || [ ! -x "$PG_CTL_PATH" ]; then
     echo "${ERR}pg_ctl nicht gefunden — PostgreSQL-Installation fehlgeschlagen"
-    echo "         Versuche manuell: apt-get install -y postgresql-14"
     exit 1
 fi
 PG_BIN=$(dirname "$PG_CTL_PATH")
 echo "${OK}PostgreSQL Binary: $PG_BIN"
 
-# PostgreSQL kann nicht als root laufen – eigenen User zuerst anlegen
+# ── Pfade ──────────────────────────────────────────────────────────────────
+PG_DATA="/var/lib/postgresql/data"          # Lokal im Container (chown geht hier)
+PG_BACKUP_DIR="/workspace/postgres_backup"  # Persistent auf Network Volume
+PG_BACKUP_LATEST="$PG_BACKUP_DIR/latest.sql.gz"
+
+# User anlegen falls nicht vorhanden
 if ! id "$PG_USER" >/dev/null 2>&1; then
     echo "${GO}User '$PG_USER' anlegen..."
     useradd -m "$PG_USER"
 fi
 
-# Lock-File-Verzeichnis muss dem PG_USER gehoeren (nach useradd!)
+# Lock-File-Verzeichnis muss dem PG_USER gehoeren
 mkdir -p /var/run/postgresql
 chown "$PG_USER" /var/run/postgresql
 chmod 775 /var/run/postgresql
 
+# Backup-Verzeichnis auf Network Volume anlegen
+mkdir -p "$PG_BACKUP_DIR"
+chmod 777 "$PG_BACKUP_DIR" 2>/dev/null || true
+
+# ── PG_DATA vorbereiten ────────────────────────────────────────────────────
+mkdir -p "$PG_DATA"
+chown -R "$PG_USER:$PG_USER" "$PG_DATA"
+chmod 700 "$PG_DATA"
+
 # Stale Lock-Files aus vorherigem Pod-Run aufraeumen
-# (PostgreSQL refused start wenn postmaster.pid vom Container-Vorgaenger uebrig ist)
 if [ -f "$PG_DATA/postmaster.pid" ]; then
     OLD_PID=$(head -1 "$PG_DATA/postmaster.pid" 2>/dev/null)
     if [ -n "$OLD_PID" ] && ! kill -0 "$OLD_PID" 2>/dev/null; then
-        echo "${WARN}Stale postmaster.pid (PID $OLD_PID läuft nicht) - räume auf"
+        echo "${WARN}Stale postmaster.pid — räume auf"
         rm -f "$PG_DATA/postmaster.pid" "$PG_DATA/postmaster.opts"
     fi
 fi
 
-# Variante B: PG-Daten liegen direkt auf /workspace (Network Volume).
-# Keine Sync-Kopie mehr nötig — Daten sind persistent über Pod-Neustarts.
-#
-# Wichtig: RunPod erlaubt auf Network-Volume-Mounts kein chown, deshalb
-# verwenden wir dort POSIX-ACLs oder (Fallback) schreiben als UID 999
-# (systelios_pg). Das Verzeichnis muss dem PG-User gehören.
-
-mkdir -p "$PG_DATA"
-
-# Variante B: PostgreSQL läuft direkt auf /workspace/postgres_data (Network Volume).
-# Keine Migration, kein Sync — alle Daten persistent auf Volume.
-# Erstmaliger Start: initdb wird unten automatisch ausgeführt wenn PG_VERSION fehlt.
-
-# Ownership setzen — auf Network Volume tolerieren wir Fehler
-# (manche RunPod-Mounts verweigern chown, dann greift eine andere Strategie unten)
-chown -R "$PG_USER" "$PG_DATA" 2>/dev/null || {
-    echo "${WARN}chown auf $PG_DATA nicht möglich (Network-Volume-Limit)"
-    echo "         Fallback: setze alle Files world-writable für PG-User-Zugriff"
-    chmod -R u+rwX,g+rwX,o+rwX "$PG_DATA" 2>/dev/null || true
-}
-chmod 700 "$PG_DATA" 2>/dev/null || chmod 755 "$PG_DATA"
-
-# Pruefen ob Postgres schon laeuft
-if su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA status" 2>/dev/null | grep -q "server is running"; then
-    echo "${OK}PostgreSQL laeuft bereits"
+# ── Cluster initialisieren falls nötig ────────────────────────────────────
+if [ ! -f "$PG_DATA/PG_VERSION" ]; then
+    echo "${GO}Datenbank-Cluster initialisieren..."
+    su -m "$PG_USER" -c "$PG_BIN/initdb -D $PG_DATA --encoding=UTF8 --locale=C" > /dev/null
+    echo "${OK}initdb abgeschlossen"
+    FRESH_INSTALL=true
 else
-    # Cluster initialisieren falls noetig
-    if [ ! -f "$PG_DATA/PG_VERSION" ]; then
-        echo "${GO}Datenbank initialisieren..."
-        su -m "$PG_USER" -c "$PG_BIN/initdb -D $PG_DATA --encoding=UTF8 --locale=C"
-        echo "${OK}initdb abgeschlossen"
-    fi
+    FRESH_INSTALL=false
+fi
 
-    # Starten
-    echo "${GO}PostgreSQL starten..."
+# ── PostgreSQL starten ─────────────────────────────────────────────────────
+if su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA status" 2>/dev/null | grep -q "server is running"; then
+    echo "${OK}PostgreSQL läuft bereits"
+else
     su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA -l $LOG_DIR/postgres.log start"
-    sleep 4
 
     # Warten bis bereit
-    MAX=10
+    MAX=15
     for i in $(seq 1 $MAX); do
-        if su -m "$PG_USER" -c "psql -d postgres -c 'SELECT 1'" >/dev/null 2>&1; then
+        if su -m "$PG_USER" -c "$PG_BIN/pg_isready -U $PG_USER" >/dev/null 2>&1; then
             echo "${OK}PostgreSQL bereit"
             break
         fi
-        [ "$i" = "$MAX" ] && { echo "${ERR}PostgreSQL startet nicht. Log: $LOG_DIR/postgres.log"; exit 1; }
+        [ "$i" = "$MAX" ] && {
+            echo "${ERR}PostgreSQL startet nicht. Log:"
+            tail -20 "$LOG_DIR/postgres.log"
+            exit 1
+        }
         sleep 2
     done
-
-    # User anlegen
-    su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_roles WHERE rolname='systelios'\"" 2>/dev/null \
-        | grep -q 1 \
-        || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE USER systelios WITH PASSWORD 'systelios';\""
-
-    # Datenbank anlegen
-    su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_database WHERE datname='systelios'\"" 2>/dev/null \
-        | grep -q 1 \
-        || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE DATABASE systelios OWNER systelios;\""
-
-    # pgvector Extension aktivieren
-    su -m "$PG_USER" -c "psql -d systelios -c \"CREATE EXTENSION IF NOT EXISTS vector;\"" 2>/dev/null \
-        && echo "${OK}pgvector aktiviert" \
-        || echo "${WARN}pgvector konnte nicht aktiviert werden"
-
-    echo "${OK}Datenbank 'systelios' bereit"
 fi
+
+# ── Restore aus Backup falls frisches Cluster ─────────────────────────────
+if [ "$FRESH_INSTALL" = "true" ]; then
+    if [ -f "$PG_BACKUP_LATEST" ]; then
+        echo "${GO}Restore aus Backup: $PG_BACKUP_LATEST"
+        # Erst User + DB, dann Dump einspielen
+        su -m "$PG_USER" -c "psql -d postgres -c \"CREATE USER systelios WITH PASSWORD 'systelios';\"" 2>/dev/null || true
+        su -m "$PG_USER" -c "psql -d postgres -c \"CREATE DATABASE systelios OWNER systelios;\"" 2>/dev/null || true
+        su -m "$PG_USER" -c "psql -d systelios -c \"CREATE EXTENSION IF NOT EXISTS vector;\"" 2>/dev/null || true
+        gunzip -c "$PG_BACKUP_LATEST" | su -m "$PG_USER" -c "psql -d systelios" > /dev/null 2>&1 &&             echo "${OK}Backup restored" ||             echo "${WARN}Backup-Restore fehlgeschlagen — starte mit leerer DB"
+    else
+        echo "${INFO:-[INFO]} Kein Backup vorhanden — neue leere Datenbank"
+    fi
+fi
+
+# ── User + Datenbank + Extension sicherstellen ─────────────────────────────
+su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_roles WHERE rolname='systelios'\"" 2>/dev/null | grep -q 1 \
+    || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE USER systelios WITH PASSWORD 'systelios';\""
+
+su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_database WHERE datname='systelios'\"" 2>/dev/null | grep -q 1 \
+    || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE DATABASE systelios OWNER systelios;\""
+
+su -m "$PG_USER" -c "psql -d systelios -c \"CREATE EXTENSION IF NOT EXISTS vector;\"" >/dev/null 2>&1 \
+    && echo "${OK}pgvector aktiviert" \
+    || echo "${WARN}pgvector konnte nicht aktiviert werden"
+
+echo "${OK}Datenbank 'systelios' bereit"
+
+# ── Backup-Loop im Hintergrund ─────────────────────────────────────────────
+# Alle 30 Minuten ein pg_dump ins Network Volume.
+# Beim Pod-Stop wird durch den EXIT-Trap ein letzter Dump erzeugt.
+BACKUP_INTERVAL=1800   # 30 Minuten
+
+pg_backup_dump() {
+    local ts=$(date +%Y%m%d_%H%M%S)
+    local tmp="$PG_BACKUP_DIR/dump_${ts}.sql.gz.tmp"
+    local final="$PG_BACKUP_DIR/dump_${ts}.sql.gz"
+    if su -m "$PG_USER" -c "$PG_BIN/pg_dump systelios" 2>/dev/null | gzip > "$tmp"; then
+        mv "$tmp" "$final"
+        ln -sf "$final" "$PG_BACKUP_LATEST"
+        # Nur die letzten 5 Backups behalten
+        ls -t "$PG_BACKUP_DIR"/dump_*.sql.gz 2>/dev/null | tail -n +6 | xargs -r rm -f
+        echo "[PG-BACKUP] $(date +%H:%M:%S) Dump: $(basename $final) ($(du -h $final | cut -f1))"
+    else
+        rm -f "$tmp"
+        echo "[PG-BACKUP] $(date +%H:%M:%S) Dump fehlgeschlagen"
+    fi
+}
+export -f pg_backup_dump
+export PG_BACKUP_DIR PG_BACKUP_LATEST PG_USER PG_BIN
+
+(
+    while true; do
+        sleep $BACKUP_INTERVAL
+        pg_backup_dump
+    done
+) >> "$LOG_DIR/pg_backup.log" 2>&1 &
+PG_BACKUP_LOOP_PID=$!
+echo "${OK}PG-Backup-Loop gestartet (alle 30 Min, PID $PG_BACKUP_LOOP_PID)"
+
+# Graceful Shutdown: beim Pod-Stop finaler Dump + sauberer PG-Stop
+_pg_shutdown() {
+    echo "[PG-SHUTDOWN] Finaler Dump..."
+    pg_backup_dump
+    kill "$PG_BACKUP_LOOP_PID" 2>/dev/null || true
+    su -m "$PG_USER" -c "$PG_BIN/pg_ctl -D $PG_DATA stop -m fast" 2>/dev/null || true
+}
+trap _pg_shutdown EXIT TERM INT
 
 # 3. Ollama
 echo ""
