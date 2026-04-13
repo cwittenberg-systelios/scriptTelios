@@ -85,7 +85,7 @@ echo "${OK}Verzeichnisse bereit"
 echo ""
 echo "${GO}System-Pakete pruefen..."
 PKGS_NEEDED=""
-dpkg -l postgresql             >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED postgresql"
+command -v pg_ctl              >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED postgresql-14"
 dpkg -l tesseract-ocr          >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED tesseract-ocr tesseract-ocr-deu"
 dpkg -l poppler-utils          >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED poppler-utils"
 dpkg -l ffmpeg                 >/dev/null 2>&1 || PKGS_NEEDED="$PKGS_NEEDED ffmpeg"
@@ -107,7 +107,7 @@ else
 fi
 
 # pgvector – braucht offizielles PostgreSQL-Repo
-if ! dpkg -l postgresql-14-pgvector >/dev/null 2>&1; then
+if ! ls /usr/lib/postgresql/14/lib/vector.so >/dev/null 2>&1; then
     echo "${GO}pgvector installieren..."
     curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
         | gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
@@ -124,11 +124,13 @@ fi
 echo ""
 echo "${GO}PostgreSQL starten..."
 
-PG_BIN=$(find /usr/lib/postgresql -name "pg_ctl" 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
-if [ -z "$PG_BIN" ]; then
-    echo "${ERR}pg_ctl nicht gefunden"
+PG_CTL_PATH=$(find /usr/lib/postgresql -name "pg_ctl" 2>/dev/null | head -1)
+if [ -z "$PG_CTL_PATH" ] || [ ! -x "$PG_CTL_PATH" ]; then
+    echo "${ERR}pg_ctl nicht gefunden — PostgreSQL-Installation fehlgeschlagen"
+    echo "         Versuche manuell: apt-get install -y postgresql-14"
     exit 1
 fi
+PG_BIN=$(dirname "$PG_CTL_PATH")
 echo "${OK}PostgreSQL Binary: $PG_BIN"
 
 # PostgreSQL kann nicht als root laufen – eigenen User zuerst anlegen
@@ -141,6 +143,16 @@ fi
 mkdir -p /var/run/postgresql
 chown "$PG_USER" /var/run/postgresql
 chmod 775 /var/run/postgresql
+
+# Stale Lock-Files aus vorherigem Pod-Run aufraeumen
+# (PostgreSQL refused start wenn postmaster.pid vom Container-Vorgaenger uebrig ist)
+if [ -f "$PG_DATA/postmaster.pid" ]; then
+    OLD_PID=$(head -1 "$PG_DATA/postmaster.pid" 2>/dev/null)
+    if [ -n "$OLD_PID" ] && ! kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "${WARN}Stale postmaster.pid (PID $OLD_PID läuft nicht) - räume auf"
+        rm -f "$PG_DATA/postmaster.pid" "$PG_DATA/postmaster.opts"
+    fi
+fi
 
 # Variante B: PG-Daten liegen direkt auf /workspace (Network Volume).
 # Keine Sync-Kopie mehr nötig — Daten sind persistent über Pod-Neustarts.
