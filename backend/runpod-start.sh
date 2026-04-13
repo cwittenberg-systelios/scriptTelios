@@ -781,7 +781,8 @@ nohup python -m uvicorn app.main:app \
     --log-level info \
     >> "$LOG_DIR/backend.log" 2>&1 &
 
-echo "${OK}Backend gestartet (PID: $!)"
+BACKEND_PID=$!
+echo "${OK}Backend gestartet (PID: $BACKEND_PID)"
 
 # 8. Health Check
 echo "${GO}Warte auf Backend..."
@@ -926,6 +927,22 @@ echo "    su -m $PG_USER -c '$PG_BIN/pg_ctl -D $PG_DATA stop'"
 # Bei Pod-Terminate bleiben die Daten automatisch erhalten, da /workspace
 # ein persistentes Network Volume ist.
 
-# Kein Shutdown-Trap mehr nötig (PG schreibt direkt auf Network Volume)
 echo "================================================"
 echo ""
+
+# ── Container am Leben halten: warte auf Backend-Prozess ──────────────────
+# Ohne dieses wait würde das Script hier enden, der Container-Main-Prozess
+# wäre fertig und RunPod würde den Pod restarten (Endlosschleife!).
+# Solange uvicorn läuft, läuft auch dieser Prozess → Container bleibt up.
+echo "${INFO:-[INFO]} Container-Hauptprozess wartet auf Backend (PID $BACKEND_PID)..."
+echo "${INFO:-[INFO]} Bei Backend-Crash oder Pod-Stop: Shutdown-Trap räumt auf."
+echo ""
+
+# Das folgende 'wait' blockiert bis Backend stirbt oder ein Signal kommt.
+# Bei SIGTERM/SIGINT (Pod-Stop) feuert der EXIT-Trap und macht Cleanup.
+wait $BACKEND_PID
+
+# Wenn wir hier ankommen, ist das Backend gestorben (nicht der Pod gestoppt)
+echo "${WARN}Backend-Prozess beendet (PID $BACKEND_PID)"
+echo "${WARN}Letzte Backend-Log-Zeilen:"
+tail -30 "$LOG_DIR/backend.log" 2>/dev/null
