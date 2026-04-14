@@ -98,6 +98,7 @@ class StyleEmbedding(Base):
         nullable=False,
         index=True,
     )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     # Originaltext des Beispiels

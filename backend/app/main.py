@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.middleware.audit import AuditMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -93,6 +93,17 @@ app.include_router(generate.router,          prefix="/api", tags=["Generierung"]
 app.include_router(documents.router,         prefix="/api", tags=["Dokumente"])
 app.include_router(style_embeddings.router,  prefix="/api", tags=["Stilprofil"])
 app.include_router(jobs.router,              prefix="/api", tags=["Jobs"])
+
+
+# Catchall fuer OPTIONS-Requests die NICHT von der CORS-Middleware behandelt werden
+# (z.B. nackte OPTIONS ohne Access-Control-Request-Method von Browser-Probes,
+# Confluence-iframe-Lifecycle, Cloudflare-Tunnel-Health-Checks, etc.).
+# Echte CORS-Preflights werden vorher von CORSMiddleware mit korrekten Headern
+# beantwortet — dieser Handler greift nur fuer den Rest.
+@app.options("/{full_path:path}")
+async def options_catchall(full_path: str):
+    return Response(status_code=204)
+
 
 # Frontend-Bundle ausliefern (gebaut mit: cd frontend && npm run build)
 # Erreichbar unter: http://systelios-backend:8000/static/systelios.js
