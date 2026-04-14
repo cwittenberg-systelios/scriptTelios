@@ -49,6 +49,9 @@ _SKIP_PATHS = {"/api/health", "/health", "/metrics", "/favicon.ico"}
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # OPTIONS-Preflights immer durchlassen (zaehlt nicht zum Limit)
+        if request.method == "OPTIONS":
+            return await call_next(request)
         path = request.url.path
         if path in _SKIP_PATHS or not getattr(settings, "RATE_LIMIT_ENABLED", True):
             return await call_next(request)

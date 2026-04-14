@@ -36,6 +36,9 @@ _SKIP_PATHS = {"/api/health", "/health", "/metrics", "/favicon.ico"}
 
 class AuditMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # OPTIONS-Preflights immer durchlassen (CORSMiddleware bzw. options_catchall regeln das)
+        if request.method == "OPTIONS":
+            return await call_next(request)
         start = time.time()
         response = await call_next(request)
         duration_ms = int((time.time() - start) * 1000)
