@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.middleware.audit import AuditMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -101,8 +101,25 @@ app.include_router(jobs.router,              prefix="/api", tags=["Jobs"])
 # Echte CORS-Preflights werden vorher von CORSMiddleware mit korrekten Headern
 # beantwortet — dieser Handler greift nur fuer den Rest.
 @app.options("/{full_path:path}")
-async def options_catchall(full_path: str):
-    return Response(status_code=204)
+async def options_catchall(full_path: str, request: Request):
+    """
+    Fallback fuer OPTIONS-Requests die NICHT von der CORSMiddleware als Preflight
+    erkannt werden (fehlender Access-Control-Request-Method-Header).
+    Setzt CORS-Header manuell, damit Browser die Response akzeptiert.
+    """
+    origin = request.headers.get("origin", "")
+    allowed = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()] or settings.CORS_ORIGINS
+    allow_origin = origin if origin in allowed else (allowed[0] if allowed else "*")
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": allow_origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Systelios-User, X-Systelios-Timestamp, X-Systelios-Signature",
+            "Vary": "Origin",
+        },
+    )
 
 
 # Frontend-Bundle ausliefern (gebaut mit: cd frontend && npm run build)
