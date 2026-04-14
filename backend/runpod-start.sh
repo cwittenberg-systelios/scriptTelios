@@ -775,9 +775,9 @@ unset DATABASE_URL
 export $(grep -v '^#' .env | xargs) 2>/dev/null || true
 
 nohup python -m uvicorn app.main:app \
-    --host 0.0.0.0 \
-    --port 8000 \
-    --workers 1 \
+    --host 0.0.0.0 --port 8000 --workers 1 \
+    --proxy-headers \
+    --forwarded-allow-ips='*' \
     --log-level info \
     >> "$LOG_DIR/backend.log" 2>&1 &
 
