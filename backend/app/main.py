@@ -84,8 +84,11 @@ app.add_middleware(
     allow_origin_regex=settings.CORS_ALLOW_ORIGIN_REGEX or None,
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Systelios-User", "X-Systelios-Timestamp", "X-Systelios-Signature"],
-)
+    allow_headers=[
+        "Authorization", "Content-Type",
+        "X-Systelios-User", "X-Systelios-Timestamp", "X-Systelios-Signature",
+        "X-Atlassian-Mau-Ignore",  # Confluence-Tracking
+    ],)
 
 app.include_router(health.router,            prefix="/api", tags=["Health"])
 app.include_router(transcribe.router,        prefix="/api", tags=["Transkription"])
@@ -95,31 +98,9 @@ app.include_router(style_embeddings.router,  prefix="/api", tags=["Stilprofil"])
 app.include_router(jobs.router,              prefix="/api", tags=["Jobs"])
 
 
-# Catchall fuer OPTIONS-Requests die NICHT von der CORS-Middleware behandelt werden
-# (z.B. nackte OPTIONS ohne Access-Control-Request-Method von Browser-Probes,
-# Confluence-iframe-Lifecycle, Cloudflare-Tunnel-Health-Checks, etc.).
-# Echte CORS-Preflights werden vorher von CORSMiddleware mit korrekten Headern
-# beantwortet — dieser Handler greift nur fuer den Rest.
 @app.options("/{full_path:path}")
-async def options_catchall(full_path: str, request: Request):
-    """
-    Fallback fuer OPTIONS-Requests die NICHT von der CORSMiddleware als Preflight
-    erkannt werden (fehlender Access-Control-Request-Method-Header).
-    Setzt CORS-Header manuell, damit Browser die Response akzeptiert.
-    """
-    origin = request.headers.get("origin", "")
-    allowed = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()] or settings.CORS_ORIGINS
-    allow_origin = origin if origin in allowed else (allowed[0] if allowed else "*")
-    return Response(
-        status_code=204,
-        headers={
-            "Access-Control-Allow-Origin": allow_origin,
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Systelios-User, X-Systelios-Timestamp, X-Systelios-Signature",
-            "Vary": "Origin",
-        },
-    )
+async def options_catchall(full_path: str):
+    return Response(status_code=204)
 
 
 # Frontend-Bundle ausliefern (gebaut mit: cd frontend && npm run build)
