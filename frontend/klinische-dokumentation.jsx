@@ -28,8 +28,8 @@ function JobProgressBar({ jobId }) {
           progress_detail: j.progress_detail || "",
         });
         if (j.status === "done" || j.status === "error" || j.status === "cancelled") return;
-        setTimeout(tick, 1000);
-      } catch { if (!cancelled) setTimeout(tick, 3000); }
+        setTimeout(tick, 3000);
+      } catch { if (!cancelled) setTimeout(tick, 5000); }
     };
     tick();
     return () => { cancelled = true; };
@@ -261,6 +261,56 @@ const S = `
     font-size: 11px; font-weight: 600;
     letter-spacing: 0.06em; text-transform: uppercase;
     color: var(--st-text-soft); margin-bottom: 8px;
+  }
+
+  /* ── Audio-Rekorder ────────────────────────────────────────── */
+  .audio-input-wrap { display: flex; flex-direction: column; gap: 12px; }
+  .audio-mode-toggle { display: flex; gap: 6px; font-size: 11px; }
+  .audio-mode-btn {
+    flex: 1; padding: 6px 10px; border: 1px solid var(--st-gray-mid);
+    background: #fff; border-radius: 4px; cursor: pointer; font-weight: 500;
+    color: var(--st-text-soft); transition: all 0.12s;
+  }
+  .audio-mode-btn.active {
+    border-color: var(--st-red); background: var(--st-red-pale);
+    color: var(--st-red); font-weight: 600;
+  }
+  .audio-mode-btn:hover:not(.active) { background: var(--st-gray-light); }
+  .recorder-box {
+    border: 2px solid var(--st-gray-mid); border-radius: 5px;
+    padding: 18px; text-align: center; background: var(--st-cream);
+    min-height: 110px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 10px;
+  }
+  .recorder-box.recording { border-color: var(--st-red); background: #fff5f5; }
+  .rec-status { font-size: 13px; font-weight: 600; color: var(--st-text-mid); }
+  .rec-status.active { color: var(--st-red); }
+  .rec-timer {
+    font-family: ui-monospace, monospace; font-size: 22px;
+    font-weight: 600; color: var(--st-text);
+  }
+  .rec-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--st-red); margin-right: 6px; vertical-align: middle;
+    animation: rec-pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes rec-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .rec-buttons { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .rec-btn {
+    padding: 7px 16px; font-size: 12px; font-weight: 600;
+    border-radius: 4px; cursor: pointer; border: 1px solid;
+    transition: all 0.12s;
+  }
+  .rec-btn-start { background: var(--st-red); color: #fff; border-color: var(--st-red); }
+  .rec-btn-start:hover { background: var(--st-red-dark, #8a0f0f); }
+  .rec-btn-stop  { background: #fff; color: var(--st-red); border-color: var(--st-red); }
+  .rec-btn-stop:hover { background: var(--st-red-pale); }
+  .rec-btn-pause { background: #fff; color: var(--st-text); border-color: var(--st-gray-mid); }
+  .rec-btn-pause:hover { background: var(--st-gray-light); }
+  .rec-info { font-size: 11px; color: var(--st-text-pale); margin-top: 4px; }
+  .upload-warn {
+    padding: 8px 12px; background: #fef3c7; border: 1px solid #fbbf24;
+    border-radius: 4px; color: #92400e; font-size: 12px; line-height: 1.5;
   }
 
   .dropzone {
@@ -526,6 +576,282 @@ Beispiel: "Wächteranteil Türsteher, Gruppenarbeit, Entschluss zur räumlichen 
 Leer lassen wenn keine besonderen Schwerpunkte gesetzt werden sollen.`;
 
 // ── Helpers ──────────────────────────────────────────────────────
+// Maximale Upload-Größe (Cloudflare Free Plan: 100MB, mit Puffer)
+const MAX_UPLOAD_MB = 90;
+
+// Format-Helper
+function fmtSec(s) {
+  const m = Math.floor(s / 60);
+  const r = Math.floor(s % 60);
+  return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+}
+
+function fmtMB(bytes) {
+  return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+/**
+ * AudioRecorder - Browser-seitige Sprachaufnahme mit Opus 24kbps.
+ * Kompakt (45 Min ~ 8 MB), unter dem 90 MB Upload-Limit selbst bei 5h-Sitzungen.
+ */
+function AudioRecorder({ onRecorded, onError }) {
+  const [state, setState] = useState("idle"); // idle | recording | paused | finalizing
+  const [seconds, setSeconds] = useState(0);
+  const mediaRecRef = useRef(null);
+  const streamRef = useRef(null);
+  const chunksRef = useRef([]);
+  const timerRef = useRef(null);
+  const startTsRef = useRef(0);
+  const pausedAccumRef = useRef(0);
+
+  // Timer aktualisieren
+  useEffect(() => {
+    if (state === "recording") {
+      timerRef.current = setInterval(() => {
+        const elapsed = (Date.now() - startTsRef.current) / 1000 + pausedAccumRef.current;
+        setSeconds(elapsed);
+      }, 500);
+    } else {
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [state]);
+
+  // Warnung vor dem Tab-Schließen
+  useEffect(() => {
+    if (state !== "recording" && state !== "paused") return;
+    const handler = (e) => {
+      e.preventDefault();
+      e.returnValue = "Aufnahme läuft. Tab schließen verwirft die Aufnahme.";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [state]);
+
+  async function start() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      streamRef.current = stream;
+
+      // Bester Codec für Sprache bei kleinster Dateigröße
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/ogg;codecs=opus",
+        "audio/webm",
+      ];
+      const mimeType = mimeCandidates.find(m => MediaRecorder.isTypeSupported(m)) || "";
+
+      const rec = new MediaRecorder(stream, {
+        mimeType: mimeType || undefined,
+        audioBitsPerSecond: 24000, // Sprache komprimiert, ~180 KB/min
+      });
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mimeType || "audio/webm" });
+        const ext = mimeType.includes("ogg") ? "ogg" : "webm";
+        const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+        const file = new File([blob], `aufnahme-${stamp}.${ext}`, { type: blob.type });
+        setState("idle");
+        setSeconds(0);
+        pausedAccumRef.current = 0;
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(t => t.stop());
+          streamRef.current = null;
+        }
+        onRecorded(file);
+      };
+
+      rec.start(1000); // 1s Chunks, damit ondataavailable regelmäßig feuert
+      mediaRecRef.current = rec;
+      startTsRef.current = Date.now();
+      pausedAccumRef.current = 0;
+      setSeconds(0);
+      setState("recording");
+    } catch (err) {
+      const msg = err?.name === "NotAllowedError"
+        ? "Mikrofon-Zugriff verweigert. Bitte in den Browser-Einstellungen erlauben."
+        : `Aufnahme fehlgeschlagen: ${err?.message || err}`;
+      onError && onError(msg);
+    }
+  }
+
+  function pause() {
+    const rec = mediaRecRef.current;
+    if (!rec) return;
+    if (rec.state === "recording") {
+      rec.pause();
+      pausedAccumRef.current += (Date.now() - startTsRef.current) / 1000;
+      setState("paused");
+    }
+  }
+
+  function resume() {
+    const rec = mediaRecRef.current;
+    if (!rec) return;
+    if (rec.state === "paused") {
+      rec.resume();
+      startTsRef.current = Date.now();
+      setState("recording");
+    }
+  }
+
+  function stop() {
+    const rec = mediaRecRef.current;
+    if (!rec) return;
+    setState("finalizing");
+    try { rec.stop(); } catch (_) {}
+  }
+
+  function cancel() {
+    const rec = mediaRecRef.current;
+    if (rec) {
+      try { rec.stop(); } catch (_) {}
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    chunksRef.current = [];
+    setState("idle");
+    setSeconds(0);
+    pausedAccumRef.current = 0;
+  }
+
+  const isActive = state === "recording" || state === "paused";
+
+  return (
+    <div className={"recorder-box" + (isActive ? " recording" : "")}>
+      {state === "idle" && (
+        <>
+          <div className="rec-status">&#127897; Mikrofon-Aufnahme</div>
+          <div className="rec-info">Sprache wird komprimiert – geeignet auch für lange Sitzungen</div>
+          <div className="rec-buttons">
+            <button className="rec-btn rec-btn-start" onClick={start}>Aufnahme starten</button>
+          </div>
+        </>
+      )}
+      {state === "recording" && (
+        <>
+          <div className="rec-status active"><span className="rec-dot" />Aufnahme läuft</div>
+          <div className="rec-timer">{fmtSec(seconds)}</div>
+          <div className="rec-buttons">
+            <button className="rec-btn rec-btn-pause" onClick={pause}>Pause</button>
+            <button className="rec-btn rec-btn-stop" onClick={stop}>Stoppen & Übernehmen</button>
+            <button className="rec-btn rec-btn-pause" onClick={cancel}>Verwerfen</button>
+          </div>
+          <div className="rec-info">Tab bitte nicht schließen – Aufnahme ginge verloren</div>
+        </>
+      )}
+      {state === "paused" && (
+        <>
+          <div className="rec-status">Pausiert</div>
+          <div className="rec-timer">{fmtSec(seconds)}</div>
+          <div className="rec-buttons">
+            <button className="rec-btn rec-btn-start" onClick={resume}>Fortsetzen</button>
+            <button className="rec-btn rec-btn-stop" onClick={stop}>Stoppen & Übernehmen</button>
+            <button className="rec-btn rec-btn-pause" onClick={cancel}>Verwerfen</button>
+          </div>
+        </>
+      )}
+      {state === "finalizing" && (
+        <div className="rec-status">Aufnahme wird vorbereitet ...</div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * AudioInput - kombiniert Browser-Aufnahme und Upload bestehender Dateien.
+ * Zeigt Warnung wenn Upload-Datei > MAX_UPLOAD_MB.
+ */
+function AudioInput({ file, onFile }) {
+  // mode: "record" oder "upload". Wenn file schon da, gilt es als "gesetzt"
+  const [mode, setMode] = useState("record");
+  const [recError, setRecError] = useState(null);
+  const [sizeWarn, setSizeWarn] = useState(null);
+
+  function handleFile(f) {
+    setRecError(null);
+    if (!f) { setSizeWarn(null); onFile(null); return; }
+    const sizeMB = f.size / (1024 * 1024);
+    if (sizeMB > MAX_UPLOAD_MB) {
+      setSizeWarn(
+        `Datei ist ${fmtMB(f.size)} MB groß. Upload-Limit liegt bei ${MAX_UPLOAD_MB} MB. ` +
+        `Nimm die Aufnahme direkt im Browser auf (siehe "Aufnehmen"-Tab) oder komprimiere ` +
+        `die Datei vorher, z.B. mit VLC auf 64 kbps Mono.`
+      );
+      return;
+    }
+    setSizeWarn(null);
+    onFile(f);
+  }
+
+  // File ist schon gesetzt - kompakte Anzeige
+  if (file) {
+    return (
+      <div className="recorder-box" style={{ background: "var(--st-red-pale)", borderColor: "var(--st-red)", borderStyle: "solid" }}>
+        <div className="rec-status">&#127897; {file.name}</div>
+        <div className="rec-info">{fmtMB(file.size)} MB</div>
+        <div className="rec-buttons">
+          <button className="rec-btn rec-btn-pause" onClick={() => { setSizeWarn(null); onFile(null); }}>
+            Entfernen
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="audio-input-wrap">
+      <div className="audio-mode-toggle">
+        <button
+          className={"audio-mode-btn" + (mode === "record" ? " active" : "")}
+          onClick={() => setMode("record")}
+        >
+          &#127897; Im Browser aufnehmen
+        </button>
+        <button
+          className={"audio-mode-btn" + (mode === "upload" ? " active" : "")}
+          onClick={() => setMode("upload")}
+        >
+          &#128190; Datei hochladen
+        </button>
+      </div>
+
+      {mode === "record" && (
+        <>
+          <AudioRecorder onRecorded={handleFile} onError={setRecError} />
+          {recError && <div className="upload-warn">{recError}</div>}
+        </>
+      )}
+
+      {mode === "upload" && (
+        <>
+          <Dropzone
+            label="Aufnahme hochladen"
+            hint={`.mp3  .m4a  .wav  .webm  .ogg  (max ${MAX_UPLOAD_MB} MB)`}
+            accept="audio/*"
+            icon="&#127897;"
+            file={null}
+            onFile={handleFile}
+          />
+          {sizeWarn && <div className="upload-warn">{sizeWarn}</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
 function Dropzone({ label, hint, accept, file, onFile, icon }) {
   const [drag, setDrag] = useState(false);
 
@@ -780,7 +1106,7 @@ function friendlyError(e) {
 // Polling fuer eine bekannte job_id – wiederverwendbar fuer Resume.
 // Stoppt automatisch wenn der Server status="cancelled" zurueckgibt.
 async function pollJob(jobId, maxWaitSeconds = 1200) {
-  const interval = 2;
+  const interval = 3;
   for (let i = 0; i < maxWaitSeconds / interval; i++) {
     await new Promise(res => setTimeout(res, interval * 1000));
     const poll = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
@@ -816,6 +1142,7 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
 
   const jobId = d.job_id;
   saveActiveJob(jobId, page);
+  if (files.onJobId) files.onJobId(jobId);
 
   try {
     const job = await pollJob(jobId, 1200);
@@ -860,6 +1187,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
   const [lastJobId, setLastJobId] = useState(null);
   const [hasTranscript, setHasTranscript] = useState(false);
   const [busy, setBusy]         = useState(false);
+  const [currentJobId, setCurrentJobId] = useState(null);
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]         = useState("");
 
@@ -867,6 +1195,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p1") return;
     setBusy(true);
+    setCurrentJobId(resumeJob.jobId);
     pollJob(resumeJob.jobId, 1200)
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
@@ -912,6 +1241,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
         styleText: styleText || null,
         bullets: bullets || null,
         model: model || null,
+        onJobId: setCurrentJobId,
       }, "p1");
       setOut(result.text || "");
       setLastJobId(result.jobId);
@@ -919,6 +1249,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
+    setCurrentJobId(null);
   }
 
   return (
@@ -940,7 +1271,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
             >
               {(activeTab) => (<>
                 {activeTab === "audio" && (
-                  <Dropzone label="Aufnahme hochladen" hint=".mp3  .m4a  .wav" accept="audio/*" icon="&#127897;" file={audio} onFile={setAudio} />
+                  <AudioInput file={audio} onFile={setAudio} />
                 )}
                 {activeTab === "file" && (
                   <Dropzone label="Transkript-Datei hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
@@ -1022,6 +1353,8 @@ function P1({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
+          {busy && currentJobId && <JobProgressBar jobId={currentJobId} />}
+
           <Output text={out} loading={busy}
             onCopy={() => { navigator.clipboard.writeText(out); toast("In Zwischenablage kopiert"); }}
             extraButtons={hasTranscript ? [
@@ -1062,6 +1395,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
   const [lastJobId, setLastJobId] = useState(null);
   const [hasTranscript, setHasTranscript] = useState(false);
   const [busy, setBusy]           = useState(false);
+  const [currentJobId, setCurrentJobId] = useState(null);
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]     = useState("");
 
@@ -1069,6 +1403,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p2") return;
     setBusy(true);
+    setCurrentJobId(resumeJob.jobId);
     pollJob(resumeJob.jobId, 1200)
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
@@ -1120,6 +1455,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         styleText: styleText || null,
         bullets:   akutantrag ? "akutantrag" : (text || null),
         model:     model || null,
+        onJobId:   setCurrentJobId,
       }, "p2");
       setOut(result.text || "");
       setBefundOut(result.befundText || "");
@@ -1129,6 +1465,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
+    setCurrentJobId(null);
   }
 
   return (
@@ -1161,7 +1498,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
             ]}>
               {(activeTab) => (<>
                 {activeTab === "audio" && (
-                  <Dropzone label="Aufnahme hochladen" hint=".mp3  .m4a  .wav" accept="audio/*" icon="&#127897;" file={audio} onFile={setAudio} />
+                  <AudioInput file={audio} onFile={setAudio} />
                 )}
                 {activeTab === "file" && (
                   <Dropzone label="Transkript-Datei hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
@@ -1242,6 +1579,8 @@ function P2({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
+          {busy && currentJobId && <JobProgressBar jobId={currentJobId} />}
+
           <Output text={tab === "Anamnese" ? out : tab === "Psych. Befund" ? befundOut : akutOut} loading={busy}
             tabs={akutOut ? ["Anamnese", "Psych. Befund", "Akutantrag"] : ["Anamnese", "Psych. Befund"]}
             activeTab={tab} onTab={setTab}
@@ -1280,11 +1619,13 @@ function P3({ toast, resumeJob, onResumed, model }) {
   const [out, setOut]             = useState("");
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
+  const [currentJobId, setCurrentJobId] = useState(null);
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p3") return;
     setBusy(true);
+    setCurrentJobId(resumeJob.jobId);
     pollJob(resumeJob.jobId, 1200)
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
@@ -1318,12 +1659,14 @@ function P3({ toast, resumeJob, onResumed, model }) {
         styleText: styleText || null,
         bullets:   fokus || null,
         model:     model || null,
+        onJobId:   setCurrentJobId,
       }, "p3");
       setOut(result.text || "");
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
+    setCurrentJobId(null);
   }
 
   return (
@@ -1379,6 +1722,8 @@ function P3({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
+          {busy && currentJobId && <JobProgressBar jobId={currentJobId} />}
+
           <Output text={out} loading={busy}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
@@ -1406,11 +1751,13 @@ function P4({ toast, resumeJob, onResumed, model }) {
   const [out, setOut]             = useState("");
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
+  const [currentJobId, setCurrentJobId] = useState(null);
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p4") return;
     setBusy(true);
+    setCurrentJobId(resumeJob.jobId);
     pollJob(resumeJob.jobId, 1200)
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
@@ -1444,12 +1791,14 @@ function P4({ toast, resumeJob, onResumed, model }) {
         styleText: styleText || null,
         bullets:   fokus || null,
         model:     model || null,
+        onJobId:   setCurrentJobId,
       }, "p4");
       setOut(result.text || "");
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
+    setCurrentJobId(null);
   }
 
   return (
@@ -1504,6 +1853,8 @@ function P4({ toast, resumeJob, onResumed, model }) {
               : <button className="btn-primary" onClick={run} disabled={!verlauf}>Entlassbericht erstellen</button>
             }
           </div>
+
+          {busy && currentJobId && <JobProgressBar jobId={currentJobId} />}
 
           <Output text={out} loading={busy}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
@@ -1928,55 +2279,20 @@ export default function App() {
   // NICHT wenn die URL aus dem Confluence-Macro kommt (data-api)
   const firstRun = !backendUrl && !urlFromMacro;
 
-  // Backend-Status: "connecting" (startet gerade), "online", "offline"
-  // Startup-aware: während der ersten 10 Minuten gilt "startet gerade" statt "offline"
-  const [backendStatus, setBackendStatus] = useState("connecting");
-  const mountTimeRef = useRef(Date.now());
+  // Backend-Erreichbarkeit prüfen (alle 30 Sekunden)
+  const [backendOffline, setBackendOffline] = useState(false);
   useEffect(() => {
     if (!backendUrl) return;
     let cancelled = false;
-    let consecutiveFailures = 0;
-    const STARTUP_GRACE_MS = 10 * 60 * 1000; // 10 Minuten
-    const OFFLINE_THRESHOLD = 3; // erst nach 3 aufeinanderfolgenden Fehlern als offline werten
-
     const check = () => {
-      apiFetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(8000) })
-        .then(r => {
-          if (cancelled) return;
-          if (r.ok) {
-            consecutiveFailures = 0;
-            setBackendStatus("online");
-          } else {
-            consecutiveFailures++;
-            handleFailure();
-          }
-        })
-        .catch(() => {
-          if (cancelled) return;
-          consecutiveFailures++;
-          handleFailure();
-        });
+      apiFetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(5000) })
+        .then(r => { if (!cancelled) setBackendOffline(!r.ok); })
+        .catch(() => { if (!cancelled) setBackendOffline(true); });
     };
-
-    const handleFailure = () => {
-      const sinceMount = Date.now() - mountTimeRef.current;
-      // In den ersten 10 Min nach Laden: Status "connecting" (freundlich)
-      // Danach: erst nach 3 aufeinanderfolgenden Fehlern als "offline"
-      if (sinceMount < STARTUP_GRACE_MS) {
-        setBackendStatus("connecting");
-      } else if (consecutiveFailures >= OFFLINE_THRESHOLD) {
-        setBackendStatus("offline");
-      }
-    };
-
-    check();
-    // Häufigeres Polling in der Startup-Phase
-    const interval = setInterval(check, 15000);
+    check(); // sofort prüfen
+    const interval = setInterval(check, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [backendUrl]);
-
-  // Für Abwärtskompatibilität mit bestehendem Code:
-  const backendOffline = backendStatus === "offline";
 
   return (
     <div id="st-root" style={{
@@ -2032,53 +2348,6 @@ export default function App() {
         </div>
       </div>
 
-      {backendStatus === "connecting" && (
-
-
-        <div style={{
-
-
-          position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
-
-
-          background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 6,
-
-
-          padding: "8px 16px", display: "flex", alignItems: "center", gap: 10,
-
-
-          boxShadow: "0 2px 8px rgba(0,0,0,0.08)", zIndex: 100, fontSize: 13, color: "#92400e"
-
-
-        }}>
-
-
-          <span style={{
-
-
-            display: "inline-block", width: 12, height: 12, border: "2px solid #fbbf24",
-
-
-            borderTopColor: "transparent", borderRadius: "50%",
-
-
-            animation: "spin 1s linear infinite"
-
-
-          }} />
-
-
-          <span>Backend wird verbunden… Bitte kurz warten (Startup ~2 Min werktags ab 9:00 Uhr)</span>
-
-
-        </div>
-
-
-      )}
-
-
-      <style>{"@keyframes spin { to { transform: rotate(360deg); } }"}</style>
-
       <main className="main">
         {/* Resume-Banner wenn ein laufender Job nach Reload wiederhergestellt wird */}
         {resumeJob && (
@@ -2103,7 +2372,7 @@ export default function App() {
       </main>
 
       {/* Settings Modal – via Portal damit position:fixed korrekt funktioniert */}
-      {(showSettings || firstRun || backendStatus === "offline") && createPortal(
+      {(showSettings || firstRun || backendOffline) && createPortal(
         <div style={{
           position:"fixed", inset:0, background:"rgba(0,0,0,0.55)",
           display:"flex", alignItems:"center", justifyContent:"center",
