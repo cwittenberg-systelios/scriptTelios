@@ -1118,7 +1118,7 @@ function PromptEditor({ value, onChange, def }) {
   );
 }
 
-function Output({ text, loading, tabs, activeTab, onTab, onCopy, onDownload, extraButtons = [] }) {
+function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownload, extraButtons = [] }) {
   const empty = !text && !loading;
   return (
     <div className="output-card">
@@ -1140,7 +1140,9 @@ function Output({ text, loading, tabs, activeTab, onTab, onCopy, onDownload, ext
         </div>
       )}
       <div className={"output-text" + (empty ? " empty" : "")}>
-        {loading ? "Wird generiert ..." : (text || "Der generierte Text erscheint hier.")}
+        {loading
+          ? (jobId ? <JobProgressBar jobId={jobId} /> : "Wird generiert ...")
+          : (text || "Der generierte Text erscheint hier.")}
       </div>
     </div>
   );
@@ -1475,9 +1477,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          {busy && currentJobId && <JobProgressBar jobId={currentJobId} />}
-
-          <Output text={out} loading={busy}
+          <Output text={out} loading={busy} jobId={currentJobId}
             onCopy={() => { navigator.clipboard.writeText(out); toast("In Zwischenablage kopiert"); }}
             extraButtons={hasTranscript ? [
               { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
@@ -1708,9 +1708,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          {busy && currentJobId && <JobProgressBar jobId={currentJobId} />}
-
-          <Output text={tab === "Anamnese" ? out : tab === "Psych. Befund" ? befundOut : akutOut} loading={busy}
+          <Output text={tab === "Anamnese" ? out : tab === "Psych. Befund" ? befundOut : akutOut} loading={busy} jobId={currentJobId}
             tabs={akutOut ? ["Anamnese", "Psych. Befund", "Akutantrag"] : ["Anamnese", "Psych. Befund"]}
             activeTab={tab} onTab={setTab}
             onCopy={() => {
@@ -1857,9 +1855,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          {busy && currentJobId && <JobProgressBar jobId={currentJobId} />}
-
-          <Output text={out} loading={busy}
+          <Output text={out} loading={busy} jobId={currentJobId}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
           {out && (
@@ -1995,9 +1991,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          {busy && currentJobId && <JobProgressBar jobId={currentJobId} />}
-
-          <Output text={out} loading={busy}
+          <Output text={out} loading={busy} jobId={currentJobId}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
           {out && (

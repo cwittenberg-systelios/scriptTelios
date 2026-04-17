@@ -417,6 +417,14 @@ async def create_generate_job(
             anamnese_part = raw
             befund_part   = None
 
+        logger.info(
+            "Job %s _run result: raw=%d anamnese=%d befund=%s akut=%s",
+            job.job_id, len(raw),
+            len(anamnese_part) if anamnese_part else 0,
+            len(befund_part) if befund_part else 0,
+            len(akut_part) if akut_part else 0,
+        )
+
         return {
             "text":        anamnese_part,
             "befund_text": befund_part,
