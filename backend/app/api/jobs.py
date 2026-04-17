@@ -3,6 +3,7 @@ GET  /api/jobs/{job_id}   – Job-Status abfragen
 GET  /api/jobs            – Alle Jobs auflisten (optional)
 """
 import logging
+import time as _t
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, Depends
 from typing import Annotated, Literal, Optional
 
