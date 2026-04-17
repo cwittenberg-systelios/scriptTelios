@@ -3,11 +3,20 @@ GET  /api/jobs/{job_id}   – Job-Status abfragen
 GET  /api/jobs            – Alle Jobs auflisten (optional)
 """
 import logging
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, Depends
 from typing import Annotated, Literal, Optional
 
 from app.core.config import settings
+from app.core.auth import get_current_user
 from app.core.files import save_upload, ALLOWED_DOCS, ALLOWED_IMAGES, ALLOWED_AUDIO
+
+
+def _size_class(n: int) -> str:
+    """O2: Größenklasse statt exakter Zeichenzahl (Datenminimierung)."""
+    if n < 1000: return "klein"
+    if n < 5000: return "mittel"
+    if n < 20000: return "groß"
+    return "sehr groß"
 from app.services.job_queue import job_queue, JobStatus
 from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_text, extract_style_context
@@ -61,7 +70,7 @@ async def list_models():
 # ── Job-Status abfragen ───────────────────────────────────────────────────────
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: str, current_user: str = Depends(get_current_user)):
     """Gibt den aktuellen Status eines Jobs zurueck (ohne Transkript)."""
     job = job_queue.get_job(job_id)
     if not job:
@@ -70,7 +79,7 @@ async def get_job(job_id: str):
 
 
 @router.delete("/jobs/{job_id}")
-async def cancel_job(job_id: str):
+async def cancel_job(job_id: str, current_user: str = Depends(get_current_user)):
     """
     Bricht einen laufenden Job ab.
     Setzt das Cancel-Flag – run_job() stoppt nach dem aktuellen Schritt.
@@ -122,6 +131,7 @@ async def create_generate_job(
     workflow:         Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"], Form()],
     prompt:           Annotated[str,  Form()],
     therapeut_id:     Annotated[Optional[str], Form()] = None,
+    current_user:     str = Depends(get_current_user),
     diagnosen:        Annotated[Optional[str], Form()] = None,
     transcript:       Annotated[Optional[str], Form()] = None,
     bullets:          Annotated[Optional[str], Form(description="Stichpunkte (P1) oder Fokus-Themen (P3/P4)")] = None,
@@ -149,6 +159,9 @@ async def create_generate_job(
       P3c (akutantrag):          antragsvorlage (Anamnese/Befund/Diagnosen) + verlaufsdoku (opt)
       P4 (entlassbericht):      verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
     """
+    # K1: Therapeut-ID aus validiertem Auth-Header
+    therapeut_id = current_user
+
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht thread-safe)
     audio_bytes            = await audio.read()          if audio          and audio.filename          else None
     audio_name             = audio.filename               if audio          and audio.filename          else None
@@ -191,16 +204,8 @@ async def create_generate_job(
 
     async def _run():
         import uuid as _uuid
-        import time as _t
         from pathlib import Path as _Path
         from app.core.files import upload_dir
-        from app.services.progress_bands import compute_bands
-
-        # Adaptive Progress-Bands: früh berechnen damit sie in allen Phasen verfügbar sind
-        _has_audio = bool(audio_bytes) if audio_bytes else False
-        _has_docs = bool(verlaufsdoku_bytes or antragsvorlage_bytes or selbstauskunft_bytes)
-        bands = compute_bands(workflow, has_audio=_has_audio, has_docs=_has_docs)
-        phase_times = {}
 
         # ── 1. Audio transkribieren ──────────────────────────────────
         transkript_text = transcript or ""
@@ -216,6 +221,10 @@ async def create_generate_job(
             if "transcription" in bands:
                 job.set_progress(bands["transcription"][1])
             transkript_text = tr["transcript"]
+
+        # Cancel-Check nach Transkription (teuerster Schritt)
+        if job._cancel_requested:
+            raise RuntimeError("__CANCELLED__")
 
         # ── 2. Dokumente extrahieren (jedes Feld → eigene Variable) ──
 
@@ -276,7 +285,7 @@ async def create_generate_job(
             path.write_bytes(vorantrag_bytes)
             try:
                 vorantrag_text = await extract_text(path)
-                logger.info("Vorantrag extrahiert: %d Zeichen", len(vorantrag_text))
+                logger.info("Vorantrag extrahiert: %s", _size_class(len(vorantrag_text)))
             except Exception as e:
                 logger.warning("Vorantrag-Extraktion fehlgeschlagen: %s", e)
 
@@ -291,7 +300,7 @@ async def create_generate_job(
             style_context = truncate_style_context(cleaned)
             style_is_example = True
             style_info = {"source": "text_input", "chars": len(style_context), "words": len(style_context.split())}
-            logger.info("Stilvorlage via Text-Input (%d Zeichen nach Bereinigung)", len(style_context))
+            logger.info("Stilvorlage via Text-Input: %s", _size_class(len(style_context)))
         elif style_bytes and style_name:
             suffix = _Path(style_name).suffix.lower()
             path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
@@ -347,11 +356,22 @@ async def create_generate_job(
             "dokumentation":        2048,
         }
         max_tok = max_tokens_map.get(workflow, 2048)
+        from app.services.progress_bands import compute_bands
         from app.services.job_queue import perf_logger
+
+        _has_audio = bool(audio_bytes) if 'audio_bytes' in dir() else False
+        _has_docs = bool((verlaufsdoku_bytes if 'verlaufsdoku_bytes' in dir() else None)
+                      or (antragsvorlage_bytes if 'antragsvorlage_bytes' in dir() else None)
+                      or (selbstauskunft_bytes if 'selbstauskunft_bytes' in dir() else None))
+        bands = compute_bands(workflow, has_audio=_has_audio, has_docs=_has_docs)
 
         phase_times["extraction"] = _t.time() - _ex_t0
         if "extraction" in bands:
             job.set_progress(bands["extraction"][1], "Dokument-Extraktion")
+
+        # Cancel-Check nach Dokument-Extraktion
+        if job._cancel_requested:
+            raise RuntimeError("__CANCELLED__")
 
         lb = bands["llm"]
         expected_tok = {"dokumentation":1000,"anamnese":1500,"verlaengerung":1500,
@@ -359,6 +379,10 @@ async def create_generate_job(
         def _on_tok(n):
             pct = lb[0] + (lb[1] - lb[0]) * min(1.0, n / expected_tok)
             job.set_progress(int(pct), "KI-Generierung", f"{n} Wörter")
+
+        # Cancel-Check vor LLM-Generierung (zweitteuerster Schritt)
+        if job._cancel_requested:
+            raise RuntimeError("__CANCELLED__")
 
         job.set_progress(lb[0], "KI-Generierung")
         _t0 = _t.time()

@@ -231,9 +231,9 @@ class JobQueue:
                 )
         except Exception as e:
             job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
-            if job._cancel_requested:
+            if job._cancel_requested or "__CANCELLED__" in str(e):
                 job.status = JobStatus.CANCELLED
-                logger.info("Job abgebrochen (Exception während Abbruch): %s", job.job_id)
+                logger.info("Job abgebrochen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s)
             else:
                 job.status    = JobStatus.ERROR
                 job.error_msg = str(e)

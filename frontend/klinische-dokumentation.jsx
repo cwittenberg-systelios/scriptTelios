@@ -665,6 +665,16 @@ function AudioRecorder({ onRecorded, onError }) {
   }, [state]);
 
   async function start() {
+    // getUserMedia erfordert HTTPS oder localhost
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      const isHttp = location.protocol === "http:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1";
+      onError && onError(
+        isHttp
+          ? "Mikrofon-Aufnahme ist nur über HTTPS verfügbar. Diese Seite wird über HTTP geladen — bitte den Administrator bitten, HTTPS zu aktivieren. Alternativ kann eine Aufnahme-Datei hochgeladen werden."
+          : "Mikrofon-Aufnahme wird von diesem Browser nicht unterstützt. Bitte einen aktuellen Browser (Chrome, Edge, Firefox) verwenden."
+      );
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -1203,16 +1213,23 @@ function friendlyError(e) {
 
 // Polling fuer eine bekannte job_id – wiederverwendbar fuer Resume.
 // Stoppt automatisch wenn der Server status="cancelled" zurueckgibt.
-async function pollJob(jobId, maxWaitSeconds = 1200) {
+async function pollJob(jobId, maxWaitSeconds = 1200, signal) {
   const interval = 3;
   for (let i = 0; i < maxWaitSeconds / interval; i++) {
+    if (signal && signal.aborted) return null;
     await new Promise(res => setTimeout(res, interval * 1000));
-    const poll = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
-    if (!poll.ok) continue;
-    const job = await poll.json();
-    if (job.status === "done")      return job;
-    if (job.status === "error")     throw new Error(job.error_msg || "Job fehlgeschlagen");
-    if (job.status === "cancelled") return null;  // Server hat abgebrochen
+    if (signal && signal.aborted) return null;
+    try {
+      const poll = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
+      if (!poll.ok) continue;
+      const job = await poll.json();
+      if (job.status === "done")      return job;
+      if (job.status === "error")     throw new Error(job.error_msg || "Job fehlgeschlagen");
+      if (job.status === "cancelled") return null;
+    } catch (e) {
+      if (signal && signal.aborted) return null;
+      throw e;
+    }
   }
   throw new Error("Timeout: Job dauert zu lange");
 }
@@ -1243,8 +1260,9 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   if (files.onJobId) files.onJobId(jobId);
 
   try {
-    const job = await pollJob(jobId, 1200);
+    const job = await pollJob(jobId, 1200, files.signal);
     clearActiveJob();
+    if (!job) return null;  // abgebrochen
     return {
       text:        job.result_text   || "",
       befundText:  job.befund_text   || "",
@@ -1286,6 +1304,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
   const [hasTranscript, setHasTranscript] = useState(false);
   const [busy, setBusy]         = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
+  const abortRef = useRef(null);
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]         = useState("");
 
@@ -1307,16 +1326,19 @@ function P1({ toast, resumeJob, onResumed, model }) {
   }, [resumeJob]);
 
   function cancelRun() {
-    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
-    const jobId = loadActiveJob()?.jobId;
+    if (abortRef.current) abortRef.current.abort();
+    const jobId = currentJobId || loadActiveJob()?.jobId;
     if (jobId) {
       apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
     }
     clearActiveJob();
     setBusy(false);
+    setCurrentJobId(null);
   }
 
   async function run() {
+    const ac = new AbortController();
+    abortRef.current = ac;
     setBusy(true);
     setLastJobId(null);
     setHasTranscript(false);
@@ -1340,7 +1362,9 @@ function P1({ toast, resumeJob, onResumed, model }) {
         bullets: bullets || null,
         model: model || null,
         onJobId: setCurrentJobId,
+        signal: ac.signal,
       }, "p1");
+      if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
@@ -1494,6 +1518,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
   const [hasTranscript, setHasTranscript] = useState(false);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
+  const abortRef = useRef(null);
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]     = useState("");
 
@@ -1517,15 +1542,19 @@ function P2({ toast, resumeJob, onResumed, model }) {
   }, [resumeJob]);
 
   function cancelRun() {
-    const jobId = loadActiveJob()?.jobId;
+    if (abortRef.current) abortRef.current.abort();
+    const jobId = currentJobId || loadActiveJob()?.jobId;
     if (jobId) {
       apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
     }
     clearActiveJob();
     setBusy(false);
+    setCurrentJobId(null);
   }
 
   async function run() {
+    const ac = new AbortController();
+    abortRef.current = ac;
     setBusy(true);
     setLastJobId(null);
     setHasTranscript(false);
@@ -1554,7 +1583,9 @@ function P2({ toast, resumeJob, onResumed, model }) {
         bullets:   akutantrag ? "akutantrag" : (text || null),
         model:     model || null,
         onJobId:   setCurrentJobId,
+        signal:    ac.signal,
       }, "p2");
+      if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
       setBefundOut(result.befundText || "");
       setAkutOut(result.akutText || "");
@@ -1718,6 +1749,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
+  const abortRef = useRef(null);
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
@@ -1736,16 +1768,19 @@ function P3({ toast, resumeJob, onResumed, model }) {
   }, [resumeJob]);
 
   function cancelRun() {
-    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
-    const jobId = loadActiveJob()?.jobId;
+    if (abortRef.current) abortRef.current.abort();
+    const jobId = currentJobId || loadActiveJob()?.jobId;
     if (jobId) {
       apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
     }
     clearActiveJob();
     setBusy(false);
+    setCurrentJobId(null);
   }
 
   async function run() {
+    const ac = new AbortController();
+    abortRef.current = ac;
     setBusy(true);
     setOut("");
     setLastJobId(null);
@@ -1758,7 +1793,9 @@ function P3({ toast, resumeJob, onResumed, model }) {
         bullets:   fokus || null,
         model:     model || null,
         onJobId:   setCurrentJobId,
+        signal:    ac.signal,
       }, "p3");
+      if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
       setLastJobId(result.jobId);
     }
@@ -1850,6 +1887,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
+  const abortRef = useRef(null);
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
@@ -1868,16 +1906,19 @@ function P4({ toast, resumeJob, onResumed, model }) {
   }, [resumeJob]);
 
   function cancelRun() {
-    // Server-seitigen Job abbrechen – pollJob stoppt bei status="cancelled"
-    const jobId = loadActiveJob()?.jobId;
+    if (abortRef.current) abortRef.current.abort();
+    const jobId = currentJobId || loadActiveJob()?.jobId;
     if (jobId) {
       apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
     }
     clearActiveJob();
     setBusy(false);
+    setCurrentJobId(null);
   }
 
   async function run() {
+    const ac = new AbortController();
+    abortRef.current = ac;
     setBusy(true);
     setOut("");
     setLastJobId(null);
@@ -1890,7 +1931,9 @@ function P4({ toast, resumeJob, onResumed, model }) {
         bullets:   fokus || null,
         model:     model || null,
         onJobId:   setCurrentJobId,
+        signal:    ac.signal,
       }, "p4");
+      if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
       setLastJobId(result.jobId);
     }
