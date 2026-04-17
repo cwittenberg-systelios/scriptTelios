@@ -206,6 +206,13 @@ async def create_generate_job(
         import uuid as _uuid
         from pathlib import Path as _Path
         from app.core.files import upload_dir
+        from app.services.progress_bands import compute_bands
+
+        # Bands + Timing frühzeitig initialisieren (werden in allen Phasen gebraucht)
+        _has_audio = bool(audio_bytes) if 'audio_bytes' in dir() else bool(audio_bytes)
+        _has_docs = bool(verlaufsdoku_bytes or antragsvorlage_bytes or selbstauskunft_bytes)
+        bands = compute_bands(workflow, has_audio=_has_audio, has_docs=_has_docs)
+        phase_times = {}
 
         # ── 1. Audio transkribieren ──────────────────────────────────
         transkript_text = transcript or ""
@@ -356,14 +363,7 @@ async def create_generate_job(
             "dokumentation":        2048,
         }
         max_tok = max_tokens_map.get(workflow, 2048)
-        from app.services.progress_bands import compute_bands
         from app.services.job_queue import perf_logger
-
-        _has_audio = bool(audio_bytes) if 'audio_bytes' in dir() else False
-        _has_docs = bool((verlaufsdoku_bytes if 'verlaufsdoku_bytes' in dir() else None)
-                      or (antragsvorlage_bytes if 'antragsvorlage_bytes' in dir() else None)
-                      or (selbstauskunft_bytes if 'selbstauskunft_bytes' in dir() else None))
-        bands = compute_bands(workflow, has_audio=_has_audio, has_docs=_has_docs)
 
         phase_times["extraction"] = _t.time() - _ex_t0
         if "extraction" in bands:
