@@ -13,8 +13,8 @@ const apiFetch = (url, opts) => {
 };
 
 function JobProgressBar({ jobId }) {
-  const [p, setP] = React.useState({ progress: 0, progress_phase: "Starte...", progress_detail: "" });
-  React.useEffect(() => {
+  const [p, setP] = useState({ progress: 0, progress_phase: "Starte...", progress_detail: "" });
+  useEffect(() => {
     if (!jobId) return;
     let cancelled = false;
     const tick = async () => {
@@ -308,6 +308,35 @@ const S = `
   .rec-btn-pause { background: #fff; color: var(--st-text); border-color: var(--st-gray-mid); }
   .rec-btn-pause:hover { background: var(--st-gray-light); }
   .rec-info { font-size: 11px; color: var(--st-text-pale); margin-top: 4px; }
+  .rec-meter-wrap { width: 100%; max-width: 260px; margin: 4px auto; }
+  .rec-meter-bar {
+    height: 6px; background: var(--st-gray-bg); border-radius: 3px;
+    overflow: hidden; position: relative;
+  }
+  .rec-meter-fill {
+    height: 100%; border-radius: 3px; transition: width 80ms linear;
+    background: linear-gradient(90deg, var(--st-green, #22c55e) 0%, #facc15 60%, var(--st-red) 90%);
+  }
+  .rec-gain-wrap {
+    display: flex; align-items: center; gap: 6px; width: 100%;
+    max-width: 220px; margin: 2px auto;
+  }
+  .rec-gain-label { font-size: 10px; color: var(--st-text-pale); white-space: nowrap; }
+  .rec-gain-slider {
+    -webkit-appearance: none; appearance: none; flex: 1;
+    height: 4px; background: var(--st-gray-mid); border-radius: 2px;
+    outline: none; cursor: pointer;
+  }
+  .rec-gain-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--st-red); cursor: pointer;
+    border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .rec-gain-slider::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--st-red); cursor: pointer;
+    border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
   .upload-warn {
     padding: 8px 12px; background: #fef3c7; border: 1px solid #fbbf24;
     border-radius: 4px; color: #92400e; font-size: 12px; line-height: 1.5;
@@ -597,12 +626,18 @@ function fmtMB(bytes) {
 function AudioRecorder({ onRecorded, onError }) {
   const [state, setState] = useState("idle"); // idle | recording | paused | finalizing
   const [seconds, setSeconds] = useState(0);
+  const [level, setLevel] = useState(0);      // 0-100 Pegel
+  const [gain, setGain] = useState(100);       // 50-200 Gain in %
   const mediaRecRef = useRef(null);
   const streamRef = useRef(null);
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
   const startTsRef = useRef(0);
   const pausedAccumRef = useRef(0);
+  const audioCtxRef = useRef(null);
+  const analyserRef = useRef(null);
+  const gainNodeRef = useRef(null);
+  const meterRafRef = useRef(null);
 
   // Timer aktualisieren
   useEffect(() => {
@@ -642,6 +677,36 @@ function AudioRecorder({ onRecorded, onError }) {
       });
       streamRef.current = stream;
 
+      // Audio-Graph: Mic → Gain → Analyser → Destination (für Metering + Gain-Regelung)
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      audioCtxRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      const gn = ctx.createGain();
+      gn.gain.value = gain / 100;
+      gainNodeRef.current = gn;
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.5;
+      analyserRef.current = analyser;
+      source.connect(gn);
+      gn.connect(analyser);
+      // Destination für Recording: GainNode-Output als neuer Stream
+      const dest = ctx.createMediaStreamDestination();
+      gn.connect(dest);
+      const recordStream = dest.stream;
+
+      // Pegel-Meter-Loop
+      const dataArr = new Uint8Array(analyser.frequencyBinCount);
+      function meterLoop() {
+        analyser.getByteFrequencyData(dataArr);
+        let sum = 0;
+        for (let i = 0; i < dataArr.length; i++) sum += dataArr[i];
+        const avg = sum / dataArr.length;
+        setLevel(Math.min(100, Math.round(avg * 100 / 128)));
+        meterRafRef.current = requestAnimationFrame(meterLoop);
+      }
+      meterLoop();
+
       // Bester Codec für Sprache bei kleinster Dateigröße
       const mimeCandidates = [
         "audio/webm;codecs=opus",
@@ -650,13 +715,16 @@ function AudioRecorder({ onRecorded, onError }) {
       ];
       const mimeType = mimeCandidates.find(m => MediaRecorder.isTypeSupported(m)) || "";
 
-      const rec = new MediaRecorder(stream, {
+      const rec = new MediaRecorder(recordStream, {
         mimeType: mimeType || undefined,
         audioBitsPerSecond: 24000, // Sprache komprimiert, ~180 KB/min
       });
       chunksRef.current = [];
       rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
       rec.onstop = () => {
+        if (meterRafRef.current) { cancelAnimationFrame(meterRafRef.current); meterRafRef.current = null; }
+        if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => {}); audioCtxRef.current = null; }
+        setLevel(0);
         const blob = new Blob(chunksRef.current, { type: mimeType || "audio/webm" });
         const ext = mimeType.includes("ogg") ? "ogg" : "webm";
         const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
@@ -713,6 +781,9 @@ function AudioRecorder({ onRecorded, onError }) {
   }
 
   function cancel() {
+    if (meterRafRef.current) { cancelAnimationFrame(meterRafRef.current); meterRafRef.current = null; }
+    if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => {}); audioCtxRef.current = null; }
+    setLevel(0);
     const rec = mediaRecRef.current;
     if (rec) {
       try { rec.stop(); } catch (_) {}
@@ -725,6 +796,13 @@ function AudioRecorder({ onRecorded, onError }) {
     setState("idle");
     setSeconds(0);
     pausedAccumRef.current = 0;
+  }
+
+  // Gain live anpassen
+  function onGainChange(e) {
+    const v = Number(e.target.value);
+    setGain(v);
+    if (gainNodeRef.current) gainNodeRef.current.gain.value = v / 100;
   }
 
   const isActive = state === "recording" || state === "paused";
@@ -744,6 +822,16 @@ function AudioRecorder({ onRecorded, onError }) {
         <>
           <div className="rec-status active"><span className="rec-dot" />Aufnahme läuft</div>
           <div className="rec-timer">{fmtSec(seconds)}</div>
+          <div className="rec-meter-wrap">
+            <div className="rec-meter-bar">
+              <div className="rec-meter-fill" style={{ width: `${level}%` }} />
+            </div>
+          </div>
+          <div className="rec-gain-wrap">
+            <span className="rec-gain-label">&#128264;</span>
+            <input type="range" className="rec-gain-slider" min="50" max="200" value={gain} onChange={onGainChange} />
+            <span className="rec-gain-label">{gain}%</span>
+          </div>
           <div className="rec-buttons">
             <button className="rec-btn rec-btn-pause" onClick={pause}>Pause</button>
             <button className="rec-btn rec-btn-stop" onClick={stop}>Stoppen & Übernehmen</button>
@@ -756,6 +844,16 @@ function AudioRecorder({ onRecorded, onError }) {
         <>
           <div className="rec-status">Pausiert</div>
           <div className="rec-timer">{fmtSec(seconds)}</div>
+          <div className="rec-meter-wrap">
+            <div className="rec-meter-bar">
+              <div className="rec-meter-fill" style={{ width: `${level}%` }} />
+            </div>
+          </div>
+          <div className="rec-gain-wrap">
+            <span className="rec-gain-label">&#128264;</span>
+            <input type="range" className="rec-gain-slider" min="50" max="200" value={gain} onChange={onGainChange} />
+            <span className="rec-gain-label">{gain}%</span>
+          </div>
           <div className="rec-buttons">
             <button className="rec-btn rec-btn-start" onClick={resume}>Fortsetzen</button>
             <button className="rec-btn rec-btn-stop" onClick={stop}>Stoppen & Übernehmen</button>
