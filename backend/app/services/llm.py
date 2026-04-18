@@ -562,6 +562,7 @@ async def _generate_ollama(
         payload = {
             "model":      effective_model,
             "stream":     False,
+            "think":      False,
             "keep_alive": -1,
             "options": {
                 "num_predict": max_tokens,
@@ -572,8 +573,9 @@ async def _generate_ollama(
             "messages": [
                 {"role": "system",    "content": system_prompt},
                 {"role": "user",      "content": user_content},
-                # Assistant-Primer: zwingt das Modell direkt mit dem Text zu beginnen
-                {"role": "assistant", "content": assistant_primer},
+                # Assistant-Primer: nur wenn nicht-leer (leerer Primer kann bei
+                # Qwen3 dazu fuehren dass Thinking alle Tokens verbraucht)
+                *([{"role": "assistant", "content": assistant_primer}] if assistant_primer else []),
             ],
         }
         client = _get_ollama_client()
@@ -616,10 +618,19 @@ async def _generate_ollama(
 
     data = r.json()
     # /api/chat gibt message.content zurück (statt response bei /api/generate)
+    msg = data.get("message", {})
     text = (
-        data.get("message", {}).get("content", "")
+        msg.get("content", "")
         or data.get("response", "")  # Fallback fuer aeltere Versionen
     ).strip()
+    # Qwen3 Thinking-Fallback: wenn content leer aber thinking gefuellt,
+    # hat das Modell alle Tokens im Thinking verbraucht.
+    if not text and msg.get("thinking"):
+        logger.warning(
+            "Ollama content leer, verwende thinking-Feld als Fallback (%d Zeichen)",
+            len(msg["thinking"]),
+        )
+        text = msg["thinking"].strip()
     return {
         "text": text,
         "model_used": f"ollama/{effective_model}",
