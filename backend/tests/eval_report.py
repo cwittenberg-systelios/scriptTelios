@@ -295,7 +295,9 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                     ("TOPPADDING", (0,0), (-1,-1), 3),
                     ("BOTTOMPADDING", (0,0), (-1,-1), 3),
                 ]))
-                story.append(KeepTogether([ht, bt, Spacer(1, 4*mm)]))
+                story.append(ht)
+                story.append(bt)
+                story.append(Spacer(1, 6*mm))
 
     if data.get("variance"):
         story.append(PageBreak())
@@ -312,8 +314,9 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
         for jr in data["jury"]:
             sc = jr.get("score",0)
             cl = C["green"] if sc>=4 else (C["orange"] if sc>=3 else C["red"])
-            story.append(Paragraph(f'<font color="{cl.hexval()}"><b>{sc}/5</b></font> — '
-                f'{jr.get("reason","")[:120]}',st["B"]))
+            reason = jr.get("reason","").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+            story.append(Paragraph(f'<font color="{cl.hexval()}"><b>{sc}/5</b></font> — {reason}',st["B"]))
+            story.append(Spacer(1, 2*mm))
     doc.build(story)
     return out
 
