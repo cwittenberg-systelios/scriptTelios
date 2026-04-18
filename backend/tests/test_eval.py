@@ -202,28 +202,31 @@ def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
     if not therapeut_dir.exists():
         return []
 
-    # Datei-Prefixe pro Workflow
+    # Datei-Prefixe pro Workflow (case-insensitive, flexible Benennungen)
     if workflow == "dokumentation":
-        prefixes = ["Gesprächszusammenfassung", "Gespraechszusammenfassung", "Dokumentation"]
+        prefixes = ["gesprächszusammenfassung", "gespraechszusammenfassung", "dokumentation", "gespräch", "gespraech"]
     elif workflow == "entlassbericht":
-        prefixes = ["Entlassbericht"]
+        prefixes = ["entlassbericht"]
     elif workflow in ("verlaengerung", "folgeverlaengerung"):
-        prefixes = ["Verlängerungsantrag", "Verlaengerungsantrag"]
+        prefixes = ["verlängerungsantrag", "verlaengerungsantrag", "verlängerung", "verlaengerung",
+                     "folgeverlängerung", "folgeverlaengerung", "fogleverlängerung"]
     elif workflow == "akutantrag":
-        prefixes = ["Akutantrag"]
+        prefixes = ["akutantrag"]
     elif workflow == "anamnese":
-        prefixes = ["Entlassbericht", "Verlängerungsantrag", "Verlaengerungsantrag"]
+        prefixes = ["entlassbericht", "verlängerungsantrag", "verlaengerungsantrag",
+                     "verlängerung", "verlaengerung", "anamnese"]
     else:
         return []
 
-    # Alle passenden DOCX finden (auch nummerierte: _01, _02, etc.)
+    # Alle passenden Dateien finden (case-insensitive, auch nummerierte: _01, 2, etc.)
     docx_files = []
     for f in sorted(therapeut_dir.iterdir()):
-        if f.suffix.lower() not in (".docx", ".doc"):
+        if f.suffix.lower() not in (".docx", ".doc", ".odt"):
             continue
-        fname = f.stem  # Dateiname ohne Extension
+        fname = f.stem.lower()  # case-insensitive
         for prefix in prefixes:
-            if fname == prefix or fname.startswith(prefix + "_"):
+            # Matcht: "entlassbericht", "entlassbericht2", "entlassbericht_01", "Entlassbericht"
+            if fname == prefix or fname.startswith(prefix + "_") or fname.startswith(prefix) and fname[len(prefix):].lstrip("_").isdigit():
                 docx_files.append(f)
                 break
 
