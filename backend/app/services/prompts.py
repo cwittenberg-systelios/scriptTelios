@@ -457,6 +457,63 @@ BASE_PROMPTS: dict[str, str] = {
 
 # ── Prompt-Zusammenbau ────────────────────────────────────────────────────────
 
+def _compute_style_constraints(style_text: str) -> str:
+    """
+    Berechnet quantitative Stil-Metriken aus dem Stilbeispiel und
+    formuliert sie als konkrete Vorgaben fuer den Prompt.
+    """
+    import re as _re
+
+    words = style_text.split()
+    word_count = len(words)
+    if word_count < 30:
+        return ""
+
+    # Satzlaenge
+    sentences = _re.split(r'[.!?]+', style_text)
+    sentences = [s.strip() for s in sentences if len(s.strip().split()) >= 3]
+    avg_sentence_len = round(sum(len(s.split()) for s in sentences) / max(len(sentences), 1), 0)
+
+    # Absatzlaenge
+    paragraphs = [p.strip() for p in style_text.split("\n\n") if len(p.strip().split()) >= 10]
+    avg_para_len = round(sum(len(p.split()) for p in paragraphs) / max(len(paragraphs), 1), 0)
+
+    # Wir-Perspektive
+    wir_pattern = _re.compile(r'\b(wir|uns|unser[ems]?|unserer?)\b', _re.IGNORECASE)
+    wir_count = len(wir_pattern.findall(style_text))
+    wir_ratio = wir_count / max(word_count, 1)
+    uses_wir = wir_ratio > 0.005  # >0.5% = Wir-Perspektive
+
+    # Fachbegriff-Dichte (vereinfacht)
+    fachbegriffe = _re.compile(
+        r'\b(Affekt|Antrieb|Dissoziation|Psychomotorik|Suizidalit|'
+        r'Anhedonie|Rumination|Intrusion|Hyperarousal|Vermeidung|'
+        r'Übertragung|Gegenübertragung|Mentalisierung|Affektregulation|'
+        r'Selbstwirksamkeit|Ressourcen|Resilienz|Copingstrategien|'
+        r'Ich-Struktur|Bindungsmuster|Externalisierung|Internalisierung)\b',
+        _re.IGNORECASE
+    )
+    fach_count = len(fachbegriffe.findall(style_text))
+    fach_density = round(fach_count / max(word_count, 1) * 100, 1)
+
+    lines = ["\nSTIL-VORGABEN (unbedingt einhalten!):"]
+    lines.append(f"- Satzlänge: durchschnittlich {int(avg_sentence_len)} Wörter pro Satz")
+    lines.append(f"- Absatzlänge: durchschnittlich {int(avg_para_len)} Wörter pro Absatz")
+    if fach_density > 0:
+        lines.append(f"- Fachbegriffe: {'sparsam' if fach_density < 0.8 else 'moderat'} "
+                      f"(ca. {fach_density} pro 100 Wörter)")
+    else:
+        lines.append("- Fachbegriffe: sehr sparsam einsetzen")
+    if uses_wir:
+        lines.append("- Perspektive: Wir-Form des Behandlungsteams "
+                      "(\"Wir beobachteten...\", \"In unserer Arbeit...\")")
+    else:
+        lines.append("- Perspektive: Dritte Person (Er/Sie-Form)")
+    lines.append(f"- Textlänge: ca. {word_count} Wörter (orientiere dich an der Länge der Vorlage)")
+
+    return "\n".join(lines)
+
+
 def build_system_prompt(
     workflow: str,
     custom_prompt: Optional[str] = None,
@@ -511,6 +568,7 @@ def build_system_prompt(
                 "NIEMALS aus dem Beispiel übernehmen: Patientennamen, Diagnosen, "
                 "ICD-Codes, konkrete Therapieinhalte, Daten – nur Struktur und Stil.\n\n"
                 f"{style_context.strip()}"
+                f"{_compute_style_constraints(style_context)}"
             )
         elif style_is_example:
             parts.append(
@@ -523,6 +581,7 @@ def build_system_prompt(
                 "Medikamente, konkrete Symptome, Therapieinhalte oder andere "
                 "patientenspezifische Informationen aus diesem Beispiel.\n\n"
                 f"{style_context.strip()}"
+                f"{_compute_style_constraints(style_context)}"
             )
         else:
             parts.append(
@@ -531,6 +590,7 @@ def build_system_prompt(
                 "NICHT die konkreten Inhalte, Diagnosen oder Patientendaten – "
                 "nur Tonalität, Satzbau und Formulierungsgewohnheiten.\n\n"
                 f"{style_context.strip()}"
+                f"{_compute_style_constraints(style_context)}"
             )
 
     has_structural_template = (
