@@ -1199,15 +1199,15 @@ function clearActiveJob() {
 function friendlyError(e) {
   const msg = e?.message || String(e);
   if (msg === "Failed to fetch" || msg.includes("NetworkError") || msg.includes("fetch"))
-    return "Server nicht erreichbar. Bitte überprüfe die Serveradresse in den Einstellungen.";
+    return "Server nicht erreichbar. Bitte warte einen Moment und versuche es erneut.";
   if (msg.includes("502") || msg.includes("Bad Gateway"))
     return "Server antwortet nicht (502). Bitte warte einen Moment und versuche es erneut.";
   if (msg.includes("503") || msg.includes("Service Unavailable"))
     return "Server überlastet (503). Bitte versuche es in Kürze erneut.";
   if (msg.includes("401") || msg.includes("403"))
-    return "Zugriff verweigert. Bitte überprüfe die Serveradresse in den Einstellungen.";
+    return "Zugriff verweigert (403).";
   if (msg.includes("404"))
-    return "Endpunkt nicht gefunden (404). Bitte überprüfe die Serveradresse in den Einstellungen.";
+    return "Endpunkt nicht gefunden (404).";
   if (msg.includes("timeout") || msg.includes("Timeout"))
     return "Zeitüberschreitung – der Server hat zu lange nicht geantwortet.";
   return msg;
@@ -2458,28 +2458,29 @@ export default function App() {
           <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",lineHeight:1.6,marginBottom:10}}>
             scriptTelios · v0.1 · sysTelios Klinik f&#252;r Psychosomatik und Psychotherapie
           </div>
+          {backendOffline && (
+            <div style={{
+              background:"rgba(168,40,30,0.3)", border:"1px solid rgba(168,40,30,0.6)",
+              borderRadius:4, padding:"8px 10px", marginBottom:8,
+              fontSize:11, color:"rgba(255,200,200,0.9)", lineHeight:1.5
+            }}>
+              ⚠ Server nicht erreichbar
+            </div>
+          )}
           <button
-            onClick={() => { setUrlInput(backendUrl); setShowSettings(true); }}
+            onClick={() => setShowSettings(true)}
             style={{
               display:"flex", alignItems:"center", gap:7,
-              background: backendUrl ? "rgba(255,255,255,0.08)" : "rgba(168,40,30,0.6)",
-              border: backendUrl ? "1px solid rgba(255,255,255,0.15)" : "1px solid rgba(168,40,30,0.8)",
+              background:"rgba(255,255,255,0.08)",
+              border:"1px solid rgba(255,255,255,0.15)",
               borderRadius:4, padding:"6px 12px", cursor:"pointer",
               color:"rgba(255,255,255,0.75)", fontSize:11, fontWeight:600,
               width:"100%", letterSpacing:"0.04em"
             }}
           >
             <span style={{fontSize:14}}>⚙</span>
-            {backendUrl ? "Backend-URL ändern" : "⚠ Backend-URL fehlt"}
+            Einstellungen
           </button>
-          {backendUrl && (
-            <div style={{
-              marginTop:6, fontSize:10, color:"rgba(255,255,255,0.25)",
-              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"
-            }} title={backendUrl}>
-              {backendUrl.replace("https://","").replace("http://","")}
-            </div>
-          )}
         </div>
       </div>
 
@@ -2507,68 +2508,20 @@ export default function App() {
       </main>
 
       {/* Settings Modal – via Portal damit position:fixed korrekt funktioniert */}
-      {(showSettings || firstRun || backendOffline) && createPortal(
+      {showSettings && createPortal(
         <div style={{
           position:"fixed", inset:0, background:"rgba(0,0,0,0.55)",
           display:"flex", alignItems:"center", justifyContent:"center",
           zIndex:1000
         }} onClick={(e) => { if(e.target===e.currentTarget && !firstRun && !backendOffline) setShowSettings(false); }}>
           <div style={{
-            background:"#fff", borderRadius:8, padding:"32px 28px", width:480,
+            background:"#fff", borderRadius:8, padding:"32px 28px", width:420,
             boxShadow:"0 8px 40px rgba(0,0,0,0.25)"
           }}>
-            {/* Offline-Banner */}
-            {backendOffline && !firstRun && (
-              <div style={{
-                background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6,
-                padding:"12px 16px", marginBottom:20, display:"flex", alignItems:"flex-start", gap:10
-              }}>
-                <span style={{fontSize:20, lineHeight:1}}>⚠</span>
-                <div>
-                  <div style={{fontSize:14, fontWeight:600, color:"#991b1b", marginBottom:4}}>
-                    Backend nicht erreichbar
-                  </div>
-                  <div style={{fontSize:12, color:"#7f1d1d", lineHeight:1.5}}>
-                    Verbindung zu <code style={{background:"#fee2e2", padding:"1px 4px", borderRadius:3, fontSize:11}}>{backendUrl}</code> fehlgeschlagen.
-                    Bitte prüfe ob der Server läuft oder ändere die URL.
-                  </div>
-                </div>
-              </div>
-            )}
             <div style={{marginBottom:20}}>
               <div style={{fontSize:18, fontWeight:700, color:"#2c2c2c", marginBottom:6}}>
-                ⚙ Backend-URL einstellen
+                ⚙ Einstellungen
               </div>
-              <div style={{fontSize:13, color:"#777c74", lineHeight:1.6}}>
-                Tragt hier die URL des sysTelios-Backends ein.<br />
-                Diese wird im Browser gespeichert und bleibt beim nächsten Aufruf erhalten.
-              </div>
-            </div>
-
-            <div style={{marginBottom:8, fontSize:12, fontWeight:600, color:"#444", textTransform:"uppercase", letterSpacing:"0.06em"}}>
-              Backend URL
-            </div>
-            <input
-              type="text"
-              value={urlInput}
-              onChange={e => setUrlInput(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && saveUrl()}
-              placeholder="https://abc123-8000.proxy.runpod.net"
-              autoFocus
-              style={{
-                width:"100%", padding:"10px 12px", borderRadius:4,
-                border:"1px solid #ccc", fontSize:13, fontFamily:"monospace",
-                boxSizing:"border-box", marginBottom:8
-              }}
-            />
-            <div style={{fontSize:11, color:"#a0a49e", marginBottom:20, lineHeight:1.6}}>
-              {urlFromMacro && (
-                <span style={{color:"#16a34a", fontWeight:500}}>
-                  ✓ URL wird über das Confluence-Macro konfiguriert.<br />
-                </span>
-              )}
-              Testphase RunPod: <code style={{background:"#f0eeea",padding:"1px 5px",borderRadius:3}}>https://&lt;pod-id&gt;-8000.proxy.runpod.net</code><br />
-              Produktion: <code style={{background:"#f0eeea",padding:"1px 5px",borderRadius:3}}>http://systelios-server:8000</code>
             </div>
 
             <div style={{marginBottom:8, fontSize:12, fontWeight:600, color:"#444", textTransform:"uppercase", letterSpacing:"0.06em"}}>
@@ -2583,21 +2536,11 @@ export default function App() {
             </div>
 
             <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>
-              {!firstRun && !backendOffline && (
-                <button onClick={() => setShowSettings(false)} style={{
-                  padding:"8px 20px", borderRadius:4, border:"1px solid #ccc",
-                  background:"#fff", cursor:"pointer", fontSize:13, color:"#666"
-                }}>
-                  Abbrechen
-                </button>
-              )}
-              <button onClick={saveUrl} disabled={!urlInput.trim()} style={{
-                padding:"8px 24px", borderRadius:4, border:"none",
-                background: urlInput.trim() ? "#8b1a1a" : "#ccc",
-                cursor: urlInput.trim() ? "pointer" : "not-allowed",
-                fontSize:13, fontWeight:600, color:"#fff"
+              <button onClick={() => setShowSettings(false)} style={{
+                padding:"8px 20px", borderRadius:4, border:"1px solid #ccc",
+                background:"#fff", cursor:"pointer", fontSize:13, color:"#666"
               }}>
-                Speichern
+                Schließen
               </button>
             </div>
           </div>
