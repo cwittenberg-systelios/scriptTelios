@@ -1094,18 +1094,23 @@ async def test_style_llm_jury(workflow, test_case, request):
     )
 
     try:
-        # Direkt an Ollama senden (nicht über /api/jobs, das wäre zu aufwändig)
-        async with httpx.AsyncClient(base_url=BACKEND_URL, timeout=120.0) as client:
-            # Einfache Generierung ohne Job-Queue
-            r = await client.post("/api/generate", data={
-                "workflow": "dokumentation",  # beliebig, wird durch jury_prompt überschrieben
-                "prompt": jury_prompt,
-                "transcript": " ",  # minimal content
+        # Direkt an Ollama senden (schneller als Job-Queue, kein multipart nötig)
+        ollama_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        async with httpx.AsyncClient(base_url=ollama_url, timeout=120.0) as client:
+            r = await client.post("/api/chat", json={
+                "model": os.environ.get("OLLAMA_MODEL", "qwen3:32b"),
+                "stream": False,
+                "think": False,
+                "messages": [
+                    {"role": "user", "content": jury_prompt + "\n\n/no_think"},
+                ],
+                "options": {"num_predict": 200},
             })
             if r.status_code != 200:
                 pytest.skip(f"LLM-Jury-Request fehlgeschlagen: {r.status_code}")
 
-            jury_response = r.json().get("text", "")
+            data = r.json()
+            jury_response = data.get("message", {}).get("content", "")
     except Exception as e:
         pytest.skip(f"LLM-Jury nicht verfügbar: {e}")
 
