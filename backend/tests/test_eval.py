@@ -125,10 +125,10 @@ def _extract_docx_section(docx_path: Path, headings: list[str]) -> str:
 
         if is_heading or is_bold:
             text_lower = text.lower().rstrip(":")
-            for h in headings_lower:
-                if h in text_lower or text_lower in h:
+            # Spezifischste Headings zuerst prüfen (längere Strings zuerst)
+            for h in sorted(headings_lower, key=len, reverse=True):
+                if text_lower == h or text_lower.startswith(h) or h == text_lower:
                     start_idx = i + 1
-                    # Heading-Level extrahieren (Heading 1, Heading 2, etc.)
                     level_match = re.search(r'(\d)', style_name)
                     start_level = int(level_match.group(1)) if level_match else 2
                     break
@@ -189,6 +189,52 @@ def load_style_text(therapeut: str, workflow: str) -> str | None:
     return texts[0] if texts else None
 
 
+def _extract_section_by_text(docx_path: Path, headings: list[str]) -> str:
+    """
+    Fallback-Extraktion: sucht nach Heading-Texten als Plain-Text im Dokument
+    (unabhängig von Style oder Bold-Formatierung).
+    Sammelt allen Text nach dem Treffer bis zur nächsten kurzen Zeile
+    die wie eine Überschrift aussieht (<=8 Wörter, gefolgt von längerem Text).
+    """
+    try:
+        from docx import Document
+    except ImportError:
+        return ""
+
+    doc = Document(str(docx_path))
+    paragraphs = doc.paragraphs
+    headings_lower = [h.lower() for h in headings]
+
+    start_idx = None
+    for i, p in enumerate(paragraphs):
+        text = p.text.strip().lower().rstrip(":")
+        if not text:
+            continue
+        for h in headings_lower:
+            if h in text or text in h:
+                start_idx = i + 1
+                break
+        if start_idx is not None:
+            break
+
+    if start_idx is None:
+        return ""
+
+    # Text sammeln bis zur nächsten kurzen Zeile die wie Überschrift aussieht
+    section_lines = []
+    for p in paragraphs[start_idx:]:
+        text = p.text.strip()
+        if not text:
+            section_lines.append("")
+            continue
+        # Kurze Zeile nach substanziellem Text → wahrscheinlich nächste Überschrift
+        if len(text.split()) <= 8 and len(section_lines) > 3 and any(len(l.split()) > 10 for l in section_lines[-3:]):
+            break
+        section_lines.append(text)
+
+    return "\n".join(section_lines).strip()
+
+
 def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
     """
     Lädt ALLE Stilvorlagen eines Therapeuten für einen Workflow.
@@ -239,11 +285,16 @@ def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
     texts = []
     for docx_path in docx_files:
         try:
-            if headings is None:
-                text = _extract_docx_text(docx_path)
-            else:
+            text = None
+            if headings is not None:
                 text = _extract_docx_section(docx_path, headings)
-            if text and len(text.split()) >= 20:  # mindestens 20 Wörter
+            # Fallback: Plain-Text-Suche nach Heading-Text im Dokument
+            if (not text or len(text.split()) < 20) and headings:
+                text = _extract_section_by_text(docx_path, headings)
+            # Letzter Fallback: gesamter Text
+            if not text or len(text.split()) < 20:
+                text = _extract_docx_text(docx_path)
+            if text and len(text.split()) >= 20:
                 texts.append(text)
         except Exception as e:
             logger.warning("DOCX-Extraktion fehlgeschlagen: %s (%s)", docx_path.name, e)
