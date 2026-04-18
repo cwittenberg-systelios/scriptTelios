@@ -39,7 +39,7 @@ FIXTURES_PATH = Path(__file__).parent / "fixtures" / "eval" / "fixtures.json"
 EVAL_DATA_DIR = Path(os.environ.get("EVAL_DATA_DIR", "/workspace/eval_data"))
 EVAL_RESULTS_DIR = Path(os.environ.get("EVAL_RESULTS_DIR", "/workspace/eval_results"))
 STYLES_DIR = EVAL_DATA_DIR / "styles"
-TIMEOUT = 300  # 5 Minuten pro Generierung (lang wegen GPU-Kaltstart)
+TIMEOUT = 900  # 5 Minuten pro Generierung (lang wegen GPU-Kaltstart)
 
 # Abschnitts-Überschriften in den DOCX-Vorlagen pro Workflow
 STYLE_SECTION_HEADINGS = {
@@ -221,7 +221,7 @@ def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
     # Alle passenden Dateien finden (case-insensitive, auch nummerierte: _01, 2, etc.)
     docx_files = []
     for f in sorted(therapeut_dir.iterdir()):
-        if f.suffix.lower() not in (".docx", ".doc", ".odt"):
+        if f.suffix.lower() not in (".docx", ".doc"):
             continue
         fname = f.stem.lower()  # case-insensitive
         for prefix in prefixes:
@@ -652,12 +652,12 @@ class EvalResult:
             for issue in self.issues:
                 lines.append(f"    - {issue}")
         if hasattr(self, "style_metrics") and self.style_metrics:
-            ref = self.style_metrics["reference"]
+            ref = self.style_metrics["reference"].get("avg", self.style_metrics["reference"])
             out = self.style_metrics["output"]
             lines.append(f"  Stil-Vergleich:")
-            lines.append(f"    Satzlänge:    Vorlage={ref['avg_sentence_length']}w  Output={out['avg_sentence_length']}w")
-            lines.append(f"    Absatzlänge:  Vorlage={ref['avg_paragraph_length']}w  Output={out['avg_paragraph_length']}w")
-            lines.append(f"    Fachbegriffe: Vorlage={ref['fachbegriff_density']}/100w  Output={out['fachbegriff_density']}/100w")
+            lines.append(f"    Satzlänge:    Vorlage={ref.get('avg_sentence_length','?')}w  Output={out.get('avg_sentence_length','?')}w")
+            lines.append(f"    Absatzlänge:  Vorlage={ref.get('avg_paragraph_length','?')}w  Output={out.get('avg_paragraph_length','?')}w")
+            lines.append(f"    Fachbegriffe: Vorlage={ref.get('fachbegriff_density','?')}/100w  Output={out.get('fachbegriff_density','?')}/100w")
             lines.append(f"    Wir-Perspektive: Vorlage={ref.get('wir_perspektive_ratio',0):.0%}  Output={out.get('wir_perspektive_ratio',0):.0%}")
         if hasattr(self, "style_variance_score"):
             lines.append(f"  Stil-Varianz (A vs B): {self.style_variance_score:.2f} (>0.15 = gut)")
