@@ -787,6 +787,10 @@ async def test_eval_workflow(workflow, test_case, request):
     out_path.mkdir(parents=True, exist_ok=True)
     result_file = out_path / f"{test_case['id']}.txt"
     result_file.write_text(text, encoding="utf-8")
+    # Referenz-Stiltext speichern (fuer 2-spaltigen PDF-Vergleich)
+    _ref_text = style_text if isinstance(style_text, str) else (style_text[0] if style_text else None)
+    if _ref_text:
+        (out_path / f"{test_case['id']}.ref.txt").write_text(_ref_text, encoding="utf-8")
     summary_file = out_path / f"{test_case['id']}.eval.txt"
     summary_file.write_text(ev.summary(), encoding="utf-8")
     if hasattr(ev, "style_metrics") and ev.style_metrics:

@@ -73,6 +73,10 @@ def load_eval_results(d: Path) -> dict:
             if sf.exists():
                 try: e["style_metrics"] = json.loads(sf.read_text("utf-8"))
                 except: pass
+            # Referenz- und Output-Text fuer 2-spaltigen Vergleich
+            rf = wd/f"{tid}.ref.txt"
+            if rf.exists(): e["ref_text"] = rf.read_text("utf-8")
+            if tf.exists(): e["output_text"] = tf.read_text("utf-8")
             results[wf].append(e)
     var, jury = [], []
     vd = d/"style_variance"
@@ -242,6 +246,56 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                 for iss in e["issue_list"]: items.append(Paragraph(f"• {iss}",st["Iss"]))
                 items.append(Spacer(1,2*mm))
                 story.append(KeepTogether(items))
+
+    # ── LLM-Output-Vergleich (2-spaltig, Referenz vs. Output) ────────
+    st.add(ParagraphStyle("RefTxt", parent=st["Normal"], fontSize=6, leading=8,
+                           textColor=C["dark"], fontName="Helvetica"))
+    st.add(ParagraphStyle("ColHead", parent=st["Normal"], fontSize=8, leading=10,
+                           textColor=colors.white, fontName="Helvetica-Bold"))
+    has_comparison = any(e.get("ref_text") or e.get("output_text")
+                         for wf in data["workflows"].values() for e in wf)
+    if has_comparison:
+        story.append(PageBreak())
+        story.append(Paragraph("Textvergleich: Referenz vs. LLM-Output", st["H2"]))
+        story.append(Paragraph(
+            "Gegenüberstellung der Stilvorlage (links) und des generierten Texts (rechts). "
+            "Nur Testfälle mit verfügbarer Stilvorlage werden angezeigt.",
+            ParagraphStyle("CompInfo", parent=st["Normal"], fontSize=8, textColor=C["gray"],
+                           spaceAfter=4*mm)))
+        pw = A4[0] - 4*cm  # page width minus margins
+        col_w = pw / 2 - 2*mm
+        for wf, entries in data["workflows"].items():
+            for e in entries:
+                ref = e.get("ref_text", "")
+                out = e.get("output_text", "")
+                if not ref and not out:
+                    continue
+                # Escape XML entities for Paragraph
+                ref_safe = ref.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
+                out_safe = out.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
+                header = [[Paragraph(f'<font color="white">Referenz — {WF_LBL.get(wf,wf)}</font>', st["ColHead"]),
+                           Paragraph(f'<font color="white">Output — {e["test_id"]}</font>', st["ColHead"])]]
+                body = [[Paragraph(ref_safe or "<i>Keine Referenz</i>", st["RefTxt"]),
+                         Paragraph(out_safe or "<i>Kein Output</i>", st["RefTxt"])]]
+                ht = Table(header, colWidths=[col_w, col_w])
+                ht.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (0,0), C["blue"]),
+                    ("BACKGROUND", (1,0), (1,0), C["red"]),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+                    ("TOPPADDING", (0,0), (-1,-1), 3),
+                ]))
+                bt = Table(body, colWidths=[col_w, col_w])
+                bt.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f4f8")),
+                    ("BACKGROUND", (1,0), (1,-1), colors.HexColor("#fdf2f2")),
+                    ("VALIGN", (0,0), (-1,-1), "TOP"),
+                    ("GRID", (0,0), (-1,-1), .3, C["grid"]),
+                    ("LEFTPADDING", (0,0), (-1,-1), 4),
+                    ("RIGHTPADDING", (0,0), (-1,-1), 4),
+                    ("TOPPADDING", (0,0), (-1,-1), 3),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+                ]))
+                story.append(KeepTogether([ht, bt, Spacer(1, 4*mm)]))
 
     if data.get("variance"):
         story.append(PageBreak())
