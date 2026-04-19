@@ -270,13 +270,9 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                 out = e.get("output_text", "")
                 if not ref and not out:
                     continue
-                # Escape XML entities for Paragraph
-                ref_safe = ref.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
-                out_safe = out.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
+                # Header
                 header = [[Paragraph(f'<font color="white">Referenz — {WF_LBL.get(wf,wf)}</font>', st["ColHead"]),
                            Paragraph(f'<font color="white">Output — {e["test_id"]}</font>', st["ColHead"])]]
-                body = [[Paragraph(ref_safe or "<i>Keine Referenz</i>", st["RefTxt"]),
-                         Paragraph(out_safe or "<i>Kein Output</i>", st["RefTxt"])]]
                 ht = Table(header, colWidths=[col_w, col_w])
                 ht.setStyle(TableStyle([
                     ("BACKGROUND", (0,0), (0,0), C["blue"]),
@@ -284,20 +280,50 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                     ("BOTTOMPADDING", (0,0), (-1,-1), 3),
                     ("TOPPADDING", (0,0), (-1,-1), 3),
                 ]))
-                bt = Table(body, colWidths=[col_w, col_w])
-                bt.setStyle(TableStyle([
-                    ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f4f8")),
-                    ("BACKGROUND", (1,0), (1,-1), colors.HexColor("#fdf2f2")),
-                    ("VALIGN", (0,0), (-1,-1), "TOP"),
-                    ("GRID", (0,0), (-1,-1), .3, C["grid"]),
-                    ("LEFTPADDING", (0,0), (-1,-1), 4),
-                    ("RIGHTPADDING", (0,0), (-1,-1), 4),
-                    ("TOPPADDING", (0,0), (-1,-1), 3),
-                    ("BOTTOMPADDING", (0,0), (-1,-1), 3),
-                ]))
                 story.append(ht)
-                story.append(bt)
-                story.append(Spacer(1, 6*mm))
+
+                # Texte in Absaetze splitten und zeilenweise als kleine Tabellen ausgeben
+                # damit reportlab ueber Seiten umbrechen kann
+                def _to_paras(text, max_chars=2500):
+                    """Splittet Text in Absatz-Chunks die in eine Tabellenzelle passen."""
+                    if not text:
+                        return ["<i>Nicht verfügbar</i>"]
+                    safe = text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+                    paragraphs = safe.split("\n\n")
+                    chunks, current = [], ""
+                    for p in paragraphs:
+                        p_br = p.replace("\n", "<br/>")
+                        if len(current) + len(p_br) > max_chars and current:
+                            chunks.append(current)
+                            current = p_br
+                        else:
+                            current = current + "<br/><br/>" + p_br if current else p_br
+                    if current:
+                        chunks.append(current)
+                    return chunks or ["<i>Nicht verfügbar</i>"]
+
+                ref_chunks = _to_paras(ref)
+                out_chunks = _to_paras(out)
+                max_rows = max(len(ref_chunks), len(out_chunks))
+
+                for ri in range(max_rows):
+                    rc = ref_chunks[ri] if ri < len(ref_chunks) else ""
+                    oc = out_chunks[ri] if ri < len(out_chunks) else ""
+                    row = [[Paragraph(rc, st["RefTxt"]),
+                            Paragraph(oc, st["RefTxt"])]]
+                    rt = Table(row, colWidths=[col_w, col_w])
+                    rt.setStyle(TableStyle([
+                        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f4f8")),
+                        ("BACKGROUND", (1,0), (1,-1), colors.HexColor("#fdf2f2")),
+                        ("VALIGN", (0,0), (-1,-1), "TOP"),
+                        ("GRID", (0,0), (-1,-1), .3, C["grid"]),
+                        ("LEFTPADDING", (0,0), (-1,-1), 4),
+                        ("RIGHTPADDING", (0,0), (-1,-1), 4),
+                        ("TOPPADDING", (0,0), (-1,-1), 3),
+                        ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+                    ]))
+                    story.append(rt)
+                story.append(Spacer(1, 8*mm))
     else:
         story.append(PageBreak())
         story.append(Paragraph("Textvergleich: Referenz vs. LLM-Output", st["H2"]))
