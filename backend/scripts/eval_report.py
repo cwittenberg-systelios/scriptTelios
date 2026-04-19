@@ -284,15 +284,21 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
 
                 # Texte in Absaetze splitten und zeilenweise als kleine Tabellen ausgeben
                 # damit reportlab ueber Seiten umbrechen kann
-                def _to_paras(text, max_chars=2500):
-                    """Splittet Text in Absatz-Chunks die in eine Tabellenzelle passen."""
+                def _to_paras(text, max_chars=1500):
+                    """Splittet Text in Chunks die in eine Tabellenzelle passen."""
                     if not text:
                         return ["<i>Nicht verfügbar</i>"]
                     safe = text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-                    paragraphs = safe.split("\n\n")
+                    # Bei Doppel-Newlines splitten, sonst bei Einzel-Newlines
+                    if "\n\n" in safe:
+                        paragraphs = safe.split("\n\n")
+                    else:
+                        paragraphs = safe.split("\n")
                     chunks, current = [], ""
                     for p in paragraphs:
-                        p_br = p.replace("\n", "<br/>")
+                        p_br = p.strip().replace("\n", "<br/>")
+                        if not p_br:
+                            continue
                         if len(current) + len(p_br) > max_chars and current:
                             chunks.append(current)
                             current = p_br
@@ -300,7 +306,18 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                             current = current + "<br/><br/>" + p_br if current else p_br
                     if current:
                         chunks.append(current)
-                    return chunks or ["<i>Nicht verfügbar</i>"]
+                    # Sicherheitsnetz: falls ein einzelner Chunk immer noch zu lang ist
+                    final = []
+                    for c in chunks:
+                        while len(c) > max_chars:
+                            cut = c[:max_chars].rfind("<br/>")
+                            if cut < max_chars // 3:
+                                cut = max_chars
+                            final.append(c[:cut])
+                            c = c[cut:].lstrip("<br/>").lstrip()
+                        if c:
+                            final.append(c)
+                    return final or ["<i>Nicht verfügbar</i>"]
 
                 ref_chunks = _to_paras(ref)
                 out_chunks = _to_paras(out)
