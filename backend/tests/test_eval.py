@@ -1121,7 +1121,7 @@ async def test_style_llm_jury(workflow, test_case, request):
 
     # Begründung extrahieren
     reason_match = re.search(r'BEGRÜNDUNG:\s*(.+)', jury_response, re.DOTALL)
-    reason = reason_match.group(1).strip()[:200] if reason_match else jury_response[:200]
+    reason = reason_match.group(1).strip() if reason_match else jury_response.strip()
 
     print(f"\n[LLM-JURY] {workflow}/{test_case['id']}")
     print(f"  Score: {score}/5")
