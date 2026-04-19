@@ -113,42 +113,21 @@ in dem sie festhalt, wann und wie stark der Anteil aktiv wird.\
 """
 
 FEW_SHOT_ANAMNESE = """\
-STRUKTURVORLAGE (zeigt NUR die Gliederung – KEINE Inhalte übernehmen):
+STILVORLAGE (zeigt den erwarteten Schreibstil – KEINE Inhalte übernehmen):
 
-Die Anamnese folgt dieser Gliederung. Fülle JEDEN Abschnitt ausschließlich \
-mit Informationen aus der Selbstauskunft des aktuellen Patienten. \
+Schreibe die Anamnese als zusammenhängenden FLIESSTEXT ohne Zwischenüberschriften.
+Die Themen fließen natürlich ineinander über, wie ein erfahrener Therapeut berichten würde.
+Alle Inhalte MÜSSEN aus der Selbstauskunft des AKTUELLEN Patienten stammen.
 Steht eine Information NICHT in der Selbstauskunft: schreibe 'nicht erhoben'.
 
-  Vorstellungsanlass und Hauptbeschwerde:
-    → Eigene Worte des Patienten, direkte Zitate NUR wenn wörtlich in Selbstauskunft
+Beispiel-Einstieg (NUR als Stilreferenz):
+'Herr/Frau X. stellt sich mit dem Hauptanliegen vor, ... . Die Symptomatik begann vor
+etwa ... Monaten im Kontext von ... . Seither habe sich ... . Vorbehandlungen umfassen
+... . Familiär sei bekannt, dass ... . Beruflich sei er/sie ... . Der Schlaf sei ...,
+der Appetit ... . An Ressourcen nennt er/sie ... .'
 
-  Aktuelle Erkrankung:
-    → Beginn, Verlauf, auslösende und aufrechterhaltende Faktoren AUS DER SELBSTAUSKUNFT
-
-  Psychiatrische Vorgeschichte:
-    → Frühere Diagnosen, Behandlungen, Aufenthalte – oder 'nicht erhoben'
-
-  Somatische Vorgeschichte und aktülle Medikation:
-    → Körperliche Erkrankungen, Medikamente – oder 'nicht erhoben'
-
-  Familienanamnese:
-    → Psychische/somatische Erkrankungen in der Familie – oder 'nicht erhoben'
-
-  Sozialanamnese:
-    → Beruf, Familienstand, Kinder, Wohnsituation – oder 'nicht erhoben'
-
-  Vegetativum:
-    → Schlaf, Appetit/Gewicht, Sexualität, Schmerzen – oder 'nicht erhoben'
-
-  Suchtmittelanamnese:
-    → Alkohol, Nikotin, Medikamente, illegale Substanzen – oder 'nicht erhoben'
-
-  Ressourcen:
-    → Was gibt Kraft? Aus der Selbstauskunft – oder 'nicht erhoben'
-
-WICHTIG: Die Diagnosen, Symptome, Berufe, Zitate und alle anderen Inhalte müssen \
-von DIESEM Patienten stammen. Das Few-Shot-Beispiel dient NUR als Strukturvorlage. \
-Übernimm KEINE konkreten Inhalte, Formulierungen oder Zitate aus diesem Beispiel.\
+WICHTIG: Schreibe KEINE Überschriften wie 'Vorstellungsanlass:', 'Aktuelle Erkrankung:' etc.
+Alle Inhalte müssen von DIESEM Patienten stammen – KEINE Inhalte aus dem Beispiel übernehmen.\
 """
 
 FEW_SHOT_VERLÄNGERUNG = """\
@@ -305,24 +284,33 @@ BASE_PROMPTS: dict[str, str] = {
     "anamnese": (
         "Erstelle eine vollständige Anamnese UND einen psychopathologischen Befund "
         "auf Basis der bereitgestellten Unterlagen.\n\n"
-        "TEIL 1 – ANAMNESE:\n"
-        "- Vorstellungsanlass und Hauptbeschwerde: in eigenen Worten des Patienten, "
-        "direkte Zitate aus der Selbstauskunft wenn charakteristisch\n"
-        "- Aktuelle Erkrankung (Beginn, Verlauf, auslösende und aufrechterhaltende Faktoren)\n"
-        "- Psychiatrische Vorgeschichte (Diagnosen, Behandlungen, Krankenhausaufenthalte)\n"
-        "- Somatische Vorgeschichte und aktülle Medikation\n"
-        "- Familienanamnese (psychische und somatische Erkrankungen)\n"
-        "- Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungsstatus, Kinder, Wohnsituation)\n"
-        "- Vegetativum (Schlaf, Appetit/Gewicht, Sexualität, Schmerzen)\n"
-        "- Suchtmittelanamnese (Alkohol, Nikotin, Medikamente, illegale Substanzen)\n"
-        "- Ressourcen: Was gibt Kraft? Interessen, tragende Beziehungen, Fähigkeiten\n\n"
+        "TEIL 1 – ANAMNESE (als durchgehender FLIESSTEXT, KEINE Unterüberschriften):\n"
+        "Schreibe die Anamnese als einen zusammenhängenden Fließtext OHNE Zwischenüberschriften "
+        "wie 'Vorstellungsanlass', 'Aktuelle Erkrankung' etc. Der Text soll natürlich von "
+        "Thema zu Thema fließen, wie ein erfahrener Therapeut einen Bericht diktieren würde.\n\n"
+        "Folgende Inhalte nahtlos in den Fließtext einarbeiten (KEINE Überschriften dafür!):\n"
+        "- Vorstellungsanlass und Hauptbeschwerde in eigenen Worten des Patienten\n"
+        "- Beginn, Verlauf, auslösende und aufrechterhaltende Faktoren\n"
+        "- Psychiatrische Vorgeschichte\n"
+        "- Somatische Vorgeschichte und Medikation\n"
+        "- Familienanamnese\n"
+        "- Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungsstatus, Kinder)\n"
+        "- Vegetativum (Schlaf, Appetit, Schmerzen)\n"
+        "- Suchtmittelanamnese\n"
+        "- Ressourcen\n\n"
+        "WICHTIG: KEINE Unterüberschriften verwenden! Kein 'Vorstellungsanlass:', "
+        "kein 'Aktuelle Erkrankung:', kein 'Psychiatrische Vorgeschichte:' etc. "
+        "Stattdessen fließende Übergänge zwischen den Themen.\n\n"
         "DIAGNOSEN gemäß ICD: {diagnosen}\n\n"
         "TEIL 2 – PSYCHOPATHOLOGISCHER BEFUND:\n"
         "Verwende EXAKT die folgende Vorlage. Fülle alle Lücken mit Informationen "
         "aus der Selbstauskunft. Kürze Mehrfachoptionen auf die zutreffende Variante. "
         "Wenn eine Information nicht in den Unterlagen steht, schreibe 'nicht erhoben' – "
-        "NIEMALS eine klinisch plausible Option raten oder erfinden.\n"
-        "Trenne die beiden Teile mit der Zeile: ###BEFUND###\n\n"
+        "NIEMALS eine klinisch plausible Option raten oder erfinden.\n\n"
+        "WICHTIG: Trenne die beiden Teile ZWINGEND mit genau dieser Zeile:\n"
+        "###BEFUND###\n"
+        "Diese Trennzeile MUSS im Output erscheinen, allein auf einer Zeile, "
+        "zwischen dem Anamnese-Fließtext und dem Befund.\n\n"
         "BEFUND-VORLAGE (exakt so ausfüllen):\n"
         + BEFUND_VORLAGE + "\n\n"
         "NICHT SCHREIBEN:\n"
@@ -341,7 +329,7 @@ BASE_PROMPTS: dict[str, str] = {
         "- NIEMALS erfinden: Beruf, Familienstand, Kinder, Wohnsituation, "
         "Vorbehandlungen, Medikamente, Suchtmittel, Diagnosen, Zeitangaben, "
         "auslösende Ereignisse, Testwerte, Zitate\n"
-        "- LÄNGE Anamnese: Mindestens 350 Wörter\n\n"
+        "- LÄNGE Anamnese: Mindestens 450 Wörter Fließtext (KEINE kurzen Absätze – schreibe ausführliche, zusammenhängende Absätze)\n\n"
         + FEW_SHOT_ANAMNESE
     ),
 
@@ -424,14 +412,20 @@ BASE_PROMPTS: dict[str, str] = {
         "Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts "
         "als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, "
         "ohne Einleitung und ohne Abschluss.\n\n"
-        "INHALT – drei Abschnitte nahtlos ineinander:\n"
-        "Abschnitt 1 (Behandlungsverlauf): Eingesetzte Methoden (IFS/Anteilearbeit, "
-        "hypnosystemisch, Stuhlarbeit, Biographiearbeit), konkrete Wendepunkte, "
-        "Entwicklung der Klientin/des Klienten. Wir-Perspektive: "
-        "'Wir erlebten...', 'Es gelang zunehmend...', 'Im Verlauf zeigte sich...'\n"
-        "Abschnitt 2 (Epikrise): Symptomatik-Entwicklung, entlastete Schutzanteile, "
-        "verbliebener Bedarf, Ressourcen, Prognose.\n"
-        "Abschnitt 3 (Empfehlungen): Ambulante Weiterbehandlung, Schwerpunkte, Nachsorge.\n\n"
+        "INHALT – drei Teile nahtlos als Fließtext ineinander (ALLE DREI MÜSSEN VORKOMMEN):\n\n"
+        "Teil 1 – BEHANDLUNGSVERLAUF (mindestens 300 Wörter):\n"
+        "Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden "
+        "(IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), "
+        "konkrete Wendepunkte und Entwicklungsschritte. Schreibe ausführliche Absätze "
+        "mit mindestens 100 Wörtern pro Absatz. Wir-Perspektive: "
+        "'Wir erlebten...', 'Es gelang zunehmend...', 'Im Verlauf zeigte sich...'\n\n"
+        "Teil 2 – EPIKRISE (mindestens 100 Wörter):\n"
+        "Gesamtbewertung: Symptomatik-Entwicklung im Vergleich zu Aufnahme, "
+        "entlastete Schutzanteile, verbliebener Bedarf, Ressourcen, Prognose.\n\n"
+        "Teil 3 – THERAPIEEMPFEHLUNGEN (mindestens 80 Wörter):\n"
+        "Konkrete Empfehlungen für die ambulante Weiterbehandlung: "
+        "Therapieform, Schwerpunkte, Frequenz, Nachsorge. "
+        "DIESER TEIL DARF NICHT FEHLEN.\n\n"
         "NICHT SCHREIBEN:\n"
         "– Keine Überschriften (kein 'Psychotherapeutischer Behandlungsverlauf', "
         "kein 'Epikrise', keine nummerierten Abschnitte)\n"
@@ -443,7 +437,7 @@ BASE_PROMPTS: dict[str, str] = {
         "– Keine Stammdaten, Diagnosen-Kodierung, Medikation\n\n"
         "STIL: Fließtext, Wir-Perspektive, systemische Fachsprache, "
         "konkret und patientenspezifisch – keine Allgemeinplätze.\n"
-        "LÄNGE: mind. 600 Wörter gesamt.\n\n"
+        "LÄNGE: mind. 700 Wörter gesamt. Schreibe ausführlich – kurze Texte unter 600 Wörter sind unzureichend.\n\n"
         "QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in der "
         "Verlaufsdokumentation oder Antragsvorlage zurückführbar sein. "
         "Keine Therapieinhalte, Diagnosen, Methoden oder Zitate erfinden "
