@@ -298,6 +298,14 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                 story.append(ht)
                 story.append(bt)
                 story.append(Spacer(1, 6*mm))
+    else:
+        story.append(PageBreak())
+        story.append(Paragraph("Textvergleich: Referenz vs. LLM-Output", st["H2"]))
+        story.append(Paragraph(
+            "Keine Referenztexte verfügbar. Bitte Tests mit aktueller test_eval.py "
+            "nochmal ausführen — die .ref.txt Dateien werden dann automatisch gespeichert.",
+            ParagraphStyle("CompNote", parent=st["Normal"], fontSize=9, textColor=C["orange"],
+                           spaceAfter=4*mm)))
 
     if data.get("variance"):
         story.append(PageBreak())
@@ -314,9 +322,12 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
         for jr in data["jury"]:
             sc = jr.get("score",0)
             cl = C["green"] if sc>=4 else (C["orange"] if sc>=3 else C["red"])
-            reason = jr.get("reason","").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-            story.append(Paragraph(f'<font color="{cl.hexval()}"><b>{sc}/5</b></font> — {reason}',st["B"]))
-            story.append(Spacer(1, 2*mm))
+            reason = jr.get("reason","")
+            # XML-Escaping + Zeilenumbrueche
+            reason = reason.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
+            jury_style = ParagraphStyle("JuryItem", parent=st["Normal"], fontSize=8, leading=11, textColor=C["dark"])
+            story.append(Paragraph(f'<font color="{cl.hexval()}"><b>{sc}/5</b></font> — {reason}', jury_style))
+            story.append(Spacer(1, 3*mm))
     doc.build(story)
     return out
 
