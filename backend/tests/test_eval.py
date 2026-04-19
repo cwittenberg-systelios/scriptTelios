@@ -827,6 +827,7 @@ async def test_eval_workflow(workflow, test_case, request):
     if not style_text and test_case.get("style_therapeut"):
         style_texts = load_all_style_texts(test_case["style_therapeut"], workflow)
         if style_texts:
+            style_text = style_texts  # Liste für check_style_consistency + ref.txt
             ev.check_style_consistency(style_texts)
 
     # Ergebnis loggen
