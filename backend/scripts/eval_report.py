@@ -247,8 +247,8 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                 items.append(Spacer(1,2*mm))
                 story.append(KeepTogether(items))
 
-    # ── LLM-Output-Vergleich (2-spaltig, Referenz vs. Output) ────────
-    st.add(ParagraphStyle("RefTxt", parent=st["Normal"], fontSize=6, leading=8,
+    # ── LLM-Output-Vergleich (untereinander: Referenz, dann Output) ──────
+    st.add(ParagraphStyle("RefTxt", parent=st["Normal"], fontSize=7, leading=9,
                            textColor=C["dark"], fontName="Helvetica"))
     st.add(ParagraphStyle("ColHead", parent=st["Normal"], fontSize=8, leading=10,
                            textColor=colors.white, fontName="Helvetica-Bold"))
@@ -256,91 +256,61 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                          for wf in data["workflows"].values() for e in wf)
     if has_comparison:
         story.append(PageBreak())
-        story.append(Paragraph("Textvergleich: Referenz vs. LLM-Output", st["H2"]))
+        story.append(Paragraph("Textvergleich: Stilvorlage vs. LLM-Output", st["H2"]))
         story.append(Paragraph(
-            "Gegenüberstellung der Stilvorlage (links) und des generierten Texts (rechts). "
-            "Nur Testfälle mit verfügbarer Stilvorlage werden angezeigt.",
+            "Stilvorlage (blau) = Beispieltext eines anderen Patienten desselben Therapeuten. "
+            "LLM-Output (rot) = generierter Text für den aktuellen Testfall. "
+            "Nur der Schreibstil soll übereinstimmen, nicht die Inhalte.",
             ParagraphStyle("CompInfo", parent=st["Normal"], fontSize=8, textColor=C["gray"],
                            spaceAfter=4*mm)))
         pw = A4[0] - 4*cm  # page width minus margins
-        col_w = pw / 2 - 2*mm
+
+        def _safe_text(text):
+            """XML-Escaping + Zeilenumbrueche fuer reportlab Paragraph."""
+            if not text:
+                return "<i>Nicht verfügbar</i>"
+            safe = text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+            safe = safe.replace("\n", "<br/>")
+            return safe
+
         for wf, entries in data["workflows"].items():
             for e in entries:
                 ref = e.get("ref_text", "")
                 out = e.get("output_text", "")
                 if not ref and not out:
                     continue
-                # Header
-                header = [[Paragraph(f'<font color="white">Referenz — {WF_LBL.get(wf,wf)}</font>', st["ColHead"]),
-                           Paragraph(f'<font color="white">Output — {e["test_id"]}</font>', st["ColHead"])]]
-                ht = Table(header, colWidths=[col_w, col_w])
-                ht.setStyle(TableStyle([
-                    ("BACKGROUND", (0,0), (0,0), C["blue"]),
-                    ("BACKGROUND", (1,0), (1,0), C["red"]),
-                    ("BOTTOMPADDING", (0,0), (-1,-1), 3),
-                    ("TOPPADDING", (0,0), (-1,-1), 3),
+
+                story.append(Paragraph(
+                    f'<b>{WF_LBL.get(wf,wf)}</b> — {e["test_id"]}',
+                    ParagraphStyle("CompTitle", parent=st["Normal"], fontSize=9,
+                                   textColor=C["dark"], fontName="Helvetica-Bold",
+                                   spaceBefore=6*mm, spaceAfter=2*mm)))
+
+                # Stilvorlage (blau)
+                hdr_ref = Table(
+                    [[Paragraph('<font color="white">Stilvorlage (anderer Patient, nur Stil-Referenz)</font>', st["ColHead"])]],
+                    colWidths=[pw])
+                hdr_ref.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,-1), C["blue"]),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+                    ("TOPPADDING", (0,0), (-1,-1), 2),
                 ]))
-                story.append(ht)
+                story.append(hdr_ref)
+                story.append(Paragraph(_safe_text(ref), st["RefTxt"]))
+                story.append(Spacer(1, 3*mm))
 
-                # Texte in Absaetze splitten und zeilenweise als kleine Tabellen ausgeben
-                # damit reportlab ueber Seiten umbrechen kann
-                def _to_paras(text, max_chars=1500):
-                    """Splittet Text in Chunks die in eine Tabellenzelle passen."""
-                    if not text:
-                        return ["<i>Nicht verfügbar</i>"]
-                    safe = text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-                    # Bei Doppel-Newlines splitten, sonst bei Einzel-Newlines
-                    if "\n\n" in safe:
-                        paragraphs = safe.split("\n\n")
-                    else:
-                        paragraphs = safe.split("\n")
-                    chunks, current = [], ""
-                    for p in paragraphs:
-                        p_br = p.strip().replace("\n", "<br/>")
-                        if not p_br:
-                            continue
-                        if len(current) + len(p_br) > max_chars and current:
-                            chunks.append(current)
-                            current = p_br
-                        else:
-                            current = current + "<br/><br/>" + p_br if current else p_br
-                    if current:
-                        chunks.append(current)
-                    # Sicherheitsnetz: falls ein einzelner Chunk immer noch zu lang ist
-                    final = []
-                    for c in chunks:
-                        while len(c) > max_chars:
-                            cut = c[:max_chars].rfind("<br/>")
-                            if cut < max_chars // 3:
-                                cut = max_chars
-                            final.append(c[:cut])
-                            c = c[cut:].lstrip("<br/>").lstrip()
-                        if c:
-                            final.append(c)
-                    return final or ["<i>Nicht verfügbar</i>"]
-
-                ref_chunks = _to_paras(ref)
-                out_chunks = _to_paras(out)
-                max_rows = max(len(ref_chunks), len(out_chunks))
-
-                for ri in range(max_rows):
-                    rc = ref_chunks[ri] if ri < len(ref_chunks) else ""
-                    oc = out_chunks[ri] if ri < len(out_chunks) else ""
-                    row = [[Paragraph(rc, st["RefTxt"]),
-                            Paragraph(oc, st["RefTxt"])]]
-                    rt = Table(row, colWidths=[col_w, col_w])
-                    rt.setStyle(TableStyle([
-                        ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f4f8")),
-                        ("BACKGROUND", (1,0), (1,-1), colors.HexColor("#fdf2f2")),
-                        ("VALIGN", (0,0), (-1,-1), "TOP"),
-                        ("GRID", (0,0), (-1,-1), .3, C["grid"]),
-                        ("LEFTPADDING", (0,0), (-1,-1), 4),
-                        ("RIGHTPADDING", (0,0), (-1,-1), 4),
-                        ("TOPPADDING", (0,0), (-1,-1), 3),
-                        ("BOTTOMPADDING", (0,0), (-1,-1), 3),
-                    ]))
-                    story.append(rt)
-                story.append(Spacer(1, 8*mm))
+                # LLM-Output (rot)
+                hdr_out = Table(
+                    [[Paragraph(f'<font color="white">LLM-Output — {e["test_id"]}</font>', st["ColHead"])]],
+                    colWidths=[pw])
+                hdr_out.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,-1), C["red"]),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+                    ("TOPPADDING", (0,0), (-1,-1), 2),
+                ]))
+                story.append(hdr_out)
+                story.append(Paragraph(_safe_text(out), st["RefTxt"]))
+                story.append(Spacer(1, 6*mm))
     else:
         story.append(PageBreak())
         story.append(Paragraph("Textvergleich: Referenz vs. LLM-Output", st["H2"]))

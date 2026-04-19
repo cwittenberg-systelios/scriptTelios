@@ -8,8 +8,9 @@ Alle zeitintensiven Operationen laufen als Hintergrund-Jobs:
 
 Frontend pollt GET /api/jobs/{job_id} bis status="done" oder "error".
 
-Speicherung: In-Memory (reicht fuer Testphase).
-Produktion: PostgreSQL-Tabelle jobs (Modell bereits in db.py vorhanden).
+Speicherung: Hybrid – PostgreSQL fuer Persistenz, RAM-Cache fuer Progress.
+Progress-Updates kommen vielfach pro Sekunde (Token-Zaehler) und sind zu
+teuer fuer DB-Writes. Bei Job-Abschluss wird der finale State persistiert.
 """
 import asyncio
 import json
@@ -25,66 +26,46 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # Separater Performance-Logger – schreibt JSON-Zeilen in eigene Datei
-# Pfad: /workspace/performance.log (persistent über Pod-Neustarts)
 perf_logger = logging.getLogger("systelios.performance")
 
 
-def _minimize_input_meta(meta):
-    """O2: Entfernt Klartextdaten aus Metadaten, behält nur Booleans/Anzahlen."""
-    if not isinstance(meta, dict): return {}
-    out = {}
-    for key, val in meta.items():
-        if isinstance(val, bool):
-            out[key] = val
-        elif isinstance(val, (list, tuple)):
-            out[f"{key}_count"] = len(val)
-        elif isinstance(val, str):
-            out[f"has_{key}"] = bool(val)
-        elif isinstance(val, (int, float)):
-            out[key] = val
-    return out
+# ── Performance-Logging ─────────────────────────────────────────────────────
 
-
-def _setup_perf_logger() -> None:
-    """Richtet den Performance-Logger mit eigenem Logfile ein."""
-    # Persistent auf /workspace falls vorhanden, sonst neben LOG_FILE
-    import os
-    if os.path.isdir("/workspace"):
-        perf_log_path = "/workspace/performance.log"
-    else:
-        perf_log_path = str(Path(settings.LOG_FILE).parent / "performance.log")
+def _setup_perf_logger():
+    """Richtet den Performance-Logger ein (einmalig beim Import)."""
+    if perf_logger.handlers:
+        return
+    perf_logger.setLevel(logging.INFO)
+    perf_logger.propagate = False
+    log_dir = Path(getattr(settings, "AUDIT_LOG_PATH", "/workspace/audit.log")).parent
+    perf_file = log_dir / "performance.log"
     try:
-        handler = logging.FileHandler(str(perf_log_path), encoding="utf-8")
-        handler.setFormatter(logging.Formatter("%(message)s"))  # nur die JSON-Zeile
+        handler = logging.FileHandler(str(perf_file), encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(message)s"))
         perf_logger.addHandler(handler)
-        perf_logger.setLevel(logging.INFO)
-        perf_logger.propagate = False  # nicht ins Haupt-Log schreiben
-    except OSError:
+    except Exception:
         pass
-
 
 _setup_perf_logger()
 
 
-def _log_performance(job: "Job", queue_size: int) -> None:
-    """Schreibt einen JSON-Eintrag ins Performance-Log."""
+def _log_performance(job: "JobState", queue_size: int) -> None:
+    """Loggt Performance-Metriken eines abgeschlossenen Jobs."""
     entry = {
-        "ts":           job.finished_at.isoformat() if job.finished_at else datetime.now(timezone.utc).isoformat(),
+        "ts":           datetime.now(timezone.utc).isoformat(),
         "job_id":       job.job_id,
         "workflow":     job.workflow,
-        "status":       job.status.value,
+        "status":       job.status,
         "duration_s":   job.duration_s,
-        "queue_size":   queue_size,
-        "model":        job.model_used,
-        "error":        job.error_msg if job.status.value == "error" else None,
-        # Input-Metadaten
-        "input":        _minimize_input_meta(job.input_meta) if job.input_meta else None,
-        # Output-Statistiken
+        "model_used":   job.model_used,
         "output_words": len(job.result_text.split()) if job.result_text else 0,
         "output_chars": len(job.result_text) if job.result_text else 0,
+        "queue_size":   queue_size,
     }
     perf_logger.info(json.dumps(entry, ensure_ascii=False))
 
+
+# ── Job Status ───────────────────────────────────────────────────────────────
 
 class JobStatus(str, Enum):
     PENDING    = "pending"
@@ -94,12 +75,21 @@ class JobStatus(str, Enum):
     CANCELLED  = "cancelled"
 
 
-class Job:
+# ── In-Memory Job State (transient, fuer schnelle Progress-Updates) ──────────
+
+class JobState:
+    """
+    Transienter Job-Zustand im RAM.
+
+    Progress-Updates kommen vielfach pro Sekunde (Token-Zaehler) —
+    zu teuer fuer DB-Writes. Stattdessen halten wir den State im RAM
+    und persistieren bei Abschluss in PostgreSQL.
+    """
     def __init__(self, job_id: str, workflow: str, description: str = ""):
         self.job_id             = job_id
         self.workflow           = workflow
         self.description        = description
-        self.status             = JobStatus.PENDING
+        self.status             = JobStatus.PENDING.value
         self.result_text        : Optional[str] = None
         self.progress           : int = 0
         self.progress_phase     : str = ""
@@ -114,10 +104,9 @@ class Job:
         self.finished_at        : Optional[datetime] = None
         self.model_used         : Optional[str] = None
         self.duration_s         : Optional[float] = None
-        self.style_info         : Optional[dict] = None   # Stil-Metadaten: source, chars, words
-        self._cancel_requested  : bool = False  # gesetzt via cancel_job()
-        # Performance-Tracking: Input-Metadaten
-        self.input_meta         : Optional[dict] = None   # {has_audio, has_pdf, has_style, ...}
+        self.style_info         : Optional[dict] = None
+        self._cancel_requested  : bool = False
+        self.input_meta         : Optional[dict] = None
 
     def set_progress(self, pct: int, phase: str = "", detail: str = "") -> None:
         """Monotoner Progress (0-100). Thread-safe via atomic int write."""
@@ -131,7 +120,7 @@ class Job:
             "job_id":          self.job_id,
             "workflow":        self.workflow,
             "description":     self.description,
-            "status":          self.status.value,
+            "status":          self.status,
             "cancelled":       self._cancel_requested,
             "result_text":     self.result_text or "",
             "has_transcript":  self.result_transcript is not None,
@@ -151,66 +140,172 @@ class Job:
         }
 
 
+# ── Job Queue (DB-backed + In-Memory Cache) ──────────────────────────────────
+
 class JobQueue:
-    """Einfache In-Memory Job-Queue fuer asynchrone Verarbeitung."""
+    """
+    Hybride Job-Queue: DB fuer Persistenz, RAM fuer schnelle Progress-Updates.
+
+    - create_job():  INSERT in DB + lokaler Cache
+    - get_job():     lokaler Cache (schnell) oder DB-Fallback (multi-worker)
+    - run_job():     async Coroutine, Progress in RAM, Ergebnis in DB
+    - cancel_job():  Flag in RAM + UPDATE in DB
+    """
 
     def __init__(self):
-        self._jobs: dict[str, Job] = {}
-        self._max_jobs = 500  # Aelteste Jobs werden entfernt
+        self._cache: dict[str, JobState] = {}
+        self._max_cache = 500
 
-    def create_job(self, workflow: str, description: str = "") -> Job:
+    async def create_job(self, workflow: str, description: str = "") -> JobState:
+        """Erstellt einen neuen Job in DB und Cache."""
         job_id = uuid.uuid4().hex
-        job = Job(job_id, workflow, description)
-        self._jobs[job_id] = job
-        self._cleanup_old_jobs()
-        queue_size = len([j for j in self._jobs.values() if j.status in (JobStatus.PENDING, JobStatus.RUNNING)])
+        state = JobState(job_id, workflow, description)
+        self._cache[job_id] = state
+
+        # In DB persistieren
+        try:
+            from app.core.database import async_session_factory
+            from app.models.db import Job as JobModel
+            async with async_session_factory() as db:
+                db_job = JobModel(
+                    id=job_id,
+                    workflow=workflow,
+                    description=description,
+                    status="pending",
+                )
+                db.add(db_job)
+                await db.commit()
+        except Exception as e:
+            logger.warning("Job-DB-Insert fehlgeschlagen (laeuft in-memory weiter): %s", e)
+
+        self._cleanup_cache()
+        queue_size = len([j for j in self._cache.values()
+                          if j.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)])
         logger.info("Job erstellt: %s (%s) | Warteschlange: %d", job_id, workflow, queue_size)
-        return job
+        return state
 
-    def get_job(self, job_id: str) -> Optional[Job]:
-        return self._jobs.get(job_id)
+    def get_job(self, job_id: str) -> Optional[JobState]:
+        """Holt Job aus dem Cache (schnell, fuer Polling)."""
+        return self._cache.get(job_id)
 
-    def get_all_jobs(self) -> list[Job]:
-        return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+    async def get_job_from_db(self, job_id: str) -> Optional[dict]:
+        """Fallback: Job aus der DB laden (fuer multi-worker oder nach Restart)."""
+        try:
+            from app.core.database import async_session_factory
+            from app.models.db import Job as JobModel
+            from sqlalchemy import select
+            async with async_session_factory() as db:
+                result = await db.execute(select(JobModel).where(JobModel.id == job_id))
+                db_job = result.scalar_one_or_none()
+                if not db_job:
+                    return None
+                return {
+                    "job_id":          db_job.id,
+                    "workflow":        db_job.workflow,
+                    "description":     db_job.description or "",
+                    "status":          db_job.status,
+                    "cancelled":       db_job.cancel_requested or False,
+                    "result_text":     db_job.result_text or "",
+                    "has_transcript":  db_job.result_transcript is not None,
+                    "progress":        db_job.progress or 0,
+                    "progress_phase":  db_job.progress_phase or "",
+                    "progress_detail": db_job.progress_detail or "",
+                    "befund_text":     db_job.result_befund or "",
+                    "akut_text":       db_job.result_akut or "",
+                    "result_file":     db_job.result_file,
+                    "error_msg":       db_job.error_msg,
+                    "created_at":      db_job.created_at.isoformat() if db_job.created_at else None,
+                    "started_at":      db_job.started_at.isoformat() if db_job.started_at else None,
+                    "finished_at":     db_job.finished_at.isoformat() if db_job.finished_at else None,
+                    "model_used":      db_job.model_used,
+                    "duration_s":      db_job.duration_s,
+                    "style_info":      json.loads(db_job.style_info_json) if db_job.style_info_json else None,
+                }
+        except Exception as e:
+            logger.warning("Job-DB-Lookup fehlgeschlagen: %s", e)
+            return None
+
+    def get_all_jobs(self) -> list[JobState]:
+        return sorted(self._cache.values(), key=lambda j: j.created_at, reverse=True)
 
     def cancel_job(self, job_id: str) -> bool:
-        """
-        Markiert einen Job als abzubrechen.
-        run_job() prüft das Flag und bricht ab bevor/nach dem LLM-Call.
-        Gibt True zurück wenn der Job gefunden und noch nicht abgeschlossen war.
-        """
-        job = self._jobs.get(job_id)
-        if not job:
+        """Markiert einen Job als abzubrechen (Cache + DB)."""
+        state = self._cache.get(job_id)
+        if not state:
             return False
-        if job.status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED):
+        if state.status in (JobStatus.DONE.value, JobStatus.ERROR.value, JobStatus.CANCELLED.value):
             return False
-        job._cancel_requested = True
-        logger.info("Abbruch angefordert: %s (%s)", job_id, job.workflow)
+        state._cancel_requested = True
+        logger.info("Abbruch angefordert: %s (%s)", job_id, state.workflow)
+        # Async DB-Update
+        asyncio.ensure_future(self._db_set_cancel(job_id))
         return True
+
+    async def _db_set_cancel(self, job_id: str):
+        try:
+            from app.core.database import async_session_factory
+            from app.models.db import Job as JobModel
+            from sqlalchemy import update
+            async with async_session_factory() as db:
+                await db.execute(
+                    update(JobModel).where(JobModel.id == job_id)
+                    .values(cancel_requested=True)
+                )
+                await db.commit()
+        except Exception as e:
+            logger.warning("Cancel-DB-Update fehlgeschlagen: %s", e)
+
+    async def _persist_job(self, state: JobState):
+        """Persistiert den finalen Job-Zustand in der DB."""
+        try:
+            from app.core.database import async_session_factory
+            from app.models.db import Job as JobModel
+            from sqlalchemy import update
+            async with async_session_factory() as db:
+                await db.execute(
+                    update(JobModel).where(JobModel.id == state.job_id).values(
+                        status=state.status,
+                        cancel_requested=state._cancel_requested,
+                        progress=state.progress,
+                        progress_phase=state.progress_phase,
+                        progress_detail=state.progress_detail,
+                        result_text=state.result_text,
+                        result_transcript=state.result_transcript,
+                        result_befund=state.result_befund,
+                        result_akut=state.result_akut,
+                        result_file=state.result_file,
+                        error_msg=state.error_msg,
+                        started_at=state.started_at,
+                        finished_at=state.finished_at,
+                        model_used=state.model_used,
+                        duration_s=state.duration_s,
+                        style_info_json=json.dumps(state.style_info) if state.style_info else None,
+                    )
+                )
+                await db.commit()
+        except Exception as e:
+            logger.warning("Job-DB-Persist fehlgeschlagen: %s", e)
 
     async def run_job(
         self,
-        job: Job,
+        job: JobState,
         coro: Coroutine,
     ) -> None:
         """Fuehrt einen Job asynchron aus und aktualisiert den Status."""
-        job.status     = JobStatus.RUNNING
+        job.status     = JobStatus.RUNNING.value
         job.set_progress(5, "Warteschlange")
         job.started_at = datetime.now(timezone.utc)
         t0 = asyncio.get_event_loop().time()
 
         try:
-            # Vor dem Start: schon abgebrochen?
             if job._cancel_requested:
-                job.status = JobStatus.CANCELLED
+                job.status = JobStatus.CANCELLED.value
                 job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
                 logger.info("Job abgebrochen (vor Start): %s", job.job_id)
                 return
 
             result = await coro
 
-            # Ergebnis IMMER speichern – auch wenn inzwischen Abbruch angefordert.
-            # Der Text wurde bereits generiert (GPU-Zeit verbraucht), also behalten.
             job.result_text        = result.get("text")
             job.result_transcript  = result.get("transcript")
             job.result_befund      = result.get("befund_text")
@@ -221,37 +316,39 @@ class JobQueue:
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
 
             if job._cancel_requested:
-                job.status = JobStatus.CANCELLED
+                job.status = JobStatus.CANCELLED.value
                 logger.info("Job abgebrochen (nach Generierung, Text behalten): %s", job.job_id)
             else:
                 job.set_progress(100, "Fertig")
-                job.status = JobStatus.DONE
+                job.status = JobStatus.DONE.value
                 logger.info(
                     "Job abgeschlossen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s
                 )
         except Exception as e:
             job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
             if job._cancel_requested or "__CANCELLED__" in str(e):
-                job.status = JobStatus.CANCELLED
+                job.status = JobStatus.CANCELLED.value
                 logger.info("Job abgebrochen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s)
             else:
-                job.status    = JobStatus.ERROR
+                job.status    = JobStatus.ERROR.value
                 job.error_msg = str(e)
                 logger.error("Job fehlgeschlagen: %s (%s) in %.1fs – %s", job.job_id, job.workflow, job.duration_s, e)
         finally:
             job.finished_at = datetime.now(timezone.utc)
-            queue_size = len([j for j in self._jobs.values() if j.status in (JobStatus.PENDING, JobStatus.RUNNING)])
+            queue_size = len([j for j in self._cache.values()
+                              if j.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)])
             _log_performance(job, queue_size)
+            await self._persist_job(job)
 
-    def _cleanup_old_jobs(self):
-        if len(self._jobs) > self._max_jobs:
-            # Aelteste abgeschlossene Jobs entfernen
+    def _cleanup_cache(self):
+        if len(self._cache) > self._max_cache:
             done_jobs = sorted(
-                [j for j in self._jobs.values() if j.status in (JobStatus.DONE, JobStatus.ERROR, JobStatus.CANCELLED)],
+                [j for j in self._cache.values()
+                 if j.status in (JobStatus.DONE.value, JobStatus.ERROR.value, JobStatus.CANCELLED.value)],
                 key=lambda j: j.created_at,
             )
-            for job in done_jobs[:len(self._jobs) - self._max_jobs]:
-                del self._jobs[job.job_id]
+            for job in done_jobs[:len(self._cache) - self._max_cache]:
+                del self._cache[job.job_id]
 
 
 # Globale Instanz

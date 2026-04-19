@@ -43,6 +43,142 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+# ── Relevante Abschnitte pro Workflow (fuer Stilvorlagen-Extraktion) ──────────
+
+STYLE_SECTION_HEADINGS = {
+    "entlassbericht": [
+        "Psychotherapeutischer Verlauf",
+        "Psychotherapeutischer Behandlungsverlauf",
+        "Therapie und Verlauf",
+        "Verlaufsbericht",
+        "Verlauf",
+    ],
+    "verlaengerung": [
+        "Bisheriger Verlauf und Begründung der Verlängerung",
+        "Verlauf und Begründung der weiteren Verlängerung",
+        "Bisheriger Verlauf",
+        "Begründung der Verlängerung",
+    ],
+    "folgeverlaengerung": [
+        "Verlauf und Begründung der weiteren Verlängerung",
+        "Bisheriger Verlauf und Begründung der Verlängerung",
+        "Bisheriger Verlauf",
+    ],
+    "anamnese": [
+        "Aktuelle Anamnese",
+        "Anamnese",
+        "Psychische Anamnese",
+    ],
+    "dokumentation": [
+        "Auftragsklärung",
+        "Relevante Gesprächsinhalte",
+    ],
+}
+
+
+def extract_docx_section(file_path: Path, workflow: str) -> str:
+    """
+    Extrahiert den relevanten Abschnitt aus einem DOCX basierend auf dem Workflow.
+
+    Erkennt Ueberschriften sowohl als Heading-Style als auch als fettgedruckten Text.
+    Bei langen Heading-Suchstrings (>20 Zeichen) wird Substring-Match erlaubt,
+    bei kurzen nur exakt/startswith (vermeidet Falsch-Positive).
+
+    Gibt den gesamten Text zurueck wenn kein relevanter Abschnitt gefunden wird.
+    """
+    import re
+
+    headings = STYLE_SECTION_HEADINGS.get(workflow)
+    if not headings:
+        return _extract_docx_fulltext(file_path)
+
+    try:
+        from docx import Document
+    except ImportError:
+        logger.warning("python-docx nicht installiert")
+        return ""
+
+    doc = Document(str(file_path))
+    paragraphs = doc.paragraphs
+    headings_lower = [h.lower() for h in headings]
+
+    # Ueberschrift finden
+    start_idx = None
+    start_level = None
+
+    for i, p in enumerate(paragraphs):
+        text = p.text.strip()
+        if not text:
+            continue
+        style_name = (p.style.name or "").lower()
+        is_heading = "heading" in style_name or style_name.startswith("überschrift")
+        is_bold = all(run.bold for run in p.runs if run.text.strip()) if p.runs else False
+
+        if is_heading or is_bold:
+            text_lower = text.lower().rstrip(":")
+            for h in sorted(headings_lower, key=len, reverse=True):
+                if len(h) > 20:
+                    matched = h in text_lower or text_lower in h
+                else:
+                    matched = text_lower == h or text_lower.startswith(h)
+                if matched:
+                    start_idx = i + 1
+                    level_match = re.search(r"(\d)", style_name)
+                    start_level = int(level_match.group(1)) if level_match else 2
+                    break
+        if start_idx is not None:
+            break
+
+    if start_idx is None:
+        logger.info("Kein relevanter Abschnitt in %s fuer Workflow %s – verwende gesamten Text",
+                     file_path.name, workflow)
+        return _extract_docx_fulltext(file_path)
+
+    # Text sammeln bis naechste Heading gleicher/hoeherer Ebene
+    section_lines = []
+    for p in paragraphs[start_idx:]:
+        text = p.text.strip()
+        if not text:
+            section_lines.append("")
+            continue
+        style_name = (p.style.name or "").lower()
+        is_heading = "heading" in style_name or style_name.startswith("überschrift")
+        is_bold_heading = (
+            all(run.bold for run in p.runs if run.text.strip())
+            and len(text.split()) <= 8
+        ) if p.runs else False
+
+        if is_heading or is_bold_heading:
+            level_match = re.search(r"(\d)", style_name)
+            level = int(level_match.group(1)) if level_match else 2
+            if level <= (start_level or 2):
+                break
+
+        section_lines.append(text)
+
+    result = "\n".join(section_lines).strip()
+    if len(result.split()) < 20:
+        logger.info("Abschnitt zu kurz (%d Woerter) in %s – verwende gesamten Text",
+                     len(result.split()), file_path.name)
+        return _extract_docx_fulltext(file_path)
+
+    logger.info("DOCX-Abschnitt extrahiert: %s/%s → %d Woerter",
+                 file_path.name, workflow, len(result.split()))
+    return result
+
+
+def _extract_docx_fulltext(file_path: Path) -> str:
+    """Extrahiert den gesamten Text eines DOCX als Fallback."""
+    try:
+        from docx import Document
+        doc = Document(str(file_path))
+        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    except Exception as e:
+        logger.warning("DOCX-Volltext-Extraktion fehlgeschlagen: %s", e)
+        return ""
+
+
 MIN_CHARS = 80
 MIN_READABILITY = 0.72
 MIN_CONFIDENCE = 45.0
@@ -104,8 +240,12 @@ async def extract_text_with_meta(file_path: Path) -> ExtractionResult:
         )
 
 
-async def extract_style_context(file_path: Path, llm_generate_fn) -> str:
-    raw_text = await extract_text(file_path)
+async def extract_style_context(file_path: Path, llm_generate_fn, workflow: str = "") -> str:
+    # Fuer DOCX: relevanten Abschnitt extrahieren statt ganzen Text
+    if file_path.suffix.lower() in (".docx", ".doc") and workflow:
+        raw_text = extract_docx_section(file_path, workflow)
+    else:
+        raw_text = await extract_text(file_path)
     if len(raw_text.strip()) < 100:
         return ""
     sample = raw_text[:3000]

@@ -74,9 +74,13 @@ async def list_models():
 async def get_job(job_id: str, current_user: str = Depends(get_current_user)):
     """Gibt den aktuellen Status eines Jobs zurueck (ohne Transkript)."""
     job = job_queue.get_job(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
-    return job.to_dict()
+    if job:
+        return job.to_dict()
+    # Fallback: DB-Lookup (Job aus anderem Worker oder nach Restart)
+    db_result = await job_queue.get_job_from_db(job_id)
+    if db_result:
+        return db_result
+    raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
 
 
 @router.delete("/jobs/{job_id}")
@@ -107,15 +111,100 @@ async def get_job_transcript(job_id: str):
     uebertragen wird (kann >50k Zeichen sein).
     """
     job = job_queue.get_job(job_id)
+    if job:
+        if job.result_transcript is None:
+            raise HTTPException(status_code=404, detail="Kein Transkript fuer diesen Job vorhanden")
+        return {
+            "job_id":     job_id,
+            "transcript": job.result_transcript,
+            "word_count": len(job.result_transcript.split()),
+        }
+    # Fallback: DB
+    db_result = await job_queue.get_job_from_db(job_id)
+    if not db_result:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
+    transcript = db_result.get("result_text", "")  # DB hat kein separates transcript-Feld im dict
+    # Transkript direkt aus DB laden
+    try:
+        from app.core.database import async_session_factory
+        from app.models.db import Job as JobModel
+        from sqlalchemy import select
+        async with async_session_factory() as db:
+            result = await db.execute(select(JobModel.result_transcript).where(JobModel.id == job_id))
+            row = result.scalar_one_or_none()
+            if not row:
+                raise HTTPException(status_code=404, detail="Kein Transkript fuer diesen Job vorhanden")
+            return {"job_id": job_id, "transcript": row, "word_count": len(row.split())}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="Transkript nicht verfuegbar")
+
+
+
+# ── Server-Sent Events: Live-Progress-Stream ─────────────────────────────────
+
+@router.get("/jobs/{job_id}/stream")
+async def stream_job(job_id: str):
+    """
+    SSE-Endpoint fuer Live-Progress-Updates.
+
+    Frontend kann statt Polling einen EventSource oeffnen:
+      const es = new EventSource('/api/jobs/{id}/stream');
+      es.onmessage = (e) => { const data = JSON.parse(e.data); ... };
+
+    Events:
+      - {type: "progress", progress: 42, phase: "Transkription", detail: "Chunk 2/4"}
+      - {type: "done", result_text: "...", befund_text: "...", ...}
+      - {type: "error", error_msg: "..."}
+      - {type: "cancelled"}
+    """
+    from starlette.responses import StreamingResponse
+    import asyncio, json
+
+    job = job_queue.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
-    if job.result_transcript is None:
-        raise HTTPException(status_code=404, detail="Kein Transkript fuer diesen Job vorhanden")
-    return {
-        "job_id":     job_id,
-        "transcript": job.result_transcript,
-        "word_count": len(job.result_transcript.split()),
-    }
+
+    async def event_generator():
+        last_progress = -1
+        last_phase = ""
+        while True:
+            j = job_queue.get_job(job_id)
+            if not j:
+                yield f"data: {json.dumps({'type': 'error', 'error_msg': 'Job nicht gefunden'})}\n\n"
+                break
+
+            # Progress-Update senden wenn sich was geaendert hat
+            if j.progress != last_progress or j.progress_phase != last_phase:
+                last_progress = j.progress
+                last_phase = j.progress_phase
+                yield f"data: {json.dumps({'type': 'progress', 'progress': j.progress, 'phase': j.progress_phase, 'detail': j.progress_detail})}\n\n"
+
+            # Terminal-States
+            if j.status == JobStatus.DONE.value:
+                yield f"data: {json.dumps({'type': 'done', 'result_text': j.result_text or '', 'befund_text': j.result_befund or '', 'akut_text': j.result_akut or '', 'has_transcript': j.result_transcript is not None, 'job_id': job_id, 'model_used': j.model_used})}\n\n"
+                break
+            elif j.status == JobStatus.ERROR.value:
+                yield f"data: {json.dumps({'type': 'error', 'error_msg': j.error_msg or 'Unbekannter Fehler'})}\n\n"
+                break
+            elif j.status == JobStatus.CANCELLED.value:
+                yield f"data: {json.dumps({'type': 'cancelled'})}\n\n"
+                break
+
+            # Adaptives Intervall: schnell (1s) waehrend LLM-Generierung
+            # (Token-Zaehler aendert sich oft), langsam (5s) sonst
+            is_llm_phase = j.progress_phase in ("KI-Generierung", "Fertig")
+            await asyncio.sleep(1 if is_llm_phase else 10)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # Nginx/CF: nicht buffern
+        },
+    )
 
 
 @router.get("/jobs")
@@ -182,7 +271,7 @@ async def create_generate_job(
     dx_list = [d.strip() for d in diagnosen.split(",") if d.strip()] if diagnosen else []
 
     # Job anlegen
-    job = job_queue.create_job(
+    job = await job_queue.create_job(
         workflow=workflow,
         description=f"Workflow: {workflow}" + (f" | Audio: {audio_name}" if audio_name else ""),
     )
@@ -314,7 +403,7 @@ async def create_generate_job(
             path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
             path.write_bytes(style_bytes)
             try:
-                style_context = await extract_style_context(path, generate_text)
+                style_context = await extract_style_context(path, generate_text, workflow=workflow)
                 style_context = truncate_style_context(style_context)
                 style_info = {"source": "file_upload", "filename": style_name, "chars": len(style_context)}
             except Exception as e:

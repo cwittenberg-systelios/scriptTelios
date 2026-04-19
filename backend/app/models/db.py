@@ -20,35 +20,44 @@ def _uuid() -> str:
 
 
 class Job(Base):
-    """Verarbeitungsjob (Transkription oder Generierung)."""
+    """
+    Verarbeitungsjob (Transkription + Generierung).
+
+    Persistiert in PostgreSQL – ueberlebt Pod-Neustarts und ermoeglicht multi-worker.
+    Progress-Updates laufen in-memory (transient) und werden bei Abschluss persistiert.
+    """
 
     __tablename__ = "jobs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    workflow: Mapped[str] = mapped_column(
-        Enum("dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht", name="workflow_enum"),
-        nullable=False,
-    )
-    step: Mapped[str] = mapped_column(
-        Enum("transcription", "extraction", "generation", name="step_enum"),
-        nullable=False,
-    )
-    status: Mapped[str] = mapped_column(
-        Enum("pending", "running", "done", "error", name="status_enum"),
-        default="pending",
-    )
+    workflow: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    description: Mapped[str] = mapped_column(String(512), default="")
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Ergebnis
+    # Progress (transient in-memory, persistiert bei Abschluss)
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    progress_phase: Mapped[str] = mapped_column(String(128), default="")
+    progress_detail: Mapped[str] = mapped_column(String(256), default="")
+
+    # Ergebnisse
     result_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    result_file: Mapped[str | None] = mapped_column(String(512), nullable=True)  # Pfad
+    result_transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_befund: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_akut: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_file: Mapped[str | None] = mapped_column(String(512), nullable=True)
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    # Audit
+    # Metadaten
     therapeut_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_used: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    style_info_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-serialisiert
 
 
 class StyleProfile(Base):
@@ -98,8 +107,8 @@ class StyleEmbedding(Base):
         nullable=False,
         index=True,
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     # Originaltext des Beispiels
     text: Mapped[str] = mapped_column(Text, nullable=False)

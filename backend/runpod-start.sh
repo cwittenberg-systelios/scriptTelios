@@ -227,6 +227,35 @@ su -m "$PG_USER" -c "psql -d systelios -c \"CREATE EXTENSION IF NOT EXISTS vecto
     && echo "${OK}pgvector aktiviert" \
     || echo "${WARN}pgvector konnte nicht aktiviert werden"
 
+# ── Schema-Migrations (idempotent) ──────────────────────────────────────────
+# Bei Fresh-Install erstellt SQLAlchemy die Tabellen vollständig via create_all().
+# Bei restoreten Backups fehlen ggf. neuere Spalten → hier nachziehen.
+# Jede Zeile muss IF NOT EXISTS / IF EXISTS nutzen damit sie idempotent ist.
+su -m "$PG_USER" -c "psql -d systelios -v ON_ERROR_STOP=0" <<'SQL' >/dev/null 2>&1
+ALTER TABLE IF EXISTS style_embeddings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+-- Job-Tabelle: neue Spalten fuer DB-backed Job-Queue (v14)
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS description VARCHAR(512) DEFAULT '';
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN DEFAULT FALSE;
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0;
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS progress_phase VARCHAR(128) DEFAULT '';
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS progress_detail VARCHAR(256) DEFAULT '';
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS result_transcript TEXT;
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS result_befund TEXT;
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS result_akut TEXT;
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS model_used VARCHAR(128);
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS duration_s DOUBLE PRECISION;
+ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS style_info_json TEXT;
+-- Alte Spalten anpassen (step/status waren Enums, jetzt VARCHAR)
+ALTER TABLE IF EXISTS jobs ALTER COLUMN status TYPE VARCHAR(20) USING status::VARCHAR;
+ALTER TABLE IF EXISTS jobs ALTER COLUMN workflow TYPE VARCHAR(64) USING workflow::VARCHAR;
+-- step-Spalte entfernen wenn vorhanden (wird nicht mehr benutzt)
+ALTER TABLE IF EXISTS jobs DROP COLUMN IF EXISTS step;
+ALTER TABLE IF EXISTS jobs DROP COLUMN IF EXISTS duration_seconds;
+SQL
+echo "${OK}Schema-Migrations ausgeführt"
+
 echo "${OK}Datenbank 'systelios' bereit"
 
 # ── Backup-Loop im Hintergrund ─────────────────────────────────────────────
@@ -775,9 +804,9 @@ unset DATABASE_URL
 export $(grep -v '^#' .env | xargs) 2>/dev/null || true
 
 nohup python -m uvicorn app.main:app \
-    --host 0.0.0.0 --port 8000 --workers 1 \
-    --proxy-headers \
-    --forwarded-allow-ips='*' \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 1 \
     --log-level info \
     >> "$LOG_DIR/backend.log" 2>&1 &
 

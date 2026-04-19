@@ -17,22 +17,53 @@ function JobProgressBar({ jobId }) {
   useEffect(() => {
     if (!jobId) return;
     let cancelled = false;
-    const tick = async () => {
-      try {
-        const r = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
-        const j = await r.json();
+
+    // Versuch 1: Server-Sent Events (live, kein Polling)
+    const sseUrl = `${getApiBase()}/jobs/${jobId}/stream`;
+    let es;
+    try {
+      es = new EventSource(sseUrl);
+      es.onmessage = (e) => {
         if (cancelled) return;
-        setP({
-          progress: j.progress || 0,
-          progress_phase: j.progress_phase || "",
-          progress_detail: j.progress_detail || "",
-        });
-        if (j.status === "done" || j.status === "error" || j.status === "cancelled") return;
-        setTimeout(tick, 3000);
-      } catch { if (!cancelled) setTimeout(tick, 5000); }
+        try {
+          const d = JSON.parse(e.data);
+          if (d.type === "progress") {
+            setP({ progress: d.progress || 0, progress_phase: d.phase || "", progress_detail: d.detail || "" });
+          } else if (d.type === "done" || d.type === "error" || d.type === "cancelled") {
+            setP(prev => ({ ...prev, progress: d.type === "done" ? 100 : prev.progress, progress_phase: d.type === "done" ? "Fertig" : d.type === "error" ? "Fehler" : "Abgebrochen" }));
+            es.close();
+          }
+        } catch (_) {}
+      };
+      es.onerror = () => {
+        // SSE fehlgeschlagen → Fallback auf Polling
+        es.close();
+        if (!cancelled) startPolling();
+      };
+    } catch (_) {
+      // EventSource nicht verfuegbar → Polling
+      startPolling();
+    }
+
+    // Fallback: Polling (alle 3s)
+    function startPolling() {
+      const tick = async () => {
+        try {
+          const r = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
+          const j = await r.json();
+          if (cancelled) return;
+          setP({ progress: j.progress || 0, progress_phase: j.progress_phase || "", progress_detail: j.progress_detail || "" });
+          if (j.status === "done" || j.status === "error" || j.status === "cancelled") return;
+          setTimeout(tick, 3000);
+        } catch { if (!cancelled) setTimeout(tick, 5000); }
+      };
+      tick();
+    }
+
+    return () => {
+      cancelled = true;
+      if (es) try { es.close(); } catch (_) {}
     };
-    tick();
-    return () => { cancelled = true; };
   }, [jobId]);
   return (
     <div style={{margin:"12px 0"}}>

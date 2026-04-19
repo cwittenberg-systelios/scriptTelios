@@ -78,20 +78,20 @@ AUSGABE:
 
 Auftragsklärung
 
-Im Mittelpunkt stand das wiederkehrende Anspannungserleben von Frau M. \
+Im Mittelpunkt stand das wiederkehrende Anspannungserleben von Frau X. \
 im Vorfeld familiärer Begegnungen, insbesondere in Kontakt mit ihrer Schwester. \
 Ziel war es, den dahinterliegenden Schutzmechanismus besser zu verstehen \
 und erste Kontaktaufnahme mit diesem Anteil zu ermöglichen.
 
 Relevante Gesprächsinhalte
 
-Frau M. berichtete von einer erneuten Anspannungsepisode vor dem Familientreffen, \
+Frau X. berichtete von einer erneuten Anspannungsepisode vor dem Familientreffen, \
 die im Rückzug endete und Erschöpfung hinterließ. Im Sinne des IFS zeigte sich \
 ein aktiver Manager-Anteil in Form eines inneren Schutzschildes, \
 der proaktiv Kontakt zu potenziell verletzenden Situationen vermeidet. \
 Die Erschöpfung nach dem Rückzug weist auf die hohe Aktivierungsintensität \
 dieses Anteils hin. Bemerkenswert war der spontane Zugang zu Self-Energy: \
-Als Frau M. eingeladen wurde, dem Schutzanteil Dankbarkeit entgegenzubringen, \
+Als Frau X. eingeladen wurde, dem Schutzanteil Dankbarkeit entgegenzubringen, \
 war dies körperlich spürbar und emotional stimmig.
 
 Hypothesen und Entwicklungsperspektiven
@@ -101,11 +101,11 @@ Manager-Anteils verstehen, der früh gelernt hat, Verletzungen durch \
 Vermeidung abzuwenden. Entwicklungsperspektivisch steht die Differenzierung \
 zwischen Schutz und Kontaktfähigkeit im Vordergrund: Wenn der Schutzanteil \
 erfährt, dass er nicht mehr allein für die Sicherheit zuständig sein muss, \
-kann Frau M. schrittweise neue Beziehungserfahrungen machen.
+kann Frau X. schrittweise neue Beziehungserfahrungen machen.
 
 Einladungen
 
-Frau M. wurde eingeladen, in dieser Woche nach innen zu horchen, \
+Frau X. wurde eingeladen, in dieser Woche nach innen zu horchen, \
 wenn sich der Schutzschild aktiviert - nicht um ihn wegzuschieben, \
 sondern um kurz innezuhalten und ihm innerlich zu danken. \
 Unterstützend kann das Führen eines kurzen Notizbuchs sein, \
@@ -222,7 +222,7 @@ BASE_PROMPT_AKUTANTRAG = (
     "STIL: Knappe medizinisch-klinische Sprache. Konkret und symptombezogen. "
     "Keine allgemeinen Floskeln.\n"
     "LÄNGE: 200-350 Wörter.\n\n"
-    "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens: 'Frau M.' / 'Herr R.'\n\n"
+    "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS 'Frau X.' oder Namen aus dem Stilbeispiel verwenden\n\n"
     "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
     "Jeder Satz MUSS auf eine konkrete Stelle in der Antragsvorlage "
     "zurückführbar sein. Keine Symptome, Diagnosen oder Risiken erfinden.\n"
@@ -239,7 +239,7 @@ ROLE_PREAMBLE = (
     "du beginnst sofort mit dem Schreiben des angeforderten Dokuments.\n\n"
     "Beispiel für korrektes Verhalten:\n"
     "Anfrage: 'Schreibe den Behandlungsverlauf'\n"
-    "Korrekte Antwort: 'Zu Beginn des stationären Aufenthaltes zeigte sich Herr R. "
+    "Korrekte Antwort: 'Zu Beginn des stationären Aufenthaltes zeigte sich Herr X. "
     "deutlich erschöpft und in seinem Selbstwert erheblich verunsichert...'\n"
     "Falsche Antwort: 'Entschuldigung, ich kann keine Berichte erstellen...'\n\n"
     + KLINISCHES_GLOSSAR
@@ -358,7 +358,7 @@ BASE_PROMPTS: dict[str, str] = {
         "'Die Klientin/der Klient entwickelte...'. "
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
-        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens: 'Frau M.' / 'Herr R.' "
+        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS 'Frau X.' oder Namen aus dem Stilbeispiel verwenden "
         "sowie 'die Klientin' / 'der Klient'.\n\n"
         "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
         "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation "
@@ -395,7 +395,7 @@ BASE_PROMPTS: dict[str, str] = {
         "Wir-Perspektive des Therapeutenteams. "
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
-        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens: 'Frau M.' / 'Herr R.' "
+        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS 'Frau X.' oder Namen aus dem Stilbeispiel verwenden "
         "sowie 'die Klientin' / 'der Klient'.\n\n"
         "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
         "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation, "
@@ -653,7 +653,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Selbst wenn der volle Name in den Unterlagen steht: nur Initiale verwenden."
         )
         if selbstauskunft_text:
@@ -671,7 +671,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Auch 'die Klientin' / 'der Klient' als Alternative. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )
@@ -704,7 +704,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Auch 'die Klientin' / 'der Klient' als Alternative. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )
@@ -749,7 +749,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )
         if antragsvorlage_text:
@@ -784,7 +784,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau M.' oder 'Herr R.' – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen. "
+            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Auch 'die Klientin' / 'der Klient' als Alternative. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )
