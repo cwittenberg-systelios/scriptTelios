@@ -1106,7 +1106,6 @@ async def test_style_llm_jury(workflow, test_case, request):
                 ],
                 "options": {"num_predict": 200},
             })
-            print(f"DEBUG JURY: url={ollama_url}/api/chat status={r.status_code} body={r.text[:300]}")
             if r.status_code != 200:
                 pytest.skip(f"LLM-Jury-Request fehlgeschlagen: {r.status_code}")
 
