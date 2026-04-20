@@ -78,20 +78,20 @@ AUSGABE:
 
 Auftragsklärung
 
-Im Mittelpunkt stand das wiederkehrende Anspannungserleben von Frau X. \
+Im Mittelpunkt stand das wiederkehrende Anspannungserleben von [Patient/in] \
 im Vorfeld familiärer Begegnungen, insbesondere in Kontakt mit ihrer Schwester. \
 Ziel war es, den dahinterliegenden Schutzmechanismus besser zu verstehen \
 und erste Kontaktaufnahme mit diesem Anteil zu ermöglichen.
 
 Relevante Gesprächsinhalte
 
-Frau X. berichtete von einer erneuten Anspannungsepisode vor dem Familientreffen, \
+[Patient/in] berichtete von einer erneuten Anspannungsepisode vor dem Familientreffen, \
 die im Rückzug endete und Erschöpfung hinterließ. Im Sinne des IFS zeigte sich \
 ein aktiver Manager-Anteil in Form eines inneren Schutzschildes, \
 der proaktiv Kontakt zu potenziell verletzenden Situationen vermeidet. \
 Die Erschöpfung nach dem Rückzug weist auf die hohe Aktivierungsintensität \
 dieses Anteils hin. Bemerkenswert war der spontane Zugang zu Self-Energy: \
-Als Frau X. eingeladen wurde, dem Schutzanteil Dankbarkeit entgegenzubringen, \
+Als [Patient/in] eingeladen wurde, dem Schutzanteil Dankbarkeit entgegenzubringen, \
 war dies körperlich spürbar und emotional stimmig.
 
 Hypothesen und Entwicklungsperspektiven
@@ -101,11 +101,11 @@ Manager-Anteils verstehen, der früh gelernt hat, Verletzungen durch \
 Vermeidung abzuwenden. Entwicklungsperspektivisch steht die Differenzierung \
 zwischen Schutz und Kontaktfähigkeit im Vordergrund: Wenn der Schutzanteil \
 erfährt, dass er nicht mehr allein für die Sicherheit zuständig sein muss, \
-kann Frau X. schrittweise neue Beziehungserfahrungen machen.
+kann [Patient/in] schrittweise neue Beziehungserfahrungen machen.
 
 Einladungen
 
-Frau X. wurde eingeladen, in dieser Woche nach innen zu horchen, \
+[Patient/in] wurde eingeladen, in dieser Woche nach innen zu horchen, \
 wenn sich der Schutzschild aktiviert - nicht um ihn wegzuschieben, \
 sondern um kurz innezuhalten und ihm innerlich zu danken. \
 Unterstützend kann das Führen eines kurzen Notizbuchs sein, \
@@ -121,7 +121,7 @@ Alle Inhalte MÜSSEN aus der Selbstauskunft des AKTUELLEN Patienten stammen.
 Steht eine Information NICHT in der Selbstauskunft: schreibe 'nicht erhoben'.
 
 Beispiel-Einstieg (NUR als Stilreferenz):
-'Herr/Frau X. stellt sich mit dem Hauptanliegen vor, ... . Die Symptomatik begann vor
+'Herr/[Patient/in] stellt sich mit dem Hauptanliegen vor, ... . Die Symptomatik begann vor
 etwa ... Monaten im Kontext von ... . Seither habe sich ... . Vorbehandlungen umfassen
 ... . Familiär sei bekannt, dass ... . Beruflich sei er/sie ... . Der Schlaf sei ...,
 der Appetit ... . An Ressourcen nennt er/sie ... .'
@@ -134,7 +134,7 @@ FEW_SHOT_VERLÄNGERUNG = """\
 BEISPIEL (Bisheriger Verlauf und Begründung der Verlängerung /
 Verlauf und Begründung der weiteren Verlängerung – ca. 400-600 Wörter):
 
-Frau X. zeigte sich im bisherigen Verlauf des stationären Aufenthaltes unter anhaltendem \
+[Patient/in] zeigte sich im bisherigen Verlauf des stationären Aufenthaltes unter anhaltendem \
 innerem Druck mit ausgeprägte Anspannung und emotionaler Ambivalenz. Gleichzeitig wurde \
 eine zunehmende Bereitschaft erkennbar, sich auf den therapeutischen Prozess einzulassen \
 und auch sehr vulnerable innere Themen zu explorieren.
@@ -144,10 +144,10 @@ dominanter Kontrollanteil differenziert werden, der biographisch vor dem Hinterg
 invalidierenden Beziehungserfahrungen in der Herkunftsfamilie verständlich wurde. \
 Parallel traten jüngere, verletzliche Anteile in Erscheinung, die mit starken Gefühlen \
 von Wertlosigkeit und Trauer einhergehen. Durch Stuhlarbeit, Netzwerk- und Körperarbeit \
-gelang es Frau X. in ersten Schritten, eine Beobachterposition einzunehmen und eine \
+gelang es [Patient/in] in ersten Schritten, eine Beobachterposition einzunehmen und eine \
 wohlwollendere innere Haltung zu entwickeln.
 
-In den therapeutischen Gruppen zeigte sich Frau X. zunehmend aktiv und beziehungsfähig. \
+In den therapeutischen Gruppen zeigte sich [Patient/in] zunehmend aktiv und beziehungsfähig. \
 Gleichzeitig führten gruppale Trigger und Nähedistanzthemen wiederholt zu Überlastung, \
 was die weiterhin hohe Vulnerabilität des Systems unterstreicht.
 
@@ -163,7 +163,7 @@ aus psychotherapeutischer Sicht dringend indiziert.\
 FEW_SHOT_ENTLASSBERICHT = """\
 BEISPIEL (reiner Fließtext, keine Überschriften, ca. 600-900 Wörter):
 
-Zu Beginn des stationären Aufenthaltes formulierte Herr/Frau X. als zentrales Anliegen, \
+Zu Beginn des stationären Aufenthaltes formulierte Herr/[Patient/in] als zentrales Anliegen, \
 wieder inneren Halt zu finden und sich aus einem über Jahre verfestigten Erleben von \
 innerer Überforderung und Selbstwertzweifeln zu lösen. Wir erlebten ihn/sie zu \
 Therapiebeginn deutlich erschöpft, innerlich angespannt und in seinem/ihrem Selbstwert \
@@ -186,7 +186,7 @@ auf das kritisch verzerrte Selbstbild und unterstützten den Aufbau eines stabil
 Selbstwertgefühls.
 
 Im Gesamtverlauf zeigte sich eine deutliche Entwicklung hin zu mehr innerer \
-Differenzierung, affektiver Stabilität und Selbstwirksamkeit. Herr/Frau X. stellte \
+Differenzierung, affektiver Stabilität und Selbstwirksamkeit. Herr/[Patient/in] stellte \
 sich mit [Hauptdiagnose] vor dem Hintergrund [biographischer Belastungskontext] vor. \
 Im stationären Rahmen konnte eine deutliche Symptomreduktion erreicht werden. \
 Die prämorbide Persönlichkeitsstruktur mit hoher Leistungsorientierung und \
@@ -222,7 +222,7 @@ BASE_PROMPT_AKUTANTRAG = (
     "STIL: Knappe medizinisch-klinische Sprache. Konkret und symptombezogen. "
     "Keine allgemeinen Floskeln.\n"
     "LÄNGE: 200-350 Wörter.\n\n"
-    "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS 'Frau X.' oder Namen aus dem Stilbeispiel verwenden\n\n"
+    "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS '[Patient/in]' oder Namen aus dem Stilbeispiel verwenden\n\n"
     "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
     "Jeder Satz MUSS auf eine konkrete Stelle in der Antragsvorlage "
     "zurückführbar sein. Keine Symptome, Diagnosen oder Risiken erfinden.\n"
@@ -239,7 +239,7 @@ ROLE_PREAMBLE = (
     "du beginnst sofort mit dem Schreiben des angeforderten Dokuments.\n\n"
     "Beispiel für korrektes Verhalten:\n"
     "Anfrage: 'Schreibe den Behandlungsverlauf'\n"
-    "Korrekte Antwort: 'Zu Beginn des stationären Aufenthaltes zeigte sich Herr X. "
+    "Korrekte Antwort: 'Zu Beginn des stationären Aufenthaltes zeigte sich [Patient/in] "
     "deutlich erschöpft und in seinem Selbstwert erheblich verunsichert...'\n"
     "Falsche Antwort: 'Entschuldigung, ich kann keine Berichte erstellen...'\n\n"
     + KLINISCHES_GLOSSAR
@@ -258,7 +258,7 @@ BASE_PROMPTS: dict[str, str] = {
         "**Auftragsklärung**\n"
         "Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame "
         "Ziel des Gesprächs war. Beispiel: 'Im Mittelpunkt stand...' oder "
-        "'Frau X. kam mit dem Anliegen...'\n\n"
+        "'[Patient/in] kam mit dem Anliegen...'\n\n"
         "**Relevante Gesprächsinhalte**\n"
         "Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: "
         "Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. "
@@ -271,7 +271,7 @@ BASE_PROMPTS: dict[str, str] = {
         "Ressourcenorientiert und konkret.\n\n"
         "**Einladungen**\n"
         "Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden "
-        "- aktiv formuliert: 'Frau X. wurde eingeladen, ...' oder "
+        "- aktiv formuliert: '[Patient/in] wurde eingeladen, ...' oder "
         "'Als Übung wurde vereinbart, ...'\n\n"
         "Stil: Fliestext pro Abschnitt, aktiv, konkret, systemisch-wertschätzend. "
         "Keine Sektion über den Gesprächsstil.\n\n"
@@ -282,9 +282,13 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "anamnese": (
-        "Erstelle eine vollständige Anamnese UND einen psychopathologischen Befund "
+        # WICHTIG: Dies ist der ANAMNESE-ONLY Prompt (Teil 1 von 2).
+        # Der Befund wird in einem SEPARATEN LLM-Call generiert (siehe "befund").
+        # So vermeiden wir das Problem dass der ###BEFUND###-Separator vergessen wird,
+        # und beide Teile koennen mit fokussierten Prompts in besserer Qualitaet entstehen.
+        "Erstelle eine vollständige psychotherapeutische Anamnese "
         "auf Basis der bereitgestellten Unterlagen.\n\n"
-        "TEIL 1 – ANAMNESE (als durchgehender FLIESSTEXT, KEINE Unterüberschriften):\n"
+        "ANAMNESE als durchgehender FLIESSTEXT (KEINE Unterüberschriften!):\n"
         "Schreibe die Anamnese als einen zusammenhängenden Fließtext OHNE Zwischenüberschriften "
         "wie 'Vorstellungsanlass', 'Aktuelle Erkrankung' etc. Der Text soll natürlich von "
         "Thema zu Thema fließen, wie ein erfahrener Therapeut einen Bericht diktieren würde.\n\n"
@@ -302,23 +306,13 @@ BASE_PROMPTS: dict[str, str] = {
         "kein 'Aktuelle Erkrankung:', kein 'Psychiatrische Vorgeschichte:' etc. "
         "Stattdessen fließende Übergänge zwischen den Themen.\n\n"
         "DIAGNOSEN gemäß ICD: {diagnosen}\n\n"
-        "TEIL 2 – PSYCHOPATHOLOGISCHER BEFUND:\n"
-        "Verwende EXAKT die folgende Vorlage. Fülle alle Lücken mit Informationen "
-        "aus der Selbstauskunft. Kürze Mehrfachoptionen auf die zutreffende Variante. "
-        "Wenn eine Information nicht in den Unterlagen steht, schreibe 'nicht erhoben' – "
-        "NIEMALS eine klinisch plausible Option raten oder erfinden.\n\n"
-        "WICHTIG: Trenne die beiden Teile ZWINGEND mit genau dieser Zeile:\n"
-        "###BEFUND###\n"
-        "Diese Trennzeile MUSS im Output erscheinen, allein auf einer Zeile, "
-        "zwischen dem Anamnese-Fließtext und dem Befund.\n\n"
-        "BEFUND-VORLAGE (exakt so ausfüllen):\n"
-        + BEFUND_VORLAGE + "\n\n"
         "NICHT SCHREIBEN:\n"
+        "– Keinen psychopathologischen Befund (wird separat generiert!)\n"
         "– Keine 'SYSTEMISCHE EINSCHÄTZUNG' oder Hypothesen-Abschnitte\n"
         "– Keine Diagnosen-Wiederholung am Ende\n"
         "– Keine Therapieempfehlungen oder Behandlungspläne\n"
-        "– Keine Abschnitte die nicht oben in der Gliederung stehen\n"
-        "– Kein Markdown (keine **, keine ##, keine ---)\n\n"
+        "– Kein Markdown (keine **, keine ##, keine ---)\n"
+        "– KEINEN ###BEFUND###-Separator (der Befund kommt in einem separaten Call)\n\n"
         "QUALITÄTSANFORDERUNGEN:\n"
         "- QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in den "
         "bereitgestellten Unterlagen (Selbstauskunft, Vorbefunde, Aufnahmegespräch) "
@@ -331,6 +325,30 @@ BASE_PROMPTS: dict[str, str] = {
         "auslösende Ereignisse, Testwerte, Zitate\n"
         "- LÄNGE Anamnese: Mindestens 450 Wörter Fließtext (KEINE kurzen Absätze – schreibe ausführliche, zusammenhängende Absätze)\n\n"
         + FEW_SHOT_ANAMNESE
+    ),
+
+    "befund": (
+        # Separater Prompt fuer den psychopathologischen Befund.
+        # Wird vom Backend als zweiter LLM-Call ausgeloest nach der Anamnese.
+        "Erstelle einen psychopathologischen Befund auf Basis der bereitgestellten Unterlagen "
+        "(Selbstauskunft, Vorbefunde, Anamnese-Fließtext der bereits erstellt wurde).\n\n"
+        "Verwende EXAKT die folgende Vorlage. Fülle alle Lücken mit Informationen "
+        "aus der Selbstauskunft. Kürze Mehrfachoptionen auf die zutreffende Variante. "
+        "Wenn eine Information nicht in den Unterlagen steht, schreibe 'nicht erhoben' – "
+        "NIEMALS eine klinisch plausible Option raten oder erfinden.\n\n"
+        "BEFUND-VORLAGE (exakt so ausfüllen):\n"
+        + BEFUND_VORLAGE + "\n\n"
+        "DIAGNOSEN gemäß ICD: {diagnosen}\n\n"
+        "NICHT SCHREIBEN:\n"
+        "– Keine Anamnese-Inhalte (wurden bereits in einem vorigen Call generiert)\n"
+        "– Keine Therapieempfehlungen, Hypothesen oder Behandlungspläne\n"
+        "– Keine Diagnosen-Wiederholung am Ende\n"
+        "– Kein Markdown (keine **, keine ##, keine ---)\n"
+        "– KEINEN ###BEFUND###-Separator (gib nur den Befund-Text aus, ohne Praeambel)\n\n"
+        "QUALITÄTSANFORDERUNGEN:\n"
+        "- QUELLENREGEL: Jeder Eintrag MUSS auf eine konkrete Stelle in den Unterlagen "
+        "zurückführbar sein. Findest du keine Quelle → 'nicht erhoben'.\n"
+        "- Direkt mit dem Befund beginnen, keine Vorbemerkungen.\n"
     ),
 
     "verlaengerung": (
@@ -358,7 +376,7 @@ BASE_PROMPTS: dict[str, str] = {
         "'Die Klientin/der Klient entwickelte...'. "
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
-        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS 'Frau X.' oder Namen aus dem Stilbeispiel verwenden "
+        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS '[Patient/in]' oder Namen aus dem Stilbeispiel verwenden "
         "sowie 'die Klientin' / 'der Klient'.\n\n"
         "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
         "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation "
@@ -395,7 +413,7 @@ BASE_PROMPTS: dict[str, str] = {
         "Wir-Perspektive des Therapeutenteams. "
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
-        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS 'Frau X.' oder Namen aus dem Stilbeispiel verwenden "
+        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS '[Patient/in]' oder Namen aus dem Stilbeispiel verwenden "
         "sowie 'die Klientin' / 'der Klient'.\n\n"
         "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
         "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation, "
@@ -653,7 +671,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
+            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Selbst wenn der volle Name in den Unterlagen steht: nur Initiale verwenden."
         )
         if selbstauskunft_text:
@@ -671,7 +689,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
+            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Auch 'die Klientin' / 'der Klient' als Alternative. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )
@@ -704,7 +722,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
+            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Auch 'die Klientin' / 'der Klient' als Alternative. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )
@@ -749,7 +767,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
+            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )
         if antragsvorlage_text:
@@ -784,7 +802,7 @@ def build_user_content(
         parts.append(
             "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
             "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "'Frau K.' oder 'Herr S.' (Initialen des AKTUELLEN Patienten) – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
+            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
             "Auch 'die Klientin' / 'der Klient' als Alternative. "
             "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
         )

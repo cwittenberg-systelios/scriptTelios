@@ -131,19 +131,39 @@ def extract_docx_section(file_path: Path, workflow: str) -> str:
             break
 
     if start_idx is None:
-        logger.info("Kein relevanter Abschnitt in %s fuer Workflow %s – verwende gesamten Text",
+        # Bold/Heading-Match fehlgeschlagen → direkt Plain-Text-Suche versuchen
+        logger.info("Kein Bold-Match in %s fuer %s – versuche Plain-Text-Suche",
                      file_path.name, workflow)
+        result = _extract_section_by_text(file_path, headings)
+        if result and len(result.split()) >= 20:
+            logger.info("DOCX-Abschnitt via Plain-Text: %s/%s → %d Woerter",
+                         file_path.name, workflow, len(result.split()))
+            return result
+        logger.info("Auch Plain-Text-Suche fehlgeschlagen – verwende gesamten Text")
         return _extract_docx_fulltext(file_path)
 
     # Text sammeln bis naechste Heading gleicher/hoeherer Ebene
+    # End-Marker: bekannte Schluss-Phrasen die das Ende des Verlaufs-Abschnitts markieren
+    end_markers = [
+        "wir bitten daher um", "daher bitten wir um", "vor diesem hintergrund bitten wir",
+        "wir bitten um", "fuer rueckfragen", "für rückfragen",
+        "mit freundlichem gruß", "mit freundlichen grüßen",
+    ]
     section_lines = []
     for p in paragraphs[start_idx:]:
         text = p.text.strip()
         if not text:
             section_lines.append("")
             continue
+        text_lower = text.lower()
+
+        # End-Marker erkennen (typischer Schlusssatz/Grussformel)
+        if any(text_lower.startswith(m) for m in end_markers):
+            break
+
         style_name = (p.style.name or "").lower()
         is_heading = "heading" in style_name or style_name.startswith("überschrift")
+        # Bold-Heading-Erkennung: Heading-Style ODER kurze Bold-Zeile (<=8 Woerter)
         is_bold_heading = (
             all(run.bold for run in p.runs if run.text.strip())
             and len(text.split()) <= 8
@@ -159,13 +179,82 @@ def extract_docx_section(file_path: Path, workflow: str) -> str:
 
     result = "\n".join(section_lines).strip()
     if len(result.split()) < 20:
-        logger.info("Abschnitt zu kurz (%d Woerter) in %s – verwende gesamten Text",
-                     len(result.split()), file_path.name)
+        # Fallback: Plain-Text-Suche
+        logger.info("Style-Match zu kurz in %s – versuche Plain-Text-Suche",
+                     file_path.name)
+        result = _extract_section_by_text(file_path, headings)
+        if result and len(result.split()) >= 20:
+            logger.info("DOCX-Abschnitt via Plain-Text: %s/%s → %d Woerter",
+                         file_path.name, workflow, len(result.split()))
+            return result
+        # Fallback 2: Volltext
+        logger.info("Auch Plain-Text-Suche fehlgeschlagen – verwende gesamten Text")
         return _extract_docx_fulltext(file_path)
 
     logger.info("DOCX-Abschnitt extrahiert: %s/%s → %d Woerter",
                  file_path.name, workflow, len(result.split()))
     return result
+
+
+def _extract_section_by_text(file_path: Path, headings: list[str]) -> str:
+    """
+    Fallback-Extraktion: sucht nach Heading-Texten als Plain-Text im Dokument
+    (unabhaengig von Style oder Bold-Formatierung).
+    Sammelt allen Text nach dem Treffer bis zur naechsten kurzen Zeile
+    die wie eine Ueberschrift aussieht (<=8 Woerter, gefolgt von laengerem Text).
+    """
+    try:
+        from docx import Document
+    except ImportError:
+        return ""
+
+    doc = Document(str(file_path))
+    paragraphs = doc.paragraphs
+    headings_lower = [h.lower() for h in headings]
+
+    start_idx = None
+    for i, p in enumerate(paragraphs):
+        text = p.text.strip().lower().rstrip(":")
+        if not text:
+            continue
+        # Spezifischste zuerst (laengere Headings)
+        for h in sorted(headings_lower, key=len, reverse=True):
+            if len(h) > 20:
+                if h in text or text in h:
+                    start_idx = i + 1
+                    break
+            else:
+                if text == h or text.startswith(h):
+                    start_idx = i + 1
+                    break
+        if start_idx is not None:
+            break
+
+    if start_idx is None:
+        return ""
+
+    # Text sammeln bis zur naechsten kurzen Zeile die wie Ueberschrift aussieht
+    end_markers = [
+        "wir bitten daher um", "daher bitten wir um", "vor diesem hintergrund bitten wir",
+        "wir bitten um", "fuer rueckfragen", "für rückfragen",
+        "mit freundlichem gruß", "mit freundlichen grüßen",
+    ]
+    section_lines = []
+    for p in paragraphs[start_idx:]:
+        text = p.text.strip()
+        if not text:
+            section_lines.append("")
+            continue
+        text_lower = text.lower()
+        # End-Marker erkennen
+        if any(text_lower.startswith(m) for m in end_markers):
+            break
+        # Kurze Zeile nach substanziellem Text → wahrscheinlich naechste Ueberschrift
+        if len(text.split()) <= 8 and len(section_lines) > 3 and any(len(l.split()) > 10 for l in section_lines[-3:]):
+            break
+        section_lines.append(text)
+
+    return "\n".join(section_lines).strip()
 
 
 def _extract_docx_fulltext(file_path: Path) -> str:

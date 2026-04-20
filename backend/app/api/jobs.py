@@ -476,7 +476,62 @@ async def create_generate_job(
 
         job.set_progress(lb[0], "KI-Generierung")
         _t0 = _t.time()
-        result = await generate_text(system, user, max_tokens=max_tok, model=model, workflow=workflow, on_progress=_on_tok)
+
+        # Anamnese: ZWEI sequenzielle LLM-Calls (Anamnese + Befund separat)
+        # Vorteil: zuverlaessige Trennung ohne Marker, fokussierte Prompts
+        if workflow == "anamnese":
+            # Call 1: Anamnese-Fließtext (max ~60% des Token-Budgets)
+            anamnese_max_tok = int(max_tok * 0.6)
+            def _on_tok_a(n):
+                # Erste Haelfte des LLM-Bands fuer Anamnese
+                mid = lb[0] + (lb[1] - lb[0]) * 0.5
+                pct = lb[0] + (mid - lb[0]) * min(1.0, n / (expected_tok * 0.6))
+                job.set_progress(int(pct), "KI-Generierung", f"Anamnese: {n} Wörter")
+            result_a = await generate_text(system, user, max_tokens=anamnese_max_tok,
+                                            model=model, workflow=workflow, on_progress=_on_tok_a)
+            anamnese_text = (result_a.get("text") or "").strip()
+
+            # Cancel-Check zwischen den Calls
+            if job._cancel_requested:
+                raise RuntimeError("__CANCELLED__")
+
+            # Call 2: Befund (mit eigenem Prompt + Anamnese als zusaetzlichem Kontext)
+            from app.services.prompts import BASE_PROMPTS, ROLE_PREAMBLE
+            befund_base = BASE_PROMPTS.get("befund", "")
+            diag_str = ", ".join(dx_list) if dx_list else "noch nicht festgelegt"
+            befund_system = ROLE_PREAMBLE + "\n\n" + befund_base.replace("{diagnosen}", diag_str)
+            # User-Content fuer Befund: Selbstauskunft + Vorbefunde + die generierte Anamnese
+            befund_user_parts = []
+            if selbstauskunft_text:
+                befund_user_parts.append(f"SELBSTAUSKUNFT DES PATIENTEN:\n{selbstauskunft_text}")
+            if vorbefunde_text:
+                befund_user_parts.append(f"VORBEFUNDE:\n{vorbefunde_text}")
+            if transkript_text:
+                befund_user_parts.append(f"AUFNAHMEGESPRÄCH (Transkript):\n{transkript_text}")
+            befund_user_parts.append(f"BEREITS GENERIERTE ANAMNESE (als Kontext):\n{anamnese_text}")
+            befund_user_parts.append("\nErstelle nun den psychopathologischen Befund.")
+            befund_user = "\n\n".join(befund_user_parts)
+
+            befund_max_tok = int(max_tok * 0.5)
+            def _on_tok_b(n):
+                # Zweite Haelfte des LLM-Bands fuer Befund
+                mid = lb[0] + (lb[1] - lb[0]) * 0.5
+                pct = mid + (lb[1] - mid) * min(1.0, n / (expected_tok * 0.4))
+                job.set_progress(int(pct), "KI-Generierung", f"Befund: {n} Wörter")
+            result_b = await generate_text(befund_system, befund_user, max_tokens=befund_max_tok,
+                                            model=model, workflow="befund", on_progress=_on_tok_b)
+            befund_text_generated = (result_b.get("text") or "").strip()
+
+            # Direkt zwei separate Felder zurueckgeben — keine Marker noetig
+            result = {
+                "text": anamnese_text,
+                "befund_text": befund_text_generated,
+                "transcript": result_a.get("transcript") or result_b.get("transcript"),
+                "model_used": result_a.get("model_used"),
+            }
+        else:
+            result = await generate_text(system, user, max_tokens=max_tok, model=model, workflow=workflow, on_progress=_on_tok)
+
         phase_times["llm"] = _t.time() - _t0
 
         try:
@@ -490,21 +545,16 @@ async def create_generate_job(
             pass
         raw = result["text"] or ""
 
-        # Anamnese: Ergebnis bei ###BEFUND### und optional ###AKUT### aufteilen
-        akut_part = None
-        if workflow == "anamnese" and "###BEFUND###" in raw:
-            parts_split = raw.split("###BEFUND###", 1)
-            anamnese_part = parts_split[0].strip()
-            rest = parts_split[1].strip()
-            if "###AKUT###" in rest:
-                akut_split = rest.split("###AKUT###", 1)
-                befund_part = akut_split[0].strip()
-                akut_part   = akut_split[1].strip()
-            else:
-                befund_part = rest
+        # Anamnese-Workflow: Befund kommt bereits separat aus dem zweiten LLM-Call.
+        # Fuer alle anderen Workflows: kein Befund/Akut-Splitting noetig.
+        if workflow == "anamnese":
+            anamnese_part = raw
+            befund_part = result.get("befund_text") or None
+            akut_part = result.get("akut_text") or None
         else:
             anamnese_part = raw
-            befund_part   = None
+            befund_part = None
+            akut_part = None
 
         logger.info(
             "Job %s _run result: raw=%d anamnese=%d befund=%s akut=%s",
