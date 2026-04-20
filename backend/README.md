@@ -374,3 +374,20 @@ window.SYSTELIOS_AUTH_SECRET = "xY7kN3vP2mQ8rT5jL9nF4bW6cE1sD0aZ";
 
 **WICHTIG**: Der Confluence-Admin muss das Secret auf beiden Seiten
 synchron halten. Bei Rotation beide Stellen gleichzeitig updaten.
+
+
+### 4. Server copy script
+
+So benutzt du es
+
+1. ausführbar machen
+chmod +x runpod-sync.sh
+
+2. Download (Pod → Mac)
+./runpod-sync.sh download /workspace/eval_data ~/Downloads/eval_data
+
+3. Upload (Mac → Pod)
+./runpod-sync.sh upload ~/Downloads/eval_data /workspace/eval_data
+
+4. optional: anderer Server
+./runpod-sync.sh download /workspace/data ~/Downloads/data user@ssh.runpod.io
