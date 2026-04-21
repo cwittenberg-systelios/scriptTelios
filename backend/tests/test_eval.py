@@ -71,9 +71,12 @@ STYLE_SECTION_HEADINGS = {
         "Befund",
     ],
     "akutantrag": [
+        "Zusammenfassung (Begründung der Notwendigkeit)",
+        "Begründung der Notwendigkeit",
         "Begründung für Akutaufnahme",
-        "Begründung",
+        "Begründung für die Akutaufnahme",
         "Akutbegründung",
+        "Begründung",
     ],
     "dokumentation": None,  # Gesprächszusammenfassung = ganzes Dokument
 }
@@ -893,11 +896,16 @@ async def test_eval_workflow(workflow, test_case, request):
                 if p.suffix.lower() == ".txt":
                     style_text = p.read_text(encoding="utf-8")
                 elif p.suffix.lower() in (".docx", ".doc"):
-                    # Relevanten Abschnitt aus DOCX extrahieren
+                    # Relevanten Abschnitt aus DOCX extrahieren – gleiche Logik wie
+                    # load_all_style_texts: erst Bold-Match, dann Plain-Text-Fallback,
+                    # dann Volltext.
                     headings = STYLE_SECTION_HEADINGS.get(workflow)
+                    style_text = None
                     if headings:
                         style_text = _extract_docx_section(p, headings)
-                    else:
+                        if not style_text or len(style_text.split()) < 20:
+                            style_text = _extract_section_by_text(p, headings)
+                    if not style_text or len(style_text.split()) < 20:
                         style_text = _extract_docx_text(p)
                 if style_text:
                     ev.check_style_consistency(style_text)

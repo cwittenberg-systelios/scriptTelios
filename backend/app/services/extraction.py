@@ -74,6 +74,14 @@ STYLE_SECTION_HEADINGS = {
         "Auftragsklärung",
         "Relevante Gesprächsinhalte",
     ],
+    "akutantrag": [
+        "Zusammenfassung (Begründung der Notwendigkeit)",
+        "Begründung der Notwendigkeit",
+        "Begründung für Akutaufnahme",
+        "Begründung für die Akutaufnahme",
+        "Akutbegründung",
+        "Begründung",
+    ],
 }
 
 

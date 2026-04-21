@@ -43,13 +43,21 @@ logger = logging.getLogger(__name__)
 RELEVANTE_ABSCHNITTE = [
     "Aktuelle Anamnese",
     "Verlauf und Begründung der weiteren Verlängerung",
+    "Bisheriger Verlauf und Begründung der Verlängerung",
+    "Bisheriger Verlauf",
     "Problemrelevante Vorgeschichte",
     "Biographische Anamnese",
     "Psychotherapeutischer Verlauf",
+    "Psychotherapeutischer Behandlungsverlauf",
+    "Zusammenfassung (Begründung der Notwendigkeit)",
+    "Begründung der Notwendigkeit",
+    "Begründung für Akutaufnahme",
+    "Begründung für die Akutaufnahme",
+    "Akutbegründung",
 ]
 
 # Dokumenttypen bei denen Abschnitts-Filterung sinnvoll ist
-DOKUMENTTYPEN_MIT_ABSCHNITTEN = {"verlaengerung", "entlassbericht"}
+DOKUMENTTYPEN_MIT_ABSCHNITTEN = {"verlaengerung", "folgeverlaengerung", "entlassbericht", "akutantrag"}
 
 
 def _extrahiere_relevante_abschnitte(text: str) -> str:
@@ -136,20 +144,38 @@ async def upload_style_example(
 
     # ── Text extrahieren ──────────────────────────────────────────
     source_filename = None
+    docx_path = None  # Fuer Abschnittsextraktion bei DOCX
     if text_content and text_content.strip():
         raw_text = text_content.strip()
         source_filename = None
     else:
         path = await save_upload(beispiel_file, ALLOWED_DOCS)
         source_filename = beispiel_file.filename
+        # Bei DOCX koennen wir strukturierte Abschnittsextraktion nutzen
+        if path.suffix.lower() in (".docx", ".doc"):
+            docx_path = path
         try:
             raw_text = await extract_text(path)
         except Exception as e:
             raise HTTPException(status_code=422, detail=f"Text konnte nicht extrahiert werden: {e}")
 
-    # ── Abschnitts-Filterung für strukturierte Dokumente ─────────
+    # ── Abschnitts-Filterung: nur relevante Abschnitte speichern ──
+    # Bei DOCX: verlaessliche Heading-Extraktion (erkennt Bold-Headings, Plain-Text-Headings,
+    # End-Marker wie Grussformeln). Bei anderen Formaten: Fallback auf primitive Text-Filterung.
     if dokumenttyp in DOKUMENTTYPEN_MIT_ABSCHNITTEN:
-        raw_text = _extrahiere_relevante_abschnitte(raw_text)
+        if docx_path is not None:
+            from app.services.extraction import extract_docx_section
+            section_text = extract_docx_section(docx_path, dokumenttyp)
+            if section_text and len(section_text.split()) >= 30:
+                raw_text = section_text
+                logger.info("Stilbibliothek: Abschnitt via extract_docx_section (%d Woerter)",
+                            len(raw_text.split()))
+            else:
+                # Fallback wenn DOCX-Section-Extraktion nichts findet
+                raw_text = _extrahiere_relevante_abschnitte(raw_text)
+        else:
+            # Nicht-DOCX: Text-basierte Filterung
+            raw_text = _extrahiere_relevante_abschnitte(raw_text)
 
     if len(raw_text.strip()) < 30:
         raise HTTPException(status_code=422, detail="Dokument scheint leer zu sein oder konnte nicht gelesen werden")
