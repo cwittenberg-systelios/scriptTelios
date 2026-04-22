@@ -81,6 +81,9 @@ STYLE_SECTION_HEADINGS = {
         "Begründung für die Akutaufnahme",
         "Akutbegründung",
         "Begründung",
+        # Fallback wenn die Begruendungs-Abschnitte leer sind:
+        # Aktuelle Anamnese zeigt ebenfalls den therapeutischen Schreibstil
+        "Aktuelle Anamnese",
     ],
 }
 
@@ -111,10 +114,38 @@ def extract_docx_section(file_path: Path, workflow: str) -> str:
     paragraphs = doc.paragraphs
     headings_lower = [h.lower() for h in headings]
 
-    # Ueberschrift finden
-    start_idx = None
-    start_level = None
+    def _extract_from(start_idx: int, start_level: int | None) -> str:
+        """Sammelt Text ab start_idx bis zur naechsten Heading/End-Marker."""
+        end_markers = [
+            "wir bitten daher um", "daher bitten wir um", "vor diesem hintergrund bitten wir",
+            "wir bitten um", "fuer rueckfragen", "für rückfragen",
+            "mit freundlichem gruß", "mit freundlichen grüßen",
+        ]
+        section_lines = []
+        for p in paragraphs[start_idx:]:
+            text = p.text.strip()
+            if not text:
+                section_lines.append("")
+                continue
+            text_lower = text.lower()
+            if any(text_lower.startswith(m) for m in end_markers):
+                break
+            style_name = (p.style.name or "").lower()
+            is_heading = "heading" in style_name or style_name.startswith("überschrift")
+            is_bold_heading = (
+                all(run.bold for run in p.runs if run.text.strip())
+                and len(text.split()) <= 8
+            ) if p.runs else False
+            if is_heading or is_bold_heading:
+                level_match = re.search(r"(\d)", style_name)
+                level = int(level_match.group(1)) if level_match else 2
+                if level <= (start_level or 2):
+                    break
+            section_lines.append(text)
+        return "\n".join(section_lines).strip()
 
+    # Alle Bold/Heading-Positionen mit ihren Matches sammeln
+    candidates = []  # [(start_idx, start_level, matched_heading), ...]
     for i, p in enumerate(paragraphs):
         text = p.text.strip()
         if not text:
@@ -127,81 +158,43 @@ def extract_docx_section(file_path: Path, workflow: str) -> str:
             text_lower = text.lower().rstrip(":")
             for h in sorted(headings_lower, key=len, reverse=True):
                 if len(h) > 20:
-                    matched = h in text_lower or text_lower in h
+                    matched = h in text_lower or (
+                        text_lower in h and len(text_lower.split()) >= len(h.split()) - 1
+                    )
                 else:
                     matched = text_lower == h or text_lower.startswith(h)
                 if matched:
-                    start_idx = i + 1
                     level_match = re.search(r"(\d)", style_name)
-                    start_level = int(level_match.group(1)) if level_match else 2
+                    lvl = int(level_match.group(1)) if level_match else 2
+                    candidates.append((i + 1, lvl, h))
                     break
-        if start_idx is not None:
-            break
 
-    if start_idx is None:
-        # Bold/Heading-Match fehlgeschlagen → direkt Plain-Text-Suche versuchen
-        logger.info("Kein Bold-Match in %s fuer %s – versuche Plain-Text-Suche",
-                     file_path.name, workflow)
-        result = _extract_section_by_text(file_path, headings)
+    # Sortiere Kandidaten nach Heading-Prioritaet (Position in headings-Liste)
+    # Je frueher in der Liste, desto hoeher die Prioritaet
+    heading_priority = {h.lower(): idx for idx, h in enumerate(headings)}
+    candidates.sort(key=lambda c: heading_priority.get(c[2], 999))
+
+    # Probiere jeden Kandidaten – nimm den ersten mit ausreichend Inhalt
+    for start_idx, start_level, matched_h in candidates:
+        result = _extract_from(start_idx, start_level)
         if result and len(result.split()) >= 20:
-            logger.info("DOCX-Abschnitt via Plain-Text: %s/%s → %d Woerter",
-                         file_path.name, workflow, len(result.split()))
+            logger.info("DOCX-Abschnitt: %s/%s via '%s' → %d Woerter",
+                         file_path.name, workflow, matched_h, len(result.split()))
             return result
-        logger.info("Auch Plain-Text-Suche fehlgeschlagen – verwende gesamten Text")
-        return _extract_docx_fulltext(file_path)
+        else:
+            logger.debug("Heading '%s' in %s ergab zu wenig Text (%d Woerter) – probiere naechste",
+                          matched_h, file_path.name, len(result.split()) if result else 0)
 
-    # Text sammeln bis naechste Heading gleicher/hoeherer Ebene
-    # End-Marker: bekannte Schluss-Phrasen die das Ende des Verlaufs-Abschnitts markieren
-    end_markers = [
-        "wir bitten daher um", "daher bitten wir um", "vor diesem hintergrund bitten wir",
-        "wir bitten um", "fuer rueckfragen", "für rückfragen",
-        "mit freundlichem gruß", "mit freundlichen grüßen",
-    ]
-    section_lines = []
-    for p in paragraphs[start_idx:]:
-        text = p.text.strip()
-        if not text:
-            section_lines.append("")
-            continue
-        text_lower = text.lower()
-
-        # End-Marker erkennen (typischer Schlusssatz/Grussformel)
-        if any(text_lower.startswith(m) for m in end_markers):
-            break
-
-        style_name = (p.style.name or "").lower()
-        is_heading = "heading" in style_name or style_name.startswith("überschrift")
-        # Bold-Heading-Erkennung: Heading-Style ODER kurze Bold-Zeile (<=8 Woerter)
-        is_bold_heading = (
-            all(run.bold for run in p.runs if run.text.strip())
-            and len(text.split()) <= 8
-        ) if p.runs else False
-
-        if is_heading or is_bold_heading:
-            level_match = re.search(r"(\d)", style_name)
-            level = int(level_match.group(1)) if level_match else 2
-            if level <= (start_level or 2):
-                break
-
-        section_lines.append(text)
-
-    result = "\n".join(section_lines).strip()
-    if len(result.split()) < 20:
-        # Fallback: Plain-Text-Suche
-        logger.info("Style-Match zu kurz in %s – versuche Plain-Text-Suche",
-                     file_path.name)
-        result = _extract_section_by_text(file_path, headings)
-        if result and len(result.split()) >= 20:
-            logger.info("DOCX-Abschnitt via Plain-Text: %s/%s → %d Woerter",
-                         file_path.name, workflow, len(result.split()))
-            return result
-        # Fallback 2: Volltext
-        logger.info("Auch Plain-Text-Suche fehlgeschlagen – verwende gesamten Text")
-        return _extract_docx_fulltext(file_path)
-
-    logger.info("DOCX-Abschnitt extrahiert: %s/%s → %d Woerter",
-                 file_path.name, workflow, len(result.split()))
-    return result
+    # Kein Bold-Match mit Inhalt → Plain-Text-Suche versuchen
+    logger.info("Kein Bold-Match mit Inhalt in %s fuer %s – versuche Plain-Text-Suche",
+                 file_path.name, workflow)
+    result = _extract_section_by_text(file_path, headings)
+    if result and len(result.split()) >= 20:
+        logger.info("DOCX-Abschnitt via Plain-Text: %s/%s → %d Woerter",
+                     file_path.name, workflow, len(result.split()))
+        return result
+    logger.info("Auch Plain-Text-Suche fehlgeschlagen – verwende gesamten Text")
+    return _extract_docx_fulltext(file_path)
 
 
 def _extract_section_by_text(file_path: Path, headings: list[str]) -> str:
@@ -228,7 +221,10 @@ def _extract_section_by_text(file_path: Path, headings: list[str]) -> str:
         # Spezifischste zuerst (laengere Headings)
         for h in sorted(headings_lower, key=len, reverse=True):
             if len(h) > 20:
-                if h in text or text in h:
+                matched = h in text or (
+                    text in h and len(text.split()) >= len(h.split()) - 1
+                )
+                if matched:
                     start_idx = i + 1
                     break
             else:
@@ -263,6 +259,94 @@ def _extract_section_by_text(file_path: Path, headings: list[str]) -> str:
         section_lines.append(text)
 
     return "\n".join(section_lines).strip()
+
+
+def extract_patient_name(text: str) -> dict | None:
+    """
+    Extrahiert den Patientennamen aus einem Dokument-Text.
+
+    Sucht nach typischen Mustern im Briefkopf:
+      - "Wir berichten über Herrn/Frau [Vorname] [Nachname]"
+      - "Herrn/Frau\n[Vorname] [Nachname]" (mit Zeilenumbruch)
+      - Selbstauskunft: "Name:" / "Nachname:" / "Vorname:"
+
+    Rueckgabe:
+      {"anrede": "Herr"/"Frau", "vorname": "...", "nachname": "...", "initial": "K."}
+      oder None wenn nichts gefunden.
+
+    Die Initiale ist der erste Buchstabe des Nachnamens + Punkt.
+    """
+    import re
+    if not text or len(text) < 20:
+        return None
+
+    # Suche nur in den ersten 2000 Zeichen (Briefkopf/Deckblatt)
+    head = text[:2000]
+
+    # Muster 1: "wir berichten über Herrn/Frau Vorname Nachname"
+    m = re.search(
+        r"[Ww]ir berichten (?:über|ueber)\s+(Herrn|Frau)\s+([A-ZÄÖÜ][a-zäöüß\-]+)"
+        r"(?:\s+(?:von\s+)?(?:der|de[nr])?\s*([A-ZÄÖÜ][\wäöüÄÖÜß\.\-]*(?:\s+[A-ZÄÖÜ][\wäöüÄÖÜß\.\-]*)?))",
+        head,
+    )
+    if m:
+        anrede = m.group(1)
+        if anrede == "Herrn":
+            anrede = "Herr"
+        vorname = m.group(2)
+        nachname = (m.group(3) or "").strip()
+        if nachname:
+            initial = nachname.split()[0][0].upper() + "."
+            # Falls van/von: Initiale vom letzten Teil
+            if nachname.split()[0].lower() in ("van", "von", "de", "der", "zu"):
+                if len(nachname.split()) > 1:
+                    initial = nachname.split()[-1][0].upper() + "."
+            return {
+                "anrede": anrede,
+                "vorname": vorname,
+                "nachname": nachname,
+                "initial": initial,
+            }
+
+    # Muster 2: "Herr/Frau" auf einer Zeile, Name auf naechster Zeile (Briefkopf-Block)
+    m = re.search(
+        r"^\s*(Herr|Frau)\s*\n+([A-ZÄÖÜ][a-zäöüß\-]+)\s+([A-ZÄÖÜ][\wäöüÄÖÜß\.\-]+)",
+        head, re.MULTILINE,
+    )
+    if m:
+        anrede = m.group(1)
+        vorname = m.group(2)
+        nachname = m.group(3)
+        initial = nachname[0].upper() + "."
+        return {"anrede": anrede, "vorname": vorname, "nachname": nachname, "initial": initial}
+
+    # Muster 3: Selbstauskunft "Name: ..." bzw. "Nachname: ..."
+    nachname = None
+    vorname = None
+    anrede = None
+    m_nn = re.search(r"Nachname[:\s]+([A-ZÄÖÜ][\wäöüÄÖÜß\-]+)", head)
+    m_vn = re.search(r"Vorname[:\s]+([A-ZÄÖÜ][\wäöüÄÖÜß\-]+)", head)
+    m_ga = re.search(r"Geschlecht[:\s]+(m[aä]nnlich|weiblich|m|w)", head, re.IGNORECASE)
+    if m_nn:
+        nachname = m_nn.group(1)
+    if m_vn:
+        vorname = m_vn.group(1)
+    if m_ga:
+        g = m_ga.group(1).lower()
+        anrede = "Frau" if g.startswith("w") else "Herr"
+    if nachname:
+        if not anrede:
+            # Fallback: aus Vorname schliessen (sehr grobe Heuristik)
+            anrede = "Frau" if vorname and vorname.endswith("a") else "Herr"
+        initial = nachname[0].upper() + "."
+        return {
+            "anrede": anrede,
+            "vorname": vorname or "",
+            "nachname": nachname,
+            "initial": initial,
+        }
+
+    return None
 
 
 def _extract_docx_fulltext(file_path: Path) -> str:

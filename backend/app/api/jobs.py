@@ -420,13 +420,27 @@ async def create_generate_job(
             if style_context:
                 style_info = {"source": "style_library", "therapeut_id": therapeut_id.strip(), "chars": len(style_context)}
 
-        # 4. Generieren – jede Variable hat genau eine Bedeutung
+        # 4. Patientennamen aus Unterlagen extrahieren (Briefkopf oder Selbstauskunft)
+        # Prioritaet: antragsvorlage/vorantrag (enthalten "Wir berichten über ...")
+        #             selbstauskunft (enthaelt "Nachname: ...")
+        from app.services.extraction import extract_patient_name
+        patient_name = None
+        for src_text in (antragsvorlage_text, vorantrag_text, selbstauskunft_text, verlaufsdoku_text, vorbefunde_text):
+            if src_text:
+                patient_name = extract_patient_name(src_text)
+                if patient_name:
+                    logger.info("Patientenname erkannt: %s %s. (aus Unterlagen)",
+                                patient_name["anrede"], patient_name["initial"])
+                    break
+
+        # 5. Generieren – jede Variable hat genau eine Bedeutung
         system = build_system_prompt(
             workflow=workflow,
             custom_prompt=prompt,
             style_context=style_context,
             style_is_example=style_is_example,
             diagnosen=dx_list,
+            patient_name=patient_name,
         )
         user = build_user_content(
             workflow=workflow,
@@ -439,6 +453,7 @@ async def create_generate_job(
             vorantrag_text=vorantrag_text,
             diagnosen=dx_list,
             custom_prompt=prompt if prompt and prompt.strip() else None,
+            patient_name=patient_name,
         )
         # Workflow-spezifische max_tokens:
         # Entlassbericht/Verlängerung: langer Fliesstext, mind. 800 Wörter → 4000 Tokens

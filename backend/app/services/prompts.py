@@ -532,6 +532,7 @@ def build_system_prompt(
     style_context: Optional[str] = None,
     style_is_example: bool = False,
     diagnosen: Optional[list[str]] = None,
+    patient_name: Optional[dict] = None,
 ) -> str:
     """
     Baut den finalen System-Prompt zusammen:
@@ -542,6 +543,10 @@ def build_system_prompt(
        - anamnese/verlängerung/entlassbericht: strukturelle Schablone
          (Gliederung, Länge, Absatztiefe werden übernommen)
     4. Abschließende Anweisung
+
+    patient_name: optional dict {anrede, vorname, nachname, initial}
+                  aus extract_patient_name() – wird als expliziter Name-Hinweis
+                  an das Modell gegeben.
     """
     base = BASE_PROMPTS.get(workflow, "")
 
@@ -609,6 +614,24 @@ def build_system_prompt(
         style_context and style_context.strip()
         and workflow in ("anamnese", "verlaengerung", "entlassbericht")
     )
+
+    # Expliziter Patientennamen-Hinweis (aus den Unterlagen extrahiert)
+    if patient_name and patient_name.get("initial"):
+        anrede = patient_name["anrede"]
+        initial = patient_name["initial"]
+        nachname = patient_name.get("nachname", "")
+        vorname = patient_name.get("vorname", "")
+        parts.append(
+            f"\nPATIENTENNAME (aus den Unterlagen extrahiert):\n"
+            f"Der aktuelle Patient ist {anrede} {vorname} {nachname}.\n"
+            f"Verwende im gesamten Bericht AUSSCHLIESSLICH die Bezeichnung '{anrede} {initial}' "
+            f"(Anrede + erster Buchstabe des Nachnamens + Punkt).\n"
+            f"NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, "
+            f"NIEMALS Platzhalter wie '[Patient/in]', '[Initiale]' oder 'Frau X.'.\n"
+            f"Beispiel: 'Nach der Aufnahme zeigte sich {anrede} {initial} zunehmend...' statt "
+            f"'Nach der Aufnahme zeigte sich [Patient/in] zunehmend...'.\n"
+        )
+
     if has_structural_template:
         parts.append(
             "\nSchreibe jetzt den Bericht in der Struktur des Stilbeispiels. "

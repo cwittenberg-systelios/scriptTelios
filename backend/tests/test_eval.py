@@ -77,6 +77,9 @@ STYLE_SECTION_HEADINGS = {
         "Begründung für die Akutaufnahme",
         "Akutbegründung",
         "Begründung",
+        # Fallback wenn die Begruendungs-Abschnitte leer sind:
+        # Aktuelle Anamnese zeigt ebenfalls den therapeutischen Schreibstil
+        "Aktuelle Anamnese",
     ],
     "dokumentation": None,  # Gesprächszusammenfassung = ganzes Dokument
 }
@@ -99,8 +102,10 @@ def _extract_docx_section(docx_path: Path, headings: list[str]) -> str:
     """
     Extrahiert einen Abschnitt aus einem DOCX anhand der Überschrift.
     
-    Sucht die erste Überschrift die matcht, dann sammelt allen Text
-    bis zur nächsten Heading gleicher oder höherer Ebene.
+    Sammelt ALLE Bold/Heading-Matches, sortiert nach Prioritaet in der headings-Liste,
+    und probiert jeden Kandidaten durch bis einer ausreichend Inhalt liefert (>= 20 Woerter).
+    Dadurch werden leere Abschnitte (z.B. Vorlagen mit leerer "Begruendung") uebersprungen
+    und der naechste gefuellte Abschnitt (z.B. "Aktuelle Anamnese") wird genutzt.
     """
     try:
         from docx import Document
@@ -110,89 +115,88 @@ def _extract_docx_section(docx_path: Path, headings: list[str]) -> str:
 
     doc = Document(str(docx_path))
     paragraphs = doc.paragraphs
-
-    # Überschrift finden (case-insensitive Teilmatch)
-    start_idx = None
-    start_level = None
     headings_lower = [h.lower() for h in headings]
 
+    def _extract_from(start_idx: int, start_level: int | None) -> str:
+        """Sammelt Text ab start_idx bis zur naechsten Heading/End-Marker."""
+        end_markers = [
+            "wir bitten daher um", "daher bitten wir um", "vor diesem hintergrund bitten wir",
+            "wir bitten um", "fuer rueckfragen", "für rückfragen",
+            "mit freundlichem gruß", "mit freundlichen grüßen",
+        ]
+        section_lines = []
+        for p in paragraphs[start_idx:]:
+            text = p.text.strip()
+            if not text:
+                section_lines.append("")
+                continue
+            text_lower = text.lower()
+            if any(text_lower.startswith(m) for m in end_markers):
+                break
+            style_name = (p.style.name or "").lower()
+            is_heading = "heading" in style_name or style_name.startswith("überschrift")
+            is_bold_heading = (
+                all(run.bold for run in p.runs if run.text.strip())
+                and len(text.split()) <= 8
+            ) if p.runs else False
+            if is_heading or is_bold_heading:
+                level_match = re.search(r'(\d)', style_name)
+                level = int(level_match.group(1)) if level_match else 2
+                if level <= (start_level or 2):
+                    break
+            section_lines.append(text)
+        return "\n".join(section_lines).strip()
+
+    # Alle Bold/Heading-Positionen mit ihren Matches sammeln
+    candidates = []
     for i, p in enumerate(paragraphs):
         text = p.text.strip()
         if not text:
             continue
         style_name = (p.style.name or "").lower()
         is_heading = "heading" in style_name or style_name.startswith("überschrift")
-
-        # Auch fettgedruckter Text als Überschrift erkennen
         is_bold = all(run.bold for run in p.runs if run.text.strip()) if p.runs else False
 
         if is_heading or is_bold:
             text_lower = text.lower().rstrip(":")
-            # Spezifischste Headings zuerst prüfen (längere Strings zuerst)
             for h in sorted(headings_lower, key=len, reverse=True):
-                # Lange Headings (>20 Zeichen): Substring-Match erlaubt (spezifisch genug)
-                # Kurze Headings: nur exakt oder startswith (vermeidet Falsch-Positive)
                 if len(h) > 20:
-                    matched = h in text_lower or text_lower in h
+                    matched = h in text_lower or (
+                        text_lower in h and len(text_lower.split()) >= len(h.split()) - 1
+                    )
                 else:
                     matched = text_lower == h or text_lower.startswith(h)
                 if matched:
-                    start_idx = i + 1
                     level_match = re.search(r'(\d)', style_name)
-                    start_level = int(level_match.group(1)) if level_match else 2
+                    lvl = int(level_match.group(1)) if level_match else 2
+                    candidates.append((i + 1, lvl, h))
                     break
-        if start_idx is not None:
-            break
 
-    if start_idx is None:
-        # Fallback: gesamten Text zurückgeben wenn Überschrift nicht gefunden
-        logger.warning(
-            "Überschrift nicht gefunden in %s (gesucht: %s). Verwende gesamten Text.",
-            docx_path.name, headings,
-        )
-        return "\n".join(p.text for p in paragraphs if p.text.strip())
+    # Sortiere nach Prioritaet in der headings-Liste (frueher = wichtiger)
+    heading_priority = {h.lower(): idx for idx, h in enumerate(headings)}
+    candidates.sort(key=lambda c: heading_priority.get(c[2], 999))
 
-    # Text sammeln bis nächste Heading gleicher/höherer Ebene
-    section_lines = []
-    # End-Marker: bekannte Schluss-Phrasen die das Ende des Verlaufs-Abschnitts markieren
-    end_markers = [
-        "wir bitten daher um", "daher bitten wir um", "vor diesem hintergrund bitten wir",
-        "wir bitten um", "fuer rueckfragen", "für rückfragen",
-        "mit freundlichem gruß", "mit freundlichen grüßen",
-    ]
-    for p in paragraphs[start_idx:]:
-        text = p.text.strip()
-        if not text:
-            section_lines.append("")
-            continue
-        text_lower = text.lower()
-        # End-Marker erkennen (typischer Schlusssatz/Grussformel)
-        if any(text_lower.startswith(m) for m in end_markers):
-            break
+    # Probiere jeden Kandidaten
+    for start_idx, start_level, matched_h in candidates:
+        result = _extract_from(start_idx, start_level)
+        if result and len(result.split()) >= 20:
+            logger.info(
+                "DOCX-Abschnitt extrahiert: %s via '%s' → %d Wörter",
+                docx_path.name, matched_h, len(result.split()),
+            )
+            return result
+        else:
+            logger.debug(
+                "Heading '%s' in %s ergab zu wenig Text (%d Wörter) – probiere naechste",
+                matched_h, docx_path.name, len(result.split()) if result else 0,
+            )
 
-        style_name = (p.style.name or "").lower()
-        is_heading = "heading" in style_name or style_name.startswith("überschrift")
-        is_bold_heading = (
-            all(run.bold for run in p.runs if run.text.strip())
-            and len(text.split()) <= 8  # kurze fette Zeile = wahrscheinlich Überschrift
-        ) if p.runs else False
-
-        if is_heading or is_bold_heading:
-            # Neue Überschrift → Abschnitt endet
-            level_match = re.search(r'(\d)', style_name)
-            level = int(level_match.group(1)) if level_match else 2
-            if level <= start_level:
-                break
-            # Unterüberschrift → weiter sammeln
-
-        section_lines.append(text)
-
-    result = "\n".join(section_lines).strip()
-    logger.info(
-        "DOCX-Abschnitt extrahiert: %s → %d Zeichen (%d Wörter)",
-        docx_path.name, len(result), len(result.split()),
+    # Kein Match mit Inhalt → Volltext-Fallback
+    logger.warning(
+        "Keine Überschrift mit Inhalt in %s (gesucht: %s). Verwende gesamten Text.",
+        docx_path.name, headings,
     )
-    return result
+    return "\n".join(p.text for p in paragraphs if p.text.strip())
 
 
 def load_style_text(therapeut: str, workflow: str) -> str | None:
@@ -230,7 +234,10 @@ def _extract_section_by_text(docx_path: Path, headings: list[str]) -> str:
         if not text:
             continue
         for h in headings_lower:
-            if h in text or text in h:
+            matched = h in text or (
+                text in h and len(text.split()) >= len(h.split()) - 1
+            )
+            if matched:
                 start_idx = i + 1
                 break
         if start_idx is not None:
