@@ -658,6 +658,7 @@ def build_user_content(
     vorantrag_text: Optional[str] = None,
     diagnosen: Optional[list[str]] = None,
     custom_prompt: Optional[str] = None,
+    patient_name: Optional[dict] = None,
 ) -> str:
     """
     Baut den User-Content-Block zusammen.
@@ -672,8 +673,20 @@ def build_user_content(
       vorantrag_text:      Folgeverlängerung: Vorheriger Bericht mit Verlauf/Anamnese
       diagnosen:           ICD-Codes (explizit oder aus Antragsvorlage)
       custom_prompt:       Therapeuten-Fokus (wird am Ende eingebettet)
+      patient_name:        Dict {anrede, vorname, nachname, initial} – explizit uebergeben
+                           oder aus Unterlagen extrahiert. Wird als expliziter Hinweis
+                           am Anfang des User-Blocks eingefuegt.
     """
     parts = []
+
+    # Expliziter Patientenname ganz oben im User-Block (wenn verfuegbar)
+    if patient_name and patient_name.get("initial"):
+        anrede = patient_name.get("anrede") or ""
+        initial = patient_name["initial"]
+        if anrede:
+            parts.append(f"AKTUELLER PATIENT: {anrede} {initial} (verwende ausschliesslich diese Bezeichnung)")
+        else:
+            parts.append(f"AKTUELLER PATIENT: Namenskuerzel '{initial}' (verwende ausschliesslich diese Bezeichnung)")
 
     if workflow == "dokumentation":
         if transcript:

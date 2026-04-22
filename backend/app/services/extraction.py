@@ -349,7 +349,63 @@ def extract_patient_name(text: str) -> dict | None:
     return None
 
 
-def _extract_docx_fulltext(file_path: Path) -> str:
+def parse_explicit_patient_name(name_str: str) -> dict | None:
+    """
+    Parst einen explizit uebergebenen Namen-String.
+
+    Akzeptierte Formate:
+      - "Herr/Frau Vorname Nachname"  → {anrede, vorname, nachname, initial}
+      - "Herr/Frau Nachname"          → {anrede, nachname, initial, vorname=""}
+      - "Vorname Nachname"            → {anrede="", vorname, nachname, initial}
+      - "Nachname"                    → {anrede="", vorname="", nachname, initial}
+
+    Wenn Anrede fehlt, wird sie leer gelassen (Modell nutzt dann 'die Klientin' etc).
+    """
+    import re
+    if not name_str:
+        return None
+    s = name_str.strip()
+    if not s:
+        return None
+
+    anrede = ""
+    # Anrede am Anfang erkennen (Herr/Frau/Herrn)
+    m = re.match(r"^(Herrn?|Frau)\s+(.+)$", s)
+    if m:
+        anrede = m.group(1)
+        if anrede == "Herrn":
+            anrede = "Herr"
+        rest = m.group(2).strip()
+    else:
+        rest = s
+
+    parts = rest.split()
+    if not parts:
+        return None
+
+    if len(parts) == 1:
+        # Nur Nachname
+        nachname = parts[0]
+        vorname = ""
+    else:
+        # Annahme: letztes Wort = Nachname, Rest = Vorname(n)
+        # Ausnahme: "van Dyk", "von Beethoven" etc. → letztes Wort bleibt Nachname
+        nachname = parts[-1]
+        vorname = " ".join(parts[:-1])
+
+    initial = nachname[0].upper() + "." if nachname else ""
+    if not initial:
+        return None
+
+    return {
+        "anrede": anrede,
+        "vorname": vorname,
+        "nachname": nachname,
+        "initial": initial,
+    }
+
+
+
     """Extrahiert den gesamten Text eines DOCX als Fallback."""
     try:
         from docx import Document

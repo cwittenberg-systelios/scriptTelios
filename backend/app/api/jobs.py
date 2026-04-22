@@ -221,6 +221,7 @@ async def create_generate_job(
     workflow:         Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"], Form()],
     prompt:           Annotated[str,  Form()],
     therapeut_id:     Annotated[Optional[str], Form()] = None,
+    patientenname:    Annotated[Optional[str], Form(description="Explizit uebergebener Patientenname (vor allem bei P1 Gespraechszusammenfassung). Format: 'Vorname Nachname' oder 'Herr/Frau Nachname'. Wird in Initiale umgewandelt fuer den Output.")] = None,
     current_user:     str = Depends(get_current_user),
     diagnosen:        Annotated[Optional[str], Form()] = None,
     transcript:       Annotated[Optional[str], Form()] = None,
@@ -420,18 +421,33 @@ async def create_generate_job(
             if style_context:
                 style_info = {"source": "style_library", "therapeut_id": therapeut_id.strip(), "chars": len(style_context)}
 
-        # 4. Patientennamen aus Unterlagen extrahieren (Briefkopf oder Selbstauskunft)
-        # Prioritaet: antragsvorlage/vorantrag (enthalten "Wir berichten über ...")
-        #             selbstauskunft (enthaelt "Nachname: ...")
-        from app.services.extraction import extract_patient_name
+        # 4. Patientennamen ermitteln — Reihenfolge:
+        #    a) Explizit uebergeben (vor allem P1 Gespraechszusammenfassung)
+        #    b) Aus antragsvorlage/vorantrag (Briefkopf "Wir berichten ueber ...")
+        #    c) Aus selbstauskunft (Seite 1, "Nachname: ...")
+        #    d) Fallback: verlaufsdoku / vorbefunde
+        from app.services.extraction import extract_patient_name, parse_explicit_patient_name
         patient_name = None
-        for src_text in (antragsvorlage_text, vorantrag_text, selbstauskunft_text, verlaufsdoku_text, vorbefunde_text):
-            if src_text:
-                patient_name = extract_patient_name(src_text)
-                if patient_name:
-                    logger.info("Patientenname erkannt: %s %s. (aus Unterlagen)",
-                                patient_name["anrede"], patient_name["initial"])
-                    break
+
+        # a) Explizit uebergeben
+        if patientenname and patientenname.strip():
+            patient_name = parse_explicit_patient_name(patientenname.strip())
+            if patient_name:
+                logger.info("Patientenname explizit uebergeben: %s %s.",
+                            patient_name["anrede"], patient_name["initial"])
+
+        # b-d) Fallback: aus Dokumenten extrahieren
+        if not patient_name:
+            for src_text in (antragsvorlage_text, vorantrag_text, selbstauskunft_text, verlaufsdoku_text, vorbefunde_text):
+                if src_text:
+                    patient_name = extract_patient_name(src_text)
+                    if patient_name:
+                        logger.info("Patientenname aus Unterlagen erkannt: %s %s.",
+                                    patient_name["anrede"], patient_name["initial"])
+                        break
+
+        if not patient_name:
+            logger.warning("Kein Patientenname ermittelbar – Modell muss aus Unterlagen ableiten")
 
         # 5. Generieren – jede Variable hat genau eine Bedeutung
         system = build_system_prompt(

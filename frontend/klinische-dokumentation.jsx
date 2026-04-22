@@ -1273,15 +1273,19 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   fd.append("workflow",   workflow);
   fd.append("prompt",     prompt);
   fd.append("transcript", userContent);
-  if (therapeutId)      fd.append("therapeut_id",  therapeutId);
-  if (files.audio)      fd.append("audio",          files.audio);
-  if (files.selbst)     fd.append("selbstauskunft", files.selbst);
-  if (files.vorbef)     fd.append("vorbefunde",     files.vorbef);
-  if (files.style)      fd.append("style_file",     files.style);
-  if (files.diagnosen)  fd.append("diagnosen",      files.diagnosen);
-  if (files.bullets)    fd.append("bullets",        files.bullets);
-  if (files.styleText)  fd.append("style_text",     files.styleText);
-  if (files.model)      fd.append("model",           files.model);
+  if (therapeutId)       fd.append("therapeut_id",    therapeutId);
+  if (files.patientName) fd.append("patientenname",   files.patientName);
+  if (files.audio)       fd.append("audio",            files.audio);
+  if (files.selbst)      fd.append("selbstauskunft",   files.selbst);
+  if (files.vorbef)      fd.append("vorbefunde",       files.vorbef);
+  if (files.verlauf)     fd.append("verlaufsdoku",     files.verlauf);
+  if (files.antragsvorlage) fd.append("antragsvorlage", files.antragsvorlage);
+  if (files.vorantrag)   fd.append("vorantrag",        files.vorantrag);
+  if (files.style)       fd.append("style_file",       files.style);
+  if (files.diagnosen)   fd.append("diagnosen",        files.diagnosen);
+  if (files.bullets)     fd.append("bullets",          files.bullets);
+  if (files.styleText)   fd.append("style_text",       files.styleText);
+  if (files.model)       fd.append("model",             files.model);
 
   // Job starten
   const r = await apiFetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
@@ -1387,6 +1391,16 @@ function P1({ toast, resumeJob, onResumed, model }) {
 
     const promptMitGeschlecht = prompt + geschlechtHinweis;
 
+    // Expliziten Patientennamen fuer Backend zusammensetzen (P1)
+    // Format: "Frau M." / "Herr S." oder leer wenn kein Kuerzel
+    let patientNameExplicit = null;
+    if (kuerzel.trim()) {
+      const kurz = k;  // bereits normalisiert mit Punkt
+      if (geschlecht === "w")      patientNameExplicit = `Frau ${kurz}`;
+      else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
+      else                          patientNameExplicit = kurz;  // nur Kuerzel wenn auto
+    }
+
     try {
       const result = await generate("dokumentation", promptMitGeschlecht, text || "", {
         audio: audio,
@@ -1394,6 +1408,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
         styleText: styleText || null,
         bullets: bullets || null,
         model: model || null,
+        patientName: patientNameExplicit,
         onJobId: setCurrentJobId,
         signal: ac.signal,
       }, "p1");
@@ -1604,6 +1619,16 @@ function P2({ toast, resumeJob, onResumed, model }) {
     }[geschlecht];
 
     const sys = prompt.replace("{diagnosen}", dxStr) + geschlechtHinweis;
+
+    // Expliziten Patientennamen fuer Backend zusammensetzen (P2)
+    let patientNameExplicit = null;
+    if (kuerzel.trim()) {
+      const kurz = k;
+      if (geschlecht === "w")      patientNameExplicit = `Frau ${kurz}`;
+      else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
+      else                          patientNameExplicit = kurz;
+    }
+
     try {
       const result = await generate("anamnese", sys, "", {
         selbst:    selbst,
@@ -1613,6 +1638,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         styleText: styleText || null,
         bullets:   akutantrag ? "akutantrag" : (text || null),
         model:     model || null,
+        patientName: patientNameExplicit,
         onJobId:   setCurrentJobId,
         signal:    ac.signal,
       }, "p2");
@@ -1815,14 +1841,14 @@ function P3({ toast, resumeJob, onResumed, model }) {
     setLastJobId(null);
     try {
       const result = await generate("verlaengerung", "", "", {
-        selbst:    antrag,   // Antragsvorlage → Diagnosen/Anamnese
-        vorbef:    verlauf,  // Verlaufsdokumentation
-        style:     style,
-        styleText: styleText || null,
-        bullets:   fokus || null,
-        model:     model || null,
-        onJobId:   setCurrentJobId,
-        signal:    ac.signal,
+        antragsvorlage: antrag,   // Antragsvorlage → Diagnosen/Anamnese/Name
+        verlauf:        verlauf,  // Verlaufsdokumentation
+        style:          style,
+        styleText:      styleText || null,
+        bullets:        fokus || null,
+        model:          model || null,
+        onJobId:        setCurrentJobId,
+        signal:         ac.signal,
       }, "p3");
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
@@ -1951,14 +1977,14 @@ function P4({ toast, resumeJob, onResumed, model }) {
     setLastJobId(null);
     try {
       const result = await generate("entlassbericht", "", "", {
-        selbst:    bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund
-        vorbef:    verlauf,  // Verlaufsdokumentation
-        style:     style,
-        styleText: styleText || null,
-        bullets:   fokus || null,
-        model:     model || null,
-        onJobId:   setCurrentJobId,
-        signal:    ac.signal,
+        antragsvorlage: bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund/Name
+        verlauf:        verlauf,  // Verlaufsdokumentation
+        style:          style,
+        styleText:      styleText || null,
+        bullets:        fokus || null,
+        model:          model || null,
+        onJobId:        setCurrentJobId,
+        signal:         ac.signal,
       }, "p4");
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
