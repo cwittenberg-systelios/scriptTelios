@@ -214,23 +214,22 @@ def _extract_section_by_text(file_path: Path, headings: list[str]) -> str:
     headings_lower = [h.lower() for h in headings]
 
     start_idx = None
-    for i, p in enumerate(paragraphs):
-        text = p.text.strip().lower().rstrip(":")
-        if not text:
-            continue
-        # Spezifischste zuerst (laengere Headings)
-        for h in sorted(headings_lower, key=len, reverse=True):
-            if len(h) > 20:
-                matched = h in text or (
-                    text in h and len(text.split()) >= len(h.split()) - 1
+    # Spezifischste Headings zuerst (laengere Strings = praeziserer Match)
+    for h in sorted(headings_lower, key=len, reverse=True):
+        for i, p in enumerate(paragraphs):
+            text = p.text.strip().lower().rstrip(":")
+            if not text:
+                continue
+            # Einfacher Substring-Match: formatierungsunabhaengig, kein Fuzzy.
+            # Greift auch wenn Ueberschrift laenger ist als der gesuchte Heading-String
+            # (z.B. Paragraph "psychotherapeutischer verlauf und epikrise" → h "verlauf").
+            if h in text:
+                start_idx = i + 1
+                logger.debug(
+                    "_extract_section_by_text: '%s' gefunden in '%s' (Zeile %d)",
+                    h, p.text.strip()[:60], i,
                 )
-                if matched:
-                    start_idx = i + 1
-                    break
-            else:
-                if text == h or text.startswith(h):
-                    start_idx = i + 1
-                    break
+                break
         if start_idx is not None:
             break
 

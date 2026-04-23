@@ -942,6 +942,16 @@ function AudioInput({ file, onFile }) {
         <div className="rec-status">&#127897; {file.name}</div>
         <div className="rec-info">{fmtMB(file.size)} MB</div>
         <div className="rec-buttons">
+		  <button className="rec-btn rec-btn-stop" onClick={() => {
+			const url = URL.createObjectURL(file);
+			const a = document.createElement("a");
+			a.href = url;
+			a.download = file.name;
+			a.click();
+            URL.revokeObjectURL(url);
+          }}>
+            ↓ Aufnahme speichern
+          </button>
           <button className="rec-btn rec-btn-pause" onClick={() => { setSizeWarn(null); onFile(null); }}>
             Entfernen
           </button>

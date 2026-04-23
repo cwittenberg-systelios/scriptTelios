@@ -30,6 +30,30 @@ from pathlib import Path
 import httpx
 import pytest
 
+
+def derive_word_limits(
+    style_texts: list,
+    fallback_min: int,
+    fallback_max: int,
+    tolerance: float = 0.30,
+) -> tuple:
+    """
+    Leitet min/max Wortlimit dynamisch aus Stilvorlagen ab.
+    Spiegelt die gleichnamige Funktion in prompts.py (Option A):
+    beide operieren auf dem gleichen Rohtext, gleiche Logik.
+    """
+    counts = [len(t.split()) for t in style_texts if t and len(t.split()) >= 50]
+    if not counts:
+        return fallback_min, fallback_max
+    ref_min, ref_max = min(counts), max(counts)
+    derived_min = max(50, int(ref_min * (1 - tolerance)))
+    derived_max = int(ref_max * (1 + tolerance))
+    logger.info(
+        "Wortlimit aus %d Stilvorlage(n) abgeleitet: %d–%d (Referenz: %d–%d, ±%.0f%%)",
+        len(counts), derived_min, derived_max, ref_min, ref_max, tolerance * 100,
+    )
+    return derived_min, derived_max
+
 logger = logging.getLogger(__name__)
 
 # ── Konfiguration ────────────────────────────────────────────────────────────
@@ -191,7 +215,25 @@ def _extract_docx_section(docx_path: Path, headings: list[str]) -> str:
                 matched_h, docx_path.name, len(result.split()) if result else 0,
             )
 
-    # Kein Match mit Inhalt → Volltext-Fallback
+    # Stufe 2: Plain-String-Fallback (formatierungsunabhängig)
+    # Sucht nach Heading-Text als einfachem Substring in ALLEN Paragraphen,
+    # unabhängig von Bold/Heading-Formatierung. Greift wenn Stufe 1 keinen
+    # Kandidaten mit ≥20 Wörtern Inhalt lieferte (z.B. andere Formatierungen).
+    for h in headings_lower:
+        for i, p in enumerate(paragraphs):
+            text = p.text.strip().lower().rstrip(":")
+            if not text:
+                continue
+            if h in text:  # einfacher Substring-Match, keine Fuzzy-Logik
+                result = _extract_from(i + 1, None)
+                if result and len(result.split()) >= 20:
+                    logger.info(
+                        "DOCX-Abschnitt (Plain-String-Fallback): %s via '%s' → %d Wörter",
+                        docx_path.name, h, len(result.split()),
+                    )
+                    return result
+
+    # Stufe 3: Volltext-Fallback (letzter Ausweg)
     logger.warning(
         "Keine Überschrift mit Inhalt in %s (gesucht: %s). Verwende gesamten Text.",
         docx_path.name, headings,
@@ -859,7 +901,23 @@ async def test_eval_workflow(workflow, test_case, request):
     except (RuntimeError, TimeoutError) as e:
         pytest.fail(f"Generierung fehlgeschlagen: {e}")
 
-    text = job.get("result_text", "")
+    # Anamnese-Workflow: Anamnese + Befund zu kombiniertem Text verketten.
+    # jobs.py gibt beide Teile separat zurück (zwei LLM-Calls); der Test
+    # evaluiert den Gesamtoutput (Anamnese + ###BEFUND### + Befund).
+    if workflow == "anamnese":
+        anamnese_part = (job.get("result_text") or "").strip()
+        befund_part   = (job.get("befund_text") or "").strip()
+        if befund_part:
+            text = anamnese_part + "\n\n###BEFUND###\n\n" + befund_part
+        else:
+            text = anamnese_part
+            logger.warning(
+                "[%s/%s] befund_text leer – nur Anamnese evaluiert",
+                workflow, test_case["id"],
+            )
+    else:
+        text = job.get("result_text", "")
+
     if not text:
         pytest.fail("Leerer Output")
 
@@ -869,8 +927,25 @@ async def test_eval_workflow(workflow, test_case, request):
 
     ev.check_no_think_blocks()
 
-    if "min_words" in expected:
-        ev.check_word_count(expected["min_words"], expected.get("max_words", 9999))
+    # Wortlimit: dynamisch aus Therapeuten-Stilvorlagen ableiten wenn verfügbar,
+    # Fixture-Defaults als Fallback. Spiegelt die Logik in jobs.py/prompts.py.
+    _wl_defaults = {
+        "dokumentation":      (150, 500),
+        "anamnese":           (450, 700),
+        "verlaengerung":      (300, 600),
+        "folgeverlaengerung": (300, 600),
+        "entlassbericht":     (600, 1200),
+        "akutantrag":         (150, 400),
+    }
+    _fb_min = expected.get("min_words", _wl_defaults.get(workflow, (200, 800))[0])
+    _fb_max = expected.get("max_words", _wl_defaults.get(workflow, (200, 800))[1])
+    _style_therapeut = test_case.get("style_therapeut")
+    if _style_therapeut:
+        _style_texts_for_limits = load_all_style_texts(_style_therapeut, workflow)
+        eff_min, eff_max = derive_word_limits(_style_texts_for_limits, _fb_min, _fb_max)
+    else:
+        eff_min, eff_max = _fb_min, _fb_max
+    ev.check_word_count(eff_min, eff_max)
 
     if "required_keywords" in expected:
         ev.check_required_keywords(expected["required_keywords"])
@@ -890,8 +965,10 @@ async def test_eval_workflow(workflow, test_case, request):
     if "must_not_hallucinate" in expected:
         ev.check_hallucinations(expected["must_not_hallucinate"])
 
-    if "befund_separator" in expected:
-        ev.check_befund_separator(expected["befund_separator"])
+    # befund_separator: wird durch das Verketten von Anamnese+Befund implizit gesetzt.
+    # Wenn befund_text leer war, fehlt der Separator → Check greift korrekt als Fail.
+    if workflow == "anamnese" or "befund_separator" in expected:
+        ev.check_befund_separator("###BEFUND###")
 
     # Ansatz 1: Stil-Konsistenz gegen Vorlage prüfen
     style_text = None

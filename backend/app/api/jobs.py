@@ -28,6 +28,53 @@ import app.services.transcription as _transcription
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Separater Prompt-Logger – schreibt vollständige System/User-Prompts in prompts.log
+# Zweck: manuelle Inspektion und Prompt-Debugging ohne den Haupt-Log zu fluten.
+_prompt_logger = logging.getLogger("systelios.prompts")
+
+
+def _setup_prompt_logger() -> None:
+    """Richtet den Prompt-Logger ein (einmalig beim Import)."""
+    if _prompt_logger.handlers:
+        return
+    _prompt_logger.setLevel(logging.DEBUG)
+    _prompt_logger.propagate = False
+    import os
+    from pathlib import Path as _Path2
+    log_dir = _Path2(os.environ.get("LOG_FILE", "/workspace/systelios.log")).parent
+    prompt_file = log_dir / "prompts.log"
+    try:
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(str(prompt_file), encoding="utf-8")
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s  %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        _prompt_logger.addHandler(handler)
+    except Exception as e:
+        logger.warning("Prompt-Logger konnte nicht eingerichtet werden: %s", e)
+
+
+_setup_prompt_logger()
+
+
+def _log_prompt(job_id: str, workflow: str, call_label: str,
+                system: str, user: str) -> None:
+    """
+    Schreibt System- und User-Prompt eines LLM-Calls in prompts.log.
+
+    call_label: z.B. 'anamnese', 'befund', 'verlaengerung' – unterscheidet
+                bei Anamnese den ersten vom zweiten LLM-Call.
+    """
+    sep = "=" * 80
+    _prompt_logger.debug(
+        "\n%s\nJOB: %s  |  WORKFLOW: %s  |  CALL: %s\n%s\n"
+        "--- SYSTEM ---\n%s\n"
+        "--- USER ---\n%s\n%s\n",
+        sep, job_id, workflow, call_label, sep,
+        system, user, sep,
+    )
+
 
 # ── Verfuegbare Modelle ───────────────────────────────────────────────────────
 
@@ -389,12 +436,17 @@ async def create_generate_job(
 
         # 3. Stilprofil
         from app.services.llm import truncate_style_context
+        from app.services.prompts import derive_word_limits
         style_context = ""
         style_is_example = False
         style_info = None   # Metadaten: source, chars – wird im Job gespeichert
+        # Roh-Texte fuer Wortlimit-Berechnung (vor Destillation/Truncation gesammelt)
+        _style_raw_texts: list[str] = []
+
         if style_text and style_text.strip():
             from app.services.llm import deduplicate_paragraphs
             cleaned = deduplicate_paragraphs(style_text.strip())
+            _style_raw_texts.append(cleaned)          # Roh-Text vor Truncation
             style_context = truncate_style_context(cleaned)
             style_is_example = True
             style_info = {"source": "text_input", "chars": len(style_context), "words": len(style_context.split())}
@@ -404,6 +456,18 @@ async def create_generate_job(
             path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
             path.write_bytes(style_bytes)
             try:
+                # Roh-Text für Wortlimit abgreifen bevor extract_style_context ihn destilliert
+                from app.services.extraction import extract_text as _extract_raw
+                from app.services.extraction import extract_docx_section as _extract_section
+                try:
+                    if suffix in (".docx", ".doc") and workflow:
+                        _raw = _extract_section(path, workflow)
+                    else:
+                        _raw = await _extract_raw(path)
+                    if _raw and len(_raw.split()) >= 50:
+                        _style_raw_texts.append(_raw)
+                except Exception:
+                    pass  # Wortlimit-Berechnung faellt auf Defaults zurueck
                 style_context = await extract_style_context(path, generate_text, workflow=workflow)
                 style_context = truncate_style_context(style_context)
                 style_info = {"source": "file_upload", "filename": style_name, "chars": len(style_context)}
@@ -419,7 +483,24 @@ async def create_generate_job(
                     db, therapeut_id.strip(), workflow, query_text
                 )
             if style_context:
+                _style_raw_texts.append(style_context)  # pgvector gibt bereits Rohtext
                 style_info = {"source": "style_library", "therapeut_id": therapeut_id.strip(), "chars": len(style_context)}
+
+        # Wortlimit aus Roh-Texten ableiten (vor Destillation, fuer alle Quellen konsistent)
+        # Workflow-spezifische Fallback-Defaults:
+        _wl_defaults = {
+            "dokumentation":     (150, 500),
+            "anamnese":          (450, 700),
+            "verlaengerung":     (300, 600),
+            "folgeverlaengerung":(300, 600),
+            "entlassbericht":    (600, 1200),
+            "akutantrag":        (150, 400),
+        }
+        _fb_min, _fb_max = _wl_defaults.get(workflow, (200, 800))
+        word_limits = derive_word_limits(_style_raw_texts, _fb_min, _fb_max) if _style_raw_texts else None
+        if word_limits:
+            logger.info("Wortlimit fuer %s: %d–%d Wörter (aus %d Stilvorlage(n))",
+                        workflow, word_limits[0], word_limits[1], len(_style_raw_texts))
 
         # 4. Patientennamen ermitteln — Reihenfolge:
         #    a) Explizit uebergeben (vor allem P1 Gespraechszusammenfassung)
@@ -457,6 +538,7 @@ async def create_generate_job(
             style_is_example=style_is_example,
             diagnosen=dx_list,
             patient_name=patient_name,
+            word_limits=word_limits,
         )
         user = build_user_content(
             workflow=workflow,
@@ -518,6 +600,7 @@ async def create_generate_job(
                 mid = lb[0] + (lb[1] - lb[0]) * 0.5
                 pct = lb[0] + (mid - lb[0]) * min(1.0, n / (expected_tok * 0.6))
                 job.set_progress(int(pct), "KI-Generierung", f"Anamnese: {n} Wörter")
+            _log_prompt(job.job_id, workflow, "anamnese", system, user)
             result_a = await generate_text(system, user, max_tokens=anamnese_max_tok,
                                             model=model, workflow=workflow, on_progress=_on_tok_a)
             anamnese_text = (result_a.get("text") or "").strip()
@@ -549,6 +632,7 @@ async def create_generate_job(
                 mid = lb[0] + (lb[1] - lb[0]) * 0.5
                 pct = mid + (lb[1] - mid) * min(1.0, n / (expected_tok * 0.4))
                 job.set_progress(int(pct), "KI-Generierung", f"Befund: {n} Wörter")
+            _log_prompt(job.job_id, workflow, "befund", befund_system, befund_user)
             result_b = await generate_text(befund_system, befund_user, max_tokens=befund_max_tok,
                                             model=model, workflow="befund", on_progress=_on_tok_b)
             befund_text_generated = (result_b.get("text") or "").strip()
@@ -561,6 +645,7 @@ async def create_generate_job(
                 "model_used": result_a.get("model_used"),
             }
         else:
+            _log_prompt(job.job_id, workflow, workflow, system, user)
             result = await generate_text(system, user, max_tokens=max_tok, model=model, workflow=workflow, on_progress=_on_tok)
 
         phase_times["llm"] = _t.time() - _t0

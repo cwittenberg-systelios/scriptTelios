@@ -192,7 +192,24 @@ def _get_model(device: str, compute_type: str):
 
 
 def _get_duration(file_path: Path) -> float:
-    """Gibt Audiodauer in Sekunden zurueck via ffprobe."""
+    """
+    Gibt Audiodauer in Sekunden zurueck.
+
+    Fallback-Kette fuer Browser-webm (kein seekbarer Moov-Atom → ffprobe
+    meldet 0.0 oder schlaegt fehl):
+
+    1. ffprobe Standard (schnell, funktioniert fuer mp3/wav/ogg/m4a)
+    2. ffprobe mit -count_packets (liest Paketanzahl × Zeitbasis aus dem
+       Container – robust fuer webm ohne Duration-Header, ~1-2s overhead)
+    3. ffmpeg stderr Duration-Parsing (komplettes Dekodieren, immer korrekt,
+       ~5-10s overhead bei langen Dateien – aber wir laufen sowieso danach
+       fuer silencedetect, also kein echter Mehraufwand)
+    4. Schätzung via Dateigrösse (Opus@24kbps = 180 KB/min, konstant weil
+       der Browser mit audioBitsPerSecond: 24000 aufnimmt)
+    """
+    import re
+
+    # ── Stufe 1: ffprobe Standard ────────────────────────────────────────
     try:
         result = subprocess.run(
             [
@@ -203,14 +220,102 @@ def _get_duration(file_path: Path) -> float:
             ],
             capture_output=True, text=True, check=True,
         )
-        return float(result.stdout.strip())
+        duration = float(result.stdout.strip())
+        if duration > 0:
+            return duration
+        # duration == 0.0 → Container hat kein Duration-Feld (Browser-webm)
+        logger.debug("ffprobe Standard: duration=0 für %s – Fallback 2", file_path.name)
     except FileNotFoundError:
         raise RuntimeError(
             "ffprobe nicht gefunden. Bitte ffmpeg installieren: "
             "'apt-get install -y ffmpeg'"
         )
     except (ValueError, subprocess.CalledProcessError):
-        return 0.0
+        logger.debug("ffprobe Standard fehlgeschlagen für %s – Fallback 2", file_path.name)
+
+    # ── Stufe 2: ffprobe count_packets ──────────────────────────────────
+    # Liest Paketanzahl × Zeitbasis – kein vollstaendiges Dekodieren noetig.
+    # Funktioniert fuer webm/opus weil die Zeitbasis pro Stream im Header steht.
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-count_packets",
+                "-show_entries", "stream=nb_read_packets,duration_ts,time_base",
+                "-of", "json",
+                str(file_path),
+            ],
+            capture_output=True, text=True, check=True,
+        )
+        import json as _json
+        data = _json.loads(result.stdout)
+        streams = data.get("streams", [])
+        if streams:
+            s = streams[0]
+            # Direkte duration_ts × time_base (z.B. "1/1000")
+            duration_ts = s.get("duration_ts")
+            time_base   = s.get("time_base")
+            if duration_ts and time_base and "/" in str(time_base):
+                num, den = time_base.split("/")
+                duration = int(duration_ts) * int(num) / int(den)
+                if duration > 0:
+                    logger.info(
+                        "ffprobe count_packets: %.1fs für %s", duration, file_path.name
+                    )
+                    return duration
+            # Fallback: nb_read_packets × geschaetzte Paketlaenge (Opus ~20ms/Paket)
+            nb = s.get("nb_read_packets")
+            if nb and int(nb) > 0:
+                duration = int(nb) * 0.02  # Opus-Standardpaket: 20ms
+                if duration > 0:
+                    logger.info(
+                        "ffprobe nb_packets-Schätzung: %.1fs für %s", duration, file_path.name
+                    )
+                    return duration
+    except Exception as e:
+        logger.debug("ffprobe count_packets fehlgeschlagen: %s – Fallback 3", e)
+
+    # ── Stufe 3: ffmpeg vollstaendiges Dekodieren (Duration aus stderr) ──
+    # Gleicher subprocess wie in _find_silence_splits – bei langen Dateien
+    # ~5-15s, aber wir brauchen das sowieso fuer silencedetect.
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-i", str(file_path), "-f", "null", "-"],
+            capture_output=True, text=True,
+        )
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", result.stderr)
+        if m:
+            h = int(m.group(1))
+            mins = int(m.group(2))
+            secs = float(m.group(3))
+            duration = h * 3600 + mins * 60 + secs
+            if duration > 0:
+                logger.info(
+                    "ffmpeg-Dekodierung: %.1fs für %s", duration, file_path.name
+                )
+                return duration
+    except Exception as e:
+        logger.debug("ffmpeg-Dekodierung fehlgeschlagen: %s – Fallback 4", e)
+
+    # ── Stufe 4: Schätzung via Dateigrösse ──────────────────────────────
+    # Opus@24kbps (audioBitsPerSecond: 24000 im Browser) = 3000 Byte/s.
+    # webm-Container-Overhead: ~1-2%, vernachlaessigbar.
+    # Ist konservativ: lieber etwas zu lang schätzen als zu kurz (→ kein Timeout).
+    try:
+        file_size = file_path.stat().st_size
+        # 24 kbit/s = 3000 Byte/s; Container-Overhead ~5% Puffer abziehen
+        estimated = file_size / (3000 * 1.05)
+        logger.warning(
+            "Audiodauer unbekannt – Schätzung via Dateigrösse: "
+            "%.1f MB → ~%.0fs (~%.1f Min) für %s",
+            file_size / 1_048_576, estimated, estimated / 60, file_path.name,
+        )
+        return max(estimated, 1.0)
+    except Exception as e:
+        logger.error("Alle Duration-Methoden fehlgeschlagen: %s", e)
+
+    return 0.0
 
 
 def _find_silence_splits(file_path: Path, chunk_max: int) -> list[float]:
@@ -220,10 +325,10 @@ def _find_silence_splits(file_path: Path, chunk_max: int) -> list[float]:
     Schnitte werden so gewaehlt dass Chunks <= chunk_max Sekunden sind.
     """
     duration = _get_duration(file_path)
-    if duration <= chunk_max:
-        return []
 
-    # Stille-Segmente detektieren (mind. 0.5s Stille bei -40dB)
+    # Stille-Segmente detektieren (mind. 0.5s Stille bei -40dB).
+    # Diesen ffmpeg-Aufruf machen wir unabhaengig von duration,
+    # weil wir aus dem stderr auch die Dauer parsen koennen (Fallback).
     result = subprocess.run(
         [
             "ffmpeg", "-i", str(file_path),
@@ -232,6 +337,20 @@ def _find_silence_splits(file_path: Path, chunk_max: int) -> list[float]:
         ],
         capture_output=True, text=True,
     )
+
+    # Falls duration nach _get_duration immer noch 0: aus ffmpeg-stderr lesen
+    if duration <= 0:
+        import re as _re
+        m = _re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", result.stderr)
+        if m:
+            h, mins, secs = int(m.group(1)), int(m.group(2)), float(m.group(3))
+            duration = h * 3600 + mins * 60 + secs
+            logger.info(
+                "_find_silence_splits: Duration aus ffmpeg-stderr: %.1fs", duration
+            )
+
+    if duration <= chunk_max:
+        return []
 
     # Stille-Mitten aus stderr parsen
     silence_midpoints = []
@@ -268,26 +387,26 @@ def _find_silence_splits(file_path: Path, chunk_max: int) -> list[float]:
     return splits
 
 
-def _split_audio(file_path: Path, splits: list[float], tmp_dir: Path) -> list[Path]:
-    """Schneidet Audio an den gegebenen Zeitpunkten via ffmpeg."""
+def _split_audio(file_path: Path, splits: list[float], tmp_dir: Path, duration: float = 0.0) -> list[Path]:
+    """Schneidet Audio an den gegebenen Zeitpunkten via ffmpeg.
+    
+    duration: bekannte Gesamtdauer (0 = unbekannt, dann via ffmpeg ermitteln).
+    Als letzte Boundary wird bei unbekannter Dauer kein '-to' uebergeben
+    damit ffmpeg den Rest der Datei vollstaendig liest.
+    """
     chunks = []
-    boundaries = [0.0] + splits + [_get_duration(file_path)]
+    end_duration = duration if duration > 0 else _get_duration(file_path)
+    boundaries = [0.0] + splits + [end_duration]
     suffix = file_path.suffix.lower() or ".wav"
 
     for i, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:])):
         chunk_path = tmp_dir / f"chunk_{i:03d}{suffix}"
-        subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-ss", str(start),
-                "-to", str(end),
-                "-i", str(file_path),
-                "-c", "copy",
-                str(chunk_path),
-            ],
-            capture_output=True,
-            check=True,
-        )
+        cmd = ["ffmpeg", "-y", "-ss", str(start)]
+        # Bei letztem Chunk und unbekannter Dauer: kein -to, ffmpeg liest bis EOF
+        if end > 0 and end < end_duration * 1.01:
+            cmd += ["-to", str(end)]
+        cmd += ["-i", str(file_path), "-c", "copy", str(chunk_path)]
+        subprocess.run(cmd, capture_output=True, check=True)
         chunks.append(chunk_path)
         logger.debug("Chunk %d: %.1fs – %.1fs → %s", i, start, end, chunk_path.name)
 
@@ -391,6 +510,17 @@ async def _transcribe_local(file_path: Path) -> dict:
     def _run() -> dict:
         duration = _get_duration(file_path)
         logger.info("Audio-Dauer: %.1fs (%.1f Min)", duration, duration / 60)
+
+        if duration <= 0:
+            # Alle Duration-Methoden haben versagt (sollte nach der neuen
+            # Fallback-Kette nicht mehr vorkommen, aber als letzter Safety-Net).
+            # Immer chunked transkribieren – _transcribe_chunked hat keinen
+            # globalen Timeout sondern nur per-Chunk-Timeouts.
+            logger.warning(
+                "Audio-Dauer nach allen Fallbacks unbekannt – "
+                "erzwinge Chunked-Transkription für %s", file_path.name
+            )
+            return _transcribe_chunked(file_path, duration=7200.0)
 
         if duration > CHUNK_MAX_SECONDS:
             return _transcribe_chunked(file_path, duration)
@@ -602,7 +732,7 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
         tmp_path = Path(tmp_dir)
 
         splits = _find_silence_splits(file_path, CHUNK_MAX_SECONDS)
-        chunks = _split_audio(file_path, splits, tmp_path)
+        chunks = _split_audio(file_path, splits, tmp_path, duration=duration)
         logger.info("Audio aufgeteilt in %d Chunks", len(chunks))
 
         # Diarization parallel zur Transkription starten

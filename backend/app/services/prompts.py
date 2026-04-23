@@ -469,10 +469,60 @@ BASE_PROMPTS: dict[str, str] = {
 
 # ── Prompt-Zusammenbau ────────────────────────────────────────────────────────
 
+def derive_word_limits(
+    style_texts: "list[str]",
+    fallback_min: int,
+    fallback_max: int,
+    tolerance: float = 0.30,
+) -> "tuple[int, int]":
+    """
+    Leitet min/max Wortlimit dynamisch aus Stilvorlagen ab.
+
+    Nimmt die Wortanzahl aller Referenztexte (mind. 50 Wörter), berechnet
+    die Bandbreite und erweitert sie um ±tolerance.
+    Fallback auf die uebergebenen Defaults wenn keine verwertbaren Vorlagen.
+
+    Verwendung:
+      - Im Backend: build_system_prompt() ruft diese Funktion mit dem Rohtext
+        auf, bevor er destilliert wird.
+      - Im Test (test_eval.py): gleiche Logik, gleiche Funktion importieren
+        oder duplizieren.
+    """
+    import re as _re
+
+    counts = []
+    for t in style_texts:
+        if not t:
+            continue
+        w = len(t.split())
+        if w >= 50:
+            counts.append(w)
+
+    if not counts:
+        return fallback_min, fallback_max
+
+    ref_min = min(counts)
+    ref_max = max(counts)
+    derived_min = max(50, int(ref_min * (1 - tolerance)))
+    derived_max = int(ref_max * (1 + tolerance))
+
+    import logging as _logging
+    _logging.getLogger(__name__).info(
+        "Wortlimit aus %d Stilvorlage(n) abgeleitet: %d–%d "
+        "(Referenz: %d–%d, ±%.0f%%)",
+        len(counts), derived_min, derived_max, ref_min, ref_max, tolerance * 100,
+    )
+    return derived_min, derived_max
+
+
 def _compute_style_constraints(style_text: str) -> str:
     """
     Berechnet quantitative Stil-Metriken aus dem Stilbeispiel und
     formuliert sie als konkrete Vorgaben fuer den Prompt.
+
+    Gibt einen String mit STIL-VORGABEN inkl. hartem Wortlimit zurueck,
+    der in build_system_prompt() eingefuegt wird und die hardcodierten
+    Laengenangaben im BASE_PROMPT ueberschreibt.
     """
     import re as _re
 
@@ -508,6 +558,9 @@ def _compute_style_constraints(style_text: str) -> str:
     fach_count = len(fachbegriffe.findall(style_text))
     fach_density = round(fach_count / max(word_count, 1) * 100, 1)
 
+    # Hartes Wortlimit aus Vorlagenlänge (±30%), überschreibt BASE_PROMPT-Angaben
+    limit_min, limit_max = derive_word_limits([style_text], fallback_min=50, fallback_max=9999)
+
     lines = ["\nSTIL-VORGABEN (unbedingt einhalten!):"]
     lines.append(f"- Satzlänge: durchschnittlich {int(avg_sentence_len)} Wörter pro Satz")
     lines.append(f"- Absatzlänge: durchschnittlich {int(avg_para_len)} Wörter pro Absatz")
@@ -521,7 +574,12 @@ def _compute_style_constraints(style_text: str) -> str:
                       "(\"Wir beobachteten...\", \"In unserer Arbeit...\")")
     else:
         lines.append("- Perspektive: Dritte Person (Er/Sie-Form)")
-    lines.append(f"- Textlänge: ca. {word_count} Wörter (orientiere dich an der Länge der Vorlage)")
+    # Hartes Limit – überschreibt die Längenangaben im BASE_PROMPT
+    lines.append(
+        f"- TEXTLÄNGE (verbindlich): mindestens {limit_min} Wörter, "
+        f"maximal {limit_max} Wörter. "
+        f"Die Vorlage hat {word_count} Wörter – orientiere dich genau daran."
+    )
 
     return "\n".join(lines)
 
@@ -533,6 +591,7 @@ def build_system_prompt(
     style_is_example: bool = False,
     diagnosen: Optional[list[str]] = None,
     patient_name: Optional[dict] = None,
+    word_limits: Optional[tuple] = None,
 ) -> str:
     """
     Baut den finalen System-Prompt zusammen:
@@ -547,11 +606,24 @@ def build_system_prompt(
     patient_name: optional dict {anrede, vorname, nachname, initial}
                   aus extract_patient_name() – wird als expliziter Name-Hinweis
                   an das Modell gegeben.
+    word_limits: optional (min, max) Tuple aus derive_word_limits().
+                 Wenn angegeben, wird ein verbindliches Wortlimit an den
+                 BASE_PROMPT angehängt, das die hardcodierten Längenangaben
+                 überschreibt. Wird in jobs.py aus dem Roh-Stiltext berechnet
+                 bevor der Text destilliert wird (Option A).
     """
     base = BASE_PROMPTS.get(workflow, "")
 
     diag_str = ", ".join(diagnosen) if diagnosen else "noch nicht festgelegt"
     base = base.replace("{diagnosen}", diag_str)
+
+    # Verbindliches Wortlimit aus Stilvorlagen anhängen (überschreibt BASE_PROMPT-Angaben)
+    if word_limits is not None:
+        limit_min, limit_max = word_limits
+        base = base + (
+            "\nVERBINDLICHES TEXTLIMIT (hat Vorrang vor allen anderen Laengenangaben): "
+            f"mindestens {limit_min} Woerter, maximal {limit_max} Woerter.\n"
+        )
 
     parts = [ROLE_PREAMBLE, base]
 
