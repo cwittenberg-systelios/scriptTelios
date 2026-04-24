@@ -138,6 +138,76 @@ def deduplicate_paragraphs(text: str) -> str:
     return "\n\n".join(result)
 
 
+def strip_markdown_formatting(text: str) -> str:
+    """
+    Entfernt Markdown-Formatierungen aus dem LLM-Output.
+
+    Die Prompts verbieten Markdown ausdruecklich, aber das Modell generiert
+    trotzdem gelegentlich **bold**, ## Headers und aehnliches. Dieser
+    Post-Processing-Filter strippt diese Zeichen zuverlaessig.
+
+    Was entfernt wird:
+    - **text** → text  (Bold)
+    - __text__ → text  (Bold alternative)
+    - *text* → text    (nur als Paar, nicht einzelne Sternchen)
+    - ## Header → Header (Ueberschriften-Marker)
+    - --- → leere Zeile (horizontale Trennlinien)
+    """
+    if not text:
+        return text
+
+    import re as _re
+
+    # **bold** -> bold
+    text = _re.sub(r"\*\*([^*\n]+?)\*\*", r"\1", text)
+    # __bold__ -> bold
+    text = _re.sub(r"__([^_\n]+?)__", r"\1", text)
+    # *italic* -> italic (nur Paare, nicht einzelne Sternchen)
+    text = _re.sub(r"(?<!\*)\*([^*\n]+?)\*(?!\*)", r"\1", text)
+    # Heading-Marker am Zeilenanfang: "## Text" / "# Text" / "### Text"
+    text = _re.sub(r"(?m)^#{1,6}\s+", "", text)
+    # Horizontale Trennlinien
+    text = _re.sub(r"(?m)^[-_*]{3,}\s*$", "", text)
+    # Doppelte Leerzeilen konsolidieren
+    text = _re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+def substitute_patient_placeholders(text: str, patient_name: dict | None) -> str:
+    """
+    Ersetzt verbleibende "[Patient/in]"-Platzhalter im LLM-Output durch den
+    echten Namen. Das Modell sollte eigentlich die Initiale selbst einsetzen,
+    aber manchmal kopiert es den Platzhalter aus dem Beispiel-Prompt.
+
+    patient_name: Dict aus extract_patient_name() oder None.
+    """
+    if not text or not patient_name or not patient_name.get("initial"):
+        return text
+
+    anrede = patient_name.get("anrede") or ""
+    initial = patient_name["initial"]
+    full_ref = f"{anrede} {initial}".strip()
+
+    replacements = [
+        ("Herr/[Patient/in]", full_ref),
+        ("Frau/[Patient/in]", full_ref),
+        ("[Patient/in]", full_ref),
+        ("[Patientin]", full_ref),
+        ("[Patient]", full_ref),
+        ("[Name]", full_ref),
+        ("[Initiale]", initial),
+        # "Frau X." / "Herr X." als explizite Fehl-Platzhalter
+        ("Frau X.", full_ref if anrede == "Frau" else f"Frau {initial}"),
+        ("Herr X.", full_ref if anrede == "Herr" else f"Herr {initial}"),
+    ]
+
+    for placeholder, replacement in replacements:
+        text = text.replace(placeholder, replacement)
+
+    return text
+
+
 def clean_verlauf_text(text: str) -> str:
     """
     Bereinigt extrahierten Verlaufsdokumentationstext vor dem LLM-Aufruf:
@@ -413,7 +483,7 @@ async def generate_text(
                 logger.warning("Doppelten Text erkannt und bereinigt (Phrase: '%s')", phrase)
                 break
 
-        result["text"] = deduplicate_paragraphs(text)
+        result["text"] = strip_markdown_formatting(deduplicate_paragraphs(text))
 
     result["duration_s"] = round(time.time() - t0, 1)
     logger.info(

@@ -515,7 +515,7 @@ def derive_word_limits(
     return derived_min, derived_max
 
 
-def _compute_style_constraints(style_text: str) -> str:
+def _compute_style_constraints(style_text: str, skip_length: bool = False) -> str:
     """
     Berechnet quantitative Stil-Metriken aus dem Stilbeispiel und
     formuliert sie als konkrete Vorgaben fuer den Prompt.
@@ -523,6 +523,12 @@ def _compute_style_constraints(style_text: str) -> str:
     Gibt einen String mit STIL-VORGABEN inkl. hartem Wortlimit zurueck,
     der in build_system_prompt() eingefuegt wird und die hardcodierten
     Laengenangaben im BASE_PROMPT ueberschreibt.
+
+    skip_length: wenn True wird die TEXTLAENGE-Zeile ausgelassen. Nutzen
+                 wenn weiter oben bereits ein VERBINDLICHES TEXTLIMIT
+                 aus mehreren Stilvorlagen gesetzt wurde (vermeidet
+                 widersprueche zwischen destillierter Einzelvorlage und
+                 aggregiertem Limit).
     """
     import re as _re
 
@@ -536,8 +542,15 @@ def _compute_style_constraints(style_text: str) -> str:
     sentences = [s.strip() for s in sentences if len(s.strip().split()) >= 3]
     avg_sentence_len = round(sum(len(s.split()) for s in sentences) / max(len(sentences), 1), 0)
 
-    # Absatzlaenge
+    # Absatzlaenge - robust gegen verschiedene Trenner.
+    # extract_docx_section joined Paragraphen mit \n (mit "" fuer Leerzeilen).
+    # Strategie: erst \n\n probieren, dann \n.
     paragraphs = [p.strip() for p in style_text.split("\n\n") if len(p.strip().split()) >= 10]
+    if len(paragraphs) < 2:
+        # Fallback: einzelne Zeilen als Absaetze (>=20 Woerter = substantieller Absatz)
+        paragraphs = [p.strip() for p in style_text.split("\n") if len(p.strip().split()) >= 20]
+    if len(paragraphs) < 1:
+        paragraphs = [style_text.strip()]
     avg_para_len = round(sum(len(p.split()) for p in paragraphs) / max(len(paragraphs), 1), 0)
 
     # Wir-Perspektive
@@ -574,12 +587,21 @@ def _compute_style_constraints(style_text: str) -> str:
                       "(\"Wir beobachteten...\", \"In unserer Arbeit...\")")
     else:
         lines.append("- Perspektive: Dritte Person (Er/Sie-Form)")
-    # Hartes Limit – überschreibt die Längenangaben im BASE_PROMPT
-    lines.append(
-        f"- TEXTLÄNGE (verbindlich): mindestens {limit_min} Wörter, "
-        f"maximal {limit_max} Wörter. "
-        f"Die Vorlage hat {word_count} Wörter – orientiere dich genau daran."
-    )
+
+    # Hartes Limit nur wenn nicht schon oben ueber VERBINDLICHES TEXTLIMIT gesetzt.
+    # Vermeidet widerspruechliche Angaben zwischen diesem Einzel-Vorlagen-Limit
+    # und dem aggregierten Limit aus derive_word_limits(alle Vorlagen).
+    if not skip_length:
+        lines.append(
+            f"- TEXTLÄNGE (verbindlich): mindestens {limit_min} Wörter, "
+            f"maximal {limit_max} Wörter. "
+            f"Die Vorlage hat {word_count} Wörter – orientiere dich genau daran."
+        )
+    else:
+        lines.append(
+            f"- Absatzstruktur: die Vorlage hat ca. {len(paragraphs)} Absätze "
+            f"(siehe TEXTLIMIT oben fuer die Gesamtlaenge)."
+        )
 
     return "\n".join(lines)
 
@@ -657,7 +679,7 @@ def build_system_prompt(
                 "NIEMALS aus dem Beispiel übernehmen: Patientennamen, Diagnosen, "
                 "ICD-Codes, konkrete Therapieinhalte, Daten – nur Struktur und Stil.\n\n"
                 f"{style_context.strip()}"
-                f"{_compute_style_constraints(style_context)}"
+                f"{_compute_style_constraints(style_context, skip_length=(word_limits is not None))}"
             )
         elif style_is_example:
             parts.append(
@@ -670,7 +692,7 @@ def build_system_prompt(
                 "Medikamente, konkrete Symptome, Therapieinhalte oder andere "
                 "patientenspezifische Informationen aus diesem Beispiel.\n\n"
                 f"{style_context.strip()}"
-                f"{_compute_style_constraints(style_context)}"
+                f"{_compute_style_constraints(style_context, skip_length=(word_limits is not None))}"
             )
         else:
             parts.append(
@@ -679,7 +701,7 @@ def build_system_prompt(
                 "NICHT die konkreten Inhalte, Diagnosen oder Patientendaten – "
                 "nur Tonalität, Satzbau und Formulierungsgewohnheiten.\n\n"
                 f"{style_context.strip()}"
-                f"{_compute_style_constraints(style_context)}"
+                f"{_compute_style_constraints(style_context, skip_length=(word_limits is not None))}"
             )
 
     has_structural_template = (
@@ -716,7 +738,29 @@ def build_system_prompt(
             "Sprache: Deutsch. Keine Markdown-Formatierung."
         )
 
-    return "\n".join(parts)
+    final_prompt = "\n".join(parts)
+
+    # ── Platzhalter-Substitution ──────────────────────────────────────────
+    # Die Beispiele (FEW_SHOT_*) enthalten "[Patient/in]" und "Herr/[Patient/in]"
+    # als generische Platzhalter. Wenn der echte Name bekannt ist, ersetzen
+    # wir diese durchgaengig - sonst uebernimmt das Modell den Platzhalter 1:1
+    # in den Output.
+    if patient_name and patient_name.get("initial"):
+        anrede_p = patient_name.get("anrede") or ""
+        initial_p = patient_name["initial"]
+        full_ref = f"{anrede_p} {initial_p}".strip()  # z.B. "Frau M." oder nur "M."
+
+        # "Herr/[Patient/in]" -> "Frau M." (komplett ersetzen, keine zweischichtige Anrede mehr)
+        final_prompt = final_prompt.replace("Herr/[Patient/in]", full_ref)
+        # "[Patient/in]" -> "Frau M." / "Herr S."
+        final_prompt = final_prompt.replace("[Patient/in]", full_ref)
+        # "[Name]" (aus FACHLICHES REFERENZWISSEN) -> Initiale
+        final_prompt = final_prompt.replace("[Name]", full_ref)
+    # Wenn kein Name bekannt: Platzhalter bleiben stehen - das Modell muss
+    # aus den Quellen ableiten. Die NAMENSFORMAT-Anweisung sorgt dafuer
+    # dass es die Initiale selbst bildet.
+
+    return final_prompt
 
 
 def build_user_content(

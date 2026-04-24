@@ -661,6 +661,21 @@ async def create_generate_job(
             pass
         raw = result["text"] or ""
 
+        # Platzhalter-Substitution: "[Patient/in]" etc. durch echten Namen ersetzen.
+        # Das Modell kopiert Platzhalter aus Few-Shot-Beispielen manchmal in den Output,
+        # obwohl der Name im System-Prompt schon substituiert wurde.
+        if patient_name:
+            from app.services.llm import substitute_patient_placeholders
+            raw = substitute_patient_placeholders(raw, patient_name)
+            if result.get("befund_text"):
+                result["befund_text"] = substitute_patient_placeholders(
+                    result["befund_text"], patient_name
+                )
+            if result.get("akut_text"):
+                result["akut_text"] = substitute_patient_placeholders(
+                    result["akut_text"], patient_name
+                )
+
         # Anamnese-Workflow: Befund kommt bereits separat aus dem zweiten LLM-Call.
         # Fuer alle anderen Workflows: kein Befund/Akut-Splitting noetig.
         if workflow == "anamnese":

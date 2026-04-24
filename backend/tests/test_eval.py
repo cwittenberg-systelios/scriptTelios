@@ -437,7 +437,11 @@ async def _generate(
     if extra_form_data:
         form_data.update(extra_form_data)
 
-    # Dateien vorbereiten (optional)
+    # Dateien vorbereiten
+    # Kritische Felder (ohne die der Workflow keinen Sinn macht) failen wenn Datei fehlt.
+    # Audio/diagnosen_file/style_file sind optional und werden nur geloggt.
+    CRITICAL_FIELDS = {"antragsvorlage", "verlaufsdoku", "vorantrag", "selbstauskunft"}
+    missing_critical = []
     files_to_upload = {}
     if input_files:
         for field_name, file_path in input_files.items():
@@ -446,7 +450,11 @@ async def _generate(
             if not p.is_absolute():
                 p = EVAL_DATA_DIR / p
             if not p.exists():
-                logger.warning("Eval-Input nicht gefunden: %s (übersprungen)", p)
+                if field_name in CRITICAL_FIELDS:
+                    missing_critical.append(f"{field_name}: {p}")
+                    logger.error("KRITISCH: Eval-Input fehlt: %s → %s", field_name, p)
+                else:
+                    logger.warning("Eval-Input nicht gefunden: %s (übersprungen)", p)
                 continue
 
             # Spezielle Felder die als Text (nicht File) gesendet werden
@@ -477,6 +485,15 @@ async def _generate(
             else:
                 files_to_upload[field_name] = (p.name, open(p, "rb"))
                 logger.info("Eval-Input: %s = %s", field_name, p)
+
+    # Abbruch wenn kritische Input-Dateien fehlen - besser laut scheitern als
+    # stillschweigend einen Job ohne Quellen starten (der dann halluziniert).
+    if missing_critical:
+        raise FileNotFoundError(
+            f"Eval-Test kann nicht starten - kritische Inputs fehlen:\n  "
+            + "\n  ".join(missing_critical)
+            + f"\n(EVAL_DATA_DIR = {EVAL_DATA_DIR})"
+        )
 
     try:
         async with httpx.AsyncClient(base_url=BACKEND_URL, timeout=120.0) as client:

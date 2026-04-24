@@ -1,7 +1,7 @@
 {
   "description": "Evaluations-Fixtures für scriptTelios Qualitätsmessung.",
-  "version": "2.2",
-  "note": "Für EB/VA: selbstauskunft = Berichtsvorlage (DOCX). diagnosen_file = ICD-Codes (TXT, optional – Fallback: diagnosen-Array). audio ist überall optional.",
+  "version": "2.4",
+  "note": "Pfade entsprechen dem realen eval_data Verzeichnisbaum (Stand 2026-04-24). Akut-Tests nutzen Akut-FrauS und Akut-FrauM (beide Frauen). Gespraech-Ordner mit Umlaut. FVA nutzt FolgeVerlaengerung.docx (CamelCase) und Verlaengerung.docx als Vorantrag.",
 
   "entlassbericht": [
     {
@@ -52,8 +52,8 @@
       "diagnosen": ["F60.31", "F32.1"],
       "style_therapeut": "TherapeutA",
       "input_files": {
-        "antragsvorlage": "VA-Frau-v-d-A/verlängerung.docx",
-        "verlaufsdoku": "VA-Frau-v-d-A/tpVerlaufsdokumentation.pdf"
+        "antragsvorlage": "FVA-Frau-v-d-A/Verlaengerung.docx",
+        "verlaufsdoku": "FVA-Frau-v-d-A/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
         "min_words": 350,
@@ -87,33 +87,15 @@
       "diagnosen": ["F60.31", "F32.1"],
       "style_therapeut": "TherapeutA",
       "input_files": {
-        "antragsvorlage": "FVA-Frau-v-d-A/folgeverlaengerung.docx",
+        "antragsvorlage": "FVA-Frau-v-d-A/FolgeVerlaengerung.docx",
         "verlaufsdoku": "FVA-Frau-v-d-A/tpVerlaufsdokumentation.pdf",
-        "vorantrag": "FVA-Frau-v-d-A/vorheriger_antrag.docx"
+        "vorantrag": "FVA-Frau-v-d-A/Verlaengerung.docx"
       },
       "expected": {
         "min_words": 350,
         "max_words": 650,
         "required_keywords": ["Verlängerung", "Verlauf"],
         "forbidden_patterns": ["**", "##", "Diagnose:", "Stammdaten", "Anamnese:"],
-        "must_contain_sections": ["Verlauf", "Verlängerung"]
-      }
-    },
-    {
-      "id": "fva-02-depression-folge",
-      "name": "Folgeverlängerung Depression (Mann)",
-      "prompt": "Als systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik, schreibe den Abschnitt Verlauf und Begründung der weiteren Verlängerung. Knüpfe an den bisherigen Verlauf an.",
-      "diagnosen": ["F33.1"],
-      "style_therapeut": "TherapeutB",
-      "input_files": {
-        "verlaufsdoku": "FVA-HerrX/tpVerlaufsdokumentation.pdf",
-        "vorantrag": "FVA-HerrX/vorheriger_antrag.docx"
-      },
-      "expected": {
-        "min_words": 350,
-        "max_words": 650,
-        "required_keywords": ["Verlängerung"],
-        "forbidden_patterns": ["**", "##"],
         "must_contain_sections": ["Verlauf", "Verlängerung"]
       }
     }
@@ -127,7 +109,7 @@
       "diagnosen": ["F32.2", "F43.1"],
       "style_therapeut": "TherapeutA",
       "input_files": {
-        "antragsvorlage": "AKUT-FrauL/akutantrag.docx"
+        "antragsvorlage": "Akut-FrauS/akutantrag.docx"
       },
       "expected": {
         "min_words": 200,
@@ -139,12 +121,12 @@
     },
     {
       "id": "akut-02-angst-dekompensation",
-      "name": "Akutaufnahme Angststörung (Mann)",
+      "name": "Akutaufnahme Angststörung (Frau)",
       "prompt": "Erstelle die Begründung für Akutaufnahme.",
       "diagnosen": ["F41.0", "F40.01"],
       "style_therapeut": "TherapeutB",
       "input_files": {
-        "antragsvorlage": "AKUT-HerrM/akutantrag.docx"
+        "antragsvorlage": "Akut-FrauM/akutantrag.docx"
       },
       "expected": {
         "min_words": 200,
@@ -165,8 +147,7 @@
       "style_therapeut": "TherapeutA",
       "input_files": {
         "selbstauskunft": "Anamnese-FrauT/selbstauskunft.pdf",
-        "diagnosen_file": "Anamnese-FrauT/diagnosen.txt",
-        "audio": "Anamnese-FrauT/aufnahme.mp3"
+        "diagnosen_file": "Anamnese-FrauT/diagnosen.txt"
       },
       "expected": {
         "min_words": 300,
@@ -206,7 +187,7 @@
       "prompt": "Erstelle eine systemische Gesprächsdokumentation.",
       "style_therapeut": "TherapeutA",
       "input_files": {
-        "audio": "GESPRAECH-FrauK/aufnahme.mp3"
+        "audio": "Gespräch-FrauK/aufnahme.mp3"
       },
       "expected": {
         "min_words": 200,
@@ -221,7 +202,7 @@
       "prompt": "Erstelle eine systemische Gesprächsdokumentation.",
       "style_therapeut": "TherapeutB",
       "input_files": {
-        "audio": "GESPRAECH-HerrR/aufnahme.mp3"
+        "audio": "Gespräch-HerrR/aufnahme.mp3"
       },
       "expected": {
         "min_words": 200,
