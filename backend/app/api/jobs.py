@@ -498,6 +498,20 @@ async def create_generate_job(
         }
         _fb_min, _fb_max = _wl_defaults.get(workflow, (200, 800))
         word_limits = derive_word_limits(_style_raw_texts, _fb_min, _fb_max) if _style_raw_texts else None
+        # Bug-Fix #2: Akutantrag-Stilvorlagen enthalten oft den Volltext (Anamnese,
+        # Befund, Familienanamnese), wodurch derive_word_limits faelschlich auf
+        # 400-800 Woerter aufschwingt. Die echte "Begruendung fuer Akutaufnahme"
+        # ist 100-350 Woerter. Wir cappen daher auf den Workflow-Default-Bereich
+        # wenn das berechnete Limit ueber dem max-Default liegt.
+        if workflow == "akutantrag" and word_limits:
+            _orig_min, _orig_max = word_limits
+            if _orig_max > _fb_max or _orig_min > _fb_max:
+                # Berechnetes Limit klar ausserhalb -> auf Defaults zuruecksetzen
+                word_limits = (_fb_min, _fb_max)
+                logger.info(
+                    "Akutantrag-Cap: Wortlimit %d-%d -> %d-%d (Default, Stilvorlage zu lang)",
+                    _orig_min, _orig_max, _fb_min, _fb_max,
+                )
         if word_limits:
             logger.info("Wortlimit fuer %s: %d–%d Wörter (aus %d Stilvorlage(n))",
                         workflow, word_limits[0], word_limits[1], len(_style_raw_texts))
@@ -528,7 +542,25 @@ async def create_generate_job(
                         break
 
         if not patient_name:
-            logger.warning("Kein Patientenname ermittelbar – Modell muss aus Unterlagen ableiten")
+            # Bug-Fix #4: Bei Gespraechsdoku gibt es typischerweise kein
+            # Antragsdokument als Quelle, daher kann patient_name leer bleiben.
+            # Wenn aber kein Name gesetzt ist, ueberlebt "[Patient/in]" aus den
+            # FEW_SHOT-Beispielen die Substitution in prompts.py und landet
+            # ungewollt im Output. Wir setzen einen generischen Platzhalter,
+            # damit die Substitution stattfindet.
+            if workflow == "dokumentation":
+                patient_name = {
+                    "anrede": "",
+                    "vorname": "",
+                    "nachname": "",
+                    "initial": "die Klientin/der Klient",
+                }
+                logger.info(
+                    "Bug-Fix #4: Generischer Patient-Name-Fallback gesetzt "
+                    "(Gespraechsdoku ohne Quelldokument)"
+                )
+            else:
+                logger.warning("Kein Patientenname ermittelbar – Modell muss aus Unterlagen ableiten")
 
         # 5. Generieren – jede Variable hat genau eine Bedeutung
         system = build_system_prompt(

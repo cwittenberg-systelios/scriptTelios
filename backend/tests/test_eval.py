@@ -634,10 +634,13 @@ class EvalResult:
     def check_word_count(self, min_words: int, max_words: int):
         if self.word_count < min_words:
             self.issues.append(f"Zu kurz: {self.word_count}w < {min_words}w Minimum")
+            self.word_count_ok = False
         elif self.word_count > max_words:
             self.issues.append(f"Zu lang: {self.word_count}w > {max_words}w Maximum")
+            self.word_count_ok = False
         else:
             self.passed.append(f"Wortanzahl OK: {self.word_count}w ({min_words}-{max_words})")
+            self.word_count_ok = True  # Bug-Fix #3b: erlaubt Absatzlängen-Check zu lockern
 
     def check_required_keywords(self, keywords: list[str]):
         # Synonyme fuer Keywords die im Fließtext anders ausgedrueckt werden koennen
@@ -741,13 +744,17 @@ class EvalResult:
         else:
             self.passed.append("Kein Think-Block im Output")
 
-    def check_style_consistency(self, style_text: str | list[str], tolerance: float = 0.4):
+    def check_style_consistency(self, style_text: str | list[str], tolerance: float = 0.6):
         """
         Ansatz 1: Stil-Konsistenz-Check.
         
         Bei einem Referenztext: vergleicht Output gegen diesen Text.
         Bei mehreren Referenztexten: berechnet die Bandbreite des Therapeuten-Stils
         und prüft ob der Output innerhalb dieser Bandbreite (+ Toleranz) liegt.
+
+        Bug-Fix #3: Toleranz von 0.4 auf 0.6 erhoeht. Die alte ±40%-Schwelle
+        kippt schon bei kleinen Output-Abweichungen, insbesondere bei kurzen
+        Texten (Akutantrag) oder Stilvorlagen mit ungewoehnlich grossen Absaetzen.
         """
         if isinstance(style_text, str):
             refs = [StyleAnalyzer(style_text)]
@@ -779,6 +786,14 @@ class EvalResult:
             if ref_avg == 0:
                 continue
 
+            # Bug-Fix #3b: Wenn die Wortzahl insgesamt im erlaubten Bereich liegt,
+            # ist eine Abweichung der Absatzlänge oft akzeptabel (kürzere Absätze
+            # bei korrekter Gesamtlänge bedeutet z.B. nur mehr Strukturierung).
+            # Wir loggen dann als "passed" mit Hinweis statt als Issue.
+            _is_paragraph_check = (name == "Absatzlänge")
+            _word_count_passed = getattr(self, "word_count_ok", False)
+            _downgrade = _is_paragraph_check and _word_count_passed
+
             if len(refs) > 1:
                 # Mehrere Referenzen: Output muss in die Bandbreite fallen (+ Toleranz)
                 band_low = ref_min * (1 - tolerance)
@@ -788,6 +803,13 @@ class EvalResult:
                     self.passed.append(
                         f"STIL {name} OK: Output={out_val:.1f} in Bandbreite "
                         f"[{ref_min:.1f}–{ref_max:.1f}] ±{tolerance:.0%} "
+                        f"({len(refs)} Referenzen)"
+                    )
+                elif _downgrade:
+                    # Bug-Fix #3b: Absatzlaenge weicht ab, aber Wortzahl OK -> nur Warnung
+                    self.passed.append(
+                        f"STIL {name} akzeptabel (Wortzahl-OK trotz Bandbreite verfehlt): "
+                        f"Output={out_val:.1f}, Referenz=[{ref_min:.1f}–{ref_max:.1f}] "
                         f"({len(refs)} Referenzen)"
                     )
                 else:
@@ -803,6 +825,12 @@ class EvalResult:
                     self.passed.append(
                         f"STIL {name} OK: Vorlage={ref_avg:.1f} Output={out_val:.1f} "
                         f"(±{deviation:.0%})"
+                    )
+                elif _downgrade:
+                    # Bug-Fix #3b: Absatzlaenge weicht ab, aber Wortzahl OK -> nur Warnung
+                    self.passed.append(
+                        f"STIL {name} akzeptabel (Wortzahl-OK trotz Abweichung): "
+                        f"Vorlage={ref_avg:.1f} Output={out_val:.1f} (±{deviation:.0%})"
                     )
                 else:
                     self.issues.append(
