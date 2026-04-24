@@ -382,6 +382,7 @@ Wenn die Eval-Tests (tests/test_eval.py) auch laufen sollen, kann das
 existierende conftest.py weiter verwendet werden — diese Datei hier
 ergaenzt nur die Pfad-Konfiguration fuer Unit-Tests.
 """
+import sys
 # Backend-Root zum sys.path hinzufuegen damit `from app.services.x import ...` geht
 _BACKEND_ROOT = Path(__file__).parent.parent
 if str(_BACKEND_ROOT) not in sys.path:
