@@ -11,13 +11,8 @@ from unittest.mock import AsyncMock, patch
 
 # ── Testumgebung konfigurieren ────────────────────────────────────────────────
 os.environ.update({
-    # Datenschutz-Patches in Tests deaktiviert (AUTH_ENABLED=true blockt Form-Requests)
-    "AUTH_ENABLED":                     "false",
-    "RATE_LIMIT_ENABLED":               "false",
-    "AUDIT_LOG_PATH":                   "/tmp/systelios_test_audit.log",
-    "CONFLUENCE_SHARED_SECRET":         "test-secret",
-    "ALLOWED_ORIGINS":                  "",
     "OLLAMA_HOST":                      "http://localhost:11434",
+    "OLLAMA_MODEL":                     "qwen3:32b",
     "WHISPER_MODEL":                    "medium",
     "WHISPER_DEVICE":                   "cpu",
     "WHISPER_COMPUTE_TYPE":             "int8",
@@ -149,7 +144,7 @@ def mock_llm():
             "4. VEREINBARUNGEN\n"
             "Naechster Termin: 28.11.2025"
         ),
-        "model_used": "ollama/mistral-nemo",
+        "model_used": "ollama/qwen3:32b",
         "duration_s": 2.4,
         "token_count": 187,
     }
@@ -173,7 +168,7 @@ def mock_llm_anamnese():
             "Suizidalitaet: aktuell verneint\n\n"
             "Diagnosen: F32.1 Mittelgradige depressive Episode, Z73.0 Ausgebranntsein"
         ),
-        "model_used": "ollama/mistral-nemo",
+        "model_used": "ollama/qwen3:32b",
         "duration_s": 3.1,
         "token_count": 221,
     }
@@ -249,6 +244,84 @@ def pytest_addoption(parser):
         default=False,
         help="PDF-Report nach eval-Tests generieren",
     )
+    parser.addoption(
+        "--whisper-model",
+        action="store",
+        default=None,
+        help=(
+            "Whisper-Modell nur fuer diesen Testlauf wechseln (z.B. medium). "
+            "Setzt es vor dem ersten Audio-Test via /api/admin/whisper-model und "
+            "stellt nach dem Lauf das vorherige Modell wieder her."
+        ),
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _configure_whisper_model_for_session(request):
+    """
+    Wenn --whisper-model gesetzt ist, wechselt das Backend-Modell vor den Tests
+    und stellt es nach Abschluss der Session wieder her.
+
+    Backend muss laufen und den Admin-Endpoint bereitstellen (siehe admin.py).
+    """
+    override_model = request.config.getoption("--whisper-model", default=None)
+    if not override_model:
+        yield
+        return
+
+    import httpx
+    import os as _os
+
+    backend_url = _os.environ.get("EVAL_BACKEND_URL", "http://localhost:8000")
+    shared_secret = _os.environ.get("CONFLUENCE_SHARED_SECRET", "")
+
+    headers = {"X-Admin-Token": shared_secret} if shared_secret else {}
+    previous = None
+
+    try:
+        with httpx.Client(base_url=backend_url, timeout=10.0) as client:
+            # Aktuelles Modell merken
+            r = client.get("/api/admin/whisper-model")
+            if r.status_code == 200:
+                previous = r.json().get("whisper_model")
+                print(f"\n[WHISPER] Aktuelles Modell: {previous}", flush=True)
+
+            # Wechseln
+            r = client.post(
+                "/api/admin/whisper-model",
+                params={"model": override_model},
+                headers=headers,
+            )
+            if r.status_code != 200:
+                print(
+                    f"\n[WHISPER] WARNUNG: Modellwechsel fehlgeschlagen "
+                    f"({r.status_code} {r.text}) – Tests laufen mit {previous}",
+                    flush=True,
+                )
+                previous = None  # Nicht zuruecksetzen
+            else:
+                print(
+                    f"[WHISPER] Gewechselt auf {override_model} fuer diesen Testlauf",
+                    flush=True,
+                )
+    except Exception as e:
+        print(f"\n[WHISPER] WARNUNG: Admin-Endpoint nicht erreichbar ({e})", flush=True)
+        previous = None
+
+    yield
+
+    # Nach allen Tests: zuruecksetzen
+    if previous and previous != override_model:
+        try:
+            with httpx.Client(base_url=backend_url, timeout=10.0) as client:
+                client.post(
+                    "/api/admin/whisper-model",
+                    params={"model": previous},
+                    headers=headers,
+                )
+            print(f"\n[WHISPER] Zurueck auf {previous}", flush=True)
+        except Exception as e:
+            print(f"\n[WHISPER] Zurueckstellen fehlgeschlagen: {e}", flush=True)
 
 
 def pytest_sessionfinish(session, exitstatus):

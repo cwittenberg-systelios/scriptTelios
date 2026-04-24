@@ -12,7 +12,7 @@ from app.middleware.audit import AuditMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api import transcribe, generate, documents, health
-from app.api import style_embeddings, jobs
+from app.api import style_embeddings, jobs, admin
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -87,7 +87,8 @@ app.add_middleware(
     allow_headers=[
         "Authorization", "Content-Type",
         "X-Systelios-User", "X-Systelios-Timestamp", "X-Systelios-Signature",
-        "X-Atlassian-Mau-Ignore",  # Confluence-Tracking
+        "X-Admin-Token",               # Admin-Endpoints (z.B. Whisper-Modell-Switch)
+        "X-Atlassian-Mau-Ignore",      # Confluence-Tracking
     ],)
 
 app.include_router(health.router,            prefix="/api", tags=["Health"])
@@ -96,6 +97,7 @@ app.include_router(generate.router,          prefix="/api", tags=["Generierung"]
 app.include_router(documents.router,         prefix="/api", tags=["Dokumente"])
 app.include_router(style_embeddings.router,  prefix="/api", tags=["Stilprofil"])
 app.include_router(jobs.router,              prefix="/api", tags=["Jobs"])
+app.include_router(admin.router,             prefix="/api", tags=["Admin"])
 
 
 @app.options("/{full_path:path}")
