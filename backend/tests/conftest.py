@@ -18,7 +18,6 @@ os.environ.update({
     "CONFLUENCE_SHARED_SECRET":         "test-secret",
     "ALLOWED_ORIGINS":                  "",
     "OLLAMA_HOST":                      "http://localhost:11434",
-    "OLLAMA_MODEL":                     "mistral-nemo",
     "WHISPER_MODEL":                    "medium",
     "WHISPER_DEVICE":                   "cpu",
     "WHISPER_COMPUTE_TYPE":             "int8",
