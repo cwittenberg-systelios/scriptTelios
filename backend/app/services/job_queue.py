@@ -156,13 +156,24 @@ class JobQueue:
         self._cache: dict[str, JobState] = {}
         self._max_cache = 500
 
-    async def create_job(self, workflow: str, description: str = "") -> JobState:
-        """Erstellt einen neuen Job in DB und Cache."""
+    def create_job(self, workflow: str, description: str = "") -> JobState:
+        """Erstellt einen neuen Job im Cache und persistiert ihn asynchron in der DB."""
         job_id = uuid.uuid4().hex
         state = JobState(job_id, workflow, description)
         self._cache[job_id] = state
+        self._cleanup_cache()
 
-        # In DB persistieren
+        queue_size = len([j for j in self._cache.values()
+                          if j.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)])
+        logger.info("Job erstellt: %s (%s) | Warteschlange: %d", job_id, workflow, queue_size)
+
+        # DB-Insert asynchron (fire-and-forget) – gleicher Ansatz wie cancel_job
+        asyncio.ensure_future(self._db_insert_job(job_id, workflow, description))
+
+        return state
+
+    async def _db_insert_job(self, job_id: str, workflow: str, description: str) -> None:
+        """Persistiert einen neuen Job in der DB (wird als Task gestartet)."""
         try:
             from app.core.database import async_session_factory
             from app.models.db import Job as JobModel
@@ -177,12 +188,6 @@ class JobQueue:
                 await db.commit()
         except Exception as e:
             logger.warning("Job-DB-Insert fehlgeschlagen (laeuft in-memory weiter): %s", e)
-
-        self._cleanup_cache()
-        queue_size = len([j for j in self._cache.values()
-                          if j.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)])
-        logger.info("Job erstellt: %s (%s) | Warteschlange: %d", job_id, workflow, queue_size)
-        return state
 
     def get_job(self, job_id: str) -> Optional[JobState]:
         """Holt Job aus dem Cache (schnell, fuer Polling)."""

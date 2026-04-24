@@ -319,7 +319,7 @@ async def create_generate_job(
     dx_list = [d.strip() for d in diagnosen.split(",") if d.strip()] if diagnosen else []
 
     # Job anlegen
-    job = await job_queue.create_job(
+    job = job_queue.create_job(
         workflow=workflow,
         description=f"Workflow: {workflow}" + (f" | Audio: {audio_name}" if audio_name else ""),
     )
