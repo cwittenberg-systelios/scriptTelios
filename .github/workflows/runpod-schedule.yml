@@ -6,20 +6,20 @@ name: RunPod Schedule
 #   20:00 MESZ = 18:00 UTC
 # (Winterzeit MEZ wird ignoriert — Pod startet/stoppt dann eine Stunde früher.)
 
-on:
-  schedule:
-    - cron: '0 7 * * 1-5'   # 09:00 MESZ → start
-    - cron: '0 18 * * 1-5'  # 20:00 MESZ → stop
-  workflow_dispatch:
-    inputs:
-      action:
-        description: 'Manuelle Aktion'
-        required: true
-        default: 'start'
-        type: choice
-        options:
-          - start
-          - stop
+# on:
+#   schedule:
+#     - cron: '0 7 * * 1-5'   # 09:00 MESZ → start
+#     - cron: '0 18 * * 1-5'  # 20:00 MESZ → stop
+#   workflow_dispatch:
+#     inputs:
+#       action:
+#         description: 'Manuelle Aktion'
+#         required: true
+#         default: 'start'
+#         type: choice
+#         options:
+#           - start
+#           - stop
 
 jobs:
   control-pod:
