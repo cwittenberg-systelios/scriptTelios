@@ -12,6 +12,35 @@ Struktur:
 from typing import Optional
 
 
+# ── Workflow-Kategorisierung ─────────────────────────────────────────────────
+# Strukturelle Workflows: P2/P3/P4 - Stilbeispiel wird als Schablone verwendet
+# (Gliederung, Laenge, Absatztiefe werden uebernommen). Single source of truth -
+# wird in build_system_prompt mehrfach geprueft, frueher als is_structural-Liste
+# und has_structural_template separat - dabei kam es zu Inkonsistenzen
+# (folgeverlaengerung/akutantrag bekamen Schablone aber falschen Abschlusssatz).
+STRUCTURAL_WORKFLOWS = frozenset({
+    "anamnese",
+    "verlaengerung",
+    "folgeverlaengerung",
+    "akutantrag",
+    "entlassbericht",
+})
+
+
+# ── Datenschutz-Namensregel (zentral) ────────────────────────────────────────
+# Wird in build_system_prompt einmalig in den finalen Prompt aufgenommen
+# (nicht mehr pro Workflow im build_user_content – das war Token-Verschwendung).
+NAMENSREGEL = (
+    "DATENSCHUTZ – NAMENSFORMAT (gilt fuer den gesamten Text):\n"
+    "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
+    "Initialen des AKTUELLEN Patienten aus den Unterlagen "
+    "(z.B. wenn der Patient 'Andreas Reif' heisst: 'Herr R.', "
+    "wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, "
+    "NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
+    "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
+)
+
+
 # ── Fachglossar ──────────────────────────────────────────────────────────────
 
 KLINISCHES_GLOSSAR = """FACHLICHES REFERENZWISSEN (sysTelios-Klinik):
@@ -686,7 +715,7 @@ def build_system_prompt(
         # nur Schreibstil übernehmen, Struktur NICHT verändern.
         # P2/P3/P4: Stilbeispiel ist strukturelle Schablone → Gliederung,
         # Länge und Tonalität übernehmen, nur Patienteninhalte ersetzen.
-        is_structural = workflow in ("anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht")
+        is_structural = workflow in STRUCTURAL_WORKFLOWS
 
         if is_structural:
             parts.append(
@@ -734,25 +763,38 @@ def build_system_prompt(
 
     has_structural_template = (
         style_context and style_context.strip()
-        and workflow in ("anamnese", "verlaengerung", "entlassbericht")
+        and workflow in STRUCTURAL_WORKFLOWS
     )
 
     # Expliziter Patientennamen-Hinweis (aus den Unterlagen extrahiert)
+    # Sicherheits-Check: Block nur ausgeben wenn nachname plausibel ist.
+    # Sonst entstuende eine Geisterzeile "Der aktuelle Patient ist   ."
+    # oder schlimmer: ein Hinweistext wuerde als Name gerendert.
     if patient_name and patient_name.get("initial"):
-        anrede = patient_name["anrede"]
+        anrede = patient_name.get("anrede") or ""
         initial = patient_name["initial"]
-        nachname = patient_name.get("nachname", "")
-        vorname = patient_name.get("vorname", "")
-        parts.append(
-            f"\nPATIENTENNAME (aus den Unterlagen extrahiert):\n"
-            f"Der aktuelle Patient ist {anrede} {vorname} {nachname}.\n"
-            f"Verwende im gesamten Bericht AUSSCHLIESSLICH die Bezeichnung '{anrede} {initial}' "
-            f"(Anrede + erster Buchstabe des Nachnamens + Punkt).\n"
-            f"NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, "
-            f"NIEMALS einen Platzhalter (eckige Klammern um Patient/in oder Initiale, oder Pseudo-Namen wie Frau X. / Herr Y.) verwenden.\n"
-            f"Beispiel KORREKT: 'Nach der Aufnahme zeigte sich {anrede} {initial} zunehmend...'\n"
-            f"Beispiel FALSCH:  Nach der Aufnahme zeigte sich [Pat] zunehmend... (mit Platzhalter)\n"
+        nachname = patient_name.get("nachname", "") or ""
+        vorname = patient_name.get("vorname", "") or ""
+        nachname_low = nachname.lower().rstrip(".")
+
+        is_plausible = (
+            nachname
+            and 1 <= len(nachname) <= 30
+            and "klient" not in nachname_low
+            and "patient" not in nachname_low
+            and len(initial) <= 6
         )
+        if is_plausible:
+            parts.append(
+                f"\nPATIENTENNAME (aus den Unterlagen extrahiert):\n"
+                f"Der aktuelle Patient ist {anrede} {vorname} {nachname}.\n"
+                f"Verwende im gesamten Bericht AUSSCHLIESSLICH die Bezeichnung '{anrede} {initial}' "
+                f"(Anrede + erster Buchstabe des Nachnamens + Punkt).\n"
+                f"NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, "
+                f"NIEMALS einen Platzhalter (eckige Klammern um Patient/in oder Initiale, oder Pseudo-Namen wie Frau X. / Herr Y.) verwenden.\n"
+                f"Beispiel KORREKT: 'Nach der Aufnahme zeigte sich {anrede} {initial} zunehmend...'\n"
+                f"Beispiel FALSCH:  Nach der Aufnahme zeigte sich [Pat] zunehmend... (mit Platzhalter)\n"
+            )
 
     if has_structural_template:
         parts.append(
@@ -773,17 +815,32 @@ def build_system_prompt(
     # als generische Platzhalter. Wenn der echte Name bekannt ist, ersetzen
     # wir diese durchgaengig - sonst uebernimmt das Modell den Platzhalter 1:1
     # in den Output.
+    #
+    # Sicherheits-Check: Substitution NUR wenn full_ref plausibel kurz und
+    # frei von "Klient"/"Patient" ist. Andernfalls droht das Replace mit
+    # einem Müll-String wie "die Klientin/der Klient" auszufuehren -
+    # Quelle waere ein vom Frontend versehentlich gesendeter Hinweistext.
+    # parse_explicit_patient_name filtert solche Strings bereits in
+    # extraction.py raus, dieser Check ist die zweite Verteidigungslinie.
     if patient_name and patient_name.get("initial"):
         anrede_p = patient_name.get("anrede") or ""
         initial_p = patient_name["initial"]
         full_ref = f"{anrede_p} {initial_p}".strip()  # z.B. "Frau M." oder nur "M."
 
-        # "Herr/[Patient/in]" -> "Frau M." (komplett ersetzen, keine zweischichtige Anrede mehr)
-        final_prompt = final_prompt.replace("Herr/[Patient/in]", full_ref)
-        # "[Patient/in]" -> "Frau M." / "Herr S."
-        final_prompt = final_prompt.replace("[Patient/in]", full_ref)
-        # "[Name]" (aus FACHLICHES REFERENZWISSEN) -> Initiale
-        final_prompt = final_prompt.replace("[Name]", full_ref)
+        full_ref_low = full_ref.lower()
+        is_safe_ref = (
+            len(full_ref) <= 12
+            and "klient" not in full_ref_low
+            and "patient" not in full_ref_low
+            and full_ref not in ("", ".", "Frau .", "Herr .")
+        )
+        if is_safe_ref:
+            # "Herr/[Patient/in]" -> "Frau M." (komplett ersetzen, keine zweischichtige Anrede mehr)
+            final_prompt = final_prompt.replace("Herr/[Patient/in]", full_ref)
+            # "[Patient/in]" -> "Frau M." / "Herr S."
+            final_prompt = final_prompt.replace("[Patient/in]", full_ref)
+            # "[Name]" (aus FACHLICHES REFERENZWISSEN) -> Initiale
+            final_prompt = final_prompt.replace("[Name]", full_ref)
     # Wenn kein Name bekannt: Platzhalter bleiben stehen - das Modell muss
     # aus den Quellen ableiten. Die NAMENSFORMAT-Anweisung sorgt dafuer
     # dass es die Initiale selbst bildet.
@@ -824,13 +881,23 @@ def build_user_content(
     parts = []
 
     # Expliziter Patientenname ganz oben im User-Block (wenn verfuegbar)
+    # Sicherheits-Check: nur ausgeben wenn initial plausibel kurz ist und
+    # nicht "klient"/"patient" enthaelt - sonst landet ein Hinweistext
+    # wie "die Klientin/der Klient" als Namenskuerzel im Prompt.
     if patient_name and patient_name.get("initial"):
         anrede = patient_name.get("anrede") or ""
         initial = patient_name["initial"]
-        if anrede:
-            parts.append(f"AKTUELLER PATIENT: {anrede} {initial} (verwende ausschliesslich diese Bezeichnung)")
-        else:
-            parts.append(f"AKTUELLER PATIENT: Namenskuerzel '{initial}' (verwende ausschliesslich diese Bezeichnung)")
+        initial_low = initial.lower()
+        is_safe_initial = (
+            len(initial) <= 6
+            and "klient" not in initial_low
+            and "patient" not in initial_low
+        )
+        if is_safe_initial:
+            if anrede:
+                parts.append(f"AKTUELLER PATIENT: {anrede} {initial} (verwende ausschliesslich diese Bezeichnung)")
+            else:
+                parts.append(f"AKTUELLER PATIENT: Namenskuerzel '{initial}' (verwende ausschliesslich diese Bezeichnung)")
 
     if workflow == "dokumentation":
         if transcript:
@@ -1012,7 +1079,7 @@ def build_user_content(
     # strukturell ins Stilbeispiel passen würden und sie dort einbauen.
     if custom_prompt and custom_prompt.strip():
         focus = custom_prompt.strip()
-        is_structural = workflow in ("anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht")
+        is_structural = workflow in STRUCTURAL_WORKFLOWS
         if is_structural:
             parts.append(
                 f"THERAPEUTEN-HINWEIS – SCHWERPUNKTTHEMEN:\n{focus}\n\n"

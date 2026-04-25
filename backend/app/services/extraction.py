@@ -349,6 +349,27 @@ def extract_patient_name(text: str) -> dict | None:
     return None
 
 
+# Generische Bezeichnungen die NIE als Patientenname akzeptiert werden duerfen.
+# Wenn das Frontend so etwas als "patientenname" schickt, ist das ein Default-Wert
+# oder ein versehentlich kopierter Hinweistext - kein echter Name.
+# Vergleich case-insensitive nach Strip von Slash/Whitespace.
+_GENERIC_NAME_BLACKLIST = frozenset({
+    "klient", "klientin", "klientinnen", "klienten",
+    "patient", "patientin", "patientinnen", "patienten",
+    "der klient", "die klientin", "die patientin", "der patient",
+    "der/die klient/in", "der/die patient/in",
+    "name", "nachname", "vorname",
+    "unbekannt", "anonym", "n.n.", "nn",
+    "x", "y", "z",
+    "frau x", "herr x", "frau y", "herr y",
+    "frau x.", "herr x.", "frau y.", "herr y.",
+})
+
+# Maximalwerte fuer plausible Namen. Echte deutsche Nachnamen liegen weit darunter.
+_MAX_NACHNAME_LEN = 30
+_MAX_VORNAME_LEN  = 50
+
+
 def parse_explicit_patient_name(name_str: str) -> dict | None:
     """
     Parst einen explizit uebergebenen Namen-String.
@@ -360,12 +381,29 @@ def parse_explicit_patient_name(name_str: str) -> dict | None:
       - "Nachname"                    → {anrede="", vorname="", nachname, initial}
 
     Wenn Anrede fehlt, wird sie leer gelassen (Modell nutzt dann 'die Klientin' etc).
+
+    Lehnt generische Bezeichnungen wie "die Klientin/der Klient", "Patient" usw.
+    explizit ab — solche Strings sind kein gueltiger Name und wuerden in der
+    nachgelagerten Replace-Logik (build_system_prompt) als '[Patient/in]'-Ersatz
+    in den finalen Prompt landen.
     """
     import re
     if not name_str:
         return None
     s = name_str.strip()
     if not s:
+        return None
+
+    # Frueher Blacklist-Check: ganzer String (case-insensitive, normalisiert)
+    s_norm = re.sub(r"\s+", " ", s.replace("/", " ").replace(",", " ")).strip().lower()
+    if s_norm in _GENERIC_NAME_BLACKLIST:
+        return None
+
+    # Heuristik: Jedes Vorkommen von "klient" oder "patient" im Input ist ein
+    # starker Hinweis auf einen Hinweistext statt einem Eigennamen - echte
+    # deutsche Nachnamen enthalten diese Substrings praktisch nie.
+    s_low = s.lower()
+    if "klient" in s_low or "patient" in s_low:
         return None
 
     anrede = ""
@@ -392,6 +430,17 @@ def parse_explicit_patient_name(name_str: str) -> dict | None:
         # Ausnahme: "van Dyk", "von Beethoven" etc. → letztes Wort bleibt Nachname
         nachname = parts[-1]
         vorname = " ".join(parts[:-1])
+
+    # Sanity-Checks: zu lange "Namen" sind Hinweistexte, keine Eigennamen
+    if len(nachname) > _MAX_NACHNAME_LEN:
+        return None
+    if vorname and len(vorname) > _MAX_VORNAME_LEN:
+        return None
+
+    # Letzter Blacklist-Check auf den extrahierten Nachnamen alleine
+    # (z.B. "die Klient" -> nachname="Klient")
+    if nachname.lower().rstrip(".") in _GENERIC_NAME_BLACKLIST:
+        return None
 
     initial = nachname[0].upper() + "." if nachname else ""
     if not initial:
