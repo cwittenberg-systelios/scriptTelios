@@ -253,15 +253,23 @@ BASE_PROMPT_AKUTANTRAG = (
     "- Konkrete Symptome und Risiken aus den Quellen benennen\n"
     "- Ambulante Insuffizienz begründen (warum reicht ambulant nicht?)\n"
     "- Dekompensationszeichen und aktuelle Krisensituation\n"
-    "- Mit Standardformulierung beginnen:\n"
-    "  'Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
+    "- Beginne mit der folgenden Standardformulierung – uebernimm sie WOERTLICH "
+    "und unveraendert (Kopie, keine Paraphrase, keine Wortauslassungen):\n"
+    "  >>>\n"
+    "  Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
     "Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
-    "Eindruckes ein stationäres Krankenhaussetting akut notwendig:'\n\n"
+    "Eindruckes ein stationäres Krankenhaussetting akut notwendig:\n"
+    "  <<<\n"
+    "  Schliesse danach mit einem Zeilenumbruch ab und beginne den naechsten "
+    "Absatz mit einem Wir-Satz: 'Wir nehmen [Patient/in] schwer belastet auf...'\n\n"
     "STIL: Knappe medizinisch-klinische Sprache aus WIR-PERSPEKTIVE des aufnehmenden "
     "Klinikteams: 'Wir nehmen [Patient/in] schwer belastet auf...', "
     "'Wir prüfen den Einsatz psychopharmakologischer Intervention...', "
     "'Aus unserer Sicht ist eine ambulante Behandlung nicht ausreichend.'. "
     "Konkret und symptombezogen. Keine allgemeinen Floskeln.\n"
+    "WICHTIG ZUR WIR-PERSPEKTIVE: Nach der Standardformulierung MUSS der erste "
+    "inhaltliche Satz mit 'Wir' beginnen ('Wir nehmen ... auf', 'Wir erleben ...'). "
+    "NICHT mit '[Patient/in] präsentiert sich' oder '[Patient/in] berichtet'.\n"
     "LÄNGE: 200-350 Wörter.\n\n"
     "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden\n\n"
     "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
@@ -278,10 +286,18 @@ ROLE_PREAMBLE = (
     "Entlassberichte, Kostenverlängerungsanträge, Aufnahmebefunde und Verlaufsnotizen. "
     "Du arbeitest wie ein erfahrener medizinischer Dokumentationsassistent – "
     "du beginnst sofort mit dem Schreiben des angeforderten Dokuments.\n\n"
+    "WICHTIG – BEACHTE LEERZEICHEN:\n"
+    "Achte beim Schreiben sorgfaeltig auf die korrekte Trennung von Woertern. "
+    "Im Fliesstext steht IMMER ein Leerzeichen zwischen zwei Woertern. "
+    "Beispiele fuer KORREKTE Schreibung (mit Leerzeichen):\n"
+    "  'des stationaeren Aufenthaltes zeigte sich' (NICHT 'Aufenthaltszeigte')\n"
+    "  'Schwere sowie unter Beruecksichtigung' (NICHT 'Schweresowie')\n"
+    "  'letzten Verlaengerungsantrag hat sich' (NICHT 'Verlaengerungsantraghat')\n"
+    "Pruefe vor jeder Wortgrenze ob ein Leerzeichen noetig ist.\n\n"
     "Beispiel für korrektes Verhalten:\n"
     "Anfrage: 'Schreibe den Behandlungsverlauf'\n"
-    "Korrekte Antwort: 'Zu Beginn des stationären Aufenthaltes zeigte sich [Patient/in] "
-    "deutlich erschöpft und in seinem Selbstwert erheblich verunsichert...'\n"
+    "Korrekte Antwort: 'Zu Beginn des stationaeren Aufenthaltes zeigte sich [Patient/in] "
+    "deutlich erschoepft und in seinem Selbstwert erheblich verunsichert...'\n"
     "Falsche Antwort: 'Entschuldigung, ich kann keine Berichte erstellen...'\n\n"
     + KLINISCHES_GLOSSAR
 )
@@ -371,7 +387,7 @@ BASE_PROMPTS: dict[str, str] = {
         "- NIEMALS erfinden: Beruf, Familienstand, Kinder, Wohnsituation, "
         "Vorbehandlungen, Medikamente, Suchtmittel, Diagnosen, Zeitangaben, "
         "auslösende Ereignisse, Testwerte, Zitate\n"
-        "- LÄNGE Anamnese: Mindestens 450 Wörter Fließtext (KEINE kurzen Absätze – schreibe ausführliche, zusammenhängende Absätze)\n\n"
+        "- LÄNGE Anamnese: Richtwert ca. 450-700 Wörter Fließtext (KEINE kurzen Absätze – schreibe ausführliche, zusammenhängende Absätze). Falls weiter unten ein VERBINDLICHES TEXTLIMIT angegeben ist, hat dieses absolute Vorrang vor diesem Richtwert.\n\n"
         + FEW_SHOT_ANAMNESE
     ),
 
@@ -466,6 +482,10 @@ BASE_PROMPTS: dict[str, str] = {
         "Schreibe konsequent aus 'Wir'-Sicht: 'Seit dem letzten Antrag erlebten wir...', "
         "'In unserer weiteren Arbeit gelang es uns...', 'Wir konnten gemeinsam mit [Patient/in]...'. "
         "VERMEIDE Passivkonstruktionen wie 'es zeigte sich' oder 'konnte differenziert werden'. "
+        "WICHTIG: Der erste Satz des Textes MUSS mit 'Wir' oder einer Wir-Konstruktion "
+        "beginnen ('Wir erlebten ...', 'Seit dem letzten Antrag konnten wir ...', "
+        "'In unserer weiteren Arbeit ...'). NICHT mit 'Im weiteren Verlauf' oder "
+        "'Seither hat sich [Patient/in] ...' beginnen.\n"
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
         "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden "
@@ -486,16 +506,16 @@ BASE_PROMPTS: dict[str, str] = {
         "als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, "
         "ohne Einleitung und ohne Abschluss.\n\n"
         "INHALT – drei Teile nahtlos als Fließtext ineinander (ALLE DREI MÜSSEN VORKOMMEN):\n\n"
-        "Teil 1 – BEHANDLUNGSVERLAUF (mindestens 300 Wörter):\n"
+        "Teil 1 – BEHANDLUNGSVERLAUF (Hauptteil, ausfuehrlich):\n"
         "Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden "
         "(IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), "
         "konkrete Wendepunkte und Entwicklungsschritte. Schreibe ausführliche Absätze "
-        "mit mindestens 100 Wörtern pro Absatz. Wir-Perspektive: "
+        "(Richtwert: ca. 100 Wörter pro Absatz). Wir-Perspektive: "
         "'Wir erlebten...', 'Es gelang zunehmend...', 'Im Verlauf zeigte sich...'\n\n"
-        "Teil 2 – EPIKRISE (mindestens 100 Wörter):\n"
+        "Teil 2 – EPIKRISE (kompakte Gesamtbewertung):\n"
         "Gesamtbewertung: Symptomatik-Entwicklung im Vergleich zu Aufnahme, "
         "entlastete Schutzanteile, verbliebener Bedarf, Ressourcen, Prognose.\n\n"
-        "Teil 3 – THERAPIEEMPFEHLUNGEN (mindestens 80 Wörter):\n"
+        "Teil 3 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss):\n"
         "Konkrete Empfehlungen für die ambulante Weiterbehandlung: "
         "Therapieform, Schwerpunkte, Frequenz, Nachsorge. "
         "DIESER TEIL DARF NICHT FEHLEN.\n\n"
@@ -510,8 +530,8 @@ BASE_PROMPTS: dict[str, str] = {
         "– Keine Stammdaten, Diagnosen-Kodierung, Medikation\n\n"
         "STIL: Fließtext, Wir-Perspektive, systemische Fachsprache, "
         "konkret und patientenspezifisch – keine Allgemeinplätze.\n"
-        "LÄNGE: 600-900 Wörter gesamt (Richtwert). Wenn dynamische Wortlimits "
-        "ueber den Stilvorlagen weiter unten angegeben werden, haben diese Vorrang. "
+        "LÄNGE: Richtwert 600-900 Wörter gesamt. Wenn weiter unten ein VERBINDLICHES TEXTLIMIT "
+        "ueber den Stilvorlagen angegeben wird, hat dieses absolute Vorrang. "
         "Vermeide unnötige Ausschmückungen und Wiederholungen.\n\n"
         "QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in der "
         "Verlaufsdokumentation oder Antragsvorlage zurückführbar sein. "
@@ -628,12 +648,41 @@ def _compute_style_constraints(style_text: str, skip_length: bool = False) -> st
     fach_count = len(fachbegriffe.findall(style_text))
     fach_density = round(fach_count / max(word_count, 1) * 100, 1)
 
+    # Fragment-Stil-Heuristik: Vorlagen mit sehr kurzen Saetzen ohne Subjekt
+    # (z.B. "thematisiert, dass...", "signalisiere ihr...", "bringt Bilder mit")
+    # sind stichwort-/notizartig und erfordern entsprechenden Output.
+    # Erkennung: avg_sentence_len < 8 UND viele Saetze beginnen mit Verb/Partizip
+    # statt mit einem Pronomen oder Eigennamen.
+    is_fragment_style = False
+    if avg_sentence_len < 8 and len(sentences) >= 2:
+        # Zaehle Saetze, die mit einem Klein- oder Verb-Wort starten
+        # (kein Patientennamen-Initial, keine Anrede, kein Pronomen am Satzanfang)
+        verb_start_count = 0
+        for s in sentences:
+            first_word = s.strip().split()[0] if s.strip().split() else ""
+            if not first_word:
+                continue
+            # Klein geschrieben oder typisches Verb/Partizip am Satzanfang
+            if (first_word[0].islower()
+                or first_word in ("Thematisiert", "Bringt", "Signalisiere",
+                                  "Reflektiert", "Berichtet", "Beschreibt",
+                                  "Schildert", "Aeussert", "Äußert")):
+                verb_start_count += 1
+        if verb_start_count >= len(sentences) * 0.4:
+            is_fragment_style = True
+
     # Hartes Wortlimit aus Vorlagenlänge (±30%), überschreibt BASE_PROMPT-Angaben
     limit_min, limit_max = derive_word_limits([style_text], fallback_min=50, fallback_max=9999)
 
     lines = ["\nSTIL-VORGABEN (unbedingt einhalten!):"]
     lines.append(f"- Satzlänge: durchschnittlich {int(avg_sentence_len)} Wörter pro Satz")
     lines.append(f"- Absatzlänge: durchschnittlich {int(avg_para_len)} Wörter pro Absatz")
+    if is_fragment_style:
+        lines.append(
+            "- STILTYP: Stichwort-/Notiz-Stil (kurze Fragmente, oft ohne Satzsubjekt, "
+            "Verben am Satzanfang). UEBERNIMM diesen Stil. Schreibe KEINE Vollsaetze "
+            "mit Subjekt-Verb-Objekt-Struktur. Beispielform der Vorlage uebernehmen."
+        )
     if fach_density > 0:
         lines.append(f"- Fachbegriffe: {'sparsam' if fach_density < 0.8 else 'moderat'} "
                       f"(ca. {fach_density} pro 100 Wörter)")
@@ -641,7 +690,9 @@ def _compute_style_constraints(style_text: str, skip_length: bool = False) -> st
         lines.append("- Fachbegriffe: sehr sparsam einsetzen")
     if uses_wir:
         lines.append("- Perspektive: Wir-Form des Behandlungsteams "
-                      "(\"Wir beobachteten...\", \"In unserer Arbeit...\")")
+                      "(\"Wir beobachteten...\", \"In unserer Arbeit...\"). "
+                      "Der ERSTE Satz des Outputs MUSS mit 'Wir' oder einer "
+                      "Wir-Konstruktion beginnen.")
     else:
         lines.append("- Perspektive: Dritte Person (Er/Sie-Form)")
 
@@ -700,8 +751,13 @@ def build_system_prompt(
     if word_limits is not None:
         limit_min, limit_max = word_limits
         base = base + (
-            "\nVERBINDLICHES TEXTLIMIT (hat Vorrang vor allen anderen Laengenangaben): "
-            f"mindestens {limit_min} Woerter, maximal {limit_max} Woerter.\n"
+            "\nVERBINDLICHES TEXTLIMIT (hat Vorrang vor allen anderen Laengenangaben "
+            "im obigen Prompt, einschliesslich 'Mindestens X Woerter' / 'LAENGE: X-Y'): "
+            f"mindestens {limit_min} Woerter, maximal {limit_max} Woerter. "
+            f"Falls dieses Limit niedriger ist als eine BASE_PROMPT-Mindestangabe "
+            f"(z.B. 'Mindestens 450 Woerter'): das BASE_PROMPT-Minimum ist UNGUELTIG, "
+            f"das hier genannte Maximum ({limit_max}) gilt als harte Obergrenze. "
+            f"Ueberschreite das Maximum NIEMALS - lieber kuerzer als zu lang.\n"
         )
 
     parts = [ROLE_PREAMBLE, base]
@@ -733,6 +789,14 @@ def build_system_prompt(
                 "Ersetze ausschließlich alle patientenspezifischen Inhalte "
                 "(Namen, Diagnosen, konkrete Ereignisse, Therapiethemen) "
                 "durch die Informationen aus der aktuellen Verlaufsdokumentation.\n\n"
+                "PATIENTENSPEZIFISCHE BEGRIFFE BEIBEHALTEN:\n"
+                "Zentrale Schluesselbegriffe und Themen aus den Quellen des AKTUELLEN "
+                "Patienten (Diagnosen, Ereignisse wie 'Trennung', 'Mobbing', 'Verlust', "
+                "Methoden wie 'Anteilearbeit', 'EMDR', spezifische Personen wie "
+                "Eltern/Kinder) MUESSEN im Output vorkommen, auch wenn sie nicht im "
+                "Stilbeispiel stehen. Das Stilbeispiel liefert NUR die Form, NICHT "
+                "die Inhalte. Pruefe vor dem Abschluss: kommen alle wichtigen "
+                "Themen aus der aktuellen Verlaufsdokumentation im Bericht vor?\n\n"
                 "NIEMALS aus dem Beispiel übernehmen: Patientennamen, Diagnosen, "
                 "ICD-Codes, konkrete Therapieinhalte, Daten – nur Struktur und Stil.\n\n"
                 f"{style_context.strip()}"
@@ -1035,12 +1099,10 @@ def build_user_content(
             parts.append(f"BESONDERE HINWEISE:\n{fokus_themen}")
         parts.append(
             "Verfasse jetzt NUR den Abschnitt 'Begründung für Akutaufnahme'. "
-            "Beginne mit der Standardformulierung: "
-            "'Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
-            "Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
-            "Eindruckes ein stationäres Krankenhaussetting akut notwendig:'\n"
+            "Beginne wie im System-Prompt vorgegeben mit der Standardformulierung "
+            "(woertlich uebernehmen, KEINE Paraphrase) und schliesse direkt einen "
+            "Wir-Absatz an ('Wir nehmen ... schwer belastet auf, ...'). "
             "Dann konkrete Symptome und Risiken aus der Antragsvorlage benennen. "
-            "200-350 Wörter. "
             "Ausschließlich auf Basis der obigen Quellen."
         )
 
