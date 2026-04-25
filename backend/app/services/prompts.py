@@ -134,30 +134,39 @@ FEW_SHOT_VERLÄNGERUNG = """\
 BEISPIEL (Bisheriger Verlauf und Begründung der Verlängerung /
 Verlauf und Begründung der weiteren Verlängerung – ca. 400-600 Wörter):
 
-[Patient/in] zeigte sich im bisherigen Verlauf des stationären Aufenthaltes unter anhaltendem \
-innerem Druck mit ausgeprägte Anspannung und emotionaler Ambivalenz. Gleichzeitig wurde \
-eine zunehmende Bereitschaft erkennbar, sich auf den therapeutischen Prozess einzulassen \
-und auch sehr vulnerable innere Themen zu explorieren.
+WICHTIG: Schreibe konsequent in der WIR-FORM aus klinischer Perspektive
+("wir nahmen auf", "wir erlebten", "uns gelang es", "in unserer Arbeit").
+Vermeide Passivkonstruktionen wie "es zeigte sich" oder "konnte differenziert werden".
 
-Im hypnosystemischen Einzelprozess konnte mithilfe der Anteilearbeit insbesondere ein \
-dominanter Kontrollanteil differenziert werden, der biographisch vor dem Hintergrund von \
-invalidierenden Beziehungserfahrungen in der Herkunftsfamilie verständlich wurde. \
-Parallel traten jüngere, verletzliche Anteile in Erscheinung, die mit starken Gefühlen \
-von Wertlosigkeit und Trauer einhergehen. Durch Stuhlarbeit, Netzwerk- und Körperarbeit \
-gelang es [Patient/in] in ersten Schritten, eine Beobachterposition einzunehmen und eine \
-wohlwollendere innere Haltung zu entwickeln.
+Wir nahmen [Patient/in] im bisherigen Verlauf des stationären Aufenthaltes \
+unter anhaltendem innerem Druck, mit ausgeprägter Anspannung und emotionaler Ambivalenz \
+auf. Gleichzeitig erkannten wir eine zunehmende Bereitschaft, sich auf den \
+therapeutischen Prozess einzulassen und auch sehr vulnerable innere Themen \
+zu explorieren.
 
-In den therapeutischen Gruppen zeigte sich [Patient/in] zunehmend aktiv und beziehungsfähig. \
-Gleichzeitig führten gruppale Trigger und Nähedistanzthemen wiederholt zu Überlastung, \
-was die weiterhin hohe Vulnerabilität des Systems unterstreicht.
+Im hypnosystemischen Einzelprozess konnten wir mithilfe der Anteilearbeit \
+insbesondere einen dominanten Kontrollanteil differenzieren, der biographisch \
+vor dem Hintergrund von invalidierenden Beziehungserfahrungen in der \
+Herkunftsfamilie verständlich wurde. Parallel sahen wir jüngere, verletzliche \
+Anteile in Erscheinung treten, die mit starken Gefühlen von Wertlosigkeit \
+und Trauer einhergehen. Durch Stuhlarbeit, Netzwerk- und Körperarbeit gelang \
+es uns gemeinsam mit [Patient/in], in ersten Schritten eine Beobachterposition \
+einzunehmen und eine wohlwollendere innere Haltung aufzubauen.
 
-Insgesamt zeigen sich erste positive Entwicklungen wie eine verbesserte Reflexionsfähigkeit, \
-punktuell aufgehellte Stimmung und wachsendes Verständnis für die Funktionalität alter Muster. \
-Dennoch bestehen weiterhin hohe Anspannungszustände und eine eingeschränkte Emotionsregulation. \
-Eine für den ambulanten Kontext notwendige tragfähige Stabilität ist derzeit noch nicht \
-ausreichend gegeben. Zur weiteren Festigung der Steuerungsposition und Vorbereitung eines \
-gelingenden Transfers in den häuslichen Alltag ist eine Verlängerung um weitere 14 Tage \
-aus psychotherapeutischer Sicht dringend indiziert.\
+In den therapeutischen Gruppen erlebten wir [Patient/in] zunehmend aktiv und \
+beziehungsfähig. Gleichzeitig führten gruppale Trigger und Nähedistanzthemen \
+wiederholt zu Überlastung, was die weiterhin hohe Vulnerabilität des Systems \
+unterstreicht.
+
+Insgesamt sehen wir erste positive Entwicklungen wie eine verbesserte \
+Reflexionsfähigkeit, punktuell aufgehellte Stimmung und wachsendes Verständnis \
+für die Funktionalität alter Muster. Dennoch bestehen weiterhin hohe \
+Anspannungszustände und eine eingeschränkte Emotionsregulation. Eine für den \
+ambulanten Kontext notwendige tragfähige Stabilität ist derzeit noch nicht \
+ausreichend gegeben. Zur weiteren Festigung der Steuerungsposition und \
+Vorbereitung eines gelingenden Transfers in den häuslichen Alltag halten wir \
+eine Verlängerung um weitere 14 Tage aus psychotherapeutischer Sicht für \
+dringend indiziert.\
 """
 
 FEW_SHOT_ENTLASSBERICHT = """\
@@ -219,8 +228,11 @@ BASE_PROMPT_AKUTANTRAG = (
     "  'Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
     "Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
     "Eindruckes ein stationäres Krankenhaussetting akut notwendig:'\n\n"
-    "STIL: Knappe medizinisch-klinische Sprache. Konkret und symptombezogen. "
-    "Keine allgemeinen Floskeln.\n"
+    "STIL: Knappe medizinisch-klinische Sprache aus WIR-PERSPEKTIVE des aufnehmenden "
+    "Klinikteams: 'Wir nehmen [Patient/in] schwer belastet auf...', "
+    "'Wir prüfen den Einsatz psychopharmakologischer Intervention...', "
+    "'Aus unserer Sicht ist eine ambulante Behandlung nicht ausreichend.'. "
+    "Konkret und symptombezogen. Keine allgemeinen Floskeln.\n"
     "LÄNGE: 200-350 Wörter.\n\n"
     "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden\n\n"
     "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
@@ -274,7 +286,14 @@ BASE_PROMPTS: dict[str, str] = {
         "- aktiv formuliert: '[Patient/in] wurde eingeladen, ...' oder "
         "'Als Übung wurde vereinbart, ...'\n\n"
         "Stil: Fliestext pro Abschnitt, aktiv, konkret, systemisch-wertschätzend. "
-        "Keine Sektion über den Gesprächsstil.\n\n"
+        "Keine Sektion über den Gesprächsstil.\n"
+        "SATZLÄNGE: Verwende NATÜRLICHE, KÜRZERE Sätze (10-25 Wörter pro Satz). "
+        "Vermeide übermäßig komplexe Schachtelsätze mit mehreren Nebensätzen oder "
+        "Aufzählungen. Beispiel guter Stil: 'Sie berichtete von Anspannung. Im Gespräch "
+        "wurde der dahinterliegende Anteil sichtbar.' Statt: 'Sie berichtete von einer "
+        "tiefgreifenden Anspannung, welche im Verlauf der Sitzung durch die intensive "
+        "Auseinandersetzung mit den dahinterliegenden Anteilen, die sich als Schutzmechanismus "
+        "etabliert hatten, schrittweise einer differenzierteren Wahrnehmung zugänglich wurde.'\n\n"
         "QUELLENREGEL: Alle Inhalte müssen aus dem Transkript oder den Stichpunkten "
         "ableitbar sein. Keine Symptome, Diagnosen, Interventionen oder Zitate "
         "erfinden die nicht im Gespräch vorkamen.\n\n"
@@ -371,9 +390,13 @@ BASE_PROMPTS: dict[str, str] = {
         "soziale Integration, Entlassfähigkeit noch nicht erreicht\n"
         "- Geplante Maßnahmen und Prognose für den Verlängerungszeitraum\n\n"
         "STIL:\n"
-        "Wir-Perspektive des Therapeutenteams: "
-        "'Im bisherigen Verlauf erlebten wir...', 'Es zeigte sich...', "
-        "'Die Klientin/der Klient entwickelte...'. "
+        "WIR-PERSPEKTIVE des Therapeutenteams (verbindlich, nicht 3. Person/Passiv): "
+        "Schreibe konsequent aus 'Wir'-Sicht: 'Wir nahmen [Patient/in] auf...', "
+        "'In unserer Arbeit gelang es uns...', 'Wir erlebten [Patient/in] zunehmend...', "
+        "'Im Einzelprozess konnten wir gemeinsam mit [Patient/in]...'. "
+        "VERMEIDE Passivkonstruktionen wie 'es zeigte sich', 'konnte differenziert werden', "
+        "'wurde bearbeitet'. Setze stattdessen das Wir-Subjekt aktiv: "
+        "'wir sahen', 'wir bearbeiteten', 'es gelang uns'. "
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
         "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden "
@@ -410,7 +433,10 @@ BASE_PROMPTS: dict[str, str] = {
         "- Was bleibt noch zu tun? Warum ist weitere stationäre Behandlung notwendig?\n"
         "- Geplante Maßnahmen und Prognose für den weiteren Verlängerungszeitraum\n\n"
         "STIL:\n"
-        "Wir-Perspektive des Therapeutenteams. "
+        "WIR-PERSPEKTIVE des Therapeutenteams (verbindlich, nicht 3. Person/Passiv): "
+        "Schreibe konsequent aus 'Wir'-Sicht: 'Seit dem letzten Antrag erlebten wir...', "
+        "'In unserer weiteren Arbeit gelang es uns...', 'Wir konnten gemeinsam mit [Patient/in]...'. "
+        "VERMEIDE Passivkonstruktionen wie 'es zeigte sich' oder 'konnte differenziert werden'. "
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
         "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden "
@@ -455,7 +481,9 @@ BASE_PROMPTS: dict[str, str] = {
         "– Keine Stammdaten, Diagnosen-Kodierung, Medikation\n\n"
         "STIL: Fließtext, Wir-Perspektive, systemische Fachsprache, "
         "konkret und patientenspezifisch – keine Allgemeinplätze.\n"
-        "LÄNGE: mind. 700 Wörter gesamt. Schreibe ausführlich – kurze Texte unter 600 Wörter sind unzureichend.\n\n"
+        "LÄNGE: 600-900 Wörter gesamt (Richtwert). Wenn dynamische Wortlimits "
+        "ueber den Stilvorlagen weiter unten angegeben werden, haben diese Vorrang. "
+        "Vermeide unnötige Ausschmückungen und Wiederholungen.\n\n"
         "QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in der "
         "Verlaufsdokumentation oder Antragsvorlage zurückführbar sein. "
         "Keine Therapieinhalte, Diagnosen, Methoden oder Zitate erfinden "
