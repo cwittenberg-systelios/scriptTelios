@@ -98,6 +98,7 @@ app.include_router(documents.router,         prefix="/api", tags=["Dokumente"])
 app.include_router(style_embeddings.router,  prefix="/api", tags=["Stilprofil"])
 app.include_router(jobs.router,              prefix="/api", tags=["Jobs"])
 app.include_router(admin.router,             prefix="/api", tags=["Admin"])
+app.include_router(testrun.router,           prefix="/api", tags=["Tests"])
 
 
 @app.options("/{full_path:path}")
