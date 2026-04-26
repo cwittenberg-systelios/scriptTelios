@@ -12,13 +12,20 @@ Sicherheits-Hinweis:
     NICHT oeffentlich freigeben! In Produktion durch API-Auth (K1)
     und/oder IP-Allowlist absichern.
 
+Default-Verhalten (v16):
+    POST /api/testrun {} laeuft NUR die expliziten Unit-Test-Dateien
+    UND setzt Umgebungsvariablen die Ollama-Initialisierung im
+    pytest-Setup verhindern (z.B. autouse-Fixture 'ollama_vision_setup'
+    in conftest.py das 'ollama pull llava' triggert).
+
 Optional-Parameter:
-    selector:   pytest -k Filter (z.B. "test_prompts_v15", "TestPatient")
-                Default: alle Tests in tests/
-    paths:      Liste von Test-Dateien/-Verzeichnissen (relativ zu BACKEND_ROOT)
-                Default: ["tests/"]
-    timeout_s:  Hartes Timeout in Sekunden. Default: 600 (10 Min).
-    verbose:    "-v" Flag aktivieren. Default: True.
+    selector:     pytest -k Filter (z.B. "test_prompts_v15", "TestPatient")
+    paths:        Liste von Test-Dateien/-Verzeichnissen (relativ zu BACKEND_ROOT)
+                  Default: explizite Unit-Test-Whitelist (siehe _DEFAULT_UNIT_TEST_FILES)
+    timeout_s:    Hartes Timeout in Sekunden. Default: 300 (5 Min - Unit-Tests).
+    verbose:      "-v" Flag aktivieren. Default: True.
+    include_eval: Wenn True: test_eval.py wird mitgelaufen (braucht Ollama).
+                  Default: False.
 
 Verhalten:
     - Synchroner Run im threadpool, blockiert nicht den Event-Loop.
@@ -55,6 +62,53 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 _MAX_OUTPUT_BYTES = 2 * 1024 * 1024  # 2 MB
 
 
+# ── Whitelist der Unit-Test-Dateien (Default-Run) ────────────────────────────
+#
+# Wichtig: NICHT einfach "tests/" verwenden! conftest.py hat einen
+# autouse=True Session-Fixture (ollama_vision_setup) das beim Start
+# 'ollama pull llava' ausfuehrt - das laedt Ollama hoch und kann den
+# Endpoint blockieren bis hin zum 524-Timeout.
+#
+# Stattdessen explizit nur die Test-Dateien aufzaehlen die garantiert
+# keine echten Ollama-Aufrufe haben (alle Mocken via patch).
+#
+# Wenn neue Test-Dateien hinzukommen die NICHT Eval/LLM brauchen:
+# hier ergaenzen.
+_DEFAULT_UNIT_TEST_FILES = [
+    "tests/test_suite.py",          # Hauptsuite, alles gemockt
+    "tests/test_api.py",            # API-Integration, alles gemockt
+    "tests/test_extraction.py",     # PDF/DOCX-Extraktion, kein LLM
+    "tests/test_services.py",       # Service-Unit-Tests, alles gemockt
+    "tests/test_prompts_v13.py",    # v13 Patches
+    "tests/test_prompts_v14.py",    # v14 Patches
+    "tests/test_prompts_v15.py",    # v15 Patches
+    "tests/test_postprocessing.py", # v16 Postprocessor-Tests
+]
+
+# Tests die echtes LLM/Ollama brauchen - werden im Default NICHT gelaufen.
+_LLM_DEPENDENT_TESTS = [
+    "tests/test_eval.py",
+]
+
+# Umgebungsvariablen die das pytest-Setup zwingen Ollama nicht anzufassen.
+# Greift auf:
+#   - conftest.py::ollama_vision_setup (prueft urlopen auf OLLAMA_HOST)
+#   - llm.py / embeddings.py (alle Mocks via Fixture aktiv)
+_OLLAMA_DISABLE_ENV = {
+    # Nicht erreichbarer Host -> ollama_vision_setup gibt sofort auf
+    # statt 'ollama pull llava' zu starten.
+    "OLLAMA_HOST": "http://127.0.0.1:1",
+    # Anthropic-Backend signalisiert dass kein Ollama erwartet wird.
+    "LLM_BACKEND": "anthropic",
+    "ANTHROPIC_API_KEY": "test-key-not-used",
+    # Whisper auf Mock-Modus
+    "WHISPER_BACKEND": "local",
+    # Test-DB
+    "DATABASE_URL": "sqlite+aiosqlite:///./testrun.db",
+    "SECRET_KEY": "testrun-secret",
+}
+
+
 # ── Request/Response-Schemas ─────────────────────────────────────────────────
 
 class TestRunRequest(BaseModel):
@@ -72,17 +126,20 @@ class TestRunRequest(BaseModel):
         ),
     )
     timeout_s: int = Field(
-        default=600,
+        default=300,
         ge=10,
         le=3600,
-        description="Hartes Timeout in Sekunden (10-3600).",
+        description=(
+            "Hartes Timeout in Sekunden (10-3600). Default 300 (5 Min) ist "
+            "ausreichend fuer Unit-Tests. Fuer include_eval=True auf >= 1800 setzen."
+        ),
     )
     verbose: bool = Field(default=True, description="pytest -v aktivieren")
     include_eval: bool = Field(
         default=False,
         description=(
             "Wenn True: test_eval.py wird mitgelaufen (braucht laufendes LLM, "
-            "dauert 10-30 Min). Default False - nur Unit-Tests."
+            "dauert 10-30 Min und blockiert ggf. Ollama). Default False."
         ),
     )
 
@@ -151,12 +208,32 @@ def _truncate_output(text: str) -> str:
     )
 
 
-def _run_pytest_blocking(cmd: list[str], timeout_s: int) -> dict[str, Any]:
+def _filter_existing_paths(paths: list[str]) -> list[str]:
+    """Behaelt nur Pfade die tatsaechlich existieren (verhindert pytest-Fehler
+    wenn z.B. test_postprocessing.py noch nicht eingespielt wurde)."""
+    existing = []
+    for p in paths:
+        full = _BACKEND_ROOT / p
+        if full.exists():
+            existing.append(p)
+        else:
+            logger.info("testrun: Default-Pfad nicht vorhanden, uebersprungen: %s", p)
+    return existing
+
+
+def _run_pytest_blocking(cmd: list[str], timeout_s: int, env_overrides: dict[str, str]) -> dict[str, Any]:
     """
     Synchroner pytest-Aufruf. Wird via run_in_threadpool ausgefuehrt damit
     der FastAPI Event-Loop nicht blockiert.
+
+    env_overrides: zusaetzliche Umgebungsvariablen fuer den pytest-Subprozess
+    (z.B. um Ollama-Initialisierung in conftest.py zu verhindern).
     """
+    import os as _os
     logger.info("testrun: starte pytest: %s", " ".join(shlex.quote(c) for c in cmd))
+    # Env zusammenbauen: Original-Env + Overrides
+    env = _os.environ.copy()
+    env.update(env_overrides)
     try:
         result = subprocess.run(
             cmd,
@@ -164,7 +241,8 @@ def _run_pytest_blocking(cmd: list[str], timeout_s: int) -> dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=timeout_s,
-            check=False,  # check=False: wir behandeln returncode selbst
+            check=False,
+            env=env,
         )
         return {
             "exitCode": result.returncode,
@@ -205,7 +283,7 @@ async def testrun(req: TestRunRequest = TestRunRequest()) -> TestRunResponse:
 
     Beispiel-Request:
         POST /api/testrun
-        {}                                  # Default: Unit-Tests (OHNE test_eval.py)
+        {}                                  # Default: Unit-Tests Whitelist (OHNE Ollama)
         {"include_eval": true}              # Auch test_eval.py mitlaufen lassen
         {"selector": "test_prompts_v15"}    # Nur passende Tests
         {"paths": ["tests/test_eval.py"]}   # Explizit nur Eval
@@ -216,18 +294,30 @@ async def testrun(req: TestRunRequest = TestRunRequest()) -> TestRunResponse:
           "output":   "============================= test session starts ..."
         }
     """
-    # Pfade validieren
+    # Pfade waehlen
     if req.paths:
         # Explizite Pfade vom Aufrufer haben Vorrang
         paths = _validate_paths(req.paths)
+        # Bei expliziten Pfaden: KEIN Ollama-Disable - Aufrufer entscheidet
+        env_overrides = {}
     else:
-        # Default: Unit-Tests, ohne test_eval.py
-        # test_eval.py braucht laufendes LLM und dauert 10-30 Min,
-        # ist also nicht sinnvoll als Standard-Smoke-Test.
-        paths = ["tests/"]
-        ignore_args = []
-        if not req.include_eval:
-            ignore_args = ["--ignore=tests/test_eval.py"]
+        # Default: explizite Whitelist von Unit-Test-Dateien (KEIN "tests/")
+        # Grund: pytest auf "tests/" laedt conftest.py mit autouse-Fixture
+        # die 'ollama pull llava' triggert (Ollama wird hochgefahren).
+        paths = _filter_existing_paths(_DEFAULT_UNIT_TEST_FILES)
+        if req.include_eval:
+            paths.extend(_filter_existing_paths(_LLM_DEPENDENT_TESTS))
+            env_overrides = {}
+        else:
+            env_overrides = dict(_OLLAMA_DISABLE_ENV)
+
+    if not paths:
+        return TestRunResponse(
+            exitCode=5,
+            output="[FEHLER] Keine Test-Dateien gefunden. Whitelist: "
+                   + ", ".join(_DEFAULT_UNIT_TEST_FILES),
+        )
+
     # Selector validieren
     selector = _validate_selector(req.selector) if req.selector else None
 
@@ -237,12 +327,18 @@ async def testrun(req: TestRunRequest = TestRunRequest()) -> TestRunResponse:
         cmd.append("-v")
     if selector:
         cmd.extend(["-k", selector])
-    if not req.paths and not req.include_eval:
-        cmd.append("--ignore=tests/test_eval.py")
+    # Nicht mehr noetig: --ignore=tests/test_eval.py - die Whitelist enthaelt
+    # test_eval.py nur wenn include_eval=True
     cmd.extend(paths)
 
     # Im Threadpool ausfuehren (kein Event-Loop-Blocking)
-    result = await run_in_threadpool(_run_pytest_blocking, cmd, req.timeout_s)
+    result = await run_in_threadpool(_run_pytest_blocking, cmd, req.timeout_s, env_overrides)
+
+    logger.info(
+        "testrun: pytest fertig (exitCode=%d, output_len=%d)",
+        result["exitCode"], len(result["output"]),
+    )
+    return TestRunResponse(**result)
 
     logger.info(
         "testrun: pytest fertig (exitCode=%d, output_len=%d)",
