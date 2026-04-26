@@ -590,19 +590,21 @@ const S = `
 `;
 
 // ── Prompts ─────────────────────────────────────────────────────
-const P_DOKU = `Erstelle eine systemische Gesprächsdokumentation. Schreibe aktiv aus der Perspektive der Klientin/des Klienten – nicht über das Gespräch, sondern über die Person und ihre Themen. Gliedere den Text in folgende vier Abschnitte mit den jeweiligen Überschriften:
+const P_DOKU = `Erstelle eine systemische Gesprächsdokumentation. Schreibe aktiv aus der Perspektive der Patientin/des Patienten – nicht über das Gespräch, sondern über die Person und ihre Themen. Gliedere den Text in folgende vier Abschnitte mit den jeweiligen Überschriften:
 
 **Auftragsklärung**
-Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame Ziel des Gesprächs war. Beispiel: "Im Mittelpunkt stand..." oder "Frau X. kam mit dem Anliegen..."
+Beschreibe worum es der Patientin/dem Patienten ging und was das gemeinsame Ziel des Gesprächs war. Beispiel: "Im Mittelpunkt stand..." oder "Frau X. kam mit dem Anliegen..."
 
 **Relevante Gesprächsinhalte**
-Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. Konkrete Formulierungen statt allgemeiner Beschreibungen. Systemische und IFS-Begriffe wo passend (Manager-Anteile, Exile, Self-Energy etc.).
+Schildere die wesentlichen Inhalte aus Sicht der Patientin/des Patienten: Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. Konkrete Formulierungen statt allgemeiner Beschreibungen. Systemische und IFS-Begriffe wo passend (Manager-Anteile, Exile, Self-Energy etc.).
 
 **Hypothesen und Entwicklungsperspektiven**
 Formuliere systemische Hypothesen über Sinnzusammenhänge. Zeige Entwicklungsperspektiven auf – was wird möglich, wenn... Ressourcenorientiert und konkret.
 
 **Einladungen**
 Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden – aktiv formuliert: "Frau X. wurde eingeladen, ..." oder "Als Übung wurde vereinbart, ..."
+
+WICHTIG: Im konkreten Bericht IMMER die Initialen des aktuellen Patienten verwenden ("Frau M.", "Herr S."), NIEMALS generische Bezeichnungen wie "die Klientin", "der Klient", "die Patientin", "der Patient" als Anrede im Fließtext.
 
 Stil: Fließtext pro Abschnitt, aktiv, konkret, systemisch-wertschätzend. Keine Sektion über den Gesprächsstil.`;
 
@@ -1390,12 +1392,16 @@ function P1({ toast, resumeJob, onResumed, model }) {
     setLastJobId(null);
     setHasTranscript(false);
     const k = kuerzel.trim().replace(/\.?$/, "."); // sicherstellen dass Punkt am Ende
+    // v15 Bug F2: Keine Beispieltexte wie "die Klientin/Klient" mehr - das LLM
+    // hat das frueher als Patientenbezeichnung uebernommen statt der Initialen.
+    // Auch "Klient ${k}" als Beispiel weglassen - das suggeriert dem Modell dass
+    // es "Klient K." anstelle von "Frau K."/"Herr K." schreiben darf.
     const nameHinweis = kuerzel.trim()
-      ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}", "Herr ${k}", "Klient ${k}").`
+      ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}" oder "Herr ${k}").`
       : "";
     const geschlechtHinweis = {
-      "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen (die Klientin, sie, ihr).${nameHinweis}`,
-      "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen (der Klient, er, ihm).${nameHinweis}`,
+      "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende konsequent weibliche Pronomen und Endungen.${nameHinweis}`,
+      "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende konsequent männliche Pronomen und Endungen.${nameHinweis}`,
       "auto": `\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus dem Transkript ab (Namen, Pronomen, Anreden). Falls nicht erkennbar, verwende neutrale Formen.${nameHinweis}`,
     }[geschlecht];
 
@@ -1619,12 +1625,13 @@ function P2({ toast, resumeJob, onResumed, model }) {
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
 
     const k = kuerzel.trim().replace(/\.?$/, ".");
+    // v15 Bug F2: Konsistent mit P1 - "konsequent ... Pronomen und Endungen"
     const nameHinweis = kuerzel.trim()
-      ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}", "Herr ${k}").`
+      ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}" oder "Herr ${k}").`
       : "";
     const geschlechtHinweis = {
-      "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen.${nameHinweis}`,
-      "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen.${nameHinweis}`,
+      "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende konsequent weibliche Pronomen und Endungen.${nameHinweis}`,
+      "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende konsequent männliche Pronomen und Endungen.${nameHinweis}`,
       "auto": `\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus den Unterlagen ab. Falls nicht erkennbar, neutrale Formen verwenden.${nameHinweis}`,
     }[geschlecht];
 
