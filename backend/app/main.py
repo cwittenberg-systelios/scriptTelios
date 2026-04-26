@@ -12,7 +12,7 @@ from app.middleware.audit import AuditMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api import transcribe, generate, documents, health
-from app.api import style_embeddings, jobs, admin
+from app.api import style_embeddings, jobs, admin, testrun
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
