@@ -944,6 +944,41 @@ def build_user_content(
     """
     parts = []
 
+    # ── Opt 4: Quelltext-Deduplikation ───────────────────────────────────────
+    # Whisper halluziniert bei Stille manchmal denselben Satz mehrfach;
+    # PDFs aus Confluence enthalten Header die ueber Seitenumbrueche dupliziert
+    # werden; Klinik-Stilvorlagen werden manchmal versehentlich doppelt
+    # eingefuegt. Wir lassen alle Quelltext-Felder einmal durch
+    # deduplicate_paragraphs laufen, bevor sie ans LLM gehen.
+    #
+    # Local-Import: kein Zirkelschluss, weil llm.py NICHT aus prompts.py
+    # importiert. deduplicate_paragraphs ist case-insensitive und behaelt
+    # die Reihenfolge der erstmaligen Vorkommen bei.
+    try:
+        from app.services.llm import deduplicate_paragraphs as _dedup
+    except ImportError:
+        # Fallback fuer Test-Umgebungen ohne app-Paket: Identity-Funktion.
+        def _dedup(text: str) -> str:
+            return text
+
+    def _dedup_safe(text: Optional[str]) -> Optional[str]:
+        if not text or not text.strip():
+            return text
+        try:
+            return _dedup(text)
+        except Exception:
+            # Deduplikation darf NIE den Job killen - im Zweifel Original
+            return text
+
+    transcript          = _dedup_safe(transcript)
+    selbstauskunft_text = _dedup_safe(selbstauskunft_text)
+    vorbefunde_text     = _dedup_safe(vorbefunde_text)
+    verlaufsdoku_text   = _dedup_safe(verlaufsdoku_text)
+    antragsvorlage_text = _dedup_safe(antragsvorlage_text)
+    vorantrag_text      = _dedup_safe(vorantrag_text)
+    # Bewusst NICHT dedupliziert: fokus_themen (Therapeuten-Stichpunkte
+    # haben oft kurze, absichtlich aehnliche Eintraege), diagnosen, custom_prompt.
+
     # Expliziter Patientenname ganz oben im User-Block (wenn verfuegbar)
     # Sicherheits-Check: nur ausgeben wenn initial plausibel kurz ist und
     # nicht "klient"/"patient" enthaelt - sonst landet ein Hinweistext
@@ -963,6 +998,13 @@ def build_user_content(
             else:
                 parts.append(f"AKTUELLER PATIENT: Namenskuerzel '{initial}' (verwende ausschliesslich diese Bezeichnung)")
 
+    # Datenschutz-Namensregel EINMAL pro User-Content-Block ganz oben.
+    # Frueher (v12) wurde dieser Block in jedem Workflow-Zweig redundant
+    # eingefuegt (bei P3/P4 sogar mehrfach im Gesamt-Prompt). Das hat ~400
+    # Tokens pro Job verschwendet und teilweise widerspruechliche Varianten
+    # produziert. Jetzt: einmalig hier, alle Workflow-Zweige bleiben unberuehrt.
+    parts.append(NAMENSREGEL)
+
     if workflow == "dokumentation":
         if transcript:
             parts.append(f"TRANSKRIPT DES GESPRÄCHS:\n{transcript}")
@@ -978,13 +1020,6 @@ def build_user_content(
             )
 
     elif workflow == "anamnese":
-        # Namensregel ZUERST
-        parts.append(
-            "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
-            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
-            "Selbst wenn der volle Name in den Unterlagen steht: nur Initiale verwenden."
-        )
         if selbstauskunft_text:
             parts.append(f"SELBSTAUSKUNFT DES KLIENTEN:\n{selbstauskunft_text}")
         if vorbefunde_text:
@@ -996,14 +1031,6 @@ def build_user_content(
         parts.append("Anamnese und psychopathologischen Befund erstellen.")
 
     elif workflow == "verlaengerung":
-        # Namensregel ZUERST – bevor das Modell Quellen liest
-        parts.append(
-            "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
-            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
-            "Auch 'die Klientin' / 'der Klient' als Alternative. "
-            "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
-        )
         if antragsvorlage_text:
             parts.append(
                 f"ANTRAGSVORLAGE / VORHERIGER ANTRAG"
@@ -1029,14 +1056,6 @@ def build_user_content(
         )
 
     elif workflow == "folgeverlaengerung":
-        # Namensregel ZUERST
-        parts.append(
-            "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
-            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
-            "Auch 'die Klientin' / 'der Klient' als Alternative. "
-            "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
-        )
         # Vorheriger Verlängerungsantrag: Quelle für Anamnese, Diagnosen, bisherigen Verlauf
         if vorantrag_text:
             parts.append(
@@ -1074,13 +1093,6 @@ def build_user_content(
         )
 
     elif workflow == "akutantrag":
-        # Namensregel ZUERST
-        parts.append(
-            "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
-            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
-            "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
-        )
         if antragsvorlage_text:
             parts.append(
                 f"AKUTANTRAGS-VORLAGE"
@@ -1107,14 +1119,6 @@ def build_user_content(
         )
 
     elif workflow == "entlassbericht":
-        # Namensregel ZUERST – bevor das Modell Quellen liest
-        parts.append(
-            "DATENSCHUTZ – NAMENSFORMAT (gilt für den gesamten Text):\n"
-            "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
-            "Initialen des AKTUELLEN Patienten aus den Unterlagen (z.B. wenn der Patient 'Andreas Reif' heißt: 'Herr R.', wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
-            "Auch 'die Klientin' / 'der Klient' als Alternative. "
-            "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
-        )
         if antragsvorlage_text:
             parts.append(
                 f"VORHANDENER VERLÄNGERUNGSANTRAG / VORBERICHT"
