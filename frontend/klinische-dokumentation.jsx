@@ -652,6 +652,59 @@ function fmtMB(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1);
 }
 
+// ── Audio-IndexedDB-Persistenz ────────────────────────────────────────────────
+// Browser-Aufnahmen überleben Reloads – Upload-Dateien nicht (können neu gewählt werden).
+const AUDIO_IDB_NAME  = "scriptTelios";
+const AUDIO_IDB_STORE = "audio_draft";
+const AUDIO_IDB_KEY   = "current";
+
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(AUDIO_IDB_NAME, 1);
+    req.onupgradeneeded = (e) => { e.target.result.createObjectStore(AUDIO_IDB_STORE); };
+    req.onsuccess = (e) => resolve(e.target.result);
+    req.onerror   = (e) => reject(e.target.error);
+  });
+}
+
+async function idbSaveAudio(file) {
+  try {
+    const db    = await idbOpen();
+    const tx    = db.transaction(AUDIO_IDB_STORE, "readwrite");
+    tx.objectStore(AUDIO_IDB_STORE).put(
+      { blob: file, name: file.name, type: file.type, size: file.size },
+      AUDIO_IDB_KEY
+    );
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+    db.close();
+  } catch (e) { console.warn("[idb] Speichern fehlgeschlagen:", e); }
+}
+
+async function idbLoadAudio() {
+  try {
+    const db    = await idbOpen();
+    const tx    = db.transaction(AUDIO_IDB_STORE, "readonly");
+    const data  = await new Promise((res, rej) => {
+      const req = tx.objectStore(AUDIO_IDB_STORE).get(AUDIO_IDB_KEY);
+      req.onsuccess = (e) => res(e.target.result);
+      req.onerror   = (e) => rej(e.target.error);
+    });
+    db.close();
+    if (!data) return null;
+    return new File([data.blob], data.name, { type: data.type });
+  } catch (e) { console.warn("[idb] Laden fehlgeschlagen:", e); return null; }
+}
+
+async function idbClearAudio() {
+  try {
+    const db = await idbOpen();
+    const tx = db.transaction(AUDIO_IDB_STORE, "readwrite");
+    tx.objectStore(AUDIO_IDB_STORE).delete(AUDIO_IDB_KEY);
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+    db.close();
+  } catch (e) { console.warn("[idb] Löschen fehlgeschlagen:", e); }
+}
+
 /**
  * AudioRecorder - Browser-seitige Sprachaufnahme mit Opus 24kbps.
  * Kompakt (45 Min ~ 8 MB), unter dem 90 MB Upload-Limit selbst bei 5h-Sitzungen.
@@ -779,6 +832,7 @@ function AudioRecorder({ onRecorded, onError }) {
           streamRef.current.getTracks().forEach(t => t.stop());
           streamRef.current = null;
         }
+        idbSaveAudio(file).catch(() => {}); // Reload-Persistenz
         onRecorded(file);
       };
 
@@ -921,9 +975,20 @@ function AudioInput({ file, onFile }) {
   const [recError, setRecError] = useState(null);
   const [sizeWarn, setSizeWarn] = useState(null);
 
+  // Reload-Wiederherstellung: Browser-Aufnahme aus IndexedDB laden
+  useEffect(() => {
+    if (file) return; // schon gesetzt, nichts tun
+    idbLoadAudio().then(f => { if (f) onFile(f); });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleFile(f) {
     setRecError(null);
-    if (!f) { setSizeWarn(null); onFile(null); return; }
+    if (!f) {
+      setSizeWarn(null);
+      idbClearAudio().catch(() => {}); // IDB bereinigen beim Entfernen
+      onFile(null);
+      return;
+    }
     const sizeMB = f.size / (1024 * 1024);
     if (sizeMB > MAX_UPLOAD_MB) {
       setSizeWarn(
@@ -1432,6 +1497,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
       setOut(result.text || "");
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
+      idbClearAudio().catch(() => {}); // Aufnahme nach Job-Start nicht mehr benötigt
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
@@ -1548,7 +1614,8 @@ function P1({ toast, resumeJob, onResumed, model }) {
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
-                setAudio(null); setTxtFile(null); setText(""); setBullets("");
+                setAudio(null); idbClearAudio().catch(() => {});
+                setTxtFile(null); setText(""); setBullets("");
                 setStyle(null); setStyleText(""); setOut("");
                 setLastJobId(null); setHasTranscript(false);
                 toast("Formular zurückgesetzt");
@@ -1665,6 +1732,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
       setAkutOut(result.akutText || "");
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
+      idbClearAudio().catch(() => {}); // Aufnahme nach Job-Start nicht mehr benötigt
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
@@ -1797,7 +1865,8 @@ function P2({ toast, resumeJob, onResumed, model }) {
           {(out || befundOut) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
-                setSelbst(null); setBefunde(null); setAudio(null); setTxtFile(null);
+                setSelbst(null); setBefunde(null); setAudio(null); idbClearAudio().catch(() => {});
+                setTxtFile(null);
                 setText(""); setDx([]); setStyle(null); setStyleText("");
                 setOut(""); setBefundOut(""); setAkutOut(""); setAkutantrag(false);
                 setLastJobId(null); setHasTranscript(false);
