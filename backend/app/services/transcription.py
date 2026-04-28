@@ -264,15 +264,9 @@ def _get_duration(file_path: Path) -> float:
                         "ffprobe count_packets: %.1fs für %s", duration, file_path.name
                     )
                     return duration
-            # Fallback: nb_read_packets × geschaetzte Paketlaenge (Opus ~20ms/Paket)
-            nb = s.get("nb_read_packets")
-            if nb and int(nb) > 0:
-                duration = int(nb) * 0.02  # Opus-Standardpaket: 20ms
-                if duration > 0:
-                    logger.info(
-                        "ffprobe nb_packets-Schätzung: %.1fs für %s", duration, file_path.name
-                    )
-                    return duration
+            # nb_read_packets-Schätzung entfernt: Opus-Paketlänge variiert
+            # (Chrome nutzt oft 60ms statt 20ms) → systematisch falsche Dauer
+            # bei Browser-webm. Fallback 3 (ffmpeg decode) ist zuverlässig.
     except Exception as e:
         logger.debug("ffprobe count_packets fehlgeschlagen: %s – Fallback 3", e)
 
