@@ -10,7 +10,6 @@ Ablauf bei Generierung:
   3. Max. MAX_EXAMPLES Beispiele gesamt in den Prompt
 """
 import logging
-from typing import Optional
 
 import httpx
 from sqlalchemy import select, text

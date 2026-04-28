@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Response, Request
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.middleware.audit import AuditMiddleware
 from fastapi.staticfiles import StaticFiles

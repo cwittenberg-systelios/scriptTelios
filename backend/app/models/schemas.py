@@ -6,6 +6,24 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
+# ── v16 Audit-Patch B2: Zentrale Workflow-Liste ───────────────────────────────
+# Vorher 4x dupliziert (schemas.py, db.py, jobs.py:266, jobs.py:608).
+# Jetzt zentral hier. Andere Module importieren WORKFLOW_NAMES und
+# WorkflowLiteral von hier statt eigene Listen zu pflegen.
+WORKFLOW_NAMES: list[str] = [
+    "dokumentation",
+    "anamnese",
+    "verlaengerung",
+    "folgeverlaengerung",
+    "akutantrag",
+    "entlassbericht",
+]
+WorkflowLiteral = Literal[
+    "dokumentation", "anamnese", "verlaengerung",
+    "folgeverlaengerung", "akutantrag", "entlassbericht",
+]
+
+
 # ── Health ────────────────────────────────────────────────────────
 class HealthResponse(BaseModel):
     status: str
@@ -40,7 +58,7 @@ class TranscribeResponse(BaseModel):
 
 # ── Generierung ───────────────────────────────────────────────────
 class GenerateRequest(BaseModel):
-    workflow: Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"]
+    workflow: WorkflowLiteral
     prompt: str = Field(..., description="Angepasster System-Prompt")
     therapeut_id: Optional[str] = Field(None, description="Therapeuten-ID fuer pgvector-Retrieval")
     transcript: Optional[str] = Field(None, description="Transkripttext (optional)")

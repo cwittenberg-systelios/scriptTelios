@@ -113,15 +113,19 @@ export async function downloadTranscript(jobId, filename = "transkript.txt", _fe
 }
 
 // ── Geschlecht-Hinweis ────────────────────────────────────────────────────────
+// v16 Audit-Fix A2: synchron mit den Inline-Versionen in
+// klinische-dokumentation.jsx (P1+P2 run()). Beispieltexte wie
+// "die Klientin, sie, ihr" und "Klient ${k}" wurden entfernt - das LLM
+// hat sie als Patientenbezeichnung uebernommen statt der Initiale.
 
 export function buildGeschlechtHinweis(geschlecht, kuerzel = "") {
   const k = kuerzel.trim().replace(/\.?$/, ".");
   const nameHinweis = kuerzel.trim()
-    ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}", "Herr ${k}", "Klient ${k}").`
+    ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}" oder "Herr ${k}").`
     : "";
   return {
-    "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende durchgehend weibliche Formen (die Klientin, sie, ihr).${nameHinweis}`,
-    "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende durchgehend männliche Formen (der Klient, er, ihm).${nameHinweis}`,
-    "auto": `\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus dem Transkript ab (Namen, Pronomen, Anreden). Falls nicht erkennbar, verwende neutrale Formen.${nameHinweis}`,
+    "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende konsequent weibliche Pronomen und Endungen.${nameHinweis}`,
+    "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende konsequent männliche Pronomen und Endungen.${nameHinweis}`,
+    "auto": `\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus den Quellen ab (Namen, Pronomen). Falls nicht erkennbar, verwende neutrale Formen.${nameHinweis}`,
   }[geschlecht] ?? "";
 }

@@ -12,7 +12,6 @@ import logging
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from app.core.config import settings
 
@@ -59,7 +58,7 @@ async def cleanup_inactive_style_embeddings() -> int:
     """Löscht Stil-Embeddings deren letztes Update länger her ist als Retention."""
     from app.core.database import async_session_factory
     from app.models.db import StyleEmbedding
-    from sqlalchemy import select, delete
+    from sqlalchemy import delete
     cutoff = datetime.utcnow() - timedelta(seconds=RETENTION["style_embeddings"])
     count = 0
     try:

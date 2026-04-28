@@ -1,7 +1,6 @@
 """
 Datei-Handling: Upload-Validierung, Speicherung, Bereinigung.
 """
-import hashlib
 import logging
 import uuid
 from pathlib import Path
@@ -74,19 +73,11 @@ async def save_upload(
     return dest
 
 
-def file_checksum(path: Path) -> str:
-    """SHA-256-Pruefsumme einer Datei (fuer Audit-Log)."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def safe_delete(path: Path) -> None:
-    """Loescht eine Datei, ignoriert Fehler."""
-    try:
-        path.unlink(missing_ok=True)
-        logger.debug("Geloescht: %s", path.name)
-    except OSError as e:
-        logger.warning("Konnte nicht loeschen %s: %s", path.name, e)
+# ── v16 Audit B1: zentrale _size_class-Funktion ──────────────────────────────
+# Vorher 2x dupliziert (jobs.py + generate.py). Jetzt hier zentral.
+def size_class(n: int) -> str:
+    """O2: Größenklasse statt exakter Zeichenzahl (Datenminimierung)."""
+    if n < 1000: return "klein"
+    if n < 5000: return "mittel"
+    if n < 20000: return "groß"
+    return "sehr groß"

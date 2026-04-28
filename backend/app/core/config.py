@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Ollama vor Whisper aus VRAM entladen.
     # Nur nötig wenn Whisper + Ollama nicht gleichzeitig in den VRAM passen.
-    # RTX 4090 (24GB): large-v3 (~3GB) + mistral-nemo (~5GB) passen gleichzeitig
+    # RTX 4090 (24GB): large-v3 (~3GB) + qwen3:32b (~5GB) passen gleichzeitig
     # → False lassen, spart ~30s Kaltstart des LLM nach jeder Transkription.
     # Kleinere GPUs (<12GB): auf True setzen.
     WHISPER_FREE_OLLAMA_VRAM: bool = False

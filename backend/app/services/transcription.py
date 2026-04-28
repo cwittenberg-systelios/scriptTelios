@@ -465,7 +465,7 @@ async def transcribe_audio(file_path: Path) -> dict:
 
     VRAM-Strategie (konfigurierbar via WHISPER_FREE_OLLAMA_VRAM):
     - False (Standard, RTX 4090): Whisper und Ollama teilen VRAM.
-      large-v3 (~3GB) + mistral-nemo (~5GB) passen gleichzeitig.
+      large-v3 (~3GB) + qwen3:32b (~5GB) passen gleichzeitig.
       Nach Whisper: Ollama wird vorgewaermt → kein LLM-Kaltstart.
     - True (kleine GPUs <12GB): Ollama wird vor Whisper entladen,
       Whisper bekommt den gesamten VRAM. LLM-Kaltstart nach Transkription

@@ -80,40 +80,35 @@ class TestAkutCap:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Patient-Name-Fallback (Bug-Fix #4)
-# Spec aus jobs.py:530-549:
-# Wenn patient_name None ist UND workflow == "dokumentation" → Default-Dict
+# Patient-Name-Fallback (v16 Audit: ehemaliger Bug-Fix #4 entfernt)
+# Spec ab v16:
+# Wenn patient_name None ist → bleibt None (egal welcher Workflow).
+# Der frueher gesetzte Fallback {"initial": "die Klientin/der Klient"} war
+# die Ur-Quelle des Output-Bugs - wurde via Replace-Logik in build_system_prompt
+# durch alle [Patient/in]-Platzhalter ersetzt und kontaminierte den ganzen Text.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def apply_patient_name_fallback(patient_name: dict | None, workflow: str):
     """
-    Reproduziert die Fallback-Logik aus jobs.py.
+    Reproduziert die v16-Logik aus jobs.py:
+    Kein Fallback mehr - patient_name kommt durch oder bleibt None.
     """
-    if patient_name:
-        return patient_name
-    if workflow == "dokumentation":
-        return {
-            "anrede": "",
-            "vorname": "",
-            "nachname": "",
-            "initial": "die Klientin/der Klient",
-        }
-    return None
+    return patient_name
 
 
 class TestPatientNameFallback:
-    """Patient-Name-Fallback (Bug-Fix #4)."""
+    """v16: Kein Fallback mehr fuer leere patient_name (Audit-Patch)."""
 
-    def test_dokumentation_ohne_name_bekommt_fallback(self):
+    def test_dokumentation_ohne_name_bleibt_none(self):
+        """v16: Anders als frueher (Bug-Fix #4) wird KEIN Fallback gesetzt."""
         result = apply_patient_name_fallback(None, "dokumentation")
-        assert result is not None
-        assert result["initial"] == "die Klientin/der Klient"
+        assert result is None
 
-    def test_andere_workflows_bekommen_keinen_fallback(self):
-        for workflow in ["entlassbericht", "anamnese", "verlaengerung", "akutantrag"]:
+    def test_andere_workflows_bleiben_none(self):
+        for workflow in ["entlassbericht", "anamnese", "verlaengerung", "akutantrag", "folgeverlaengerung"]:
             result = apply_patient_name_fallback(None, workflow)
-            assert result is None, f"{workflow!r} sollte KEIN Fallback bekommen"
+            assert result is None, f"{workflow!r}: kein Fallback"
 
     def test_existierender_name_wird_durchgereicht(self):
         original = {
@@ -131,10 +126,13 @@ class TestPatientNameFallback:
         result = apply_patient_name_fallback(original, "entlassbericht")
         assert result == original
 
-    def test_fallback_dict_hat_alle_keys(self):
-        result = apply_patient_name_fallback(None, "dokumentation")
-        required = {"anrede", "vorname", "nachname", "initial"}
-        assert set(result.keys()) == required
+    def test_keine_kontamination_mehr_durch_fallback_string(self):
+        """v16-Audit: Der frueher genutzte 'die Klientin/der Klient'-String
+        darf nirgendwo mehr als Default eingefuegt werden."""
+        for workflow in ["dokumentation", "anamnese", "verlaengerung",
+                         "folgeverlaengerung", "akutantrag", "entlassbericht"]:
+            result = apply_patient_name_fallback(None, workflow)
+            assert result is None or "klient" not in (result.get("initial") or "").lower()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

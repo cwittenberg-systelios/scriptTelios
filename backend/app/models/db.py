@@ -4,8 +4,8 @@ Datenbankmodelle.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import Boolean, DateTime, Enum, Float, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
 
 from app.core.database import Base
@@ -76,8 +76,8 @@ class StyleProfile(Base):
     word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
-# Dokumenttypen als Konstante (Single Source of Truth)
-DOKUMENTTYPEN = ["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"]
+# v16 Audit B2: Workflow-Liste zentral aus schemas.py
+from app.models.schemas import WORKFLOW_NAMES as DOKUMENTTYPEN  # noqa: E402
 DOKUMENTTYP_LABELS = {
     "dokumentation":        "Gesprächsdokumentation",
     "anamnese":             "Anamnese",

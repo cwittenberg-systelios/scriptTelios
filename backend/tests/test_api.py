@@ -35,7 +35,7 @@ def mock_llm():
     """Ersetzt LLM-Aufruf durch einen fixen Beispieltext."""
     mock_response = {
         "text": "Dies ist eine generierte Verlaufsnotiz zu Testzwecken.",
-        "model_used": "ollama/mistral-nemo",
+        "model_used": "ollama/qwen3:32b",
         "duration_s": 1.2,
         "token_count": 42,
     }
@@ -225,7 +225,7 @@ def mock_llm_jobs():
     """Mock für jobs.py-Endpunkt (anderer Patch-Pfad als generate.py)."""
     mock_response = {
         "text":       "Generierter Text für diesen Workflow.",
-        "model_used": "ollama/mistral-nemo",
+        "model_used": "ollama/qwen3:32b",
         "duration_s": 1.5,
         "token_count": 80,
     }
@@ -607,7 +607,7 @@ class TestModelProfile:
 
     def test_mistral_bekommt_standard_temperature(self):
         from app.services.llm import _get_model_profile
-        p = _get_model_profile("mistral-nemo:12b")
+        p = _get_model_profile("qwen3:32b")
         assert p["temperature"] == 0.3
 
     def test_gemma_bekommt_standard_temperature(self):

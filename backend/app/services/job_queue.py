@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Optional
+from typing import Coroutine, Optional
 
 from app.core.config import settings
 

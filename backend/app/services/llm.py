@@ -114,7 +114,7 @@ def truncate_style_context(text: str) -> str:
 def deduplicate_paragraphs(text: str) -> str:
     """
     Entfernt wiederholte Absätze aus dem LLM-Output.
-    mistral-nemo neigt bei zu langem Kontext dazu denselben Absatz
+    qwen3:32b neigt bei zu langem Kontext dazu denselben Absatz
     mehrfach zu generieren – dieser Filter erkennt und entfernt Duplikate.
     Überschriften (**Fett** oder Zeile mit nur Grossbuchstaben) bleiben erhalten.
     """
@@ -181,6 +181,12 @@ def substitute_patient_placeholders(text: str, patient_name: dict | None) -> str
     aber manchmal kopiert es den Platzhalter aus dem Beispiel-Prompt.
 
     patient_name: Dict aus extract_patient_name() oder None.
+
+    v16 Audit-Patch (A1): Sanity-Check als Defense-in-Depth gegen Müll-Werte
+    wie "die Klientin/der Klient". Wenn `initial` nicht plausibel kurz ist
+    oder Klient/Patient-Substrings enthält: Replace ueberspringen, lieber
+    den Platzhalter im Output stehen lassen als mit Müll zu kontaminieren.
+    Spiegelt den entsprechenden Check in prompts.py::build_system_prompt.
     """
     if not text or not patient_name or not patient_name.get("initial"):
         return text
@@ -188,6 +194,22 @@ def substitute_patient_placeholders(text: str, patient_name: dict | None) -> str
     anrede = patient_name.get("anrede") or ""
     initial = patient_name["initial"]
     full_ref = f"{anrede} {initial}".strip()
+
+    # v16 A1 Sanity-Check: Replace nur ausführen wenn full_ref plausibel ist
+    full_ref_low = full_ref.lower()
+    is_safe_ref = (
+        len(full_ref) <= 12
+        and "klient" not in full_ref_low
+        and "patient" not in full_ref_low
+        and full_ref not in ("", ".", "Frau .", "Herr .")
+    )
+    if not is_safe_ref:
+        logger.warning(
+            "substitute_patient_placeholders: full_ref %r unplausibel "
+            "(zu lang oder Klient/Patient enthalten) - Replace uebersprungen",
+            full_ref,
+        )
+        return text
 
     replacements = [
         ("Herr/[Patient/in]", full_ref),
@@ -356,6 +378,8 @@ async def generate_text(
     model: Optional[str] = None,
     workflow: Optional[str] = None,
     on_progress=None,
+    max_words: Optional[int] = None,
+    expected_keywords: Optional[list[str]] = None,
 ) -> dict:
     """
     Generiert Text ausschliesslich via lokalem Ollama-Modell.
@@ -363,6 +387,15 @@ async def generate_text(
     num_ctx wird dynamisch berechnet: Input-Tokens * 1.2 + max_tokens,
     auf das nächste Vielfache von 1024 aufgerundet.
     Das vermeidet unnötige KV-Cache-Reallokierungen bei jedem Request.
+
+    v16-Parameter (optional, durchgereicht an postprocess_output):
+      max_words:         Hartes Wort-Limit fuer den Output (style-derived
+                         Max aus prompts.derive_word_limits). Wenn der
+                         LLM-Output das Limit ueberschreitet, wird er an
+                         einer Satzgrenze abgeschnitten.
+      expected_keywords: Liste von Keywords die im Output vorhanden sein
+                         muessten (z.B. "Trennung", "F33.1"). Fehlende
+                         werden als Warnung geloggt.
     """
     if len(user_content) > MAX_USER_CONTENT_CHARS:
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
@@ -484,6 +517,27 @@ async def generate_text(
                 break
 
         result["text"] = strip_markdown_formatting(deduplicate_paragraphs(text))
+
+    # ── v16: Output-Postprocessing ──────────────────────────────────────────
+    # Drei Schritte als Verteidigungslinie gegen Modell-Quirks die per
+    # Prompt-Engineering nicht zuverlaessig abzufangen sind:
+    #   1. Komposita-Klebebugs reparieren ("Aufenthaltszeigte" -> "Aufenthaltes zeigte")
+    #   2. Loop-Repetition am Output-Ende erkennen und abschneiden
+    #   3. Optional: Hard-Cap auf Wortzahl wenn vom Caller (jobs.py) angegeben
+    #   4. Optional: Keyword-Presence-Check (nur Logging)
+    if result.get("text"):
+        try:
+            from app.services.postprocessing import postprocess_output
+            result["text"] = postprocess_output(
+                result["text"],
+                workflow=workflow,
+                max_words=max_words,
+                expected_keywords=expected_keywords,
+            )
+        except ImportError:
+            logger.debug("postprocessing-Modul nicht verfuegbar - v16-Cleanups uebersprungen")
+        except Exception as e:
+            logger.warning("Postprocessing-Fehler (Output bleibt unveraendert): %s", e)
 
     result["duration_s"] = round(time.time() - t0, 1)
     logger.info(

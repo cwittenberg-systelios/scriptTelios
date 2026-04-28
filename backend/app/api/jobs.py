@@ -5,23 +5,23 @@ GET  /api/jobs            – Alle Jobs auflisten (optional)
 import logging
 import time as _t
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, Depends
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Optional
+
+from app.models.schemas import WorkflowLiteral
 
 from app.core.config import settings
 from app.core.auth import get_current_user
-from app.core.files import save_upload, ALLOWED_DOCS, ALLOWED_IMAGES, ALLOWED_AUDIO
-
-
-def _size_class(n: int) -> str:
-    """O2: Größenklasse statt exakter Zeichenzahl (Datenminimierung)."""
-    if n < 1000: return "klein"
-    if n < 5000: return "mittel"
-    if n < 20000: return "groß"
-    return "sehr groß"
+from app.core.files import size_class as _size_class
 from app.services.job_queue import job_queue, JobStatus
 from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_text, extract_style_context
-from app.services.llm import generate_text
+from app.services.llm import (
+    generate_text,
+    clean_verlauf_text,
+    truncate_style_context,
+    deduplicate_paragraphs,
+    substitute_patient_placeholders,
+)
 from app.services.prompts import build_system_prompt, build_user_content
 import app.services.transcription as _transcription
 
@@ -265,7 +265,7 @@ async def list_jobs():
 @router.post("/jobs/generate")
 async def create_generate_job(
     background_tasks: BackgroundTasks,
-    workflow:         Annotated[Literal["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"], Form()],
+    workflow:         Annotated[WorkflowLiteral, Form()],
     prompt:           Annotated[str,  Form()],
     therapeut_id:     Annotated[Optional[str], Form()] = None,
     patientenname:    Annotated[Optional[str], Form(description="Explizit uebergebener Patientenname (vor allem bei P1 Gespraechszusammenfassung). Format: 'Vorname Nachname' oder 'Herr/Frau Nachname'. Wird in Initiale umgewandelt fuer den Output.")] = None,
@@ -406,7 +406,6 @@ async def create_generate_job(
             path.write_bytes(verlaufsdoku_bytes)
             try:
                 verlaufsdoku_text = await extract_text(path)
-                from app.services.llm import clean_verlauf_text
                 verlaufsdoku_text = clean_verlauf_text(verlaufsdoku_text)
             except Exception as e:
                 logger.warning("Verlaufsdoku-Extraktion fehlgeschlagen: %s", e)
@@ -435,7 +434,6 @@ async def create_generate_job(
                 logger.warning("Vorantrag-Extraktion fehlgeschlagen: %s", e)
 
         # 3. Stilprofil
-        from app.services.llm import truncate_style_context
         from app.services.prompts import derive_word_limits
         style_context = ""
         style_is_example = False
@@ -444,7 +442,6 @@ async def create_generate_job(
         _style_raw_texts: list[str] = []
 
         if style_text and style_text.strip():
-            from app.services.llm import deduplicate_paragraphs
             cleaned = deduplicate_paragraphs(style_text.strip())
             _style_raw_texts.append(cleaned)          # Roh-Text vor Truncation
             style_context = truncate_style_context(cleaned)
@@ -542,25 +539,26 @@ async def create_generate_job(
                         break
 
         if not patient_name:
-            # Bug-Fix #4: Bei Gespraechsdoku gibt es typischerweise kein
-            # Antragsdokument als Quelle, daher kann patient_name leer bleiben.
-            # Wenn aber kein Name gesetzt ist, ueberlebt "[Patient/in]" aus den
-            # FEW_SHOT-Beispielen die Substitution in prompts.py und landet
-            # ungewollt im Output. Wir setzen einen generischen Platzhalter,
-            # damit die Substitution stattfindet.
-            if workflow == "dokumentation":
-                patient_name = {
-                    "anrede": "",
-                    "vorname": "",
-                    "nachname": "",
-                    "initial": "die Klientin/der Klient",
-                }
-                logger.info(
-                    "Bug-Fix #4: Generischer Patient-Name-Fallback gesetzt "
-                    "(Gespraechsdoku ohne Quelldokument)"
-                )
-            else:
-                logger.warning("Kein Patientenname ermittelbar – Modell muss aus Unterlagen ableiten")
+            # v16 Audit: Frueher (sog. Bug-Fix #4) wurde hier ein Fallback gesetzt:
+            #   patient_name = {"initial": "die Klientin/der Klient", ...}
+            # Genau dieser String war die URSACHE der "die Klientin/der Klient"-
+            # Kontamination im Output - er wurde via Replace-Logik in
+            # build_system_prompt durch ALLE [Patient/in]-Platzhalter im Glossar
+            # und in Few-Shots ersetzt. Loesung in v16: KEIN Fallback mehr.
+            #
+            # Statt dessen: patient_name bleibt None. Dann:
+            #   - Replace-Logik in prompts.py ueberspringt die Substitution
+            #   - [Patient/in]-Platzhalter in den Few-Shots bleiben stehen
+            #   - Das Modell ersetzt sie kontextuell richtig (mit dem Namen
+            #     den es aus dem Transkript ableitet, oder mit "Frau X."/
+            #     einer plausiblen Bezeichnung).
+            # Eval-Verifikation: dok-01 v15 zeigt korrekten Output mit
+            # "Herr M." obwohl kein expliziter Patientenname gesetzt war.
+            logger.warning(
+                "Kein Patientenname ermittelbar (Workflow=%s) - Modell muss "
+                "aus den Quellen ableiten, [Patient/in]-Platzhalter bleiben stehen",
+                workflow,
+            )
 
         # 5. Generieren – jede Variable hat genau eine Bedeutung
         system = build_system_prompt(
@@ -622,6 +620,38 @@ async def create_generate_job(
         job.set_progress(lb[0], "KI-Generierung")
         _t0 = _t.time()
 
+        # ── v16: Postprocessor-Parameter berechnen ──────────────────────────
+        # max_words: harte Obergrenze fuer den Output (style-derived).
+        # Wenn das Modell das Limit ueberschreitet, schneidet
+        # postprocess_output an einer Satzgrenze ab.
+        # Verwendet das schon weiter oben berechnete word_limits[1] - kein
+        # zweiter Aufruf von derive_word_limits noetig.
+        v16_max_words = word_limits[1] if word_limits else None
+
+        # expected_keywords: wichtige Source-Begriffe (Trennung, ADS, F33.1 etc.)
+        # die im Output vorhanden sein muessten. Wenn nicht: Warning im Log.
+        v16_expected_keywords: list[str] = []
+        try:
+            from app.services.postprocessing import extract_likely_keywords
+            _src_combined = " ".join(filter(None, [
+                transkript_text or "",
+                selbstauskunft_text or "",
+                vorbefunde_text or "",
+                verlaufsdoku_text or "",
+                antragsvorlage_text or "",
+                vorantrag_text or "",
+            ]))
+            v16_expected_keywords = extract_likely_keywords(_src_combined)
+            if v16_expected_keywords:
+                logger.info(
+                    "v16 Keyword-Check: erwarte %d Source-Keywords im Output: %s",
+                    len(v16_expected_keywords), v16_expected_keywords,
+                )
+        except ImportError:
+            pass
+        except Exception as _e:
+            logger.warning("Keyword-Extraktion fehlgeschlagen: %s", _e)
+
         # Anamnese: ZWEI sequenzielle LLM-Calls (Anamnese + Befund separat)
         # Vorteil: zuverlaessige Trennung ohne Marker, fokussierte Prompts
         if workflow == "anamnese":
@@ -634,7 +664,9 @@ async def create_generate_job(
                 job.set_progress(int(pct), "KI-Generierung", f"Anamnese: {n} Wörter")
             _log_prompt(job.job_id, workflow, "anamnese", system, user)
             result_a = await generate_text(system, user, max_tokens=anamnese_max_tok,
-                                            model=model, workflow=workflow, on_progress=_on_tok_a)
+                                            model=model, workflow=workflow, on_progress=_on_tok_a,
+                                            max_words=v16_max_words,
+                                            expected_keywords=v16_expected_keywords)
             anamnese_text = (result_a.get("text") or "").strip()
 
             # Cancel-Check zwischen den Calls
@@ -665,8 +697,10 @@ async def create_generate_job(
                 pct = mid + (lb[1] - mid) * min(1.0, n / (expected_tok * 0.4))
                 job.set_progress(int(pct), "KI-Generierung", f"Befund: {n} Wörter")
             _log_prompt(job.job_id, workflow, "befund", befund_system, befund_user)
+            # Befund: keine max_words-Cap (Format ist fix), aber Keyword-Check sinnvoll
             result_b = await generate_text(befund_system, befund_user, max_tokens=befund_max_tok,
-                                            model=model, workflow="befund", on_progress=_on_tok_b)
+                                            model=model, workflow="befund", on_progress=_on_tok_b,
+                                            expected_keywords=v16_expected_keywords)
             befund_text_generated = (result_b.get("text") or "").strip()
 
             # Direkt zwei separate Felder zurueckgeben — keine Marker noetig
@@ -678,7 +712,10 @@ async def create_generate_job(
             }
         else:
             _log_prompt(job.job_id, workflow, workflow, system, user)
-            result = await generate_text(system, user, max_tokens=max_tok, model=model, workflow=workflow, on_progress=_on_tok)
+            result = await generate_text(system, user, max_tokens=max_tok, model=model,
+                                          workflow=workflow, on_progress=_on_tok,
+                                          max_words=v16_max_words,
+                                          expected_keywords=v16_expected_keywords)
 
         phase_times["llm"] = _t.time() - _t0
 
@@ -697,7 +734,6 @@ async def create_generate_job(
         # Das Modell kopiert Platzhalter aus Few-Shot-Beispielen manchmal in den Output,
         # obwohl der Name im System-Prompt schon substituiert wurde.
         if patient_name:
-            from app.services.llm import substitute_patient_placeholders
             raw = substitute_patient_placeholders(raw, patient_name)
             if result.get("befund_text"):
                 result["befund_text"] = substitute_patient_placeholders(

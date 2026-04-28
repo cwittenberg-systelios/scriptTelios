@@ -1817,6 +1817,9 @@ function P3({ toast, resumeJob, onResumed, model }) {
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
   const [fokus, setFokus]         = useState("");
+  // v16 Audit-Patch A3: gleicher Patient-Override wie in P1+P2
+  const [geschlecht, setGeschlecht] = useState("auto");
+  const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
@@ -1857,6 +1860,15 @@ function P3({ toast, resumeJob, onResumed, model }) {
     setOut("");
     setLastJobId(null);
     try {
+      // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
+      // (vorher fehlte das in P3/P4 - Bug entdeckt im Audit)
+      let patientNameExplicit = null;
+      if (kuerzel.trim()) {
+        const kurz = kuerzel.trim().replace(/\.?$/, ".");
+        if (geschlecht === "w")      patientNameExplicit = `Frau ${kurz}`;
+        else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
+        else                          patientNameExplicit = kurz;
+      }
       const result = await generate("verlaengerung", "", "", {
         antragsvorlage: antrag,   // Antragsvorlage → Diagnosen/Anamnese/Name
         verlauf:        verlauf,  // Verlaufsdokumentation
@@ -1864,6 +1876,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
         styleText:      styleText || null,
         bullets:        fokus || null,
         model:          model || null,
+        patientName:    patientNameExplicit,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p3");
@@ -1953,6 +1966,9 @@ function P4({ toast, resumeJob, onResumed, model }) {
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
   const [fokus, setFokus]         = useState("");
+  // v16 Audit-Patch A3: gleicher Patient-Override wie in P1+P2
+  const [geschlecht, setGeschlecht] = useState("auto");
+  const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
@@ -1993,6 +2009,14 @@ function P4({ toast, resumeJob, onResumed, model }) {
     setOut("");
     setLastJobId(null);
     try {
+      // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
+      let patientNameExplicit = null;
+      if (kuerzel.trim()) {
+        const kurz = kuerzel.trim().replace(/\.?$/, ".");
+        if (geschlecht === "w")      patientNameExplicit = `Frau ${kurz}`;
+        else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
+        else                          patientNameExplicit = kurz;
+      }
       const result = await generate("entlassbericht", "", "", {
         antragsvorlage: bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund/Name
         verlauf:        verlauf,  // Verlaufsdokumentation
@@ -2000,6 +2024,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
         styleText:      styleText || null,
         bullets:        fokus || null,
         model:          model || null,
+        patientName:    patientNameExplicit,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p4");

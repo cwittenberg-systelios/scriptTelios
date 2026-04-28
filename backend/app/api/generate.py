@@ -21,14 +21,10 @@ from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_text, extract_style_context
 from app.services.llm import generate_text
 from app.services.prompts import build_system_prompt, build_user_content
+from app.core.files import size_class as _size_class
 import app.services.transcription as _transcription
 
 router = APIRouter()
-def _size_class(n):
-    if n < 1000: return "klein"
-    if n < 5000: return "mittel"
-    if n < 20000: return "groß"
-    return "sehr groß"
 
 logger = logging.getLogger(__name__)
 

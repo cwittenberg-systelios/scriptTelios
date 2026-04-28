@@ -11,7 +11,6 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from typing import Annotated, Optional
 
-from app.core.config import settings
 from app.core.files import save_upload, ALLOWED_DOCS, ALLOWED_IMAGES, output_dir
 from app.models.schemas import DocProcessResponse, ExtractionInfo, ExtractionResponse, StyleProfileResponse
 from app.services.docx_fill import fill_docx_template
