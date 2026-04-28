@@ -1555,6 +1555,16 @@ TK Versicherungsnummer 123456789
         assert "dokumentation" not in DOKUMENTTYPEN_MIT_ABSCHNITTEN
         assert "anamnese" not in DOKUMENTTYPEN_MIT_ABSCHNITTEN
 
+    def test_abschnitts_filterung_dokumenttypen(self):
+        """Filterung aktiv für Verlängerung, Entlassbericht, Akutantrag, Anamnese."""
+        from app.api.style_embeddings import DOKUMENTTYPEN_MIT_ABSCHNITTEN
+        assert "verlaengerung" in DOKUMENTTYPEN_MIT_ABSCHNITTEN
+        assert "folgeverlaengerung" in DOKUMENTTYPEN_MIT_ABSCHNITTEN
+        assert "entlassbericht" in DOKUMENTTYPEN_MIT_ABSCHNITTEN
+        assert "akutantrag" in DOKUMENTTYPEN_MIT_ABSCHNITTEN
+        assert "anamnese" in DOKUMENTTYPEN_MIT_ABSCHNITTEN
+        assert "dokumentation" not in DOKUMENTTYPEN_MIT_ABSCHNITTEN
+
     def test_upload_verlaengerung_mit_text_filtert_abschnitte(self):
         """Upload mit Verlängerungs-Text → nur relevante Abschnitte gespeichert."""
         text = (

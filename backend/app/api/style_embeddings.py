@@ -57,7 +57,7 @@ RELEVANTE_ABSCHNITTE = [
 ]
 
 # Dokumenttypen bei denen Abschnitts-Filterung sinnvoll ist
-DOKUMENTTYPEN_MIT_ABSCHNITTEN = {"verlaengerung", "folgeverlaengerung", "entlassbericht", "akutantrag"}
+DOKUMENTTYPEN_MIT_ABSCHNITTEN = {"verlaengerung", "folgeverlaengerung", "entlassbericht", "akutantrag", "anamnese"}
 
 
 def _extrahiere_relevante_abschnitte(text: str) -> str:
