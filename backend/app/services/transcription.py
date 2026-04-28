@@ -118,6 +118,24 @@ def _get_diarization_pipeline():
         return None
 
 
+def _to_wav_for_diarization(audio_path: Path, tmp_dir: Path) -> Path:
+    """
+    Konvertiert eine Audiodatei zu 16kHz-Mono-WAV fuer pyannote.
+    pyannote kann Browser-webm nicht direkt lesen (torchcodec fehlt →
+    AudioDecoder-Fehler). WAV umgeht das komplett.
+    """
+    wav_path = tmp_dir / (audio_path.stem + "_diarization.wav")
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-i", str(audio_path),
+            "-ar", "16000", "-ac", "1", "-f", "wav",
+            str(wav_path),
+        ],
+        capture_output=True, check=True,
+    )
+    return wav_path
+
+
 def _diarize(audio_path: Path) -> list[dict] | None:
     """
     Führt Speaker Diarization auf einer Audiodatei aus.
@@ -126,12 +144,17 @@ def _diarize(audio_path: Path) -> list[dict] | None:
 
     Sprecher-Labels werden normalisiert: SPEAKER_00 → "A", SPEAKER_01 → "B"
     (konsistent mit dem bisherigen [A]/[B]-Format für das LLM).
+
+    Audio wird vorab zu 16kHz-Mono-WAV konvertiert damit pyannote kein
+    torchcodec braucht (Browser-webm → AudioDecoder-Fehler ohne torchcodec).
     """
     pipeline = _get_diarization_pipeline()
     if pipeline is None:
         return None
     try:
-        diarization = pipeline(str(audio_path))
+        with tempfile.TemporaryDirectory(prefix="systelios_diar_") as tmp_dir:
+            wav_path = _to_wav_for_diarization(audio_path, Path(tmp_dir))
+            diarization = pipeline(str(wav_path))
         segments = []
         speaker_map: dict[str, str] = {}
         labels = ["A", "B", "C", "D"]  # max 4 Sprecher realistisch
@@ -312,13 +335,15 @@ def _get_duration(file_path: Path) -> float:
     return 0.0
 
 
-def _find_silence_splits(file_path: Path, chunk_max: int) -> list[float]:
+def _find_silence_splits(file_path: Path, chunk_max: int, duration: float = 0.0) -> list[float]:
     """
     Findet Stille-Grenzen in der Audiodatei via ffmpeg silencedetect.
     Gibt eine sortierte Liste von Schnitt-Zeitpunkten zurueck.
     Schnitte werden so gewaehlt dass Chunks <= chunk_max Sekunden sind.
+    duration: bereits bekannte Dauer (0 = noch nicht ermittelt).
     """
-    duration = _get_duration(file_path)
+    if duration <= 0:
+        duration = _get_duration(file_path)
 
     # Stille-Segmente detektieren (mind. 0.5s Stille bei -40dB).
     # Diesen ffmpeg-Aufruf machen wir unabhaengig von duration,
@@ -725,7 +750,7 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
     with tempfile.TemporaryDirectory(prefix="systelios_chunks_") as tmp_dir:
         tmp_path = Path(tmp_dir)
 
-        splits = _find_silence_splits(file_path, CHUNK_MAX_SECONDS)
+        splits = _find_silence_splits(file_path, CHUNK_MAX_SECONDS, duration=duration)
         chunks = _split_audio(file_path, splits, tmp_path, duration=duration)
         logger.info("Audio aufgeteilt in %d Chunks", len(chunks))
 
