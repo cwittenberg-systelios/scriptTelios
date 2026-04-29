@@ -60,6 +60,28 @@ class Job(Base):
     style_info_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-serialisiert
 
 
+class Recording(Base):
+    """
+    P0-Aufnahme: Audiodatei + Transkript, persistent auf /workspace/recordings.
+    Löschung läuft über externe Datenschutz-Prozesse (deleted_at Soft-Delete).
+    """
+
+    __tablename__ = "recordings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    label: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # uploading | transcribing | ready | error
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="uploading", index=True)
+    error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class StyleProfile(Base):
     """Stilprofil eines Therapeuten (aus hochgeladenen Beispieltexten)."""
 

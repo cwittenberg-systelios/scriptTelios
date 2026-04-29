@@ -12,7 +12,7 @@ from app.middleware.audit import AuditMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api import transcribe, generate, documents, health
-from app.api import style_embeddings, jobs, admin, testrun
+from app.api import style_embeddings, jobs, admin, testrun, recordings
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -52,12 +52,21 @@ async def _cleanup_old_uploads():
 async def lifespan(app: FastAPI):
     logger.info("sysTelios Backend startet (Modell: %s)", settings.LLM_MODEL)
     await init_db()
+    # Recordings-Verzeichnis sicherstellen (P0-Aufnahmen)
+    from app.core.files import recordings_dir
+    recordings_dir()
+    # P0-Transkriptions-Queue (niedrige Priorität, läuft nur wenn kein aktiver Job)
+    from app.api.recordings import p0_queue, p0_worker
+    p0_worker_task = asyncio.create_task(p0_worker())
+    app.state.p0_queue = p0_queue
     # Upload-Bereinigung im Hintergrund starten
     cleanup_task = asyncio.create_task(_cleanup_old_uploads())
     from app.services.retention import retention_task
     retention_task_handle = asyncio.create_task(retention_task())
     yield
     cleanup_task.cancel()
+    try: p0_worker_task.cancel()
+    except: pass
     try: retention_task_handle.cancel()
     except: pass
     # Persistenten Ollama-Client schliessen
@@ -99,6 +108,7 @@ app.include_router(style_embeddings.router,  prefix="/api", tags=["Stilprofil"])
 app.include_router(jobs.router,              prefix="/api", tags=["Jobs"])
 app.include_router(admin.router,             prefix="/api", tags=["Admin"])
 app.include_router(testrun.router,           prefix="/api", tags=["Tests"])
+app.include_router(recordings.router,        prefix="/api", tags=["Aufnahmen"])
 
 
 @app.options("/{full_path:path}")

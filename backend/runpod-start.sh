@@ -78,6 +78,7 @@ echo "${GO}Verzeichnisse anlegen..."
 mkdir -p "$OLLAMA_MODELS_DIR"
 mkdir -p /workspace/uploads
 mkdir -p /workspace/outputs
+mkdir -p /workspace/recordings
 touch /workspace/systelios.log
 echo "${OK}Verzeichnisse bereit"
 
@@ -253,6 +254,21 @@ ALTER TABLE IF EXISTS jobs ALTER COLUMN workflow TYPE VARCHAR(64) USING workflow
 -- step-Spalte entfernen wenn vorhanden (wird nicht mehr benutzt)
 ALTER TABLE IF EXISTS jobs DROP COLUMN IF EXISTS step;
 ALTER TABLE IF EXISTS jobs DROP COLUMN IF EXISTS duration_seconds;
+-- P0-Aufnahmen (v17)
+CREATE TABLE IF NOT EXISTS recordings (
+    id          SERIAL PRIMARY KEY,
+    label       VARCHAR(120),
+    filename    VARCHAR(512) NOT NULL,
+    duration_s  DOUBLE PRECISION,
+    transcript  TEXT,
+    status      VARCHAR(20) NOT NULL DEFAULT 'uploading',
+    error_msg   TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_recordings_created
+    ON recordings (created_at DESC)
+    WHERE deleted_at IS NULL;
 SQL
 echo "${OK}Schema-Migrations ausgeführt"
 

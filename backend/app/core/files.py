@@ -29,6 +29,13 @@ def output_dir() -> Path:
     return p
 
 
+def recordings_dir() -> Path:
+    """Persistentes Verzeichnis für P0-Aufnahmen (kein automatisches Cleanup)."""
+    p = Path(settings.RECORDINGS_DIR)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 async def save_upload(
     file: UploadFile,
     allowed_extensions: set[str] | None = None,

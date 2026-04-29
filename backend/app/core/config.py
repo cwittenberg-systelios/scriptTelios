@@ -54,9 +54,10 @@ class Settings(BaseSettings):
     DIARIZATION_MODEL:      str  = "pyannote/speaker-diarization-3.1"
 
     # ── Dateien ───────────────────────────────────────────────────
-    UPLOAD_DIR:    str = "uploads"
-    OUTPUT_DIR:    str = "outputs"
-    MAX_UPLOAD_MB: int = 100
+    UPLOAD_DIR:      str = "uploads"
+    OUTPUT_DIR:      str = "outputs"
+    RECORDINGS_DIR:  str = "/workspace/recordings"   # P0-Aufnahmen (persistent)
+    MAX_UPLOAD_MB:   int = 100
 
     # Audiodateien nach Transkription loeschen (Datenschutz)
     DELETE_AUDIO_AFTER_TRANSCRIPTION: bool = True

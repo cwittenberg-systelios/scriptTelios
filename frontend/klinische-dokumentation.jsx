@@ -307,6 +307,17 @@ const S = `
     color: var(--st-red); font-weight: 600;
   }
   .audio-mode-btn:hover:not(.active) { background: var(--st-gray-light); }
+  .p0-picker { margin-top: 8px; }
+  .p0-hint { padding: 12px; color: var(--fg-muted); font-size: 13px; text-align: center; }
+  .p0-picker-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 12px; margin-bottom: 4px; border-radius: 5px;
+    border: 1px solid var(--border); cursor: pointer; font-size: 13px;
+    background: var(--card-bg);
+  }
+  .p0-picker-item:hover { background: var(--st-gray-light); border-color: var(--st-red); }
+  .p0-picker-label { font-weight: 600; }
+  .p0-picker-meta { color: var(--fg-muted); font-size: 11px; }
   .recorder-box {
     border: 2px solid var(--st-gray-mid); border-radius: 5px;
     padding: 18px; text-align: center; background: var(--st-cream);
@@ -970,10 +981,15 @@ function AudioRecorder({ onRecorded, onError }) {
  * Zeigt Warnung wenn Upload-Datei > MAX_UPLOAD_MB.
  */
 function AudioInput({ file, onFile }) {
-  // mode: "record" oder "upload". Wenn file schon da, gilt es als "gesetzt"
+  // mode: "record" | "upload" | "p0"
   const [mode, setMode] = useState("record");
   const [recError, setRecError] = useState(null);
   const [sizeWarn, setSizeWarn] = useState(null);
+  // P0-Picker State
+  const [p0List, setP0List]       = useState([]);
+  const [p0Loading, setP0Loading] = useState(false);
+  const [p0Error, setP0Error]     = useState(null);
+  const [p0Selected, setP0Selected] = useState(null); // { id, label, transcript, duration_s, created_at }
 
   // Reload-Wiederherstellung: Browser-Aufnahme aus IndexedDB laden
   useEffect(() => {
@@ -1002,8 +1018,54 @@ function AudioInput({ file, onFile }) {
     onFile(f);
   }
 
+  // P0-Aufnahmen laden
+  async function loadP0() {
+    setP0Loading(true);
+    setP0Error(null);
+    try {
+      const res = await apiFetch(`${getApiBase()}/recordings`);
+      const all = await res.json();
+      setP0List(all.filter(r => r.status === "ready"));
+    } catch (e) {
+      setP0Error("Aufnahmen konnten nicht geladen werden.");
+    } finally {
+      setP0Loading(false);
+    }
+  }
+
+  function switchMode(m) {
+    setMode(m);
+    if (m === "p0") loadP0();
+  }
+
+  function pickP0(rec) {
+    setP0Selected(rec);
+    // Transkript als synthetische "Datei" weitergeben — wir nutzen ein
+    // spezielles Objekt das jobs.py als transcript erkennt (kein Audio-Upload).
+    // Das wird in generate() / P1 run() abgefangen.
+    onFile({ __p0recording: true, transcript: rec.transcript, name: rec.label || `Aufnahme #${rec.id}`, id: rec.id });
+  }
+
+  function clearP0() {
+    setP0Selected(null);
+    onFile(null);
+  }
+
   // File ist schon gesetzt - kompakte Anzeige
   if (file) {
+    // P0-Recording gesetzt
+    if (file.__p0recording) {
+      return (
+        <div className="recorder-box" style={{ background: "var(--st-red-pale)", borderColor: "var(--st-red)", borderStyle: "solid" }}>
+          <div className="rec-status">&#127897; {file.name}</div>
+          <div className="rec-info">Transkript aus P0 · {file.transcript ? Math.round(file.transcript.split(" ").length) + " Wörter" : "–"}</div>
+          <div className="rec-buttons">
+            <button className="rec-btn rec-btn-pause" onClick={clearP0}>Entfernen</button>
+          </div>
+        </div>
+      );
+    }
+    // Normale Audiodatei
     return (
       <div className="recorder-box" style={{ background: "var(--st-red-pale)", borderColor: "var(--st-red)", borderStyle: "solid" }}>
         <div className="rec-status">&#127897; {file.name}</div>
@@ -1032,15 +1094,21 @@ function AudioInput({ file, onFile }) {
       <div className="audio-mode-toggle">
         <button
           className={"audio-mode-btn" + (mode === "record" ? " active" : "")}
-          onClick={() => setMode("record")}
+          onClick={() => switchMode("record")}
         >
           &#127897; Im Browser aufnehmen
         </button>
         <button
           className={"audio-mode-btn" + (mode === "upload" ? " active" : "")}
-          onClick={() => setMode("upload")}
+          onClick={() => switchMode("upload")}
         >
           &#128190; Datei hochladen
+        </button>
+        <button
+          className={"audio-mode-btn" + (mode === "p0" ? " active" : "")}
+          onClick={() => switchMode("p0")}
+        >
+          &#128203; Aus P0 wählen
         </button>
       </div>
 
@@ -1063,6 +1131,25 @@ function AudioInput({ file, onFile }) {
           />
           {sizeWarn && <div className="upload-warn">{sizeWarn}</div>}
         </>
+      )}
+
+      {mode === "p0" && (
+        <div className="p0-picker">
+          {p0Loading && <div className="p0-hint">Lade Aufnahmen…</div>}
+          {p0Error   && <div className="upload-warn">{p0Error}</div>}
+          {!p0Loading && !p0Error && p0List.length === 0 && (
+            <div className="p0-hint">Keine fertigen Aufnahmen in P0 vorhanden.</div>
+          )}
+          {p0List.map(r => (
+            <div key={r.id} className="p0-picker-item" onClick={() => pickP0(r)}>
+              <span className="p0-picker-label">{r.label || <em>Ohne Beschriftung</em>}</span>
+              <span className="p0-picker-meta">
+                {r.created_at ? new Date(r.created_at).toLocaleDateString("de-DE", {day:"2-digit",month:"2-digit",year:"2-digit"}) : ""}
+                {r.duration_s ? ` · ${Math.floor(r.duration_s/60)}:${String(Math.floor(r.duration_s%60)).padStart(2,"0")}` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -1349,10 +1436,19 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   const fd = new FormData();
   fd.append("workflow",   workflow);
   fd.append("prompt",     prompt);
-  fd.append("transcript", userContent);
   if (therapeutId)       fd.append("therapeut_id",    therapeutId);
   if (files.patientName) fd.append("patientenname",   files.patientName);
-  if (files.audio)       fd.append("audio",            files.audio);
+
+  // P0-Recording: Transkript direkt übergeben, kein Audio-Upload + Priorität setzen
+  if (files.audio && files.audio.__p0recording) {
+    fd.append("transcript", files.audio.transcript || userContent);
+    fd.append("p0_recording_id", String(files.audio.id));
+    fd.append("priority",  "high");
+  } else {
+    fd.append("transcript", userContent);
+    if (files.audio)       fd.append("audio",            files.audio);
+  }
+
   if (files.selbst)      fd.append("selbstauskunft",   files.selbst);
   if (files.vorbef)      fd.append("vorbefunde",       files.vorbef);
   if (files.verlauf)     fd.append("verlaufsdoku",     files.verlauf);
@@ -1405,6 +1501,196 @@ async function downloadTranscript(jobId, filename = "transkript.txt") {
 }
 
 // ── Pages ────────────────────────────────────────────────────────
+
+// ── P0: Aufnahmen ─────────────────────────────────────────────────
+function P0({ toast }) {
+  const [recordings, setRecordings] = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [error, setError]           = useState(null);
+  const [pendingFile, setPendingFile] = useState(null);
+  const [labelInput, setLabelInput]   = useState("");
+  const [submitting, setSubmitting]   = useState(false);
+  const pollRef = useRef(null);
+
+  const loadRecordings = useCallback(async () => {
+    try {
+      const res = await apiFetch(`${getApiBase()}/recordings`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setRecordings(data);
+      setError(null);
+    } catch (e) {
+      setError("Aufnahmen konnten nicht geladen werden: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadRecordings(); }, [loadRecordings]);
+
+  // Polling solange pending Jobs laufen
+  useEffect(() => {
+    const hasPending = recordings.some(r => r.status === "uploading" || r.status === "transcribing");
+    if (hasPending && !pollRef.current) {
+      pollRef.current = setInterval(loadRecordings, 4000);
+    } else if (!hasPending && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [recordings, loadRecordings]);
+
+  function onRecorded(file) {
+    setPendingFile(file);
+    setLabelInput("");
+  }
+
+  async function submitRecording() {
+    if (!pendingFile) return;
+    setSubmitting(true);
+    try {
+      const form = new FormData();
+      form.append("audio", pendingFile);
+      if (labelInput.trim()) form.append("label", labelInput.trim());
+      const res = await apiFetch(`${getApiBase()}/recordings`, { method: "POST", body: form });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const newRec = await res.json();
+      setRecordings(prev => [newRec, ...prev]);
+      setPendingFile(null);
+      setLabelInput("");
+      toast("Aufnahme gespeichert – Transkription läuft im Hintergrund");
+    } catch (e) {
+      toast("Upload fehlgeschlagen: " + e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function deleteRecording(id) {
+    if (!window.confirm("Aufnahme unwiderruflich löschen?")) return;
+    try {
+      await apiFetch(`${getApiBase()}/recordings/${id}`, { method: "DELETE" });
+      setRecordings(prev => prev.filter(r => r.id !== id));
+      toast("Aufnahme gelöscht");
+    } catch (e) {
+      toast("Löschen fehlgeschlagen: " + e.message);
+    }
+  }
+
+  const STATUS = {
+    uploading:    { text: "Wird hochgeladen…",    color: "#c07000" },
+    transcribing: { text: "Transkription läuft…", color: "#0060c0" },
+    ready:        { text: "Bereit",               color: "#1a7a1a" },
+    error:        { text: "Fehler",               color: "#c02020" },
+  };
+
+  function fmtDur(s) {
+    if (!s) return "–";
+    return `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`;
+  }
+  function fmtDat(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit",year:"2-digit"})
+      + " " + d.toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});
+  }
+
+  return (
+    <div>
+      <div className="page-header">
+        <div className="page-eyebrow">Aufnahmen</div>
+        <h2>Gesprächsaufzeichnungen</h2>
+        <p>Aufnehmen, beschriften, verwalten. In P1–P4 direkt als Quelle wählen.</p>
+      </div>
+      <div className="page-body">
+        <div className="workflow">
+
+          <Card num="A" title="Neue Aufnahme" open={true}>
+            <AudioRecorder onRecorded={onRecorded} onError={(msg) => toast(msg)} />
+
+            {pendingFile && (
+              <div style={{marginTop:12,padding:"12px 14px",background:"var(--st-red-pale)",border:"1px solid var(--st-red)",borderRadius:6}}>
+                <div style={{fontSize:13,marginBottom:8,color:"var(--fg)"}}>
+                  &#127897; <strong>{pendingFile.name}</strong> &nbsp;({(pendingFile.size/1024/1024).toFixed(1)} MB)
+                </div>
+                <input
+                  type="text"
+                  placeholder="Kurzbeschriftung (optional) – z.B. „Fr. M., Folgegespräch""
+                  value={labelInput}
+                  onChange={e => setLabelInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && submitRecording()}
+                  autoFocus
+                  maxLength={120}
+                  style={{width:"100%",marginBottom:8,boxSizing:"border-box"}}
+                />
+                <div style={{display:"flex",gap:8}}>
+                  <button className="run-btn" onClick={submitRecording} disabled={submitting} style={{flex:1,padding:"8px 0",fontSize:13}}>
+                    {submitting ? "Wird gespeichert…" : "Speichern & Transkribieren"}
+                  </button>
+                  <button className="rec-btn rec-btn-pause" onClick={() => { setPendingFile(null); setLabelInput(""); }} disabled={submitting}>
+                    Verwerfen
+                  </button>
+                </div>
+              </div>
+            )}
+          </Card>
+
+          <Card num="B" title="Aufnahmen" open={true}>
+            {loading && <div className="p0-hint">Lade…</div>}
+            {error   && <div className="upload-warn">{error}</div>}
+            {!loading && recordings.length === 0 && (
+              <div className="p0-hint">Noch keine Aufnahmen vorhanden.</div>
+            )}
+            {recordings.map(r => {
+              const st = STATUS[r.status] || { text: r.status, color: "#666" };
+              return (
+                <div key={r.id} style={{
+                  display:"flex",alignItems:"center",gap:10,
+                  padding:"10px 12px",marginBottom:6,
+                  background:"var(--card-bg)",border:"1px solid var(--border)",
+                  borderRadius:6,fontSize:13
+                }}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {r.label || <em style={{color:"var(--fg-muted)"}}>Ohne Beschriftung</em>}
+                    </div>
+                    <div style={{color:"var(--fg-muted)",fontSize:11,display:"flex",gap:10}}>
+                      <span>{fmtDat(r.created_at)}</span>
+                      <span>{fmtDur(r.duration_s)}</span>
+                      <span style={{color:st.color,fontWeight:600}}>{st.text}</span>
+                      {r.error_msg && <span title={r.error_msg} style={{cursor:"help"}}>ⓘ</span>}
+                    </div>
+                  </div>
+                  <a
+                    href={`${getApiBase()}/recordings/${r.id}/download`}
+                    download
+                    style={{
+                      padding:"4px 10px",fontSize:12,border:"1px solid var(--border)",
+                      borderRadius:4,background:"transparent",cursor:"pointer",
+                      textDecoration:"none",color:"var(--fg)"
+                    }}
+                    title="Herunterladen"
+                  >⬇</a>
+                  <button
+                    onClick={() => deleteRecording(r.id)}
+                    style={{
+                      padding:"4px 10px",fontSize:12,border:"1px solid var(--st-red)",
+                      borderRadius:4,background:"transparent",cursor:"pointer",
+                      color:"var(--st-red)"
+                    }}
+                    title="Löschen"
+                  >🗑</button>
+                </div>
+              );
+            })}
+          </Card>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function P1({ toast, resumeJob, onResumed, model }) {
   const [audio, setAudio]   = useState(null);
   const [txtFile, setTxtFile] = useState(null);
@@ -2463,6 +2749,7 @@ function useHeadStyle(css) {
 }
 
 const NAVS = [
+  { id: "p0", n: "⏺", title: "Aufnahmen",              sub: "Aufzeichnungen verwalten" },
   { id: "p1", n: "1", title: "Gesprächsdokumentation", sub: "Verlaufsnotiz" },
   { id: "p2", n: "2", title: "Anamnese & Befund",       sub: "Aufnahmegespräch" },
   { id: "p3", n: "3", title: "Verlängerungsantrag",     sub: "Kostenübernahme" },
@@ -2662,6 +2949,7 @@ export default function App() {
             }}>Abbrechen</button>
           </div>
         )}
+        {page === "p0" && <P0 toast={toast} />}
         {page === "p1" && <P1 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
         {page === "p2" && <P2 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
         {page === "p3" && <P3 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
