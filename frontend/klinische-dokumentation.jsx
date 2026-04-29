@@ -601,52 +601,103 @@ const S = `
 `;
 
 // ── Prompts ─────────────────────────────────────────────────────
-const P_DOKU = `Erstelle eine systemische Gesprächsdokumentation. Schreibe aktiv aus der Perspektive der Patientin/des Patienten – nicht über das Gespräch, sondern über die Person und ihre Themen. Gliedere den Text in folgende vier Abschnitte mit den jeweiligen Überschriften:
+// ── Frontend-Defaults fuer Workflow-Anweisungen (v18) ─────────────────────
+//
+// Diese Texte sind die Default-Inhalte fuer den Prompt-Editor und werden als
+// 'workflow_instructions' Form-Feld zum Backend geschickt. Der Backend-
+// Pflichtkern (Stilregeln, Quellenregel, Few-Shot, Negativ-Listen) ist
+// unsichtbar fuer den Therapeuten und wird im Backend ergaenzt.
+//
+// Architektur: was hier editiert wird ist WAS geschrieben werden soll,
+// nicht WIE. Der Therapeut kann den Auftrag anpassen ohne die
+// Pflichtkern-Regeln aushebeln zu koennen.
+
+const P_DOKU = `Erstelle eine systemische Gesprächsdokumentation. Schreibe aktiv aus der Perspektive der Klientin/des Klienten – nicht über das Gespräch, sondern über die Person und ihre Themen. Gliedere den Text in folgende vier Abschnitte mit den jeweiligen Überschriften:
 
 **Auftragsklärung**
-Beschreibe worum es der Patientin/dem Patienten ging und was das gemeinsame Ziel des Gesprächs war. Beispiel: "Im Mittelpunkt stand..." oder "Frau X. kam mit dem Anliegen..."
+Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame Ziel des Gesprächs war. Beispiel: "Im Mittelpunkt stand..." oder "Frau M. kam mit dem Anliegen..." (verwende den tatsächlichen Namen des Patienten – NICHT den Platzhalter "[Patient/in]").
 
 **Relevante Gesprächsinhalte**
-Schildere die wesentlichen Inhalte aus Sicht der Patientin/des Patienten: Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. Konkrete Formulierungen statt allgemeiner Beschreibungen. Systemische und IFS-Begriffe wo passend (Manager-Anteile, Exile, Self-Energy etc.).
+Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. Konkrete Formulierungen statt allgemeiner Beschreibungen. Systemische und IFS-Begriffe wo passend (Manager-Anteile, Exile, Self-Energy, Feuerwehr-Anteile etc.).
 
 **Hypothesen und Entwicklungsperspektiven**
 Formuliere systemische Hypothesen über Sinnzusammenhänge. Zeige Entwicklungsperspektiven auf – was wird möglich, wenn... Ressourcenorientiert und konkret.
 
 **Einladungen**
-Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden – aktiv formuliert: "Frau X. wurde eingeladen, ..." oder "Als Übung wurde vereinbart, ..."
+Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden – aktiv formuliert: "Frau M. wurde eingeladen, ..." oder "Als Übung wurde vereinbart, ..." (verwende den tatsächlichen Namen, NICHT "[Patient/in]").`;
 
-WICHTIG: Im konkreten Bericht IMMER die Initialen des aktuellen Patienten verwenden ("Frau M.", "Herr S."), NIEMALS generische Bezeichnungen wie "die Klientin", "der Klient", "die Patientin", "der Patient" als Anrede im Fließtext.
+const P_ANAMNESE = `Erstelle eine vollständige psychotherapeutische Anamnese auf Basis der bereitgestellten Unterlagen.
 
-Stil: Fließtext pro Abschnitt, aktiv, konkret, systemisch-wertschätzend. Keine Sektion über den Gesprächsstil.`;
+TON UND STIL:
+Schreibe einen erzählerischen, biographisch eingebetteten Bericht. Die Anamnese ist KEINE Symptom-Liste – sie ist die Lebensgeschichte des Patienten in seinem Kontext. Lass die Lebenswelt, die Bezugspersonen und die Entwicklungslinien sichtbar werden. Vermeide pathologisierende Sprache ("Defizit", "gestört", "auffällig"), wo eine beschreibende Formulierung möglich ist ("hat Schwierigkeiten mit...", "erlebt sich als...", "schildert, dass...").
 
-const P_ANAMNESE = `Erstelle Anamnese und psychopathologischen Befund aus systemischer Perspektive auf Basis der vorliegenden Unterlagen.
+ANAMNESE als durchgehender FLIESSTEXT (KEINE Unterüberschriften!):
+Schreibe die Anamnese als einen zusammenhängenden Fließtext OHNE Zwischenüberschriften wie "Vorstellungsanlass", "Aktuelle Erkrankung" etc. Der Text soll natürlich von Thema zu Thema fließen, wie ein erfahrener Therapeut einen Bericht diktieren würde.
 
-ANAMNESE (Fließtext):
-Vorstellungsanlass und Hauptbeschwerden im Kontext des sozialen Systems. Beginn und Verlauf der Beschwerden, auslösende und aufrechterhaltende Faktoren im Familien- und Beziehungskontext, psychiatrische und somatische Vorgeschichte, Medikation, Familienanamnese mit Blick auf Muster und Überzeugungen, Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungen, Kinder), Schlaf, Ernährung, Bewegung, Suchtmittel.
+Folgende Inhalte nahtlos einarbeiten (KEINE Überschriften dafür!):
+- Vorstellungsanlass und Hauptbeschwerde in eigenen Worten des Patienten
+- Beginn, Verlauf, auslösende und aufrechterhaltende Faktoren
+- Psychiatrische Vorgeschichte
+- Somatische Vorgeschichte und Medikation
+- Familienanamnese
+- Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungsstatus, Kinder)
+- Vegetativum (Schlaf, Appetit, Schmerzen) – nur kurz erwähnen, NICHT als Bullet-Liste
+- Suchtmittelanamnese – nur falls relevant, kurz im Fluss
+- Ressourcen`;
 
-PSYCHOPATHOLOGISCHER BEFUND (AMDP):
-Bewusstsein | Orientierung | Aufmerksamkeit | Gedächtnis | Formales Denken | Inhaltliches Denken | Wahrnehmung | Ich-Erleben | Affektivität | Antrieb | Psychomotorik | Suizidalität/Selbstverletzung
+// Befund-Vorlage als separates editierbares Feld in P2.
+// Der umgebende Pflichtkern (Quellenregel, NICHT-Schreiben-Liste) liegt im Backend.
+const P_BEFUND_VORLAGE = `Im Gespräch offen, wach, bewusstseinsklar, zu allen Qualitäten orientiert. Konzentration subjektiv {konzentration}. Auffassung, Merkfähigkeit und Gedächtnis intakt. Formalgedanklich {formalgedanke}, keine Denkverlangsamung, {fokus_denken}. {phobien_angst}. {Zwänge}. {vermeidung}. Kein Anhalt für Wahn oder Sinnestäuschungen, keine Ich-Störungen (z.B. Depersonalisation, Derealisation, Dissoziation). Stimmungslage {stimmung}, affektive Schwingungsfähigkeit {schwingung} bei insgesamt {affektlage} Affektlage. {freud_interessen}. {erschöpfung}. Antrieb {antrieb}. {hoffnung_insuffizienz}. {schuldgefühle}. Selbstwertgefühl ist {selbstwert}. Gefühlsregulation ist {gefühlsregulation}. Impulskontrolle ist {impulskontrolle}. {ambivalenz}. {innere_unruhe}. {zirkadian}. {schlaf}. Appetenz {appetenz}. {aggressiv_selbstverletzend}. {sozialer_rückzug}. Essverhalten {essverhalten}. {suchtverhalten}. {somatisierung}. {suizidalität_vergangenheit}. Aktuelle Verneinung von lebensüberdrüssigen und suizidalen Gedanken, keine suizidale Handlungsplanung oder Handlungsvorbereitung. Zum Zeitpunkt der Aufnahme von akuter Suizidalität klar distanziert.`;
 
-SYSTEMISCHE EINSCHÄTZUNG:
-Hypothesen zu Sinnzusammenhängen, Funktionen der Symptome im System, relevante Beziehungsmuster und Ressourcen.
+const P_VERL = `Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik und Psychotherapie. Verfasse den Abschnitt "Bisheriger Verlauf und Begründung der Verlängerung" (auch: "Verlauf und Begründung der weiteren Verlängerung") für einen Antrag auf Verlängerung der Kostenzusage bei der Krankenversicherung.
 
-Diagnosen: {diagnosen}`;
+INHALT (Reihenfolge einhalten):
+- Bisheriger Verlauf: was wurde konkret bearbeitet, welche Methoden eingesetzt (IFS, Anteilearbeit, Hypnosystemik, Körperarbeit, Gruppenarbeit)
+- Konkrete Fortschritte – spezifisch und belegbar aus der Verlaufsdokumentation, keine allgemeinen Behauptungen
+- Noch ausstehende Therapieziele: was bleibt zu tun, warum ist weitere stationäre Behandlung notwendig
+- Medizinische Begründung: Belastbarkeit, Stabilität, soziale Integration, Entlassfähigkeit noch nicht erreicht
+- Geplante Maßnahmen und Prognose für den Verlängerungszeitraum`;
 
-const P_VERL = `Optionale Schwerpunkte für diesen Verlängerungsantrag:
-– Welche Anteile / Themen besonders hervorheben?
-– Besondere Wendepunkte oder Krisen im Verlauf?
-– Spezifische noch ausstehende Therapieziele?
+const P_VERL_FOLGE = `Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für Psychosomatik und Psychotherapie. Verfasse den Abschnitt "Verlauf und Begründung der weiteren Verlängerung" für einen FOLGE-Verlängerungsantrag bei der Krankenversicherung.
 
-Leer lassen wenn keine besonderen Schwerpunkte gesetzt werden sollen.`;
+INHALT (Reihenfolge einhalten):
+- Kurzer Rückbezug auf den bisherigen Verlauf (1–2 Sätze, aus dem vorherigen Antrag)
+- Entwicklung SEIT dem letzten Antrag: neue Themen, vertiefte Arbeit, Wendepunkte
+- Konkrete Fortschritte seit dem letzten Antrag – spezifisch und belegbar
+- Was bleibt noch zu tun? Warum ist weitere stationäre Behandlung notwendig?
+- Geplante Maßnahmen und Prognose`;
 
-const P_ENTL = `Optionale Schwerpunkte für diesen Entlassbericht:
-– Welche Themen / Anteile besonders hervorheben?
-– Besondere therapeutische Wendepunkte?
-– Spezifische Empfehlungen für die Weiterbehandlung?
+const P_AKUT = `Du bist Arzt oder Psychologischer Psychotherapeut der sysTelios Klinik. Verfasse die "Begründung für Akutaufnahme" eines AKUTANTRAGS an die Krankenversicherung für die Erstattung einer stationären Akutaufnahme.
 
-Beispiel: "Wächteranteil Türsteher, Gruppenarbeit, Entschluss zur räumlichen Trennung"
+KONTEXT:
+Die Antragsvorlage enthält bereits Aktuelle Anamnese, Problemrelevante Vorgeschichte, Psychischen Befund und Einweisungsdiagnosen. Diese Informationen sind deine QUELLEN.
 
-Leer lassen wenn keine besonderen Schwerpunkte gesetzt werden sollen.`;
+INHALT:
+- Warum ist ein stationäres Setting medizinisch AKUT notwendig?
+- Konkrete Symptome und Risiken aus den Quellen benennen
+- Ambulante Insuffizienz begründen (warum reicht ambulant nicht?)
+- Dekompensationszeichen und aktuelle Krisensituation
+- Beginne mit folgender Standardformulierung – WÖRTLICH, unverändert (Kopie, keine Paraphrase, keine Wortauslassungen):
+
+  >>>
+  Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen Eindruckes ein stationäres Krankenhaussetting akut notwendig:
+  <<<
+
+  Danach Zeilenumbruch, nächster Absatz MUSS beginnen mit:
+  "Wir nehmen [Patient/in] schwer belastet auf..."`;
+
+const P_ENTL = `Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, ohne Einleitung und ohne Abschluss.
+
+INHALT – drei Teile nahtlos als Fließtext ineinander (ALLE DREI MÜSSEN VORKOMMEN):
+
+Teil 1 – BEHANDLUNGSVERLAUF (Hauptteil, ausführlich):
+Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden (IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), konkrete Wendepunkte und Entwicklungsschritte. Richtwert: ca. 100 Wörter pro Absatz. Wir-Perspektive: "Wir erlebten...", "Es gelang zunehmend...", "Im Verlauf zeigte sich..."
+
+Teil 2 – EPIKRISE (kompakte Gesamtbewertung):
+Symptomatik-Entwicklung im Vergleich zu Aufnahme, entlastete Schutzanteile, verbliebener Bedarf, Ressourcen, Prognose.
+
+Teil 3 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss, DARF NICHT FEHLEN):
+Konkrete Empfehlungen für die ambulante Weiterbehandlung: Therapieform, Schwerpunkte, Frequenz, Nachsorge.`;
 
 // ── Helpers ──────────────────────────────────────────────────────
 // Maximale Upload-Größe (Cloudflare Free Plan: 100MB, mit Puffer)
@@ -1435,7 +1486,11 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   const therapeutId = getConfluenceUser();
   const fd = new FormData();
   fd.append("workflow",   workflow);
-  fd.append("prompt",     prompt);
+  // v18: Feld heisst jetzt 'workflow_instructions' (frueher 'prompt').
+  // Backend akzeptiert beide Namen, wir senden den neuen Namen als
+  // Single-Source-of-Truth.
+  fd.append("workflow_instructions", prompt);
+  if (files.befundVorlage) fd.append("befund_vorlage", files.befundVorlage);
   if (therapeutId)       fd.append("therapeut_id",    therapeutId);
   if (files.patientName) fd.append("patientenname",   files.patientName);
 
@@ -1924,6 +1979,8 @@ function P2({ toast, resumeJob, onResumed, model }) {
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
   const [prompt, setPrompt]       = useState(P_ANAMNESE);
+  // v18: Befund-Vorlage als separates editierbares Feld
+  const [befundVorlage, setBefundVorlage] = useState(P_BEFUND_VORLAGE);
   const [out, setOut]             = useState("");
   const [befundOut, setBefundOut] = useState("");
   const [akutOut, setAkutOut]     = useState("");
@@ -2009,6 +2066,8 @@ function P2({ toast, resumeJob, onResumed, model }) {
         bullets:   akutantrag ? "akutantrag" : (text || null),
         model:     model || null,
         patientName: patientNameExplicit,
+        // v18: editierbare Befund-Vorlage fuer den separaten Befund-Call
+        befundVorlage: befundVorlage || null,
         onJobId:   setCurrentJobId,
         signal:    ac.signal,
       }, "p2");
@@ -2091,8 +2150,14 @@ function P2({ toast, resumeJob, onResumed, model }) {
             </InputTabs>
           </Card>
 
-          <Card num="E" title="Prompt anpassen" open={false}>
+          <Card num="E" title="Prompt anpassen (advanced)" open={false}>
             <PromptEditor value={prompt} onChange={setPrompt} def={P_ANAMNESE} />
+            <div className="field-note" style={{marginTop:8}}>Inhaltliche Anweisungen fuer die Anamnese. Stil-/Quellenregeln liegen im Backend.</div>
+          </Card>
+
+          <Card num="F" title="Befundvorlage (advanced)" open={false}>
+            <PromptEditor value={befundVorlage} onChange={setBefundVorlage} def={P_BEFUND_VORLAGE} />
+            <div className="field-note" style={{marginTop:8}}>AMDP-Vorlage fuer den separaten Befund-Call. Wird vom Modell mit Inhalten aus der Selbstauskunft gefuellt. Anpassen nur wenn die Standardvorlage nicht passt.</div>
           </Card>
 
           <div className="action-bar">
@@ -2172,6 +2237,8 @@ function P3({ toast, resumeJob, onResumed, model }) {
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
   const [fokus, setFokus]         = useState("");
+  // v18: Workflow-Anweisungen als editierbares Feld (advanced option)
+  const [prompt, setPrompt]       = useState(P_VERL);
   // v16 Audit-Patch A3: gleicher Patient-Override wie in P1+P2
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]       = useState("");
@@ -2224,7 +2291,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
         else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
         else                          patientNameExplicit = kurz;
       }
-      const result = await generate("verlaengerung", "", "", {
+      const result = await generate("verlaengerung", prompt, "", {
         antragsvorlage: antrag,   // Antragsvorlage → Diagnosen/Anamnese/Name
         verlauf:        verlauf,  // Verlaufsdokumentation
         style:          style,
@@ -2290,6 +2357,11 @@ function P3({ toast, resumeJob, onResumed, model }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
           </Card>
 
+          <Card num="E" title="Prompt-Vorlage (advanced)" badge="opt" open={false}>
+            <PromptEditor value={prompt} onChange={setPrompt} def={P_VERL} />
+            <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
+          </Card>
+
           <div className="action-bar">
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
@@ -2304,7 +2376,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setAntrag(null); setStyle(null); setStyleText("");
-                setFokus(""); setOut(""); setLastJobId(null);
+                setFokus(""); setPrompt(P_VERL); setOut(""); setLastJobId(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Verlängerungsantrag</button>
             </div>
@@ -2321,6 +2393,8 @@ function P4({ toast, resumeJob, onResumed, model }) {
   const [style, setStyle]         = useState(null);
   const [styleText, setStyleText] = useState("");
   const [fokus, setFokus]         = useState("");
+  // v18: Workflow-Anweisungen als editierbares Feld (advanced option)
+  const [prompt, setPrompt]       = useState(P_ENTL);
   // v16 Audit-Patch A3: gleicher Patient-Override wie in P1+P2
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]       = useState("");
@@ -2372,7 +2446,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
         else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
         else                          patientNameExplicit = kurz;
       }
-      const result = await generate("entlassbericht", "", "", {
+      const result = await generate("entlassbericht", prompt, "", {
         antragsvorlage: bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund/Name
         verlauf:        verlauf,  // Verlaufsdokumentation
         style:          style,
@@ -2438,6 +2512,11 @@ function P4({ toast, resumeJob, onResumed, model }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
           </Card>
 
+          <Card num="E" title="Prompt-Vorlage (advanced)" badge="opt" open={false}>
+            <PromptEditor value={prompt} onChange={setPrompt} def={P_ENTL} />
+            <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
+          </Card>
+
           <div className="action-bar">
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
@@ -2452,7 +2531,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setBericht(null); setStyle(null); setStyleText("");
-                setFokus(""); setOut(""); setLastJobId(null);
+                setFokus(""); setPrompt(P_ENTL); setOut(""); setLastJobId(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Entlassbericht</button>
             </div>
