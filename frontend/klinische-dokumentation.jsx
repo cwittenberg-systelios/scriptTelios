@@ -2207,15 +2207,13 @@ function getConfluenceUser() {
   return "";
 }
 
-function P5({ toast }) {
+function P5({ toast, liste, ladebusy, ladeListe, loeschen }) {
   const [therapeutId] = useState(getConfluenceUser);  // read-only aus Confluence
   const [dokumenttyp, setDokumenttyp] = useState("dokumentation");
   const [istStatisch, setIstStatisch] = useState(false);
   const [file, setFile] = useState(null);
   const [textInput, setTextInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [liste, setListe] = useState(null);
-  const [ladebusy, setLadebusy] = useState(false);
 
   // Abschnitte die für Verlängerung/Entlassbericht relevant sind
   const ABSCHNITTE_HINWEIS = [
@@ -2226,13 +2224,6 @@ function P5({ toast }) {
     "Psychotherapeutischer Verlauf",
   ];
   const hatAbschnitte = ["verlaengerung", "entlassbericht"].includes(dokumenttyp);
-
-  // Bibliothek automatisch laden beim ersten Render
-  const didMount = useRef(false);
-  if (!didMount.current) {
-    didMount.current = true;
-    if (therapeutId) Promise.resolve().then(() => ladeListe());
-  }
 
   async function hochladen() {
     const hasFile = !!file;
@@ -2265,30 +2256,6 @@ function P5({ toast }) {
       toast("Fehler: " + friendlyError(e));
     }
     setBusy(false);
-  }
-
-  async function ladeListe() {
-    if (!therapeutId.trim()) return;
-    setLadebusy(true);
-    try {
-      const r = await apiFetch(`${getApiBase()}/style/${encodeURIComponent(therapeutId.trim())}`);
-      if (!r.ok) throw new Error(r.statusText);
-      setListe(await r.json());
-    } catch (e) {
-      toast("Fehler beim Laden: " + friendlyError(e));
-    }
-    setLadebusy(false);
-  }
-
-  async function loeschen(id) {
-    try {
-      const r = await apiFetch(`${getApiBase()}/style/embedding/${id}`, { method: "DELETE" });
-      if (!r.ok) throw new Error((await r.json()).detail);
-      toast("Beispiel gelöscht");
-      await ladeListe();
-    } catch (e) {
-      toast("Fehler: " + friendlyError(e));
-    }
   }
 
   // Gruppiere Liste nach Dokumenttyp
@@ -2512,6 +2479,28 @@ export default function App() {
   const [selectedModel, setSelectedModel] = useState(() => {
     try { return localStorage.getItem("systelios_model") || ""; } catch (_) { return ""; }
   });
+
+  // Stilbibliothek – State im Root, damit Daten beim Tab-Öffnen bereits vorliegen
+  const [stilListe, setStilListe]       = useState(null);
+  const [stilLadebusy, setStilLadebusy] = useState(false);
+
+  const ladeStilListe = useCallback(async () => {
+    const tid = getConfluenceUser();
+    if (!tid.trim()) return;
+    setStilLadebusy(true);
+    try {
+      const r = await apiFetch(`${getApiBase()}/style/${encodeURIComponent(tid.trim())}`);
+      if (r.ok) setStilListe(await r.json());
+    } catch (_) {}
+    setStilLadebusy(false);
+  }, []);
+
+  const loeschenStil = useCallback(async (id) => {
+    const r = await apiFetch(`${getApiBase()}/style/embedding/${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error((await r.json()).detail);
+    await ladeStilListe();
+  }, [ladeStilListe]);
+
   const [backendUrl, setBackendUrl] = useState(() => {
     try { return localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""; }
     catch (_) { return window.SYSTELIOS_API_BASE || ""; }
@@ -2536,6 +2525,11 @@ export default function App() {
     setSelectedModel(m);
     try { localStorage.setItem("systelios_model", m); } catch (_) {}
   }
+
+  // Stilbibliothek beim Start vorladen (parallel, kein Warten auf Tab-Öffnen)
+  useEffect(() => {
+    ladeStilListe();
+  }, [ladeStilListe]);
 
   // Beim Start: prüfen ob ein laufender Job existiert
   useEffect(() => {
@@ -2672,7 +2666,16 @@ export default function App() {
         {page === "p2" && <P2 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
         {page === "p3" && <P3 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
         {page === "p4" && <P4 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
-        {page === "p5" && <P5 toast={toast} />}
+        {page === "p5" && <P5
+          toast={toast}
+          liste={stilListe}
+          ladebusy={stilLadebusy}
+          ladeListe={ladeStilListe}
+          loeschen={async (id) => {
+            try { await loeschenStil(id); toast("Beispiel gelöscht"); }
+            catch (e) { toast("Fehler: " + friendlyError(e)); }
+          }}
+        />}
       </main>
 
       {/* Settings Modal – via Portal damit position:fixed korrekt funktioniert */}
