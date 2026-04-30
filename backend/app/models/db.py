@@ -64,6 +64,10 @@ class Recording(Base):
     """
     P0-Aufnahme: Audiodatei + Transkript, persistent auf /workspace/recordings.
     Löschung läuft über externe Datenschutz-Prozesse (deleted_at Soft-Delete).
+
+    v18: therapeut_id hinzugefügt (Migration läuft automatisch via init_db_migrations
+    in database.py beim Server-Start). Jeder Therapeut sieht nur eigene Aufnahmen.
+    Audio-Datei wird nach 24h gelöscht (retention.py), Transkript bleibt in DB.
     """
 
     __tablename__ = "recordings"
@@ -71,6 +75,10 @@ class Recording(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # v18: Therapeut-Zuordnung (nullable für Rückwärtskompatibilität mit
+    # Aufnahmen die vor diesem Update erstellt wurden)
+    therapeut_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
     label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)

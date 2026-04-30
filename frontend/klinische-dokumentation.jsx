@@ -1032,8 +1032,10 @@ function AudioRecorder({ onRecorded, onError }) {
  * Zeigt Warnung wenn Upload-Datei > MAX_UPLOAD_MB.
  */
 function AudioInput({ file, onFile }) {
-  // mode: "record" | "upload" | "p0"
-  const [mode, setMode] = useState("record");
+  // v18 1c: Aufnahme-Funktion nur noch in P0.
+  // AudioInput zeigt nur noch den P0-Picker + einen Link zu P0.
+  // mode bleibt aus Kompatibilitätsgründen als State, hat aber nur noch einen Wert.
+  const [mode, setMode] = useState("p0");
   const [recError, setRecError] = useState(null);
   const [sizeWarn, setSizeWarn] = useState(null);
   // P0-Picker State
@@ -1042,11 +1044,8 @@ function AudioInput({ file, onFile }) {
   const [p0Error, setP0Error]     = useState(null);
   const [p0Selected, setP0Selected] = useState(null); // { id, label, transcript, duration_s, created_at }
 
-  // Reload-Wiederherstellung: Browser-Aufnahme aus IndexedDB laden
-  useEffect(() => {
-    if (file) return; // schon gesetzt, nichts tun
-    idbLoadAudio().then(f => { if (f) onFile(f); });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // P0-Aufnahmen beim Mounten sofort laden (mode ist immer "p0")
+  useEffect(() => { loadP0(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleFile(f) {
     setRecError(null);
@@ -1142,66 +1141,49 @@ function AudioInput({ file, onFile }) {
 
   return (
     <div className="audio-input-wrap">
-      <div className="audio-mode-toggle">
-        <button
-          className={"audio-mode-btn" + (mode === "record" ? " active" : "")}
-          onClick={() => switchMode("record")}
-        >
-          &#127897; Im Browser aufnehmen
-        </button>
-        <button
-          className={"audio-mode-btn" + (mode === "upload" ? " active" : "")}
-          onClick={() => switchMode("upload")}
-        >
-          &#128190; Datei hochladen
-        </button>
-        <button
-          className={"audio-mode-btn" + (mode === "p0" ? " active" : "")}
-          onClick={() => switchMode("p0")}
-        >
-          &#128203; Aus P0 wählen
-        </button>
+      {/* v18 1c: Kein Recorder/Upload-Button mehr hier.
+          Aufnahmen werden ausschließlich in P0 gemacht und dann hier ausgewählt.
+          Das zentralisiert die Aufnahme-Verwaltung und verhindert ungespeicherte
+          Browser-Aufnahmen die nicht in der DB landen. */}
+      <div className="p0-picker">
+        {p0Loading && <div className="p0-hint">Lade Aufnahmen…</div>}
+        {p0Error   && <div className="upload-warn">{p0Error}</div>}
+        {!p0Loading && !p0Error && p0List.length === 0 && (
+          <div className="p0-hint" style={{display:"flex",flexDirection:"column",gap:8,alignItems:"center"}}>
+            <span>Noch keine Aufnahmen vorhanden.</span>
+            <button
+              className="btn-secondary"
+              style={{fontSize:12,padding:"4px 12px"}}
+              onClick={() => {
+                // Navigiere zu P0 — setzt page-State im App-Parent via window-Event
+                window.dispatchEvent(new CustomEvent("st-nav", { detail: "p0" }));
+              }}
+            >
+              ⏺ Zu Aufnahmen (P0)
+            </button>
+          </div>
+        )}
+        {p0List.map(r => (
+          <div key={r.id} className="p0-picker-item" onClick={() => pickP0(r)}>
+            <span className="p0-picker-label">{r.label || <em>Ohne Beschriftung</em>}</span>
+            <span className="p0-picker-meta">
+              {r.created_at ? new Date(r.created_at).toLocaleDateString("de-DE", {day:"2-digit",month:"2-digit",year:"2-digit"}) : ""}
+              {r.duration_s ? ` · ${Math.floor(r.duration_s/60)}:${String(Math.floor(r.duration_s%60)).padStart(2,"0")}` : ""}
+            </span>
+          </div>
+        ))}
+        {p0List.length > 0 && (
+          <div style={{marginTop:6,textAlign:"right"}}>
+            <button
+              className="btn-secondary"
+              style={{fontSize:11,padding:"2px 8px"}}
+              onClick={() => window.dispatchEvent(new CustomEvent("st-nav", { detail: "p0" }))}
+            >
+              + Neue Aufnahme in P0
+            </button>
+          </div>
+        )}
       </div>
-
-      {mode === "record" && (
-        <>
-          <AudioRecorder onRecorded={handleFile} onError={setRecError} />
-          {recError && <div className="upload-warn">{recError}</div>}
-        </>
-      )}
-
-      {mode === "upload" && (
-        <>
-          <Dropzone
-            label="Aufnahme hochladen"
-            hint={`.mp3  .m4a  .wav  .webm  .ogg  (max ${MAX_UPLOAD_MB} MB)`}
-            accept="audio/*"
-            icon="&#127897;"
-            file={null}
-            onFile={handleFile}
-          />
-          {sizeWarn && <div className="upload-warn">{sizeWarn}</div>}
-        </>
-      )}
-
-      {mode === "p0" && (
-        <div className="p0-picker">
-          {p0Loading && <div className="p0-hint">Lade Aufnahmen…</div>}
-          {p0Error   && <div className="upload-warn">{p0Error}</div>}
-          {!p0Loading && !p0Error && p0List.length === 0 && (
-            <div className="p0-hint">Keine fertigen Aufnahmen in P0 vorhanden.</div>
-          )}
-          {p0List.map(r => (
-            <div key={r.id} className="p0-picker-item" onClick={() => pickP0(r)}>
-              <span className="p0-picker-label">{r.label || <em>Ohne Beschriftung</em>}</span>
-              <span className="p0-picker-meta">
-                {r.created_at ? new Date(r.created_at).toLocaleDateString("de-DE", {day:"2-digit",month:"2-digit",year:"2-digit"}) : ""}
-                {r.duration_s ? ` · ${Math.floor(r.duration_s/60)}:${String(Math.floor(r.duration_s%60)).padStart(2,"0")}` : ""}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -1575,7 +1557,9 @@ function P0({ toast }) {
       setRecordings(data);
       setError(null);
     } catch (e) {
-      setError("Aufnahmen konnten nicht geladen werden: " + e.message);
+      // 1a: Fehler nur bei echtem Fehler anzeigen, nicht bei leerer Liste
+      setError(null);  // Keine Fehlermeldung wenn keine Aufnahmen vorhanden
+      logger.debug && logger.debug("Aufnahmen laden fehlgeschlagen:", e);
     } finally {
       setLoading(false);
     }
@@ -1716,25 +1700,42 @@ function P0({ toast }) {
                       {r.error_msg && <span title={r.error_msg} style={{cursor:"help"}}>ⓘ</span>}
                     </div>
                   </div>
-                  <a
-                    href={`${getApiBase()}/recordings/${r.id}/download`}
-                    download
-                    style={{
-                      padding:"4px 10px",fontSize:12,border:"1px solid var(--border)",
-                      borderRadius:4,background:"transparent",cursor:"pointer",
-                      textDecoration:"none",color:"var(--fg)"
-                    }}
-                    title="Herunterladen"
-                  >⬇</a>
+                  {/* 1h: Audio download — zeigt Hinweis wenn bereits gelöscht (nach 24h) */}
+                  {r.has_audio !== false && (
+                    <a
+                      href={`${getApiBase()}/recordings/${r.id}/download`}
+                      download
+                      style={{
+                        padding:"4px 10px",fontSize:12,border:"1px solid var(--border)",
+                        borderRadius:4,background:"transparent",cursor:"pointer",
+                        textDecoration:"none",color:"var(--fg)"
+                      }}
+                      title="Audio herunterladen (24h verfügbar)"
+                    >⬇ Audio</a>
+                  )}
+                  {/* 1h: Transkript-Download — immer verfügbar wenn Transkript vorhanden */}
+                  {r.transcript && (
+                    <a
+                      href={`${getApiBase()}/recordings/${r.id}/transcript`}
+                      download
+                      style={{
+                        padding:"4px 10px",fontSize:12,border:"1px solid var(--border)",
+                        borderRadius:4,background:"transparent",cursor:"pointer",
+                        textDecoration:"none",color:"var(--fg)"
+                      }}
+                      title="Transkript als .txt herunterladen"
+                    >⬇ Transkript</a>
+                  )}
+                  {/* 1g: Lösch-Icon als rotes Kreuz statt 🗑 */}
                   <button
                     onClick={() => deleteRecording(r.id)}
                     style={{
-                      padding:"4px 10px",fontSize:12,border:"1px solid var(--st-red)",
+                      padding:"4px 10px",fontSize:13,border:"1px solid var(--st-red)",
                       borderRadius:4,background:"transparent",cursor:"pointer",
-                      color:"var(--st-red)"
+                      color:"var(--st-red)",fontWeight:700,lineHeight:1,
                     }}
-                    title="Löschen"
-                  >🗑</button>
+                    title="Aufnahme löschen"
+                  >✕</button>
                 </div>
               );
             })}
@@ -3250,7 +3251,7 @@ const NAVS = [
 
 export default function App() {
   useHeadStyle(S);
-  const [page, setPage]       = useState("p1");
+  const [page, setPage]       = useState("p0");
   const [msg, setMsg]         = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [resumeJob, setResumeJob] = useState(null); // { jobId, page } falls ein Job wiederhergestellt wird
@@ -3328,6 +3329,16 @@ export default function App() {
         setResumeJob(saved);
       })
       .catch(() => clearActiveJob());
+  }, []);
+
+  // 1c: Globales st-nav Event — ermöglicht AudioInput und andere Komponenten
+  // ohne prop-drilling zu P0 zu navigieren (z.B. "Neue Aufnahme in P0"-Link)
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.detail) setPage(e.detail);
+    };
+    window.addEventListener("st-nav", handler);
+    return () => window.removeEventListener("st-nav", handler);
   }, []);
 
   const saveUrl = () => {

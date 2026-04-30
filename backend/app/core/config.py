@@ -59,8 +59,10 @@ class Settings(BaseSettings):
     RECORDINGS_DIR:  str = "/workspace/recordings"   # P0-Aufnahmen (persistent)
     MAX_UPLOAD_MB:   int = 100
 
-    # Audiodateien nach Transkription loeschen (Datenschutz)
-    DELETE_AUDIO_AFTER_TRANSCRIPTION: bool = True
+    # v18: Audio wird NICHT mehr sofort nach Transkription gelöscht.
+    # retention.py löscht Audiodateien nach 24h automatisch.
+    # Das gibt dem Therapeuten Zeit das Audio zu prüfen/herunterzuladen.
+    DELETE_AUDIO_AFTER_TRANSCRIPTION: bool = False
 
     # ── Datenbank ─────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://systelios:systelios@db:5432/systelios"

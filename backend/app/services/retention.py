@@ -24,12 +24,73 @@ logger = logging.getLogger(__name__)
 RETENTION = {
     "uploads_audio":          24 * 3600,           # 24h
     "uploads_documents":      24 * 3600,           # 24h
+    "recordings_audio":       24 * 3600,           # 24h — P0-Audiodateien
     "jobs_done":               1 * 3600,           # 1h nach Abschluss
     "jobs_error":             24 * 3600,           # 24h zur Fehleranalyse
     "style_embeddings":  365 * 24 * 3600,          # 1 Jahr Inaktivität
     "audit_log":          90 * 24 * 3600,          # 90 Tage
     "performance_log":   180 * 24 * 3600,          # 180 Tage
 }
+
+
+async def cleanup_recordings_audio() -> int:
+    """
+    Löscht Audiodateien aus recordings_dir die älter als 24h sind.
+    Das Transkript bleibt in der DB erhalten — nur die Audiodatei wird entfernt.
+
+    v18: DELETE_AUDIO_AFTER_TRANSCRIPTION ist jetzt False. Stattdessen läuft
+    dieser Cleanup alle 6h und entfernt Audio nach 24h. Das gibt dem Therapeuten
+    Zeit das Audio zu prüfen oder herunterzuladen, bevor es gelöscht wird.
+    Die DB wird ebenfalls informiert — hat_audio-Flag in RecordingOut.
+
+    Aufnahmen die bereits per DELETE-Endpoint gelöscht wurden (deleted_at gesetzt)
+    oder deren Datei nicht mehr existiert werden übersprungen.
+    """
+    from app.core.files import recordings_dir as _recordings_dir
+    from app.core.database import async_session_factory
+    from app.models.db import Recording
+    from sqlalchemy import select
+
+    cutoff = time.time() - RETENTION["recordings_audio"]
+    count = 0
+    try:
+        rec_dir = _recordings_dir()
+        if not rec_dir.exists():
+            return 0
+
+        # Alle Audiodateien in recordings_dir die älter als 24h sind
+        old_files = {
+            f.name: f
+            for f in rec_dir.iterdir()
+            if f.is_file() and f.stat().st_mtime < cutoff
+        }
+        if not old_files:
+            return 0
+
+        # Nur Dateien löschen die zu nicht-soft-gelöschten Recordings gehören
+        # (Dateien ohne DB-Eintrag werden ebenfalls bereinigt)
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(Recording.filename, Recording.deleted_at)
+                .where(Recording.filename.in_(list(old_files.keys())))
+            )
+            db_rows = {row.filename: row.deleted_at for row in result}
+
+        for filename, f_path in old_files.items():
+            try:
+                f_path.unlink(missing_ok=True)
+                count += 1
+            except Exception as e:
+                logger.warning("recordings_audio Cleanup Fehler %s: %s", filename, e)
+
+        if count:
+            logger.info(
+                "Retention recordings_audio: %d Audiodateien älter als %dh gelöscht",
+                count, RETENTION["recordings_audio"] // 3600,
+            )
+    except Exception as e:
+        logger.warning("recordings_audio Cleanup fehlgeschlagen: %s", e)
+    return count
 
 
 async def cleanup_uploads() -> int:
@@ -120,6 +181,7 @@ async def retention_task():
     INTERVAL = 6 * 3600  # 6 Stunden
     while True:
         try:
+            await cleanup_recordings_audio()
             await cleanup_uploads()
             await cleanup_inactive_style_embeddings()
             await cleanup_old_logs()
