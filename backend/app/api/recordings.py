@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select, update
 
-from app.core.database import async_session
+from app.core.database import async_session_factory
 from app.core.files import recordings_dir, ALLOWED_AUDIO
 from app.core.config import settings
 from app.models.db import Recording
@@ -43,7 +43,7 @@ async def _active_job_running() -> bool:
     """True wenn mindestens ein P1/P2-Job mit status='running' in der DB ist."""
     from sqlalchemy import select, func
     from app.models.db import Job
-    async with async_session() as session:
+    async with async_session_factory() as session:
         result = await session.execute(
             select(func.count()).select_from(Job).where(Job.status == "running")
         )
@@ -108,7 +108,7 @@ async def _set_status(
     transcript: str = None,
     duration_s: float = None,
 ):
-    async with async_session() as session:
+    async with async_session_factory() as session:
         values = {"status": status, "error_msg": error_msg}
         if transcript is not None:
             values["transcript"] = transcript
@@ -181,7 +181,7 @@ async def upload_recording(
     audio_path = recordings_dir() / filename
     audio_path.write_bytes(content)
 
-    async with async_session() as session:
+    async with async_session_factory() as session:
         rec = Recording(
             label=label.strip()[:120] if label and label.strip() else None,
             filename=filename,
@@ -210,7 +210,7 @@ async def upload_recording(
 @router.get("", response_model=list[RecordingOut])
 async def list_recordings():
     """Alle nicht gelöschten Aufnahmen, neueste zuerst (max. 50)."""
-    async with async_session() as session:
+    async with async_session_factory() as session:
         result = await session.execute(
             select(Recording)
             .where(Recording.deleted_at.is_(None))
@@ -236,7 +236,7 @@ async def list_recordings():
 @router.get("/{rec_id}", response_model=RecordingOut)
 async def get_recording(rec_id: int):
     """Einzelnes Recording abrufen (z.B. für Status-Polling)."""
-    async with async_session() as session:
+    async with async_session_factory() as session:
         result = await session.execute(
             select(Recording)
             .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
@@ -257,7 +257,7 @@ async def delete_recording(rec_id: int):
     Soft-Delete + physische Audiodatei-Löschung.
     Transkript bleibt in DB bis externer Datenschutz-Prozess deleted_at-Zeilen bereinigt.
     """
-    async with async_session() as session:
+    async with async_session_factory() as session:
         result = await session.execute(
             select(Recording)
             .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
@@ -278,7 +278,7 @@ async def delete_recording(rec_id: int):
 @router.get("/{rec_id}/download")
 async def download_recording(rec_id: int):
     """Audiodatei herunterladen (nur wenn noch nicht transkriptions-gelöscht)."""
-    async with async_session() as session:
+    async with async_session_factory() as session:
         result = await session.execute(
             select(Recording)
             .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
