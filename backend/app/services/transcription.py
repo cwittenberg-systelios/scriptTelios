@@ -43,21 +43,77 @@ _model_cache: dict = {}
 _diarization_pipeline = None   # pyannote Pipeline-Cache
 
 
+# ── Watchdog-Konstanten (v18) ────────────────────────────────────────────────
+#
+# Variante 3: Statt eines fixen Timeouts ueberwachen wir den Fortschritt der
+# Transkription. Faster-whisper liefert Segmente als Generator - wir
+# konsumieren ihn segment-fuer-segment und protokollieren bei jedem Segment
+# einen Zeitstempel. Zwei Trip-Wires:
+#
+#   STALL_TIMEOUT_SEC: kommt 60s lang kein neues Segment -> der Process haengt.
+#                      Typische Ursache: CUDA-Operation blockiert, Whisper-
+#                      interne Schleife haengt, GPU-Lock-Konflikt.
+#
+#   MAX_REALTIME_FACTOR: Wallclock-Zeit darf maximal X-mal so lang sein wie
+#                        die Audio-Dauer (plus OVERHEAD-Sockel). Faengt den
+#                        Fall "Whisper macht Mini-Fortschritt aber unrealistisch
+#                        langsam" - typisch fuer Halluzinationsschleifen bei
+#                        degeneriertem Audio (Stille, Rauschen, Loops).
+#
+# Diese Werte sind ueber Config justierbar:
+STALL_TIMEOUT_SEC    = getattr(settings, "WHISPER_STALL_TIMEOUT_SEC",    60)
+MAX_REALTIME_FACTOR  = getattr(settings, "WHISPER_MAX_REALTIME_FACTOR",  2.0)
+TRANSCRIBE_OVERHEAD  = getattr(settings, "WHISPER_TRANSCRIBE_OVERHEAD",  60)
+
+# Eigene Exception fuer differenzierte Fehlerbehandlung im Chunk-Loop
+class TranscriptionStalledError(RuntimeError):
+    """Whisper hat 60s lang kein neues Segment geliefert."""
+
+class TranscriptionTooSlowError(RuntimeError):
+    """Wallclock > Audio-Dauer * MAX_REALTIME_FACTOR + OVERHEAD."""
+
+
 def _transcribe_audio_segment(
     model,
     audio_path: str,
-    timeout: int = 300,
+    timeout: int = 300,   # Legacy-Parameter, wird nicht mehr direkt genutzt
+                          # (Watchdog ist jetzt verantwortlich), bleibt fuer
+                          # Backwards-Compat in der Signatur
 ) -> tuple:
     """
-    Transkribiert ein Audio-Segment mit beam_size=1 (Greedy).
+    Transkribiert ein Audio-Segment mit beam_size=1 (Greedy) und
+    Watchdog-Ueberwachung.
 
-    beam_size=1 ist für klinische Gesprächsdokumentation ausreichend:
-    - Das LLM interpretiert und formuliert danach sowieso
-    - Kleinere Transkriptionsfehler werden durch den LLM geglättet
-    - ~30-50% schneller als beam_size=2 ohne spürbare Qualitätseinbuße
-    - temperature=[0,...] Sampling kompensiert Greedy-Schwächen bei unsicheren Passagen
+    Watchdog-Logik (Variante 3):
+    - Konsumiert den faster-whisper Generator segment-fuer-segment.
+    - Jedes Segment aktualisiert einen Heartbeat-Zeitstempel.
+    - Watchdog-Thread prueft alle 5s zwei Bedingungen:
+        a) Heartbeat-Alter > STALL_TIMEOUT_SEC (60s default) -> Stall
+        b) Gesamt-Wallclock > Audio-Dauer * MAX_REALTIME_FACTOR + OVERHEAD
+           -> zu langsam (Halluzinationsschleife)
+    - Bei Trip wird ein stop-Event gesetzt; der Consumer-Thread bricht beim
+      naechsten Generator-Yield ab. Faster-whisper-interne Berechnungen
+      koennen nicht hart abgebrochen werden, aber der Thread terminiert
+      sobald die laufende CUDA-Operation zurueckkommt.
+
+    beam_size=1 (Greedy) ist klinisch ausreichend:
+    - Das LLM glaettet kleinere Transkriptionsfehler im Folgeprozess
+    - 30-50% schneller als beam_size=2
+    - temperature=[0,...0.8] kompensiert Greedy-Schwaechen
     """
-    import concurrent.futures as _cf
+    import threading
+    import time as _time
+
+    # Audio-Dauer fuer MAX_REALTIME-Bedingung
+    try:
+        audio_duration = _get_duration(Path(audio_path))
+    except Exception:
+        audio_duration = 0.0  # Fallback: nur Stall-Detection, kein Realtime-Cap
+    hard_ceiling_sec = (
+        audio_duration * MAX_REALTIME_FACTOR + TRANSCRIBE_OVERHEAD
+        if audio_duration > 0
+        else None
+    )
 
     transcribe_kwargs = dict(
         language="de",
@@ -69,17 +125,86 @@ def _transcribe_audio_segment(
         temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
     )
 
-    def _run():
-        gen, info = model.transcribe(audio_path, **transcribe_kwargs)
-        return list(gen), info
+    # Geteilter Zustand zwischen Consumer und Watchdog
+    state = {
+        "last_heartbeat": _time.monotonic(),
+        "last_audio_pos": 0.0,
+        "segments": [],
+        "info": None,
+        "exc":  None,
+    }
+    stop_event = threading.Event()
+    started_at = _time.monotonic()
 
-    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
-        future = ex.submit(_run)
+    def _consumer():
         try:
-            segments, info = future.result(timeout=timeout)
-            return segments, info, 1
-        except _cf.TimeoutError:
-            raise RuntimeError(f"Transkription Timeout nach {timeout}s")
+            gen, info = model.transcribe(audio_path, **transcribe_kwargs)
+            state["info"] = info
+            for seg in gen:
+                if stop_event.is_set():
+                    # Watchdog hat ausgeloest - sauber raus, was wir bisher
+                    # haben behalten wir
+                    break
+                state["segments"].append(seg)
+                state["last_heartbeat"] = _time.monotonic()
+                state["last_audio_pos"] = float(getattr(seg, "end", 0.0) or 0.0)
+        except Exception as e:
+            state["exc"] = e
+
+    consumer = threading.Thread(target=_consumer, daemon=True)
+    consumer.start()
+
+    # Watchdog-Loop im Caller-Thread (poll alle 5s)
+    poll_interval = 5.0
+    trip_reason: "tuple[str, str] | None" = None
+    while consumer.is_alive():
+        consumer.join(timeout=poll_interval)
+        if not consumer.is_alive():
+            break
+        now = _time.monotonic()
+
+        # Trip 1: Stall (kein Heartbeat seit STALL_TIMEOUT_SEC)
+        stalled_for = now - state["last_heartbeat"]
+        if stalled_for > STALL_TIMEOUT_SEC:
+            trip_reason = (
+                "stall",
+                f"Kein Fortschritt seit {stalled_for:.0f}s "
+                f"(letzte Audio-Position: {state['last_audio_pos']:.0f}s "
+                f"von {audio_duration:.0f}s)"
+            )
+            break
+
+        # Trip 2: zu langsam (Wallclock > Audio*RTF + OVERHEAD)
+        if hard_ceiling_sec is not None:
+            elapsed = now - started_at
+            if elapsed > hard_ceiling_sec:
+                trip_reason = (
+                    "too_slow",
+                    f"Wallclock {elapsed:.0f}s > Audio {audio_duration:.0f}s "
+                    f"x {MAX_REALTIME_FACTOR} + {TRANSCRIBE_OVERHEAD}s "
+                    f"({hard_ceiling_sec:.0f}s ceiling)"
+                )
+                break
+
+    # Watchdog hat ausgeloest -> Consumer-Thread soll sauber rauslaufen
+    if trip_reason is not None:
+        stop_event.set()
+        # Geben dem Thread noch 30s zum Beenden (laufende CUDA-Operation
+        # kann nicht hart gekillt werden, kommt aber meist innerhalb
+        # weniger Sekunden zurueck)
+        consumer.join(timeout=30)
+        kind, msg = trip_reason
+        if kind == "stall":
+            raise TranscriptionStalledError(msg)
+        else:
+            raise TranscriptionTooSlowError(msg)
+
+    # Consumer ist sauber durchgelaufen
+    if state["exc"] is not None:
+        raise state["exc"]
+    if state["info"] is None:
+        raise RuntimeError("Whisper hat kein info-Objekt geliefert (interner Fehler)")
+    return state["segments"], state["info"], 1
 
 
 
@@ -767,10 +892,26 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
         model = _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
         # Segmente mit Zeitstempeln sammeln – Sprecher erst nach Diarization zuweisen
         all_segments: list[dict] = []   # {abs_start, abs_end, text}
+        # Skip-Marker fuer abgebrochene/uebersprungene Chunks. Wird unten zwischen
+        # Sprecherzuweisung und Final-Text als sichtbare Luecke eingefuegt damit der
+        # Therapeut beim Reviewen sofort sieht wo Audio fehlt (statt unbemerkt
+        # halluziniertem Text durch luckenbehaftete LLM-Inputs)
+        skipped_chunks: list[dict] = []  # {abs_start, abs_end, idx, total, reason}
         language = "de"
 
+        # Boundaries fuer Skip-Marker (Audio-Zeitfenster pro Chunk)
+        boundaries_for_log = [0.0] + splits + [duration]
+
         for i, chunk_path in enumerate(chunks):
-            logger.info("Transkribiere Chunk %d/%d ...", i + 1, len(chunks))
+            chunk_start_sec = boundaries_for_log[i]
+            chunk_end_sec   = boundaries_for_log[i + 1]
+            chunk_dur_sec   = chunk_end_sec - chunk_start_sec
+            logger.info(
+                "Transkribiere Chunk %d/%d (%.1f-%.1fs, %.1f Min) ...",
+                i + 1, len(chunks),
+                chunk_start_sec, chunk_end_sec,
+                chunk_dur_sec / 60,
+            )
             try:
                 segments, info, beam_used = _transcribe_audio_segment(
                     model, str(chunk_path)
@@ -778,10 +919,44 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
                 if beam_used < 2:
                     logger.info("Chunk %d/%d: beam_size=1 Fallback", i + 1, len(chunks))
                 language = info.language
+            except TranscriptionStalledError as e:
+                logger.error(
+                    "Chunk %d/%d: STALL bei %.0f-%.0fs - %s - ueberspringe",
+                    i + 1, len(chunks), chunk_start_sec, chunk_end_sec, e
+                )
+                skipped_chunks.append({
+                    "abs_start": chunk_start_sec,
+                    "abs_end":   chunk_end_sec,
+                    "idx":       i + 1,
+                    "total":     len(chunks),
+                    "reason":    "Whisper-Stall (kein Fortschritt)",
+                })
+                continue
+            except TranscriptionTooSlowError as e:
+                logger.error(
+                    "Chunk %d/%d: TOO_SLOW bei %.0f-%.0fs - %s - ueberspringe",
+                    i + 1, len(chunks), chunk_start_sec, chunk_end_sec, e
+                )
+                skipped_chunks.append({
+                    "abs_start": chunk_start_sec,
+                    "abs_end":   chunk_end_sec,
+                    "idx":       i + 1,
+                    "total":     len(chunks),
+                    "reason":    "Whisper zu langsam (Wallclock > 2x Audio-Dauer)",
+                })
+                continue
             except Exception as e:
                 logger.error(
-                    "Chunk %d/%d: Fehler (%s) – ueberspringe", i + 1, len(chunks), e
+                    "Chunk %d/%d: Fehler (%s) bei %.0f-%.0fs - ueberspringe",
+                    i + 1, len(chunks), e, chunk_start_sec, chunk_end_sec
                 )
+                skipped_chunks.append({
+                    "abs_start": chunk_start_sec,
+                    "abs_end":   chunk_end_sec,
+                    "idx":       i + 1,
+                    "total":     len(chunks),
+                    "reason":    f"Fehler: {type(e).__name__}",
+                })
                 continue
 
             chunk_offset = splits[i - 1] if i > 0 else 0.0
@@ -810,7 +985,9 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
                     diarization_executor.shutdown(wait=False)
 
         # Sprecher-Zuweisung auf alle gesammelten Segmente
-        all_lines = []
+        # all_lines wird mit (start_time, line)-Tupeln aufgebaut damit
+        # Skip-Marker chronologisch korrekt eingefuegt werden koennen.
+        timed_lines: list[tuple[float, str]] = []
         current_speaker = "A"
         last_end_global = None
         for seg in all_segments:
@@ -822,13 +999,43 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
                 if last_end_global is not None and (seg["start"] - last_end_global) >= 1.2:
                     current_speaker = "B" if current_speaker == "A" else "A"
                 speaker = current_speaker
-            all_lines.append(f"[{speaker}]: {seg['text']}")
+            timed_lines.append((seg["start"], f"[{speaker}]: {seg['text']}"))
             last_end_global = seg["end"]
+
+        # Skip-Marker als sichtbare Luecken einfuegen. Format ist auffaellig
+        # gewaehlt damit Therapeut beim Reviewen sofort sieht wo Audio fehlt
+        # und entsprechend prueft. Auch das LLM in nachfolgenden Schritten
+        # erkennt das Format und halluziniert dort nicht.
+        for skip in skipped_chunks:
+            mm_start = int(skip["abs_start"] // 60)
+            ss_start = int(skip["abs_start"] % 60)
+            mm_end   = int(skip["abs_end"]   // 60)
+            ss_end   = int(skip["abs_end"]   % 60)
+            marker = (
+                f"\n[--- AUDIO LUECKE: Chunk {skip['idx']}/{skip['total']} "
+                f"({mm_start:02d}:{ss_start:02d}-{mm_end:02d}:{ss_end:02d}) "
+                f"NICHT TRANSKRIBIERT - {skip['reason']}. "
+                f"Bitte das Audio fuer diese Stelle pruefen ---]\n"
+            )
+            timed_lines.append((skip["abs_start"], marker))
+
+        # Chronologisch sortieren - Skip-Marker landen automatisch zwischen
+        # den umgebenden Segmenten an der richtigen Audio-Zeit
+        timed_lines.sort(key=lambda t: t[0])
+        all_lines = [line for _, line in timed_lines]
 
         if not all_lines:
             raise RuntimeError(
                 "Alle Chunks fehlgeschlagen oder leer – Transkription nicht moeglich. "
                 "Prüfe CUDA-Speicher und Audioqualität."
+            )
+
+        if skipped_chunks:
+            total_skipped_sec = sum(s["abs_end"] - s["abs_start"] for s in skipped_chunks)
+            logger.warning(
+                "Transkription mit Luecken: %d von %d Chunks uebersprungen "
+                "(insgesamt %.1f Min Audio nicht transkribiert)",
+                len(skipped_chunks), len(chunks), total_skipped_sec / 60,
             )
 
         full_text = "\n".join(all_lines)

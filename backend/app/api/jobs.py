@@ -266,7 +266,13 @@ async def list_jobs():
 async def create_generate_job(
     background_tasks: BackgroundTasks,
     workflow:         Annotated[WorkflowLiteral, Form()],
-    prompt:           Annotated[str,  Form()],
+    # v18: 'prompt' wurde umbenannt zu 'workflow_instructions' fuer Klarheit.
+    # Frontend-Default fuer dieses Feld kommt aus WORKFLOW_INSTRUCTIONS_DEFAULT[workflow].
+    # Leere oder fehlende Werte werden mit 422 abgelehnt (s. unten).
+    # Backwards-Compat: 'prompt' wird weiterhin akzeptiert.
+    workflow_instructions: Annotated[Optional[str], Form(description="Editierbare inhaltliche Workflow-Anweisungen (war frueher 'prompt'). Pflichtfeld - leer = 422.")] = None,
+    prompt:           Annotated[Optional[str], Form(description="DEPRECATED: alter Parametername fuer workflow_instructions.")] = None,
+    befund_vorlage:   Annotated[Optional[str], Form(description="P2 (Anamnese): editierbare AMDP-Vorlage fuer den Befund-Call. Default = BEFUND_VORLAGE.")] = None,
     therapeut_id:     Annotated[Optional[str], Form()] = None,
     patientenname:    Annotated[Optional[str], Form(description="Explizit uebergebener Patientenname (vor allem bei P1 Gespraechszusammenfassung). Format: 'Vorname Nachname' oder 'Herr/Frau Nachname'. Wird in Initiale umgewandelt fuer den Output.")] = None,
     current_user:     str = Depends(get_current_user),
@@ -291,7 +297,7 @@ async def create_generate_job(
 
     Input-Zuordnung pro Workflow:
       P1 (dokumentation):       audio + transcript + bullets
-      P2 (anamnese):            selbstauskunft + vorbefunde + audio + diagnosen
+      P2 (anamnese):            selbstauskunft + vorbefunde + audio + diagnosen + befund_vorlage
       P3 (verlaengerung):       verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
       P3b (folgeverlaengerung): verlaufsdoku + antragsvorlage + vorantrag + bullets
       P3c (akutantrag):          antragsvorlage (Anamnese/Befund/Diagnosen) + verlaufsdoku (opt)
@@ -299,6 +305,24 @@ async def create_generate_job(
     """
     # K1: Therapeut-ID aus validiertem Auth-Header
     therapeut_id = current_user
+
+    # v18: Workflow-Anweisungen sind Pflicht. Backwards-Compat: alter Name 'prompt'.
+    # Architekturvorgabe: Wenn das Frontend fuer einen Workflow KEINE
+    # Anweisungen schickt, lehnt das Backend den Job ab. Es gibt KEINEN
+    # impliziten Fallback auf den Default - sonst koennte ein verbuggtes
+    # Frontend unbemerkt mit leerem Auftrag laufen.
+    instructions = workflow_instructions or prompt
+    if not instructions or not instructions.strip():
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Pflichtfeld 'workflow_instructions' (alias 'prompt') ist leer. "
+                "Das Frontend muss die Workflow-Anweisungen mitsenden. "
+                "Default-Texte stehen im Frontend zur Verfuegung und werden "
+                "in WORKFLOW_INSTRUCTIONS_DEFAULT[workflow] vorgehalten."
+            ),
+        )
 
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht thread-safe)
     audio_bytes            = await audio.read()          if audio          and audio.filename          else None
@@ -561,9 +585,11 @@ async def create_generate_job(
             )
 
         # 5. Generieren – jede Variable hat genau eine Bedeutung
+        # v18: prompt-Feld → workflow_instructions, neuer Parameter befund_vorlage.
+        # `instructions` wurde oben aus workflow_instructions/prompt geholt und validiert.
         system = build_system_prompt(
             workflow=workflow,
-            custom_prompt=prompt,
+            workflow_instructions=instructions,
             style_context=style_context,
             style_is_example=style_is_example,
             diagnosen=dx_list,
@@ -580,7 +606,9 @@ async def create_generate_job(
             antragsvorlage_text=antragsvorlage_text,
             vorantrag_text=vorantrag_text,
             diagnosen=dx_list,
-            custom_prompt=prompt if prompt and prompt.strip() else None,
+            # v18: custom_prompt wird in build_user_content nicht mehr verwendet
+            # (Workflow-Anweisungen leben jetzt im System-Prompt). Parameter
+            # bleibt fuer Backwards-Compat in der Signatur.
             patient_name=patient_name,
         )
         # Workflow-spezifische max_tokens:
@@ -674,10 +702,14 @@ async def create_generate_job(
                 raise RuntimeError("__CANCELLED__")
 
             # Call 2: Befund (mit eigenem Prompt + Anamnese als zusaetzlichem Kontext)
-            from app.services.prompts import BASE_PROMPTS, ROLE_PREAMBLE
-            befund_base = BASE_PROMPTS.get("befund", "")
-            diag_str = ", ".join(dx_list) if dx_list else "noch nicht festgelegt"
-            befund_system = ROLE_PREAMBLE + "\n\n" + befund_base.replace("{diagnosen}", diag_str)
+            # v18: build_system_prompt uebernimmt die Vorlage-Substitution.
+            # befund_vorlage kommt aus dem Frontend (Form-Feld), Default = BEFUND_VORLAGE.
+            befund_system = build_system_prompt(
+                workflow="befund",
+                workflow_instructions="",  # Befund hat keinen Frontend-Auftragsteil
+                diagnosen=dx_list,
+                befund_vorlage=befund_vorlage,
+            )
             # User-Content fuer Befund: Selbstauskunft + Vorbefunde + die generierte Anamnese
             befund_user_parts = []
             if selbstauskunft_text:

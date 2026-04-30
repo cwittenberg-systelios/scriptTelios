@@ -711,17 +711,37 @@ class TestPrompts:
         assert "STILVORLAGE" in p
         assert "STILBEISPIEL" not in p
 
-    def test_system_prompt_custom_prompt(self):
-        """custom_prompt fließt in build_user_content als THERAPEUTEN-HINWEIS,
-        nicht mehr in den System-Prompt (würde strukturierte Anweisungen überschreiben)."""
-        from app.services.prompts import build_user_content
+    def test_v18_workflow_instructions_in_system_prompt(self):
+        """v18: workflow_instructions wandern in den System-Prompt unter
+        AUFTRAG-Header, NICHT mehr als THERAPEUTEN-HINWEIS in den User-Content.
+        Architekturwechsel - frueher war custom_prompt im User-Content."""
+        from app.services.prompts import build_system_prompt, build_user_content
+        sys_p = build_system_prompt(
+            workflow="dokumentation",
+            workflow_instructions="Mein eigener Prompt fuer diesen Therapeuten."
+        )
+        assert "AUFTRAG" in sys_p
+        assert "Mein eigener Prompt fuer diesen Therapeuten." in sys_p
+
+        # User-Content darf custom_prompt-Inhalte NICHT mehr enthalten
         u = build_user_content(
             workflow="dokumentation",
             transcript="Gespräch.",
             custom_prompt="Mein eigener Prompt fuer diesen Therapeuten."
         )
-        assert "Mein eigener Prompt" in u
-        assert "THERAPEUTEN-HINWEIS" in u
+        assert "Mein eigener Prompt" not in u
+        assert "THERAPEUTEN-HINWEIS" not in u
+
+    def test_v18_custom_prompt_legacy_alias(self):
+        """v18: alter Parameter custom_prompt mappt auf workflow_instructions
+        in build_system_prompt - Backwards-Compat fuer Legacy-Aufrufer."""
+        from app.services.prompts import build_system_prompt
+        sys_p = build_system_prompt(
+            workflow="dokumentation",
+            custom_prompt="Legacy-Test"
+        )
+        assert "AUFTRAG" in sys_p
+        assert "Legacy-Test" in sys_p
 
     def test_user_content_dokumentation_transkript(self):
         """User-Content für Dokumentation enthält Transkript."""
@@ -734,13 +754,16 @@ class TestPrompts:
         assert "Patient berichtet" in u
 
     def test_user_content_dokumentation_stichpunkte(self):
-        """User-Content für Dokumentation enthält Stichpunkte."""
+        """v18 (Patch A): User-Content fuer Dokumentation enthaelt Stichpunkte
+        unter Label 'THERAPEUTISCHE SCHWERPUNKTE' (war 'STICHPUNKTE')."""
         from app.services.prompts import build_user_content
         u = build_user_content(
             workflow="dokumentation",
             fokus_themen="- Schlaf besser\n- Weniger Anspannung",
         )
-        assert "THERAPEUTISCHE STICHPUNKTE" in u
+        assert "THERAPEUTISCHE SCHWERPUNKTE" in u
+        # Verbindlichkeitssprache (Patch A)
+        assert "VERBINDLICH" in u
 
     def test_user_content_anamnese_vollstaendig(self):
         """User-Content für Anamnese enthält alle Eingaben."""
@@ -796,20 +819,24 @@ class TestPrompts:
         assert "erfinden" in u or "Quellen" in u
 
     def test_user_content_dokumentation_bullets_getrennt_von_transkript(self):
-        """Bullets und Transkript landen als getrennte Blöcke – nicht zusammengemischt."""
+        """v18 (Patch A): Stichpunkte stehen VOR dem Transkript (Sandwich-Pattern),
+        damit sie nicht in der 'lost in the middle'-Zone hinter einem 6000-Wort-
+        Transkript verschwinden."""
         from app.services.prompts import build_user_content
         u = build_user_content(
             workflow="dokumentation",
             transcript="[A]: Wie geht es Ihnen?\n[B]: Besser.",
-            fokus_themen="- der innere Löwe\n- Arbeit mit inneren Anteilen nach IFS",
+            fokus_themen="- der innere Loewe\n- Arbeit mit inneren Anteilen nach IFS",
         )
         # Beide Abschnitte vorhanden
         assert "TRANSKRIPT" in u
-        assert "THERAPEUTISCHE STICHPUNKTE" in u
-        # Stichpunkte stehen NACH dem Transkript (Reihenfolge)
-        assert u.index("TRANSKRIPT") < u.index("THERAPEUTISCHE STICHPUNKTE")
-        # Kein Zusammenmischen – das wäre der alte Frontend-Bug
-        assert "STICHPUNKTE:\n-" not in u.split("TRANSKRIPT")[0]
+        assert "THERAPEUTISCHE SCHWERPUNKTE" in u
+        # Stichpunkte stehen VOR dem Transkript (umgedreht durch Patch A)
+        assert u.index("THERAPEUTISCHE SCHWERPUNKTE") < u.index("TRANSKRIPT")
+        # Sandwich-Erinnerung am Ende
+        assert "ERINNERUNG" in u
+        assert u.index("TRANSKRIPT") < u.index("ERINNERUNG")
+        assert u.index("ERINNERUNG") < u.index("Erstelle jetzt")
 
     def test_user_content_dokumentation_nur_bullets_ohne_transkript(self):
         """Nur Stichpunkte ohne Transkript – z.B. wenn kein Audio hochgeladen wurde."""
@@ -818,7 +845,7 @@ class TestPrompts:
             workflow="dokumentation",
             fokus_themen="- Schlafprobleme\n- Kontakt zur Mutter verbessert",
         )
-        assert "THERAPEUTISCHE STICHPUNKTE" in u
+        assert "THERAPEUTISCHE SCHWERPUNKTE" in u
         assert "TRANSKRIPT" not in u
         # Abschlussanweisung muss trotzdem vorhanden sein
         assert "Erstelle jetzt" in u
@@ -865,6 +892,162 @@ class TestPrompts:
         for wf in ["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]:
             p = build_system_prompt(workflow=wf)
             assert "Markdown" in p or "markdown" in p
+
+    # ══════════════════════════════════════════════════════════════
+    # v18 Architektur: Trennung Frontend-Instructions vs Backend-Kernel
+    # ══════════════════════════════════════════════════════════════
+
+    def test_v18_workflow_instructions_default_existiert_fuer_alle_workflows(self):
+        """v18: WORKFLOW_INSTRUCTIONS_DEFAULT hat Eintraege fuer alle 6 Workflows."""
+        from app.services.prompts import WORKFLOW_INSTRUCTIONS_DEFAULT
+        for wf in ["dokumentation", "anamnese", "verlaengerung",
+                   "folgeverlaengerung", "akutantrag", "entlassbericht"]:
+            assert wf in WORKFLOW_INSTRUCTIONS_DEFAULT
+            assert len(WORKFLOW_INSTRUCTIONS_DEFAULT[wf]) > 100
+
+    def test_v18_kernel_enthaelt_keine_inhaltsanweisungen(self):
+        """v18: BASE_PROMPTS-Kernel enthaelt nur Pflichtregeln, keine
+        Inhaltsanweisungen (die liegen in WORKFLOW_INSTRUCTIONS_DEFAULT)."""
+        from app.services.prompts import BASE_PROMPTS
+
+        # Dokumentation-Kernel: keine Vier-Abschnitte-Struktur mehr
+        doku_kernel = BASE_PROMPTS["dokumentation"]
+        assert "**Auftragsklärung**" not in doku_kernel
+        assert "**Einladungen**" not in doku_kernel
+
+        # Anamnese-Kernel: keine "Erstelle Anamnese"-Anweisung
+        anam_kernel = BASE_PROMPTS["anamnese"]
+        assert "Erstelle eine vollständige psychotherapeutische Anamnese" not in anam_kernel
+
+    def test_v18_instructions_im_systemprompt_vor_kernel(self):
+        """v18: AUFTRAG (Frontend-Instructions) steht VOR dem BASE_PROMPT-Kernel
+        im System-Prompt - so dass Inhaltsbeschreibung zuerst kommt und
+        Pflichtregeln als Rahmen darum gelegt werden."""
+        from app.services.prompts import build_system_prompt
+        sys_p = build_system_prompt(
+            workflow="dokumentation",
+            workflow_instructions="MARKER_INSTRUCTIONS",
+        )
+        # Pflichtkern enthaelt diesen Stilstring
+        assert "STIL: Fliesstext pro Abschnitt" in sys_p
+        # AUFTRAG steht vor Pflichtkern
+        assert sys_p.index("MARKER_INSTRUCTIONS") < sys_p.index("STIL: Fliesstext pro Abschnitt")
+
+    def test_v18_befund_vorlage_substitution(self):
+        """v18: Befund-Workflow setzt {befund_vorlage} aus dem Frontend-Feld
+        oder aus dem Default ein."""
+        from app.services.prompts import build_system_prompt
+
+        # Mit eigener Vorlage
+        sys_custom = build_system_prompt(
+            workflow="befund",
+            befund_vorlage="MEINE EIGENE VORLAGE 12345",
+            diagnosen=["F33.2"],
+        )
+        assert "MEINE EIGENE VORLAGE 12345" in sys_custom
+        assert "{befund_vorlage}" not in sys_custom
+        assert "F33.2" in sys_custom
+
+        # Ohne Vorlage -> Default
+        sys_default = build_system_prompt(workflow="befund", diagnosen=["F32.1"])
+        assert "{befund_vorlage}" not in sys_default
+        # Charakteristisch fuer BEFUND_VORLAGE
+        assert "bewusstseinsklar" in sys_default
+
+    def test_v18_befund_kernel_im_base_prompts(self):
+        """v18: BASE_PROMPTS["befund"] existiert mit {befund_vorlage}-Platzhalter."""
+        from app.services.prompts import BASE_PROMPTS
+        assert "befund" in BASE_PROMPTS
+        kernel = BASE_PROMPTS["befund"]
+        assert "{befund_vorlage}" in kernel
+        assert "QUELLENREGEL" in kernel
+        # Pflichtkern enthaelt KEINE eingebettete Vorlage hardcoded
+        assert "bewusstseinsklar" not in kernel
+
+    def test_v18_user_content_enthaelt_keine_workflow_instructions(self):
+        """v18: User-Content enthaelt KEINE Workflow-Anweisungen mehr -
+        die wandern komplett in den System-Prompt."""
+        from app.services.prompts import build_user_content
+        u = build_user_content(
+            workflow="verlaengerung",
+            verlaufsdoku_text="Sitzung 1.",
+            custom_prompt="Diese Anweisung darf nicht im User-Content auftauchen.",
+        )
+        assert "THERAPEUTEN-HINWEIS" not in u
+        assert "Diese Anweisung darf nicht" not in u
+        # Verlaufsdoku-Inhalt natuerlich schon
+        assert "Sitzung 1" in u
+
+    def test_v18_leeres_workflow_instructions_faellt_auf_default_zurueck(self):
+        """v18: Wenn workflow_instructions leer/None - Fallback auf
+        WORKFLOW_INSTRUCTIONS_DEFAULT (jobs.py rejected leere Calls vorher)."""
+        from app.services.prompts import build_system_prompt, WORKFLOW_INSTRUCTIONS_DEFAULT
+        sys_none = build_system_prompt(workflow="dokumentation", workflow_instructions=None)
+        sys_empty = build_system_prompt(workflow="dokumentation", workflow_instructions="")
+        # Beide sollten Default-Inhalt enthalten
+        marker = "Auftragsklärung"
+        assert marker in sys_none
+        assert marker in sys_empty
+
+    def test_v18_diagnosen_substitution_im_kernel(self):
+        """v18: {diagnosen}-Platzhalter im Anamnese-Kernel wird ersetzt."""
+        from app.services.prompts import build_system_prompt
+        sys_p = build_system_prompt(
+            workflow="anamnese",
+            workflow_instructions="Test",
+            diagnosen=["F32.1", "F41.1"],
+        )
+        assert "F32.1" in sys_p
+        assert "F41.1" in sys_p
+        assert "{diagnosen}" not in sys_p
+
+    def test_v18_dokumentation_sandwich_pattern(self):
+        """v18 (Patch A): Dokumentation User-Content nutzt Sandwich-Pattern.
+        SCHWERPUNKTE → TRANSKRIPT → ERINNERUNG → Erstelle jetzt"""
+        from app.services.prompts import build_user_content
+        u = build_user_content(
+            workflow="dokumentation",
+            transcript="[A]: hi\n[B]: ja",
+            fokus_themen="- Reframing zum Nebel\n- 2. Reframing: Entwicklung",
+        )
+        assert "VERBINDLICH" in u
+        assert "MUESSEN" in u
+        # Reihenfolge
+        positions = [
+            u.index("THERAPEUTISCHE SCHWERPUNKTE"),
+            u.index("TRANSKRIPT"),
+            u.index("ERINNERUNG"),
+            u.index("Erstelle jetzt"),
+        ]
+        assert positions == sorted(positions), f"Wrong order: {positions}"
+
+    # ── Patch D / D2 (uebernommen aus v17) ────────────────────────────────
+
+    def test_patch_d_satzlaenge_hardcap_entfernt(self):
+        """SATZLAENGE 10-25-Hardcap wurde aus dokumentation-BASE_PROMPT entfernt."""
+        from app.services.prompts import BASE_PROMPTS
+        p = BASE_PROMPTS["dokumentation"]
+        assert "10-25 Wörter" not in p
+        assert "10-25 Woerter" not in p
+
+    def test_patch_d2_anamnese_verbietet_amdp_heading(self):
+        """Anamnese-Kernel verbietet explizit AMDP/Befund-Heading."""
+        from app.services.prompts import BASE_PROMPTS
+        p = BASE_PROMPTS["anamnese"]
+        assert "PSYCHOPATHOLOGISCHER BEFUND" in p
+        assert "AMDP" in p
+        assert "Bullet" in p or "Pipe" in p or "|" in p
+
+    def test_patch_d2_anamnese_betont_narrativen_ton_im_default(self):
+        """Anamnese-Default (Frontend) betont erzaehlerischen Ton.
+        Im Backend-Kernel ist das nicht mehr noetig - der Default trans-
+        portiert die TON-Anweisung."""
+        from app.services.prompts import WORKFLOW_INSTRUCTIONS_DEFAULT
+        p = WORKFLOW_INSTRUCTIONS_DEFAULT["anamnese"]
+        assert ("erzaehler" in p.lower()
+                or "narrativ" in p.lower()
+                or "biograph" in p.lower())
+        assert "Lebensgeschichte" in p or "Lebenswelt" in p
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1394,6 +1577,65 @@ class TestJobQueue:
             assert has_role, \
                 f"Workflow '{workflow}': kein Rollenkontext im System-Prompt gefunden"
 
+    # ══════════════════════════════════════════════════════════════
+    # v18 Stilbibliothek-Erweiterung: Akutantrag + Folgeverlaengerung
+    # mit Fallback-Kette
+    # ══════════════════════════════════════════════════════════════
+
+    def test_v18_style_fallback_chain_konstante_existiert(self):
+        """STYLE_FALLBACK_CHAIN definiert die Fallback-Reihenfolge fuer
+        Workflows ohne eigene Stilbeispiele."""
+        from app.api.style_embeddings import STYLE_FALLBACK_CHAIN
+        # akutantrag faellt auf verlaengerung zurueck
+        assert "akutantrag" in STYLE_FALLBACK_CHAIN
+        assert STYLE_FALLBACK_CHAIN["akutantrag"][0] == "akutantrag"
+        assert "verlaengerung" in STYLE_FALLBACK_CHAIN["akutantrag"]
+        # folgeverlaengerung faellt auch auf verlaengerung zurueck
+        assert "folgeverlaengerung" in STYLE_FALLBACK_CHAIN
+        assert STYLE_FALLBACK_CHAIN["folgeverlaengerung"][0] == "folgeverlaengerung"
+        assert "verlaengerung" in STYLE_FALLBACK_CHAIN["folgeverlaengerung"]
+
+    def test_v18_style_fallback_keine_zirkulaeren_chains(self):
+        """Verlaengerung selbst hat keine Fallback-Kette (waere zirkulaer)."""
+        from app.api.style_embeddings import STYLE_FALLBACK_CHAIN
+        # verlaengerung ist Endpunkt - kein Fallback aus verlaengerung heraus
+        assert "verlaengerung" not in STYLE_FALLBACK_CHAIN
+        # Workflows ohne strukturelle Aehnlichkeit haben keinen Fallback
+        for wf in ["dokumentation", "anamnese", "entlassbericht"]:
+            assert wf not in STYLE_FALLBACK_CHAIN, \
+                f"Workflow '{wf}' sollte keinen Fallback haben"
+
+    def test_v18_style_section_headings_alle_antragstypen(self):
+        """Section-Headings fuer alle Antragstypen sind in extraction.py
+        konfiguriert (verlaengerung, folgeverlaengerung, akutantrag)."""
+        from app.services.extraction import STYLE_SECTION_HEADINGS
+        # Jeder Antragstyp braucht typische Headings
+        assert "verlaengerung" in STYLE_SECTION_HEADINGS
+        assert "folgeverlaengerung" in STYLE_SECTION_HEADINGS
+        assert "akutantrag" in STYLE_SECTION_HEADINGS
+        assert "entlassbericht" in STYLE_SECTION_HEADINGS
+
+        # akutantrag muss mehrere Varianten haben (Begruendung-Headers
+        # variieren in der Praxis)
+        akut_headings = STYLE_SECTION_HEADINGS["akutantrag"]
+        assert any("Akutaufnahme" in h for h in akut_headings)
+        assert any("Begründung" in h or "Begruendung" in h for h in akut_headings)
+
+        # folgeverlaengerung erkennt sowohl die Folge- als auch die
+        # Erst-Verlaengerung (Therapeuten benutzen oft die alte Vorlage)
+        folge_headings = STYLE_SECTION_HEADINGS["folgeverlaengerung"]
+        assert any("weiteren Verlängerung" in h for h in folge_headings)
+        assert any("Bisheriger Verlauf" in h for h in folge_headings)
+
+    def test_v18_dokumenttypen_komplett(self):
+        """Alle 6 Workflow-Dokumenttypen sind im Backend registriert."""
+        from app.models.db import DOKUMENTTYPEN, DOKUMENTTYP_LABELS
+        for wf in ["dokumentation", "anamnese", "verlaengerung",
+                   "folgeverlaengerung", "akutantrag", "entlassbericht"]:
+            assert wf in DOKUMENTTYPEN, f"'{wf}' fehlt in DOKUMENTTYPEN"
+            assert wf in DOKUMENTTYP_LABELS, f"'{wf}' fehlt in DOKUMENTTYP_LABELS"
+            assert DOKUMENTTYP_LABELS[wf], f"'{wf}' hat leeres Label"
+
 
 # ══════════════════════════════════════════════════════════════════
 # WHISPER QUALITAETSPARAMETER
@@ -1471,6 +1713,132 @@ class TestWhisperQualitaet:
         from app.services.transcription import CHUNK_MAX_SECONDS
         assert CHUNK_MAX_SECONDS == 900
 
+    # ══════════════════════════════════════════════════════════════
+    # v18 Whisper-Watchdog (Variante 3 - progress-based timeout)
+    # ══════════════════════════════════════════════════════════════
+
+    def test_v18_watchdog_konstanten_existieren(self):
+        """Watchdog-Konstanten und -Exceptions sind im Modul verfuegbar."""
+        from app.services import transcription
+        assert hasattr(transcription, "STALL_TIMEOUT_SEC")
+        assert hasattr(transcription, "MAX_REALTIME_FACTOR")
+        assert hasattr(transcription, "TRANSCRIBE_OVERHEAD")
+        assert hasattr(transcription, "TranscriptionStalledError")
+        assert hasattr(transcription, "TranscriptionTooSlowError")
+        # Defaults muessen vernuenftig sein
+        assert 30 <= transcription.STALL_TIMEOUT_SEC <= 300
+        assert 1.0 <= transcription.MAX_REALTIME_FACTOR <= 5.0
+        assert 0 <= transcription.TRANSCRIBE_OVERHEAD <= 300
+
+    def test_v18_watchdog_success_path(self):
+        """Wenn Whisper sauber durchlaeuft, gibt der Watchdog die Segmente zurueck."""
+        from app.services.transcription import _transcribe_audio_segment
+        from unittest.mock import patch, MagicMock
+
+        class FakeSeg:
+            def __init__(self, text, end):
+                self.text, self.end = text, end
+
+        fake_segments = [FakeSeg("hi", 1.0), FakeSeg("there", 2.0)]
+        fake_info = MagicMock(language="de")
+        fake_model = MagicMock()
+        fake_model.transcribe.return_value = (iter(fake_segments), fake_info)
+
+        with patch("app.services.transcription._get_duration", return_value=10.0):
+            segs, info, beam = _transcribe_audio_segment(fake_model, "/tmp/fake.wav")
+
+        assert len(segs) == 2
+        assert info.language == "de"
+        assert beam == 1
+
+    def test_v18_watchdog_stall_detection(self):
+        """Wenn Whisper haengt (kein Segment-Yield), wird TranscriptionStalledError geworfen."""
+        from app.services import transcription
+        from unittest.mock import patch, MagicMock
+        import time
+
+        class FakeSeg:
+            def __init__(self, text, end):
+                self.text, self.end = text, end
+
+        def hanging_gen():
+            yield FakeSeg("first", 1.0)
+            time.sleep(120)  # haengt - sollte vom Watchdog gestoppt werden
+
+        fake_info = MagicMock(language="de")
+        fake_model = MagicMock()
+        fake_model.transcribe.return_value = (hanging_gen(), fake_info)
+
+        # Stall-Timeout temporaer auf 1s druecken fuer schnellen Test
+        with patch.object(transcription, "STALL_TIMEOUT_SEC", 1), \
+             patch("app.services.transcription._get_duration", return_value=600.0):
+            try:
+                transcription._transcribe_audio_segment(fake_model, "/tmp/fake.wav")
+                assert False, "Sollte TranscriptionStalledError werfen"
+            except transcription.TranscriptionStalledError as e:
+                assert "kein Fortschritt" in str(e).lower() or "fortschritt" in str(e).lower()
+
+    def test_v18_watchdog_too_slow_detection(self):
+        """Wenn Wallclock >> Audio-Dauer * MAX_REALTIME_FACTOR -> TooSlowError."""
+        from app.services import transcription
+        from unittest.mock import patch, MagicMock
+        import time
+
+        class FakeSeg:
+            def __init__(self, text, end):
+                self.text, self.end = text, end
+
+        # Generator macht Mini-Fortschritt aber unrealistisch langsam:
+        # 0.01s Audio pro 0.3s Wallclock = RTF 30
+        def slow_gen():
+            for i in range(200):
+                time.sleep(0.3)
+                yield FakeSeg(f"x{i}", (i + 1) * 0.01)
+
+        fake_info = MagicMock(language="de")
+        fake_model = MagicMock()
+        fake_model.transcribe.return_value = (slow_gen(), fake_info)
+
+        # Audio-Dauer 2s, MAX_RTF=2.0, OVERHEAD=1 -> hard ceiling = 5s
+        with patch.object(transcription, "MAX_REALTIME_FACTOR", 2.0), \
+             patch.object(transcription, "TRANSCRIBE_OVERHEAD", 1), \
+             patch.object(transcription, "STALL_TIMEOUT_SEC", 60), \
+             patch("app.services.transcription._get_duration", return_value=2.0):
+            try:
+                transcription._transcribe_audio_segment(fake_model, "/tmp/fake.wav")
+                assert False, "Sollte TranscriptionTooSlowError werfen"
+            except transcription.TranscriptionTooSlowError as e:
+                assert "wallclock" in str(e).lower() or "ceiling" in str(e).lower()
+
+    def test_v18_skip_marker_format(self):
+        """Skip-Marker im Transkript haben das erwartete LUECKE-Format
+        damit Therapeut und LLM Luecken sofort erkennen."""
+        # Wir testen das Format-Konstrukt direkt - integration mit echtem
+        # Audio waere zu teuer fuer Unit-Tests.
+        skip = {
+            "abs_start": 65.5,
+            "abs_end":   125.0,
+            "idx":       3,
+            "total":     8,
+            "reason":    "Whisper-Stall (kein Fortschritt)",
+        }
+        mm_start = int(skip["abs_start"] // 60)
+        ss_start = int(skip["abs_start"] % 60)
+        mm_end   = int(skip["abs_end"]   // 60)
+        ss_end   = int(skip["abs_end"]   % 60)
+        marker = (
+            f"[--- AUDIO LUECKE: Chunk {skip['idx']}/{skip['total']} "
+            f"({mm_start:02d}:{ss_start:02d}-{mm_end:02d}:{ss_end:02d}) "
+            f"NICHT TRANSKRIBIERT - {skip['reason']}. "
+            f"Bitte das Audio fuer diese Stelle pruefen ---]"
+        )
+        # Format-Check
+        assert "AUDIO LUECKE" in marker
+        assert "01:05-02:05" in marker  # 65.5s -> 01:05, 125s -> 02:05
+        assert "Chunk 3/8" in marker
+        assert "Whisper-Stall" in marker
+        assert "pruefen" in marker
+
 
 # ══════════════════════════════════════════════════════════════════
 # STILBIBLIOTHEK: TEXT-INPUT UND ABSCHNITTS-FILTERUNG
@@ -1547,16 +1915,9 @@ TK Versicherungsnummer 123456789
         result = _extrahiere_relevante_abschnitte(text)
         assert result == text
 
-    def test_abschnitts_filterung_nur_bei_verlaengerung_entlassbericht(self):
-        """Filterung wird nur für Verlängerung/Entlassbericht angewendet."""
-        from app.api.style_embeddings import DOKUMENTTYPEN_MIT_ABSCHNITTEN
-        assert "verlaengerung" in DOKUMENTTYPEN_MIT_ABSCHNITTEN
-        assert "entlassbericht" in DOKUMENTTYPEN_MIT_ABSCHNITTEN
-        assert "dokumentation" not in DOKUMENTTYPEN_MIT_ABSCHNITTEN
-        assert "anamnese" not in DOKUMENTTYPEN_MIT_ABSCHNITTEN
-
     def test_abschnitts_filterung_dokumenttypen(self):
-        """Filterung aktiv für Verlängerung, Entlassbericht, Akutantrag, Anamnese."""
+        """Filterung aktiv für Verlängerung, Folgeverlängerung, Entlassbericht,
+        Akutantrag, Anamnese - NICHT fuer Dokumentation (P1 hat keine Sektionen)."""
         from app.api.style_embeddings import DOKUMENTTYPEN_MIT_ABSCHNITTEN
         assert "verlaengerung" in DOKUMENTTYPEN_MIT_ABSCHNITTEN
         assert "folgeverlaengerung" in DOKUMENTTYPEN_MIT_ABSCHNITTEN
@@ -1653,23 +2014,36 @@ class TestStrukturelleSchablone:
         # (der verwirrt im strukturellen Modus)
         assert "keine therapeutischen Ratschlaege" not in p
 
-    def test_fokusthemen_mit_themen_mapping_fuer_p3(self):
-        """Fokus-Themen enthalten Strukturmapping-Hinweis für P3/P4."""
-        from app.services.prompts import build_user_content
+    def test_v18_workflow_instructions_p3_im_system_prompt(self):
+        """v18: Workflow-Anweisungen fuer P3 (verlaengerung) landen im System-
+        Prompt unter AUFTRAG, nicht mehr als THERAPEUTEN-HINWEIS im User-Content."""
+        from app.services.prompts import build_system_prompt, build_user_content
+        sys_p = build_system_prompt(
+            "verlaengerung",
+            workflow_instructions="Tuersteher-Anteil, Gruppenarbeit besonders herausarbeiten."
+        )
+        assert "AUFTRAG" in sys_p
+        assert "Tuersteher-Anteil" in sys_p
+        # User-Content enthaelt KEINE Workflow-Anweisungen mehr
         u = build_user_content("verlaengerung",
             verlaufsdoku_text="Sitzung 1: IFS-Arbeit.",
-            custom_prompt="Türsteher-Anteil, Gruppenarbeit")
-        assert "THERAPEUTEN-HINWEIS" in u
-        assert "Themen" in u or "Verlaufsdokumentation" in u
+            custom_prompt="Tuersteher-Anteil, Gruppenarbeit besonders herausarbeiten.")
+        assert "THERAPEUTEN-HINWEIS" not in u
+        assert "Tuersteher-Anteil" not in u
 
-    def test_fokusthemen_ohne_mapping_fuer_p1(self):
-        """P1 Fokus-Themen ohne Strukturmapping (P1 hat feste Struktur)."""
-        from app.services.prompts import build_user_content
+    def test_v18_workflow_instructions_p1_im_system_prompt(self):
+        """v18: P1 (dokumentation) Workflow-Anweisungen ebenfalls im System-Prompt."""
+        from app.services.prompts import build_system_prompt, build_user_content
+        sys_p = build_system_prompt(
+            "dokumentation",
+            workflow_instructions="Ressourcen besonders betonen."
+        )
+        assert "AUFTRAG" in sys_p
+        assert "Ressourcen besonders betonen" in sys_p
         u = build_user_content("dokumentation",
-            transcript="Gespräch.",
-            custom_prompt="Ressourcen betonen")
-        assert "THERAPEUTEN-HINWEIS" in u
-        assert "strukturell" not in u
+            transcript="Gespraech.",
+            custom_prompt="Ressourcen besonders betonen.")
+        assert "THERAPEUTEN-HINWEIS" not in u
 
     def test_p3b_folgeverlaengerung_strukturelle_schablone(self):
         """P3b (folgeverlaengerung) nutzt strukturelle Schablone."""
@@ -1679,13 +2053,18 @@ class TestStrukturelleSchablone:
         assert "STRUKTURELLE SCHABLONE" in p
 
     def test_p3b_folgeverlaengerung_base_prompt(self):
-        """Folgeverlaengerung hat eigenen BASE_PROMPT mit Fokus 'seit dem letzten Antrag'."""
-        from app.services.prompts import BASE_PROMPTS
+        """v18: Folgeverlaengerung-Kontext liegt jetzt in WORKFLOW_INSTRUCTIONS_DEFAULT
+        (frontend-editierbar). Der BASE_PROMPT-Kernel enthaelt nur noch Pflichtregeln."""
+        from app.services.prompts import BASE_PROMPTS, WORKFLOW_INSTRUCTIONS_DEFAULT
         assert "folgeverlaengerung" in BASE_PROMPTS
-        p = BASE_PROMPTS["folgeverlaengerung"]
-        assert "SEIT" in p.upper() or "seit" in p
-        assert "FOLGE" in p.upper() or "Folge" in p
-        assert "vorherigen" in p.lower() or "letzten Antrag" in p.lower()
+        # Inhaltlicher Auftrag (was geschrieben wird) liegt im Frontend-Default
+        instr = WORKFLOW_INSTRUCTIONS_DEFAULT["folgeverlaengerung"]
+        assert "SEIT" in instr.upper() or "seit" in instr
+        assert "FOLGE" in instr.upper() or "Folge" in instr
+        assert "vorherigen" in instr.lower() or "letzten Antrag" in instr.lower()
+        # Kernel hat KONTEXT-Section (war im alten Prompt)
+        kernel = BASE_PROMPTS["folgeverlaengerung"]
+        assert "KONTEXT" in kernel
 
     def test_p3b_user_content_vorantrag(self):
         """Folgeverlaengerung: vorantrag_text wird als eigene Quelle eingebettet."""

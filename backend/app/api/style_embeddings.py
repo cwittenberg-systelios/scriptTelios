@@ -222,23 +222,84 @@ async def upload_style_example(
     )
 
 
+# ── Fallback-Kette fuer Stilbeispiele (v18) ──────────────────────────────────
+#
+# Wenn ein Therapeut fuer `akutantrag` oder `folgeverlaengerung` noch keine
+# eigenen Stilbeispiele hochgeladen hat, faellt das Backend auf
+# `verlaengerung` zurueck. Begruendung: alle drei Antragstypen folgen
+# strukturell aehnlichen Mustern (sektionsbasierter Fliesstext, Wir-Perspektive,
+# medizinische Begruendung). Das LLM bekommt mit einem Verlaengerungs-Stil
+# einen brauchbaren Anhaltspunkt fuer Tonalitaet, Satzbau und Aufbau.
+#
+# Die Reihenfolge in der Liste ist die Praeferenz-Reihenfolge:
+# 1. Eigene Beispiele dieses Typs zuerst probieren
+# 2. Falls nichts vorhanden: Fallback-Typ
+# 3. Falls auch nichts: leere Liste -> Frontend zeigt "noch keine Beispiele"
+
+STYLE_FALLBACK_CHAIN: dict[str, list[str]] = {
+    "akutantrag":         ["akutantrag", "verlaengerung"],
+    "folgeverlaengerung": ["folgeverlaengerung", "verlaengerung"],
+    # andere Workflows haben keine Fallbacks
+}
+
+
 @router.get("/style/{therapeut_id}", response_model=StyleEmbeddingListResponse)
 async def list_style_examples(
     therapeut_id: str,
     dokumenttyp: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """Listet alle Beispiele eines Therapeuten auf, optional gefiltert nach Dokumenttyp."""
+    """Listet alle Beispiele eines Therapeuten auf, optional gefiltert nach Dokumenttyp.
+
+    v18: Falls fuer `akutantrag` oder `folgeverlaengerung` keine eigenen
+    Beispiele vorliegen, werden Verlaengerungs-Beispiele als Fallback
+    mitgeliefert. Die Antwort markiert Fallback-Eintraege via dem
+    `dokumenttyp_label`-Feld mit dem Praefix `(Fallback)` damit das
+    Frontend dem Nutzer transparent anzeigen kann woher der Stil kommt.
+    """
     if dokumenttyp and dokumenttyp not in DOKUMENTTYPEN:
         raise HTTPException(status_code=422, detail=f"Ungueltiger Dokumenttyp: {dokumenttyp}")
 
+    # Erste Abfrage: alle Eintraege dieses Therapeuten in der gewuenschten Form
     q = select(StyleEmbedding).where(StyleEmbedding.therapeut_id == therapeut_id)
     if dokumenttyp:
         q = q.where(StyleEmbedding.dokumenttyp == dokumenttyp)
     q = q.order_by(StyleEmbedding.dokumenttyp, StyleEmbedding.ist_statisch.desc(), StyleEmbedding.created_at.desc())
 
     result = await db.execute(q)
-    rows = result.scalars().all()
+    rows = list(result.scalars().all())
+
+    # v18 Fallback: wenn fuer akutantrag/folgeverlaengerung nichts kam,
+    # versuchen wir die Fallback-Kette (typisch: -> verlaengerung)
+    fallback_used: Optional[str] = None
+    if not rows and dokumenttyp and dokumenttyp in STYLE_FALLBACK_CHAIN:
+        for fb_typ in STYLE_FALLBACK_CHAIN[dokumenttyp][1:]:  # [0] ist der Original-Typ
+            fb_q = (
+                select(StyleEmbedding)
+                .where(StyleEmbedding.therapeut_id == therapeut_id)
+                .where(StyleEmbedding.dokumenttyp == fb_typ)
+                .order_by(
+                    StyleEmbedding.ist_statisch.desc(),
+                    StyleEmbedding.created_at.desc(),
+                )
+            )
+            fb_result = await db.execute(fb_q)
+            fb_rows = list(fb_result.scalars().all())
+            if fb_rows:
+                rows = fb_rows
+                fallback_used = fb_typ
+                logger.info(
+                    "Stilbibliothek-Fallback: Therapeut '%s' hat keine '%s'-Beispiele, "
+                    "nutze %d '%s'-Beispiele als Fallback",
+                    therapeut_id, dokumenttyp, len(rows), fb_typ,
+                )
+                break
+
+    def _label_for(r: StyleEmbedding) -> str:
+        base_label = DOKUMENTTYP_LABELS[r.dokumenttyp]
+        if fallback_used and r.dokumenttyp == fallback_used:
+            return f"(Fallback) {base_label}"
+        return base_label
 
     return StyleEmbeddingListResponse(
         therapeut_id=therapeut_id,
@@ -247,7 +308,7 @@ async def list_style_examples(
             StyleEmbeddingInfo(
                 embedding_id=r.id,
                 dokumenttyp=r.dokumenttyp,
-                dokumenttyp_label=DOKUMENTTYP_LABELS[r.dokumenttyp],
+                dokumenttyp_label=_label_for(r),
                 word_count=r.word_count,
                 ist_statisch=r.ist_statisch,
                 created_at=r.created_at,

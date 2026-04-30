@@ -430,7 +430,9 @@ async def _generate(
     """
     form_data = {
         "workflow": workflow,
-        "prompt": prompt,
+        # v18: Feld heisst nun 'workflow_instructions'.
+        # 'prompt' bleibt als deprecated Alias erhalten (jobs.py akzeptiert beide).
+        "workflow_instructions": prompt,
     }
     if diagnosen and "diagnosen" not in form_data:
         form_data["diagnosen"] = ",".join(diagnosen)

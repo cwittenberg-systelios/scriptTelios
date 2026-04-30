@@ -238,40 +238,201 @@ Fortschritte nachhaltig im Alltag zu verankern.\
 """
 
 
+# ── ARCHITEKTUR (v18) ────────────────────────────────────────────────────────
+#
+# Bis v17 enthielt BASE_PROMPTS sowohl Inhaltsanweisungen (was geschrieben werden
+# soll) als auch Pflichtkern-Regeln (Stil, Quellenregel, NICHT-Listen). Das
+# Frontend zeigte parallel einen eigenen P_DOKU/P_ANAMNESE Text der teilweise
+# dieselben Anweisungen enthielt - was zu Doppelungen, Widersprüchen und
+# Wartungsproblemen führte.
+#
+# v18 trennt sauber:
+#
+#   WORKFLOW_INSTRUCTIONS_DEFAULT[workflow]  - editierbar im Frontend.
+#       Beschreibt WAS geschrieben werden soll: Inhaltsstruktur, Reihenfolge,
+#       Standardformulierungen. Wird vom Frontend als Default in den Prompt-
+#       Editor eingespeist und kann vom Therapeuten angepasst werden. Geht
+#       als 'workflow_instructions' Form-Feld zum Backend.
+#
+#   BASE_PROMPTS[workflow]  - NICHT im Frontend sichtbar.
+#       Enthaelt nur den unsichtbaren Pflichtkern: Stilregeln, Halluzinations-
+#       schutz, Negativ-Listen, Few-Shot-Beispiele. Wird unveraendert vom
+#       Backend angewendet, der Therapeut kann ihn nicht editieren.
+#
+#   BEFUND_VORLAGE  - eigenes editierbares Feld in P2 (Anamnese) wenn der
+#       Befund-Schritt aktiv ist. Default = die AMDP-Vorlage; das umgebende
+#       Backend-Geruest (Quellenregel, NICHT-Listen) ist Pflichtkern und
+#       liegt im BASE_PROMPTS["befund"].
+#
+# build_system_prompt() reiht zusammen:
+#   ROLE_PREAMBLE
+#   + workflow_instructions     (vom Frontend, oben - das ist der eigentliche Auftrag)
+#   + Stilschablone             (falls Stilbeispiel vorhanden)
+#   + BASE_PROMPTS[workflow]    (Pflichtkern, unsichtbar)
+#   + Diagnosen/Wortlimit
+#
+# Wenn workflow_instructions leer ist, lehnt jobs.py den Job mit 422 ab.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+# ── Frontend-editierbare Workflow-Anweisungen ────────────────────────────────
+#
+# Diese Texte sind die Defaults fuer den Prompt-Editor im Frontend. Sie
+# beschreiben fuer jeden Workflow WAS inhaltlich geschrieben werden soll.
+# Der Therapeut kann sie ueber den ausgeklappten Prompt-Editor aendern.
+# Das Backend nimmt sie als 'workflow_instructions' Form-Feld entgegen
+# und reicht sie an build_system_prompt durch.
+#
+# WICHTIG: Hier KEINE Stilregeln, Negativ-Listen oder Quellenregeln eintragen.
+# Die gehoeren in BASE_PROMPTS (Pflichtkern, unsichtbar fuer den Nutzer).
+
+WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
+
+    "dokumentation": (
+        "Erstelle eine systemische Gesprächsdokumentation. Schreibe aktiv aus der "
+        "Perspektive der Klientin/des Klienten - nicht über das Gespräch, "
+        "sondern über die Person und ihre Themen. "
+        "Gliedere den Text in folgende vier Abschnitte mit den jeweiligen Überschriften:\n\n"
+        "**Auftragsklärung**\n"
+        "Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame "
+        "Ziel des Gesprächs war. Beispiel: 'Im Mittelpunkt stand...' oder "
+        "'Frau M. kam mit dem Anliegen...' (verwende den tatsaechlichen Namen "
+        "des Patienten – NICHT den Platzhalter '[Patient/in]').\n\n"
+        "**Relevante Gesprächsinhalte**\n"
+        "Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: "
+        "Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. "
+        "Konkrete Formulierungen statt allgemeiner Beschreibungen. "
+        "Systemische und IFS-Begriffe wo passend "
+        "(Manager-Anteile, Exile, Self-Energy, Feuerwehr-Anteile etc.).\n\n"
+        "**Hypothesen und Entwicklungsperspektiven**\n"
+        "Formuliere systemische Hypothesen über Sinnzusammenhänge. "
+        "Zeige Entwicklungsperspektiven auf - was wird möglich, wenn... "
+        "Ressourcenorientiert und konkret.\n\n"
+        "**Einladungen**\n"
+        "Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden "
+        "- aktiv formuliert: 'Frau M. wurde eingeladen, ...' oder "
+        "'Als Übung wurde vereinbart, ...' (verwende den tatsaechlichen Namen, "
+        "NICHT '[Patient/in]')."
+    ),
+
+    "anamnese": (
+        "Erstelle eine vollständige psychotherapeutische Anamnese "
+        "auf Basis der bereitgestellten Unterlagen.\n\n"
+        "TON UND STIL:\n"
+        "Schreibe einen erzaehlerischen, biographisch eingebetteten Bericht. "
+        "Die Anamnese ist KEINE Symptom-Liste – sie ist die Lebensgeschichte des "
+        "Patienten in seinem Kontext. Lass die Lebenswelt, die Bezugspersonen und "
+        "die Entwicklungslinien sichtbar werden. Vermeide pathologisierende Sprache "
+        "('Defizit', 'gestoert', 'auffaellig'), wo eine beschreibende Formulierung "
+        "moeglich ist ('hat Schwierigkeiten mit...', 'erlebt sich als...', "
+        "'schildert, dass...').\n\n"
+        "ANAMNESE als durchgehender FLIESSTEXT (KEINE Unterüberschriften!):\n"
+        "Schreibe die Anamnese als einen zusammenhängenden Fließtext OHNE Zwischenüberschriften "
+        "wie 'Vorstellungsanlass', 'Aktuelle Erkrankung' etc. Der Text soll natürlich von "
+        "Thema zu Thema fließen, wie ein erfahrener Therapeut einen Bericht diktieren würde.\n\n"
+        "Folgende Inhalte nahtlos in den Fließtext einarbeiten (KEINE Überschriften dafür!):\n"
+        "- Vorstellungsanlass und Hauptbeschwerde in eigenen Worten des Patienten\n"
+        "- Beginn, Verlauf, auslösende und aufrechterhaltende Faktoren\n"
+        "- Psychiatrische Vorgeschichte\n"
+        "- Somatische Vorgeschichte und Medikation\n"
+        "- Familienanamnese\n"
+        "- Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungsstatus, Kinder)\n"
+        "- Vegetativum (Schlaf, Appetit, Schmerzen) – nur kurz erwaehnen, "
+        "  NICHT als eigene Bullet-Liste\n"
+        "- Suchtmittelanamnese – nur falls relevant, kurz im Fluss\n"
+        "- Ressourcen"
+    ),
+
+    "verlaengerung": (
+        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für "
+        "Psychosomatik und Psychotherapie. Verfasse den Abschnitt "
+        "'Bisheriger Verlauf und Begründung der Verlängerung' "
+        "(auch: 'Verlauf und Begründung der weiteren Verlängerung') "
+        "für einen Antrag auf Verlängerung der Kostenzusage bei der Krankenversicherung.\n\n"
+        "INHALT (Reihenfolge einhalten):\n"
+        "- Bisheriger Verlauf: was wurde konkret bearbeitet, welche Methoden eingesetzt "
+        "(IFS, Anteilearbeit, Hypnosystemik, Körperarbeit, Gruppenarbeit)\n"
+        "- Konkrete Fortschritte – spezifisch und belegbar aus der Verlaufsdokumentation, "
+        "keine allgemeinen Behauptungen\n"
+        "- Noch ausstehende Therapieziele: was bleibt zu tun, warum ist weitere "
+        "stationäre Behandlung notwendig\n"
+        "- Medizinische Begründung: Belastbarkeit, Stabilität, soziale Integration, "
+        "Entlassfähigkeit noch nicht erreicht\n"
+        "- Geplante Maßnahmen und Prognose für den Verlängerungszeitraum"
+    ),
+
+    "folgeverlaengerung": (
+        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für "
+        "Psychosomatik und Psychotherapie. Verfasse den Abschnitt "
+        "'Verlauf und Begründung der weiteren Verlängerung' "
+        "für einen FOLGE-Verlängerungsantrag bei der Krankenversicherung.\n\n"
+        "INHALT (Reihenfolge einhalten):\n"
+        "- Kurzer Rückbezug auf den bisherigen Verlauf (1–2 Sätze, aus dem vorherigen Antrag)\n"
+        "- Entwicklung SEIT dem letzten Antrag: neue Themen, vertiefte Arbeit, Wendepunkte\n"
+        "- Konkrete Fortschritte seit dem letzten Antrag – spezifisch und belegbar\n"
+        "- Was bleibt noch zu tun? Warum ist weitere stationäre Behandlung notwendig?\n"
+        "- Geplante Maßnahmen und Prognose"
+    ),
+
+    "akutantrag": (
+        "Du bist Arzt oder Psychologischer Psychotherapeut der sysTelios Klinik. "
+        "Verfasse die 'Begründung für Akutaufnahme' eines AKUTANTRAGS an die "
+        "Krankenversicherung für die Erstattung einer stationären Akutaufnahme.\n\n"
+        "KONTEXT:\n"
+        "Die Antragsvorlage enthält bereits Aktuelle Anamnese, Problemrelevante Vorgeschichte, "
+        "Psychischen Befund und Einweisungsdiagnosen. Diese Informationen sind deine QUELLEN.\n\n"
+        "INHALT:\n"
+        "- Warum ist ein stationäres Setting medizinisch AKUT notwendig?\n"
+        "- Konkrete Symptome und Risiken aus den Quellen benennen\n"
+        "- Ambulante Insuffizienz begründen (warum reicht ambulant nicht?)\n"
+        "- Dekompensationszeichen und aktuelle Krisensituation\n"
+        "- Beginne mit folgender Standardformulierung – WÖRTLICH, unveraendert "
+        "(Kopie, keine Paraphrase, keine Wortauslassungen):\n\n"
+        "  >>>\n"
+        "  Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
+        "Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
+        "Eindruckes ein stationäres Krankenhaussetting akut notwendig:\n"
+        "  <<<\n\n"
+        "  Danach Zeilenumbruch, naechster Absatz MUSS beginnen mit:\n"
+        "  'Wir nehmen [Patient/in] schwer belastet auf...'"
+    ),
+
+    "entlassbericht": (
+        "Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts "
+        "als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, "
+        "ohne Einleitung und ohne Abschluss.\n\n"
+        "INHALT – drei Teile nahtlos als Fließtext ineinander (ALLE DREI MÜSSEN VORKOMMEN):\n\n"
+        "Teil 1 – BEHANDLUNGSVERLAUF (Hauptteil, ausführlich):\n"
+        "Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden "
+        "(IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), "
+        "konkrete Wendepunkte und Entwicklungsschritte. "
+        "Richtwert: ca. 100 Wörter pro Absatz. "
+        "Wir-Perspektive: 'Wir erlebten...', 'Es gelang zunehmend...', 'Im Verlauf zeigte sich...'\n\n"
+        "Teil 2 – EPIKRISE (kompakte Gesamtbewertung):\n"
+        "Symptomatik-Entwicklung im Vergleich zu Aufnahme, entlastete Schutzanteile, "
+        "verbliebener Bedarf, Ressourcen, Prognose.\n\n"
+        "Teil 3 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss, DARF NICHT FEHLEN):\n"
+        "Konkrete Empfehlungen für die ambulante Weiterbehandlung: "
+        "Therapieform, Schwerpunkte, Frequenz, Nachsorge."
+    ),
+}
+
+
+# ── Pflichtkern fuer Akutantrag (Backend, nicht editierbar) ──────────────────
+
 BASE_PROMPT_AKUTANTRAG = (
-    "Du bist Arzt oder Psychologischer Psychotherapeut der sysTelios Klinik. "
-    "Verfasse die 'Begründung für Akutaufnahme' eines AKUTANTRAGS an die Krankenversicherung "
-    "für die Erstattung einer stationären Akutaufnahme.\n\n"
-    "KONTEXT:\n"
-    "Die Antragsvorlage enthält bereits Aktuelle Anamnese, Problemrelevante Vorgeschichte, "
-    "Psychischen Befund und Einweisungsdiagnosen. Diese Informationen sind deine QUELLEN.\n\n"
     "FOKUS:\n"
     "Schreibe NUR den Abschnitt 'Begründung für Akutaufnahme' – keine Anamnese, "
     "keinen Befund, keine Diagnosen (diese stehen bereits in der Vorlage).\n\n"
-    "INHALT der Begründung:\n"
-    "- Warum ist ein stationäres Setting medizinisch AKUT notwendig?\n"
-    "- Konkrete Symptome und Risiken aus den Quellen benennen\n"
-    "- Ambulante Insuffizienz begründen (warum reicht ambulant nicht?)\n"
-    "- Dekompensationszeichen und aktuelle Krisensituation\n"
-    "- Beginne mit der folgenden Standardformulierung – uebernimm sie WOERTLICH "
-    "und unveraendert (Kopie, keine Paraphrase, keine Wortauslassungen):\n"
-    "  >>>\n"
-    "  Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
-    "Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
-    "Eindruckes ein stationäres Krankenhaussetting akut notwendig:\n"
-    "  <<<\n"
-    "  Schliesse danach mit einem Zeilenumbruch ab und beginne den naechsten "
-    "Absatz mit einem Wir-Satz: 'Wir nehmen [Patient/in] schwer belastet auf...'\n\n"
     "STIL: Knappe medizinisch-klinische Sprache aus WIR-PERSPEKTIVE des aufnehmenden "
-    "Klinikteams: 'Wir nehmen [Patient/in] schwer belastet auf...', "
-    "'Wir prüfen den Einsatz psychopharmakologischer Intervention...', "
-    "'Aus unserer Sicht ist eine ambulante Behandlung nicht ausreichend.'. "
-    "Konkret und symptombezogen. Keine allgemeinen Floskeln.\n"
+    "Klinikteams.\n"
     "WICHTIG ZUR WIR-PERSPEKTIVE: Nach der Standardformulierung MUSS der erste "
     "inhaltliche Satz mit 'Wir' beginnen ('Wir nehmen ... auf', 'Wir erleben ...'). "
     "NICHT mit '[Patient/in] präsentiert sich' oder '[Patient/in] berichtet'.\n"
     "LÄNGE: 200-350 Wörter.\n\n"
-    "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden\n\n"
+    "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
+    "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
+    "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden.\n\n"
     "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
     "Jeder Satz MUSS auf eine konkrete Stelle in der Antragsvorlage "
     "zurückführbar sein. Keine Symptome, Diagnosen oder Risiken erfinden.\n"
@@ -303,42 +464,24 @@ ROLE_PREAMBLE = (
 )
 
 
-# ── Basis-Prompts ─────────────────────────────────────────────────────────────
+# ── BASE_PROMPTS – Backend-Pflichtkern (NICHT im Frontend sichtbar) ──────────
+#
+# Diese Prompts enthalten ausschliesslich Stilregeln, Halluzinationsschutz,
+# Negativ-Listen und Few-Shot-Beispiele - alle Anweisungen, die der Therapeut
+# nicht editieren koennen soll. Die inhaltlichen Workflow-Anweisungen
+# (was geschrieben werden soll) liegen in WORKFLOW_INSTRUCTIONS_DEFAULT
+# und sind im Frontend editierbar.
+#
+# build_system_prompt() platziert die Frontend-Instructions VOR diesem Kernel,
+# sodass die inhaltliche Anweisung zuerst kommt und der Kernel als Pflicht-
+# rahmen darum gelegt wird.
 
 BASE_PROMPTS: dict[str, str] = {
 
     "dokumentation": (
-        "Erstelle eine systemische Gesprächsdokumentation. Schreibe aktiv aus der "
-        "Perspektive der Klientin/des Klienten - nicht über das Gespräch, "
-        "sondern über die Person und ihre Themen. "
-        "Gliedere den Text in folgende vier Abschnitte mit den jeweiligen Überschriften:\n\n"
-        "**Auftragsklärung**\n"
-        "Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame "
-        "Ziel des Gesprächs war. Beispiel: 'Im Mittelpunkt stand...' oder "
-        "'[Patient/in] kam mit dem Anliegen...'\n\n"
-        "**Relevante Gesprächsinhalte**\n"
-        "Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: "
-        "Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. "
-        "Konkrete Formulierungen statt allgemeiner Beschreibungen. "
-        "Systemische und IFS-Begriffe wo passend "
-        "(Manager-Anteile, Exile, Self-Energy, Feuerwehr-Anteile etc.).\n\n"
-        "**Hypothesen und Entwicklungsperspektiven**\n"
-        "Formuliere systemische Hypothesen über Sinnzusammenhänge. "
-        "Zeige Entwicklungsperspektiven auf - was wird möglich, wenn... "
-        "Ressourcenorientiert und konkret.\n\n"
-        "**Einladungen**\n"
-        "Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden "
-        "- aktiv formuliert: '[Patient/in] wurde eingeladen, ...' oder "
-        "'Als Übung wurde vereinbart, ...'\n\n"
-        "Stil: Fliestext pro Abschnitt, aktiv, konkret, systemisch-wertschätzend. "
-        "Keine Sektion über den Gesprächsstil.\n"
-        "SATZLÄNGE: Verwende NATÜRLICHE, KÜRZERE Sätze (10-25 Wörter pro Satz). "
-        "Vermeide übermäßig komplexe Schachtelsätze mit mehreren Nebensätzen oder "
-        "Aufzählungen. Beispiel guter Stil: 'Sie berichtete von Anspannung. Im Gespräch "
-        "wurde der dahinterliegende Anteil sichtbar.' Statt: 'Sie berichtete von einer "
-        "tiefgreifenden Anspannung, welche im Verlauf der Sitzung durch die intensive "
-        "Auseinandersetzung mit den dahinterliegenden Anteilen, die sich als Schutzmechanismus "
-        "etabliert hatten, schrittweise einer differenzierteren Wahrnehmung zugänglich wurde.'\n\n"
+        "STIL: Fliesstext pro Abschnitt, aktiv, konkret, systemisch-wertschätzend. "
+        "Schreibe ausfuehrliche, zusammenhaengende Absaetze – fragmentiere nicht in "
+        "viele kurze Saetze. Keine Sektion über den Gesprächsstil.\n\n"
         "QUELLENREGEL: Alle Inhalte müssen aus dem Transkript oder den Stichpunkten "
         "ableitbar sein. Keine Symptome, Diagnosen, Interventionen oder Zitate "
         "erfinden die nicht im Gespräch vorkamen.\n\n"
@@ -346,33 +489,18 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "anamnese": (
-        # WICHTIG: Dies ist der ANAMNESE-ONLY Prompt (Teil 1 von 2).
-        # Der Befund wird in einem SEPARATEN LLM-Call generiert (siehe "befund").
-        # So vermeiden wir das Problem dass der ###BEFUND###-Separator vergessen wird,
-        # und beide Teile koennen mit fokussierten Prompts in besserer Qualitaet entstehen.
-        "Erstelle eine vollständige psychotherapeutische Anamnese "
-        "auf Basis der bereitgestellten Unterlagen.\n\n"
-        "ANAMNESE als durchgehender FLIESSTEXT (KEINE Unterüberschriften!):\n"
-        "Schreibe die Anamnese als einen zusammenhängenden Fließtext OHNE Zwischenüberschriften "
-        "wie 'Vorstellungsanlass', 'Aktuelle Erkrankung' etc. Der Text soll natürlich von "
-        "Thema zu Thema fließen, wie ein erfahrener Therapeut einen Bericht diktieren würde.\n\n"
-        "Folgende Inhalte nahtlos in den Fließtext einarbeiten (KEINE Überschriften dafür!):\n"
-        "- Vorstellungsanlass und Hauptbeschwerde in eigenen Worten des Patienten\n"
-        "- Beginn, Verlauf, auslösende und aufrechterhaltende Faktoren\n"
-        "- Psychiatrische Vorgeschichte\n"
-        "- Somatische Vorgeschichte und Medikation\n"
-        "- Familienanamnese\n"
-        "- Sozialanamnese (Herkunft, Bildung, Beruf, Beziehungsstatus, Kinder)\n"
-        "- Vegetativum (Schlaf, Appetit, Schmerzen)\n"
-        "- Suchtmittelanamnese\n"
-        "- Ressourcen\n\n"
-        "WICHTIG: KEINE Unterüberschriften verwenden! Kein 'Vorstellungsanlass:', "
-        "kein 'Aktuelle Erkrankung:', kein 'Psychiatrische Vorgeschichte:' etc. "
+        # Pflichtkern fuer P2 (Anamnese-Call). Befund laeuft als separater Call mit
+        # eigenem BASE_PROMPTS["befund"].
+        "WICHTIG: KEINE Unterüberschriften! Kein 'Vorstellungsanlass:', "
+        "kein 'Aktuelle Erkrankung:', kein 'PSYCHOPATHOLOGISCHER BEFUND', "
+        "kein 'AMDP', keine Bullet-Listen. "
         "Stattdessen fließende Übergänge zwischen den Themen.\n\n"
         "DIAGNOSEN gemäß ICD: {diagnosen}\n\n"
         "NICHT SCHREIBEN:\n"
         "– Keinen psychopathologischen Befund (wird separat generiert!)\n"
+        "– Keine 'PSYCHOPATHOLOGISCHER BEFUND'-Sektion, kein 'AMDP'-Schema\n"
         "– Keine 'SYSTEMISCHE EINSCHÄTZUNG' oder Hypothesen-Abschnitte\n"
+        "– Keine Bullet-Listen, keine Stichworte, keine Pipe-Separatoren ('|')\n"
         "– Keine Diagnosen-Wiederholung am Ende\n"
         "– Keine Therapieempfehlungen oder Behandlungspläne\n"
         "– Kein Markdown (keine **, keine ##, keine ---)\n"
@@ -387,13 +515,18 @@ BASE_PROMPTS: dict[str, str] = {
         "- NIEMALS erfinden: Beruf, Familienstand, Kinder, Wohnsituation, "
         "Vorbehandlungen, Medikamente, Suchtmittel, Diagnosen, Zeitangaben, "
         "auslösende Ereignisse, Testwerte, Zitate\n"
-        "- LÄNGE Anamnese: Richtwert ca. 450-700 Wörter Fließtext (KEINE kurzen Absätze – schreibe ausführliche, zusammenhängende Absätze). Falls weiter unten ein VERBINDLICHES TEXTLIMIT angegeben ist, hat dieses absolute Vorrang vor diesem Richtwert.\n\n"
+        "- LÄNGE Anamnese: Richtwert ca. 450-700 Wörter Fließtext (KEINE kurzen "
+        "Absätze – schreibe ausführliche, zusammenhängende Absätze). "
+        "Falls weiter unten ein VERBINDLICHES TEXTLIMIT angegeben ist, "
+        "hat dieses absolute Vorrang vor diesem Richtwert.\n\n"
         + FEW_SHOT_ANAMNESE
     ),
 
     "befund": (
-        # Separater Prompt fuer den psychopathologischen Befund.
-        # Wird vom Backend als zweiter LLM-Call ausgeloest nach der Anamnese.
+        # Pflichtkern fuer den Befund-Call (zweiter LLM-Call nach Anamnese).
+        # Die BEFUND_VORLAGE selbst wird vom Frontend als 'befund_vorlage'
+        # Form-Feld mitgeschickt und in build_system_prompt eingesetzt -
+        # nicht hier hardcoded, damit der Therapeut sie editieren kann.
         "Erstelle einen psychopathologischen Befund auf Basis der bereitgestellten Unterlagen "
         "(Selbstauskunft, Vorbefunde, Anamnese-Fließtext der bereits erstellt wurde).\n\n"
         "Verwende EXAKT die folgende Vorlage. Fülle alle Lücken mit Informationen "
@@ -401,7 +534,7 @@ BASE_PROMPTS: dict[str, str] = {
         "Wenn eine Information nicht in den Unterlagen steht, schreibe 'nicht erhoben' – "
         "NIEMALS eine klinisch plausible Option raten oder erfinden.\n\n"
         "BEFUND-VORLAGE (exakt so ausfüllen):\n"
-        + BEFUND_VORLAGE + "\n\n"
+        "{befund_vorlage}\n\n"
         "DIAGNOSEN gemäß ICD: {diagnosen}\n\n"
         "NICHT SCHREIBEN:\n"
         "– Keine Anamnese-Inhalte (wurden bereits in einem vorigen Call generiert)\n"
@@ -416,24 +549,9 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "verlaengerung": (
-        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für "
-        "Psychosomatik und Psychotherapie. Verfasse den Abschnitt "
-        "'Bisheriger Verlauf und Begründung der Verlängerung' "
-        "(auch: 'Verlauf und Begründung der weiteren Verlängerung') "
-        "für einen Antrag auf Verlängerung der Kostenzusage bei der Krankenversicherung.\n\n"
         "FOKUS:\n"
-        "Schreibe NUR diesen einen Abschnitt als Fließtext – keine Diagnosen, keine Stammdaten, "
-        "keine anderen Sektionen des Antrags. Diese Felder werden separat befüllt.\n\n"
-        "INHALT (Reihenfolge einhalten):\n"
-        "- Bisheriger Verlauf: was wurde konkret bearbeitet, welche Methoden eingesetzt "
-        "(IFS, Anteilearbeit, Hypnosystemik, Körperarbeit, Gruppenarbeit)\n"
-        "- Konkrete Fortschritte – spezifisch und belegbar aus der Verlaufsdokumentation, "
-        "keine allgemeinen Behauptungen\n"
-        "- Noch ausstehende Therapieziele: was bleibt zu tun, warum ist weitere "
-        "stationäre Behandlung notwendig\n"
-        "- Medizinische Begründung der Verlängerung: Belastbarkeit, Stabilität, "
-        "soziale Integration, Entlassfähigkeit noch nicht erreicht\n"
-        "- Geplante Maßnahmen und Prognose für den Verlängerungszeitraum\n\n"
+        "Schreibe NUR diesen einen Abschnitt als Fließtext – keine Diagnosen, "
+        "keine Stammdaten, keine anderen Sektionen des Antrags.\n\n"
         "STIL:\n"
         "WIR-PERSPEKTIVE des Therapeutenteams (verbindlich, nicht 3. Person/Passiv): "
         "Schreibe konsequent aus 'Wir'-Sicht: 'Wir nahmen [Patient/in] auf...', "
@@ -444,7 +562,9 @@ BASE_PROMPTS: dict[str, str] = {
         "'wir sahen', 'wir bearbeiteten', 'es gelang uns'. "
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
-        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden "
+        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
+        "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
+        "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden, "
         "sowie 'die Klientin' / 'der Klient'.\n\n"
         "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
         "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation "
@@ -458,10 +578,6 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "folgeverlaengerung": (
-        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für "
-        "Psychosomatik und Psychotherapie. Verfasse den Abschnitt "
-        "'Verlauf und Begründung der weiteren Verlängerung' "
-        "für einen FOLGE-Verlängerungsantrag bei der Krankenversicherung.\n\n"
         "KONTEXT:\n"
         "Dies ist NICHT der erste Verlängerungsantrag. Es gibt einen vorherigen "
         "Verlängerungsantrag dessen Verlaufsabschnitt, Anamnese und Diagnosen "
@@ -469,14 +585,7 @@ BASE_PROMPTS: dict[str, str] = {
         "und den Verlauf SEIT DEM LETZTEN ANTRAG beschreiben.\n\n"
         "FOKUS:\n"
         "Schreibe NUR den Abschnitt 'Verlauf und Begründung der weiteren Verlängerung' "
-        "als Fließtext – keine Diagnosen, keine Stammdaten, keine Anamnese "
-        "(diese stehen bereits im vorherigen Antrag).\n\n"
-        "INHALT (Reihenfolge einhalten):\n"
-        "- Kurzer Rückbezug auf den bisherigen Verlauf (1-2 Sätze, aus dem vorherigen Antrag)\n"
-        "- Entwicklung SEIT dem letzten Antrag: neue Themen, vertiefte Arbeit, Wendepunkte\n"
-        "- Konkrete Fortschritte seit dem letzten Antrag – spezifisch und belegbar\n"
-        "- Was bleibt noch zu tun? Warum ist weitere stationäre Behandlung notwendig?\n"
-        "- Geplante Maßnahmen und Prognose für den weiteren Verlängerungszeitraum\n\n"
+        "als Fließtext – keine Diagnosen, keine Stammdaten, keine Anamnese.\n\n"
         "STIL:\n"
         "WIR-PERSPEKTIVE des Therapeutenteams (verbindlich, nicht 3. Person/Passiv): "
         "Schreibe konsequent aus 'Wir'-Sicht: 'Seit dem letzten Antrag erlebten wir...', "
@@ -488,7 +597,9 @@ BASE_PROMPTS: dict[str, str] = {
         "'Seither hat sich [Patient/in] ...' beginnen.\n"
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
-        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten (z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden "
+        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
+        "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
+        "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden, "
         "sowie 'die Klientin' / 'der Klient'.\n\n"
         "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
         "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation, "
@@ -502,23 +613,6 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "entlassbericht": (
-        "Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts "
-        "als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, "
-        "ohne Einleitung und ohne Abschluss.\n\n"
-        "INHALT – drei Teile nahtlos als Fließtext ineinander (ALLE DREI MÜSSEN VORKOMMEN):\n\n"
-        "Teil 1 – BEHANDLUNGSVERLAUF (Hauptteil, ausfuehrlich):\n"
-        "Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden "
-        "(IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), "
-        "konkrete Wendepunkte und Entwicklungsschritte. Schreibe ausführliche Absätze "
-        "(Richtwert: ca. 100 Wörter pro Absatz). Wir-Perspektive: "
-        "'Wir erlebten...', 'Es gelang zunehmend...', 'Im Verlauf zeigte sich...'\n\n"
-        "Teil 2 – EPIKRISE (kompakte Gesamtbewertung):\n"
-        "Gesamtbewertung: Symptomatik-Entwicklung im Vergleich zu Aufnahme, "
-        "entlastete Schutzanteile, verbliebener Bedarf, Ressourcen, Prognose.\n\n"
-        "Teil 3 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss):\n"
-        "Konkrete Empfehlungen für die ambulante Weiterbehandlung: "
-        "Therapieform, Schwerpunkte, Frequenz, Nachsorge. "
-        "DIESER TEIL DARF NICHT FEHLEN.\n\n"
         "NICHT SCHREIBEN:\n"
         "– Keine Überschriften (kein 'Psychotherapeutischer Behandlungsverlauf', "
         "kein 'Epikrise', keine nummerierten Abschnitte)\n"
@@ -716,36 +810,66 @@ def _compute_style_constraints(style_text: str, skip_length: bool = False) -> st
 
 def build_system_prompt(
     workflow: str,
-    custom_prompt: Optional[str] = None,
+    workflow_instructions: Optional[str] = None,
     style_context: Optional[str] = None,
     style_is_example: bool = False,
     diagnosen: Optional[list[str]] = None,
     patient_name: Optional[dict] = None,
     word_limits: Optional[tuple] = None,
+    befund_vorlage: Optional[str] = None,
+    # Backwards-Compat: alter Parametername custom_prompt mappt auf
+    # workflow_instructions. Bestehende Tests / Legacy-Aufrufe brechen
+    # dadurch nicht.
+    custom_prompt: Optional[str] = None,
 ) -> str:
     """
-    Baut den finalen System-Prompt zusammen:
-    1. Rolle-Präambel + Fachglossar
-    2. Basis-Prompt des Workflows (immer – strukturierte Anweisungen)
-    3. Stilprofil des Therapeuten – unterschiedliche Rahmung je Workflow:
-       - dokumentation (P1): nur Schreibstil (Struktur ist festgelegt)
-       - anamnese/verlängerung/entlassbericht: strukturelle Schablone
-         (Gliederung, Länge, Absatztiefe werden übernommen)
-    4. Abschließende Anweisung
+    Baut den finalen System-Prompt zusammen.
 
-    patient_name: optional dict {anrede, vorname, nachname, initial}
-                  aus extract_patient_name() – wird als expliziter Name-Hinweis
-                  an das Modell gegeben.
-    word_limits: optional (min, max) Tuple aus derive_word_limits().
-                 Wenn angegeben, wird ein verbindliches Wortlimit an den
-                 BASE_PROMPT angehängt, das die hardcodierten Längenangaben
-                 überschreibt. Wird in jobs.py aus dem Roh-Stiltext berechnet
-                 bevor der Text destilliert wird (Option A).
+    Architektur (v18):
+      1. ROLE_PREAMBLE + Fachglossar
+      2. WORKFLOW-ANWEISUNGEN (vom Frontend, editierbar) - WAS geschrieben wird
+      3. STILSCHABLONE (falls Stilbeispiel vorhanden)
+      4. BASE_PROMPT[workflow] (Pflichtkern, NICHT editierbar) - Stil-/Quellenregeln
+      5. Diagnosen, Wortlimit, Patientennamen-Hinweis
+      6. Abschliessende Anweisung
+
+    Parameter
+    ---------
+    workflow_instructions : str, required
+        Die inhaltlichen Workflow-Anweisungen vom Frontend.
+        Default-Texte stehen in WORKFLOW_INSTRUCTIONS_DEFAULT[workflow] -
+        das Frontend zeigt sie als editierbares Feld an. Wenn None oder
+        leer uebergeben, wird der Default aus WORKFLOW_INSTRUCTIONS_DEFAULT
+        verwendet (Fallback fuer Legacy-Aufrufe und Tests). jobs.py
+        validiert davor und lehnt Jobs mit leerem Feld ab.
+    befund_vorlage : str, optional
+        Nur fuer workflow="befund": die AMDP-Vorlage aus dem Frontend.
+        Wenn None, wird BEFUND_VORLAGE als Default eingesetzt.
+    custom_prompt : str, optional [DEPRECATED]
+        Frueherer Name fuer workflow_instructions. Wird intern weitergeleitet.
+    patient_name : dict, optional
+        Aus extract_patient_name() - {anrede, vorname, nachname, initial}.
+    word_limits : tuple, optional
+        (min, max) aus derive_word_limits() - ueberschreibt BASE_PROMPT-Vorgaben.
     """
+    # Backwards-Compat: alter Parametername
+    if workflow_instructions is None and custom_prompt is not None:
+        workflow_instructions = custom_prompt
+
+    # Fallback auf Default falls leer (jobs.py sollte vorher schon validiert
+    # haben, aber wir wollen keine harte Exception in build_system_prompt)
+    if workflow_instructions is None or not workflow_instructions.strip():
+        workflow_instructions = WORKFLOW_INSTRUCTIONS_DEFAULT.get(workflow, "")
+
     base = BASE_PROMPTS.get(workflow, "")
 
     diag_str = ", ".join(diagnosen) if diagnosen else "noch nicht festgelegt"
     base = base.replace("{diagnosen}", diag_str)
+
+    # Befund-Workflow: Vorlage einsetzen (vom Frontend, oder Default)
+    if workflow == "befund":
+        vorlage = befund_vorlage if (befund_vorlage and befund_vorlage.strip()) else BEFUND_VORLAGE
+        base = base.replace("{befund_vorlage}", vorlage)
 
     # Verbindliches Wortlimit aus Stilvorlagen anhängen (überschreibt BASE_PROMPT-Angaben)
     if word_limits is not None:
@@ -760,7 +884,18 @@ def build_system_prompt(
             f"Ueberschreite das Maximum NIEMALS - lieber kuerzer als zu lang.\n"
         )
 
-    parts = [ROLE_PREAMBLE, base]
+    # Reihenfolge (v18):
+    #   ROLE_PREAMBLE  →  WORKFLOW-ANWEISUNGEN (Frontend)  →  Stilschablone
+    #     →  BASE_PROMPT-Kernel  →  Diagnosen/Wortlimit (im base eingebettet)
+    parts = [ROLE_PREAMBLE]
+
+    # Workflow-Anweisungen vom Frontend - das ist der eigentliche Auftrag,
+    # gehoert direkt nach der Rolle vor allen restriktiven Pflichtkern-Regeln.
+    if workflow_instructions and workflow_instructions.strip():
+        parts.append(
+            "\nAUFTRAG / INHALTLICHE ANWEISUNGEN:\n"
+            + workflow_instructions.strip()
+        )
 
     # Wenn strukturelle Schablone vorhanden: Längenhinweis aus BASE_PROMPT
     # wird durch "ähnliche Länge wie das Beispiel" ersetzt (kommt weiter unten).
@@ -829,6 +964,12 @@ def build_system_prompt(
         style_context and style_context.strip()
         and workflow in STRUCTURAL_WORKFLOWS
     )
+
+    # BASE_PROMPT-Kernel (Pflichtkern, NICHT editierbar) wird nach den
+    # Frontend-Anweisungen und der Stilschablone eingehaengt. Enthaelt
+    # Stilregeln, Negativ-Listen, Quellenregel und Few-Shot.
+    if base:
+        parts.append("\n" + base)
 
     # Expliziter Patientennamen-Hinweis (aus den Unterlagen extrahiert)
     # Sicherheits-Check: Block nur ausgeben wenn nachname plausibel ist.
@@ -1006,11 +1147,43 @@ def build_user_content(
     parts.append(NAMENSREGEL)
 
     if workflow == "dokumentation":
-        if transcript:
-            parts.append(f"TRANSKRIPT DES GESPRÄCHS:\n{transcript}")
+        # Patch A (v17/v18): Sandwich-Pattern.
+        # Stichpunkte stehen vor dem Transkript (sonst Lost-in-the-middle),
+        # mit Verbindlichkeitssprache und Mapping auf die vier Abschnitte.
+        # Erinnerung am Ende ruft sie unmittelbar vor der Generierung
+        # nochmal ins Gedaechtnis (Recency-Effekt).
         if fokus_themen:
             parts.append(
-                f"THERAPEUTISCHE STICHPUNKTE (vom Therapeuten ergänzt):\n{fokus_themen}"
+                "THERAPEUTISCHE SCHWERPUNKTE – VERBINDLICH UMZUSETZEN:\n"
+                "Die folgenden Punkte sind die wichtigsten Inhalte des Therapeuten "
+                "und MUESSEN explizit im Bericht auftauchen. Ordne sie den vier "
+                "Abschnitten zu:\n"
+                "- Reframings, Hypothesen, Sinnzuschreibungen → Abschnitt "
+                "'Hypothesen und Entwicklungsperspektiven'\n"
+                "- Konkrete Aufgaben, Uebungen, Impulse → Abschnitt 'Einladungen'\n"
+                "- Beobachtungen zu Symptomen, Anteilen, Erleben → Abschnitt "
+                "'Relevante Gespraechsinhalte'\n"
+                "- Anliegen oder Gespraechsziel → Abschnitt 'Auftragsklaerung'\n\n"
+                "Falls ein Punkt im Transkript nicht direkt belegt ist, formuliere "
+                "ihn trotzdem als therapeutische Hypothese ('Es laesst sich "
+                "verstehen als...', 'Reframing-Angebot war...').\n\n"
+                f"SCHWERPUNKTE:\n{fokus_themen}"
+            )
+        if transcript:
+            label = (
+                "TRANSKRIPT DES GESPRÄCHS (Belegmaterial fuer die obigen Schwerpunkte):"
+                if fokus_themen
+                else "TRANSKRIPT DES GESPRÄCHS:"
+            )
+            parts.append(f"{label}\n{transcript}")
+        # Sandwich-Erinnerung
+        if fokus_themen:
+            parts.append(
+                "ERINNERUNG – PRUEFE VOR DEM SCHREIBEN:\n"
+                "Bevor du jeden der vier Abschnitte beginnst: Welcher der oben "
+                "genannten THERAPEUTISCHEN SCHWERPUNKTE gehoert hierhin? Setze "
+                "ihn explizit um – nicht nur als beilaeufige Erwaehnung, sondern "
+                "als zentralen Inhalt des passenden Abschnitts."
             )
         if parts:
             parts.append("Erstelle jetzt die klinische Dokumentation gemäß den Anweisungen.")
@@ -1140,26 +1313,11 @@ def build_user_content(
             "keine Informationen erfinden die nicht in den Quellen stehen."
         )
 
-    # Therapeuten-Fokus: patientenspezifische Schwerpunkte.
-    # Für P2/P3/P4 mit Stilbeispiel: Modell soll prüfen wo diese Themen
-    # strukturell ins Stilbeispiel passen würden und sie dort einbauen.
-    if custom_prompt and custom_prompt.strip():
-        focus = custom_prompt.strip()
-        is_structural = workflow in STRUCTURAL_WORKFLOWS
-        if is_structural:
-            parts.append(
-                f"THERAPEUTEN-HINWEIS – SCHWERPUNKTTHEMEN:\n{focus}\n\n"
-                "Wenn ein Stilbeispiel bereitgestellt wurde: Prüfe an welcher Stelle "
-                "im Stilbeispiel diese Themen strukturell platziert wären und "
-                "baue sie an genau dieser Position in den neuen Bericht ein. "
-                "Greife diese Themen auf soweit sie in der Verlaufsdokumentation belegt sind – "
-                "erfinde keine Inhalte die nicht in den Quellen stehen."
-            )
-        else:
-            parts.append(
-                f"THERAPEUTEN-HINWEIS – SCHWERPUNKTE FÜR DIESEN BERICHT:\n{focus}\n"
-                "Greife diese Themen auf soweit sie in der Verlaufsdokumentation belegt sind. "
-                "Erfinde keine Inhalte die nicht in den Quellen stehen."
-            )
-
+    # v18 Architekturwechsel:
+    # Frueher wurde am Ende ein THERAPEUTEN-HINWEIS-Block aus custom_prompt
+    # angehaengt - das war die Quelle der Doppelung mit dem BASE_PROMPT.
+    # In v18 wandern Workflow-Anweisungen direkt in den System-Prompt
+    # (siehe build_system_prompt > workflow_instructions). Der User-Content
+    # enthaelt nur noch Patientendaten, Quellen und ggf. Stichpunkte
+    # (fokus_themen) - keine wiederholten Workflow-Anweisungen.
     return "\n\n".join(parts)
