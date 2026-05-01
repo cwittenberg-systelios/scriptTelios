@@ -31,21 +31,6 @@ client = TestClient(app)
 # ── Fixtures ──────────────────────────────────────────────────────
 
 @pytest.fixture
-def mock_llm():
-    """Ersetzt LLM-Aufruf durch einen fixen Beispieltext."""
-    mock_response = {
-        "text": "Dies ist eine generierte Verlaufsnotiz zu Testzwecken.",
-        "model_used": "ollama/qwen3:32b",
-        "duration_s": 1.2,
-        "token_count": 42,
-    }
-    with patch("app.services.llm.generate_text",    new=AsyncMock(return_value=mock_response)), \
-         patch("app.api.generate.generate_text",     new=AsyncMock(return_value=mock_response)), \
-         patch("app.api.documents.generate_text",    new=AsyncMock(return_value=mock_response)):
-        yield
-
-
-@pytest.fixture
 def mock_transcribe():
     """Ersetzt Whisper durch ein fixes Transkript."""
     with patch(
@@ -60,16 +45,6 @@ def mock_transcribe():
         yield
 
 
-@pytest.fixture
-def mock_extract():
-    """Ersetzt PDF-Extraktion durch Beispieltext."""
-    with patch(
-        "app.services.extraction.extract_text",
-        new=AsyncMock(return_value="Selbstauskunft: Patient leidet unter Schlafproblemen."),
-    ):
-        yield
-
-
 # ── Health ────────────────────────────────────────────────────────
 
 def test_health():
@@ -80,105 +55,6 @@ def test_health():
     assert data["status"] == "ok"
     assert "llm_model" in data
     assert "whisper_model" in data
-
-
-# ── Generate (einfach) ────────────────────────────────────────────
-
-def test_generate_dokumentation(mock_llm):
-    r = client.post("/api/generate", json={
-        "workflow": "dokumentation",
-        "prompt":   "Du bist ein Therapeut ...",
-        "transcript": "Patient berichtet von Besserung.",
-    })
-    assert r.status_code == 200
-    data = r.json()
-    assert "text" in data
-    assert "job_id" in data
-    assert "model_used" in data
-    assert len(data["text"]) > 0
-
-
-def test_generate_anamnese_mit_diagnosen(mock_llm):
-    r = client.post("/api/generate", json={
-        "workflow":  "anamnese",
-        "prompt":    "Du bist ein Arzt ...",
-        "diagnosen": ["F32.1", "Z73.0"],
-        "transcript": "Patient wurde aufgenommen mit depressiver Symptomatik.",
-    })
-    assert r.status_code == 200
-    assert r.json()["text"]
-
-
-def test_generate_ungueltiger_workflow(mock_llm):
-    r = client.post("/api/generate", json={
-        "workflow": "unbekannt",
-        "prompt":   "test",
-    })
-    assert r.status_code == 422
-
-
-# ── Generate mit Datei-Upload ─────────────────────────────────────
-
-def test_generate_with_audio(mock_llm, mock_transcribe):
-    audio_bytes = b"RIFF" + b"\x00" * 100   # Minimales WAV-Dummy
-    r = client.post(
-        "/api/generate/with-files",
-        data={"workflow": "dokumentation", "prompt": "Du bist ein Therapeut ..."},
-        files={"audio": ("test.wav", io.BytesIO(audio_bytes), "audio/wav")},
-    )
-    assert r.status_code == 200
-    assert r.json()["text"]
-
-
-def test_generate_with_selbstauskunft(mock_llm, mock_extract):
-    pdf_bytes = b"%PDF-1.4 Fake PDF content"
-    r = client.post(
-        "/api/generate/with-files",
-        data={
-            "workflow":   "anamnese",
-            "prompt":     "Du bist ein Arzt ...",
-            "diagnosen":  "F32.1,F41.1",
-        },
-        files={"selbstauskunft": ("selbstauskunft.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
-    )
-    assert r.status_code == 200
-
-
-# ── Transkription ─────────────────────────────────────────────────
-
-def test_transcribe_ungueltiges_format():
-    r = client.post(
-        "/api/transcribe",
-        files={"file": ("dokument.pdf", io.BytesIO(b"PDF"), "application/pdf")},
-    )
-    assert r.status_code == 422
-
-
-def test_transcribe_audio(mock_transcribe):
-    audio_bytes = b"RIFF" + b"\x00" * 100
-    r = client.post(
-        "/api/transcribe",
-        files={"file": ("aufnahme.wav", io.BytesIO(audio_bytes), "audio/wav")},
-    )
-    assert r.status_code == 200
-    data = r.json()
-    assert "transcript" in data
-    assert data["word_count"] > 0
-    assert data["language"] == "de"
-
-
-# ── Download ──────────────────────────────────────────────────────
-
-def test_download_nicht_vorhanden():
-    r = client.get("/api/documents/download/nichtvorhanden.docx")
-    assert r.status_code == 404
-
-
-def test_download_path_traversal():
-    # FastAPI matched den Pfad mit '..' nicht und gibt 404 zurueck.
-    # Der Schutz greift zusaetzlich in documents.py fuer direkte Aufrufe.
-    r = client.get("/api/documents/download/../etc/passwd")
-    assert r.status_code in (400, 404)
 
 
 # ── Prompts ───────────────────────────────────────────────────────

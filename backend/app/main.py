@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.middleware.audit import AuditMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import transcribe, generate, documents, health
+from app.api import health
 from app.api import style_embeddings, jobs, admin, testrun, recordings
 from app.core.config import settings
 from app.core.database import init_db
@@ -107,9 +107,6 @@ app.add_middleware(
     ],)
 
 app.include_router(health.router,            prefix="/api", tags=["Health"])
-app.include_router(transcribe.router,        prefix="/api", tags=["Transkription"])
-app.include_router(generate.router,          prefix="/api", tags=["Generierung"])
-app.include_router(documents.router,         prefix="/api", tags=["Dokumente"])
 app.include_router(style_embeddings.router,  prefix="/api", tags=["Stilprofil"])
 app.include_router(jobs.router,              prefix="/api", tags=["Jobs"])
 app.include_router(admin.router,             prefix="/api", tags=["Admin"])
