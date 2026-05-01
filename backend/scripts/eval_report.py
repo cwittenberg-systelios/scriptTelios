@@ -51,7 +51,8 @@ def load_eval_results(d: Path) -> dict:
         for ef in sorted(wd.glob("*.eval.txt")):
             tid = ef.stem.replace(".eval","")
             e = {"test_id":tid,"workflow":wf,"word_count":0,"passed":0,"issues":0,
-                 "score":0.0,"status":"?","issue_list":[],"style_metrics":None}
+                 "score":0.0,"status":"?","issue_list":[],"style_metrics":None,
+                 "jury_score":None,"jury_reason":None,"composite":0.0}
             for ln in ef.read_text("utf-8").split("\n"):
                 ln = ln.strip()
                 if ln.startswith("[PASS]") or ln.startswith("[FAIL]"):
@@ -89,6 +90,45 @@ def load_eval_results(d: Path) -> dict:
         for f in sorted(jd.glob("*.jury.json")):
             try: jury.append(json.loads(f.read_text("utf-8")))
             except: pass
+
+    # P6: Jury-Scores in die Test-Eintraege einmappen, Composite berechnen,
+    # Status nochmal pruefen (Jury <3 -> FAIL, auch wenn Regex-Checks PASS waren).
+    # Match-Strategie: jury-record enthaelt test_id und workflow.
+    jury_by_id: dict[str, dict] = {}
+    for jr in jury:
+        tid = jr.get("test_id") or jr.get("testcase_id") or ""
+        wf = jr.get("workflow", "")
+        # Schluessel "<workflow>/<test_id>" um Kollisionen zwischen Workflows
+        # zu vermeiden (test_id kann theoretisch dupliziert sein).
+        key = f"{wf}/{tid}" if wf else tid
+        if key:
+            jury_by_id[key] = jr
+
+    for wf, entries in results.items():
+        for e in entries:
+            key = f"{wf}/{e['test_id']}"
+            jr = jury_by_id.get(key) or jury_by_id.get(e["test_id"])
+            if jr:
+                sc = jr.get("score")
+                if isinstance(sc, (int, float)):
+                    e["jury_score"] = float(sc)
+                    e["jury_reason"] = jr.get("reason", "") or jr.get("begruendung", "")
+            # Composite-Score: 0.7 * Regex-Score + 0.3 * Jury-Score (normiert auf 0-1).
+            # Wenn keine Jury vorliegt: nur Regex-Score (= bisheriges Verhalten).
+            if e["jury_score"] is not None:
+                e["composite"] = round(0.7 * e["score"] + 0.3 * (e["jury_score"] / 5.0), 4)
+                # Jury-Failures sollen sich auch im Pass/Fail niederschlagen:
+                # Score < 3/5 = harter Fail, auch wenn Regex grün war.
+                if e["jury_score"] < 3 and e["status"] == "PASS":
+                    e["status"] = "FAIL"
+                    e["issue_list"].append(
+                        f"STIL-JURY: niedrige Bewertung ({e['jury_score']:.0f}/5) - "
+                        f"{(e['jury_reason'] or '')[:120]}"
+                    )
+                    e["issues"] += 1
+            else:
+                e["composite"] = e["score"]
+
     return {"workflows": dict(results), "variance": var, "jury": jury}
 
 def _hbar(title, labels, values, bcols, w=460, bh=18, ref=None, rl=None, sfx="%", mx=None):
@@ -162,6 +202,10 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
     passed = sum(1 for e in ae if e["status"]=="PASS")
     avg_sc = sum(e["score"] for e in ae)/tot*100 if tot else 0
     avg_wc = sum(e["word_count"] for e in ae)/tot if tot else 0
+    # P6: Composite + Jury-Coverage als Zusatzkennzahlen
+    avg_comp = sum(e.get("composite", e["score"]) for e in ae)/tot*100 if tot else 0
+    jury_cov = [e for e in ae if e.get("jury_score") is not None]
+    avg_jury = (sum(e["jury_score"] for e in jury_cov)/len(jury_cov)) if jury_cov else None
 
     # Title
     story.append(Spacer(1,2*cm))
@@ -170,8 +214,14 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
         f"{len(data['workflows'])} Workflows · {tot} Testfälle",st["Sub"]))
     rows = [["",""],["Testfälle",str(tot)],
         ["Bestanden",f"{passed}/{tot} ({passed/tot*100:.0f}%)" if tot else "–"],
-        ["Ø Score",f"{avg_sc:.1f}%"],["Ø Wörter",f"{avg_wc:.0f}"],
-        ["Workflows",", ".join(WF_LBL.get(w,w) for w in data["workflows"])]]
+        ["Ø Score (Regex)",f"{avg_sc:.1f}%"],
+        ["Ø Composite",f"{avg_comp:.1f}%"]]
+    if avg_jury is not None:
+        rows.append(["Ø LLM-Jury",f"{avg_jury:.1f}/5  ({len(jury_cov)}/{tot} Coverage)"])
+    rows.extend([
+        ["Ø Wörter",f"{avg_wc:.0f}"],
+        ["Workflows",", ".join(WF_LBL.get(w,w) for w in data["workflows"])]
+    ])
     t = Table(rows,colWidths=[5*cm,11*cm])
     t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),C["dark"]),("TEXTCOLOR",(0,0),(-1,0),colors.white),
         ("FONTSIZE",(0,0),(-1,-1),9),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
@@ -183,7 +233,9 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
     # Charts page
     story.append(Paragraph("Qualitäts-Scores",st["H2"]))
     lbs = [e["test_id"].split("-",1)[-1][:25] for e in ae]
-    story.append(_hbar("Score pro Testfall",lbs,[e["score"]*100 for e in ae],
+    # P6: Composite-Score (Regex + Jury) als Hauptchart, mit Jury-Faehnchen.
+    story.append(_hbar("Composite-Score pro Testfall (70% Regex + 30% Jury)",
+        lbs,[e.get("composite", e["score"])*100 for e in ae],
         [WF_COL.get(e["workflow"],C["gray"]) for e in ae],ref=70,rl="Min 70%",mx=105))
     story.append(Spacer(1,4*mm))
     # Legend
@@ -230,10 +282,20 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
     # Detail tables
     for wf,entries in data["workflows"].items():
         story.append(Paragraph(f"Workflow: {WF_LBL.get(wf,wf)}",st["H2"]))
-        dd = [["Testfall","Wörter","Score","Status","Issues"]]
+        # P6: Jury-Spalte ergaenzt. "—" wenn keine Jury-Bewertung vorliegt.
+        dd = [["Testfall","Wörter","Score","Jury","Composite","Status","Issues"]]
         for e in entries:
-            dd.append([e["test_id"],str(e["word_count"]),f"{e['score']*100:.0f}%",e["status"],str(e["issues"])])
-        dt = Table(dd,colWidths=[7*cm,2*cm,2*cm,2*cm,1.5*cm])
+            jury_cell = f"{e['jury_score']:.0f}/5" if e.get("jury_score") is not None else "—"
+            dd.append([
+                e["test_id"],
+                str(e["word_count"]),
+                f"{e['score']*100:.0f}%",
+                jury_cell,
+                f"{e.get('composite', e['score'])*100:.0f}%",
+                e["status"],
+                str(e["issues"]),
+            ])
+        dt = Table(dd,colWidths=[5.5*cm,1.6*cm,1.6*cm,1.4*cm,1.8*cm,1.6*cm,1.2*cm])
         dt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),C["dark"]),("TEXTCOLOR",(0,0),(-1,0),colors.white),
             ("FONTSIZE",(0,0),(-1,-1),8),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
             ("ALIGN",(1,0),(-1,-1),"CENTER"),("GRID",(0,0),(-1,-1),.5,C["grid"]),
@@ -323,23 +385,48 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
     if data.get("variance"):
         story.append(PageBreak())
         story.append(Paragraph("Stil-Varianz",st["H2"]))
+        # P6: nach Workflow gruppieren statt eine flache Liste zu produzieren.
+        # Vorher war im PDF nur "TherapeutA vs TherapeutB - 0.239" ohne Kontext.
+        from collections import defaultdict as _dd
+        grouped = _dd(list)
         for vr in data["variance"]:
-            sc = vr.get("variance_score",0)
-            cl = C["green"] if sc>.15 else (C["orange"] if sc>.05 else C["red"])
-            ic = "✓" if sc>.15 else ("⚠" if sc>.05 else "✗")
-            story.append(Paragraph(f'<font color="{cl.hexval()}"><b>{ic}</b></font> '
-                f'{vr.get("therapeut_a","?")} vs. {vr.get("therapeut_b","?")} — {sc:.3f}',st["B"]))
+            wf = vr.get("workflow", "?")
+            grouped[wf].append(vr)
+        for wf in sorted(grouped.keys()):
+            wf_label = WF_LBL.get(wf, wf)
+            story.append(Paragraph(
+                f'<b>{wf_label}</b>',
+                ParagraphStyle("VarWF", parent=st["Normal"], fontSize=9,
+                               textColor=C["dark"], spaceBefore=3*mm, spaceAfter=1*mm)))
+            for vr in grouped[wf]:
+                sc = vr.get("variance_score",0)
+                cl = C["green"] if sc>.15 else (C["orange"] if sc>.05 else C["red"])
+                ic = "✓" if sc>.15 else ("⚠" if sc>.05 else "✗")
+                story.append(Paragraph(f'<font color="{cl.hexval()}"><b>{ic}</b></font> '
+                    f'{vr.get("therapeut_a","?")} vs. {vr.get("therapeut_b","?")} — {sc:.3f}',
+                    st["B"]))
     if data.get("jury"):
         story.append(Spacer(1,6*mm))
         story.append(Paragraph("LLM-Stil-Jury",st["H2"]))
-        for jr in data["jury"]:
+        # P6: Sortiere Failures (<3) nach oben, dann nach Score absteigend.
+        sorted_jury = sorted(
+            data["jury"],
+            key=lambda r: (r.get("score", 0) >= 3, -r.get("score", 0))
+        )
+        for jr in sorted_jury:
             sc = jr.get("score",0)
             cl = C["green"] if sc>=4 else (C["orange"] if sc>=3 else C["red"])
-            reason = jr.get("reason","")
+            reason = jr.get("reason","") or jr.get("begruendung","")
             # XML-Escaping + Zeilenumbrueche
             reason = reason.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
+            # P6: Label mit Workflow + test_id (vorher anonym)
+            wf = jr.get("workflow","?")
+            tid = jr.get("test_id","") or jr.get("testcase_id","")
+            label = f"{WF_LBL.get(wf,wf)} / {tid}" if tid else WF_LBL.get(wf,wf)
             jury_style = ParagraphStyle("JuryItem", parent=st["Normal"], fontSize=8, leading=11, textColor=C["dark"])
-            story.append(Paragraph(f'<font color="{cl.hexval()}"><b>{sc}/5</b></font> — {reason}', jury_style))
+            story.append(Paragraph(
+                f'<font color="{cl.hexval()}"><b>{sc}/5</b></font> '
+                f'<b>{label}</b> — {reason}', jury_style))
             story.append(Spacer(1, 3*mm))
     doc.build(story)
     return out

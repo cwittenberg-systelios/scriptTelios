@@ -401,6 +401,38 @@ async def create_generate_job(
         if "extraction" in bands:
             job.set_progress(bands["extraction"][0], "Dokument-Extraktion")
         _ex_t0 = _t.time()
+
+        # P2: Helper fuer OCR-Mülldaten-Validierung. Loggt Auffaelligkeiten und
+        # gibt im Job einen Warn-Hinweis zurueck. Verworfen wird nichts hart -
+        # die Klinik soll trotzdem ein Ergebnis bekommen, aber im UI sehen
+        # dass die Quelle problematisch war.
+        from app.services.extraction import detect_extraction_garbage
+        _ocr_warnings: list[str] = []
+
+        def _check_ocr_garbage(text: str, label: str, file_name: str = "") -> str:
+            """Prueft Text auf OCR-Mülldaten und sammelt Warnungen.
+            Gibt den Text unveraendert zurueck (kein Hard-Filter), damit der
+            Job weiterlaeuft. Eskalation auf Reject-Schwelle: wenn drei oder
+            mehr Probleme auf einer Quelle erkannt werden, wird der Text
+            geleert um Halluzinationen zu verhindern."""
+            if not text or len(text.strip()) < 50:
+                return text
+            problems = detect_extraction_garbage(text, file_name)
+            if problems:
+                msg = f"{label} ({file_name or '?'}): " + "; ".join(problems)
+                logger.warning("[OCR-Validator] %s", msg)
+                _ocr_warnings.append(msg)
+                # Hard-Reject ab 3+ Problemen: Quelle ist offensichtlich Müll,
+                # wir leeren sie um zu verhindern dass das LLM aus Halluzinationen
+                # einen plausibel klingenden Bericht baut.
+                if len(problems) >= 3:
+                    logger.error(
+                        "[OCR-Validator] %s als unbrauchbar verworfen (%d Probleme)",
+                        label, len(problems)
+                    )
+                    return ""
+            return text
+
         selbstauskunft_text = ""
         if selbstauskunft_bytes and selbstauskunft_name:
             suffix = _Path(selbstauskunft_name).suffix.lower()
@@ -408,6 +440,8 @@ async def create_generate_job(
             path.write_bytes(selbstauskunft_bytes)
             try:
                 selbstauskunft_text = await extract_text(path)
+                selbstauskunft_text = _check_ocr_garbage(
+                    selbstauskunft_text, "Selbstauskunft", selbstauskunft_name)
             except Exception as e:
                 logger.warning("Selbstauskunft-Extraktion fehlgeschlagen: %s", e)
 
@@ -419,6 +453,8 @@ async def create_generate_job(
             path.write_bytes(vorbefunde_bytes)
             try:
                 vorbefunde_text = await extract_text(path)
+                vorbefunde_text = _check_ocr_garbage(
+                    vorbefunde_text, "Vorbefunde", vorbefunde_name)
             except Exception as e:
                 logger.warning("Vorbefunde-Extraktion fehlgeschlagen: %s", e)
 
@@ -431,6 +467,8 @@ async def create_generate_job(
             try:
                 verlaufsdoku_text = await extract_text(path)
                 verlaufsdoku_text = clean_verlauf_text(verlaufsdoku_text)
+                verlaufsdoku_text = _check_ocr_garbage(
+                    verlaufsdoku_text, "Verlaufsdokumentation", verlaufsdoku_name)
             except Exception as e:
                 logger.warning("Verlaufsdoku-Extraktion fehlgeschlagen: %s", e)
 
@@ -442,6 +480,8 @@ async def create_generate_job(
             path.write_bytes(antragsvorlage_bytes)
             try:
                 antragsvorlage_text = await extract_text(path)
+                antragsvorlage_text = _check_ocr_garbage(
+                    antragsvorlage_text, "Antragsvorlage", antragsvorlage_name)
             except Exception as e:
                 logger.warning("Antragsvorlage-Extraktion fehlgeschlagen: %s", e)
 
@@ -453,9 +493,26 @@ async def create_generate_job(
             path.write_bytes(vorantrag_bytes)
             try:
                 vorantrag_text = await extract_text(path)
+                vorantrag_text = _check_ocr_garbage(
+                    vorantrag_text, "Vorantrag", vorantrag_name)
                 logger.info("Vorantrag extrahiert: %s", _size_class(len(vorantrag_text)))
             except Exception as e:
                 logger.warning("Vorantrag-Extraktion fehlgeschlagen: %s", e)
+
+        # P2: Wenn ALLE Quell-Texte als unbrauchbar gefiltert wurden, ist die
+        # Datenlage zu duenn fuer eine sinnvolle Generierung - frueh abbrechen.
+        _all_sources = [selbstauskunft_text, vorbefunde_text, verlaufsdoku_text,
+                        antragsvorlage_text, vorantrag_text]
+        if _ocr_warnings and not any(s and len(s.strip()) > 100 for s in _all_sources):
+            # Wir haben kein Transkript noch keinen Text - Hard-Stop.
+            if not (transkript_text or transcript or bullets):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Quelldokumente konnten nicht zuverlaessig gelesen werden. "
+                        "Probleme: " + "; ".join(_ocr_warnings[:3])
+                    ),
+                )
 
         # 3. Stilprofil
         from app.services.prompts import derive_word_limits
@@ -508,17 +565,38 @@ async def create_generate_job(
                 style_info = {"source": "style_library", "therapeut_id": therapeut_id.strip(), "chars": len(style_context)}
 
         # Wortlimit aus Roh-Texten ableiten (vor Destillation, fuer alle Quellen konsistent)
-        # Workflow-spezifische Fallback-Defaults:
+        # Workflow-spezifische Fallback-Defaults.
+        # WICHTIG: Diese Defaults greifen jetzt auch OHNE Stilvorlage (P1).
+        # Werte sind so gewaehlt, dass sie typischen Klinik-Outputs entsprechen
+        # (gemessen an realen Stilvorlagen aus dem v12-Eval-Run):
+        #   - dokumentation: ~150-450w (z.B. dok-02 Vorlage: 143w, dok-01: 458w)
+        #   - anamnese: ~280-650w (Vorlage an-01: 426w, an-02: 270w-Range)
+        #   - verlaengerung/folgeverlaengerung: 350-650w
+        #   - entlassbericht: 500-900w
+        #   - akutantrag: 150-350w (kurzer Begruendungs-Abschnitt)
+        # Die Range ist absichtlich breit (Faktor 2-3 zwischen min/max), damit
+        # Stilvorlagen-Berechnung sie nur in Ausnahmefaellen triggert.
         _wl_defaults = {
-            "dokumentation":     (150, 500),
-            "anamnese":          (450, 700),
-            "verlaengerung":     (300, 600),
-            "folgeverlaengerung":(300, 600),
-            "entlassbericht":    (600, 1200),
-            "akutantrag":        (150, 400),
+            "dokumentation":     (150, 450),
+            "anamnese":          (280, 650),
+            "verlaengerung":     (350, 650),
+            "folgeverlaengerung":(350, 650),
+            "entlassbericht":    (500, 900),
+            "akutantrag":        (150, 350),
         }
         _fb_min, _fb_max = _wl_defaults.get(workflow, (200, 800))
-        word_limits = derive_word_limits(_style_raw_texts, _fb_min, _fb_max) if _style_raw_texts else None
+        if _style_raw_texts:
+            word_limits = derive_word_limits(_style_raw_texts, _fb_min, _fb_max)
+            _wl_source = f"Stilvorlage(n) (n={len(_style_raw_texts)})"
+        else:
+            # P1: Auch ohne Stilvorlage hartes TEXTLIMIT setzen.
+            # Frueher (bis v18) war word_limits=None wenn keine Stilvorlage vorlag.
+            # Folge: Anamnese und Doku produzierten 1000+ Woerter Outputs (siehe
+            # Eval-Report v12: an-02=1181w/Cap 418w, dok-02=443w/Cap 143w), weil
+            # nur der weiche "Richtwert ca. 450-700 Wörter" im BASE_PROMPT stand.
+            # Jetzt: Workflow-Default als hartes TEXTLIMIT durchreichen.
+            word_limits = (_fb_min, _fb_max)
+            _wl_source = "Workflow-Default (keine Stilvorlage)"
         # Bug-Fix #2: Akutantrag-Stilvorlagen enthalten oft den Volltext (Anamnese,
         # Befund, Familienanamnese), wodurch derive_word_limits faelschlich auf
         # 400-800 Woerter aufschwingt. Die echte "Begruendung fuer Akutaufnahme"
@@ -533,9 +611,8 @@ async def create_generate_job(
                     "Akutantrag-Cap: Wortlimit %d-%d -> %d-%d (Default, Stilvorlage zu lang)",
                     _orig_min, _orig_max, _fb_min, _fb_max,
                 )
-        if word_limits:
-            logger.info("Wortlimit fuer %s: %d–%d Wörter (aus %d Stilvorlage(n))",
-                        workflow, word_limits[0], word_limits[1], len(_style_raw_texts))
+        logger.info("Wortlimit fuer %s: %d–%d Wörter (%s)",
+                    workflow, word_limits[0], word_limits[1], _wl_source)
 
         # 4. Patientennamen ermitteln — Reihenfolge:
         #    a) Explizit uebergeben (vor allem P1 Gespraechszusammenfassung)
@@ -802,6 +879,9 @@ async def create_generate_job(
             "transcript":  transkript_text or None,
             "model_used":  result["model_used"],
             "style_info":  style_info,
+            # P2: OCR-Validator-Warnungen ans Frontend durchreichen.
+            # UI kann eine Warnbanner anzeigen wenn diese Liste nicht leer ist.
+            "ocr_warnings": _ocr_warnings if _ocr_warnings else None,
         }
 
     background_tasks.add_task(job_queue.run_job, job, _run())

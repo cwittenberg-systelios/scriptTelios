@@ -583,6 +583,132 @@ def _has_excessive_repetition(text: str) -> bool:
     return bool(re.search(r"([^\s\-_])\1{6,}", text))
 
 
+# ── P2: Halluzinationsschutz - Mülldaten-Detektion ───────────────────────────
+#
+# Vor v18 lieferte das Vision-Modell bei leeren/blanken Selbstauskunfts-Seiten
+# Pseudo-Inhalte ("Eis- und Wärmetherapie", "A. Klinikleitung B. IT-Support",
+# Listen 1-300) oder Refusal-Strings ("Es tut mir leid, aber ich kann keine
+# Bilder bearbeiten"). Diese landeten ungefiltert im LLM-Prompt - das Modell
+# halluzinierte daraus dann plausibel klingende Anamnese-Texte.
+#
+# detect_extraction_garbage() prüft ein extrahiertes Dokument auf typische
+# Müll-Muster und gibt eine Liste konkreter Probleme zurück. Aufrufer
+# (jobs.py) entscheidet ob er warnt, blockt oder durchreicht.
+
+# Refusal-Strings, die Vision-Modelle bei leeren/unleserlichen Bildern liefern.
+# Treffer = Seite ist als Quelle unbrauchbar.
+VISION_REFUSAL_PATTERNS = [
+    r"es\s+tut\s+mir\s+leid",
+    r"i'?m\s+sorry",
+    r"ich\s+kann\s+(keine|keinen)\s+(bilder|bild|text)",
+    r"i\s+can(?:not|'t)\s+(read|see|process|extract)",
+    r"keine?\s+lesbar(?:en|e)?\s+inhalt",
+    r"sorry,?\s+i\s+can",
+    r"unable\s+to\s+(read|extract|process)",
+]
+_VISION_REFUSAL_RE = re.compile(
+    "|".join(VISION_REFUSAL_PATTERNS), re.IGNORECASE
+)
+
+# Wiederholte fortlaufende Listen wie "[ ] 0\n[ ] 1\n[ ] 2..." oder
+# "A. Foo\nB. Bar\nC. Baz" sind typische Vision-Halluzinationen bei leeren
+# Seiten. Erkennung: 5+ Zeilen die alle dem gleichen Schema folgen.
+_LIST_HALLUC_PATTERNS = [
+    re.compile(r"(?:\[\s*[Xx ]?\s*\][^\n]{0,20}\n){8,}"),  # 8+ Checkboxen am Stueck
+    re.compile(r"(?:\d+\.\s+\d+\s*\n){8,}"),  # nummerierte Listen "1. 1\n2. 2..."
+    re.compile(r"(?:[A-Z]\.\s+[A-Za-zäöüÄÖÜ][^\n]{2,30}\n){8,}"),  # A. ... B. ...
+]
+
+
+def detect_extraction_garbage(
+    text: str,
+    file_name: str = "",
+) -> list[str]:
+    """
+    Prueft extrahierten Text auf typische OCR-/Vision-Halluzinations-Muster.
+
+    Returns: Liste menschenlesbarer Problem-Beschreibungen. Leere Liste = OK.
+
+    Geprueft wird:
+      1. Vision-Refusal-Strings ("Es tut mir leid, ich kann keine Bilder...")
+      2. Wiederholte Listen-Halluzinationen (Checkbox-/Buchstaben-Muster)
+      3. Anteil deutscher Stoppwoerter (Plausibilitaet als deutscher Text)
+      4. Anteil leerer/sehr kurzer Seiten (>30% bei mehrseitigem Dokument)
+      5. Generische Klinik-Phrasen ohne Bezug ("Wir bieten umfangreiche...")
+
+    Aufruf in jobs.py:
+        garbage = detect_extraction_garbage(selbstauskunft_text, "selbstauskunft.pdf")
+        if garbage:
+            logger.warning("[OCR-Validator] %s: %s", file, "; ".join(garbage))
+            # Optional: Job mit Hinweis fortsetzen oder abbrechen
+    """
+    issues: list[str] = []
+    if not text or len(text.strip()) < 50:
+        return issues  # Zu kurz fuer aussagekraeftige Pruefung
+
+    # 1. Refusal-Strings detektieren
+    refusals = _VISION_REFUSAL_RE.findall(text)
+    if refusals:
+        issues.append(
+            f"Vision-Refusal-Strings gefunden ({len(refusals)} Vorkommen) - "
+            f"OCR hat einzelne Seiten als unlesbar abgelehnt"
+        )
+
+    # 2. Listen-Halluzinationen
+    for i, pat in enumerate(_LIST_HALLUC_PATTERNS):
+        m = pat.search(text)
+        if m:
+            issues.append(
+                f"Verdaechtige Listen-Halluzination erkannt "
+                f"(Pattern {i+1}, Treffer-Laenge {len(m.group(0))} Zeichen) - "
+                f"typischerweise vom Vision-Modell bei leeren Seiten erzeugt"
+            )
+            break  # Erste Erkennung reicht
+
+    # 3. Stoppwort-Plausibilitaet (nur bei laengerem Text aussagekraeftig)
+    words = re.findall(r"\b\w+\b", text.lower())
+    if len(words) > 100:
+        hits = sum(1 for w in words if w in DE_STOPWORDS)
+        ratio = hits / len(words)
+        if ratio < 0.05:
+            issues.append(
+                f"Sehr geringe deutsche Stoppwort-Dichte ({ratio:.1%}) - "
+                f"Text wirkt nicht wie zusammenhaengende deutsche Prosa"
+            )
+
+    # 4. Seiten-Analyse (wenn Seitenmarker vorhanden)
+    page_markers = re.findall(r"\[Seite\s+\d+", text, re.IGNORECASE)
+    if len(page_markers) >= 3:
+        # Pro Seite Inhaltslaenge schaetzen
+        page_chunks = re.split(r"\[Seite\s+\d+[^\]]*\]", text, flags=re.IGNORECASE)
+        page_chunks = [c.strip() for c in page_chunks if c.strip()]
+        empty_pages = sum(1 for c in page_chunks if len(c) < 50)
+        if page_chunks and empty_pages / len(page_chunks) > 0.3:
+            issues.append(
+                f"{empty_pages} von {len(page_chunks)} Seiten enthalten <50 Zeichen "
+                f"({empty_pages/len(page_chunks):.0%}) - Quelldokument ueberwiegend leer"
+            )
+
+    # 5. Generische Klinik-Werbephrasen (Vision-Halluzinationen bei leeren
+    # Seiten reproduzieren oft Webseiten-Boilerplate aus dem Trainingskorpus)
+    boilerplate_patterns = [
+        r"wir\s+bieten\s+(?:eine|ihnen)\s+(?:umfangreiche|umfassende)",
+        r"f(?:ü|ue)r\s+(?:die|ihre)\s+bestm(?:ö|oe)gliche\s+(?:behandlung|versorgung)",
+        r"einheitliche\s+verf(?:ü|ue)gbarkeit",
+    ]
+    boilerplate_hits = sum(
+        1 for p in boilerplate_patterns
+        if re.search(p, text, re.IGNORECASE)
+    )
+    if boilerplate_hits >= 1:
+        issues.append(
+            f"Generische Klinik-Werbephrasen gefunden ({boilerplate_hits} Treffer) - "
+            f"vermutlich Vision-Halluzination, kein echter Patient-Inhalt"
+        )
+
+    return issues
+
+
 def _normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFC", text)
     text = re.sub(r"[^\S\n\t ]+", " ", text)
