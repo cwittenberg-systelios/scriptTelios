@@ -10,6 +10,11 @@ from typing import Annotated, Optional
 from app.core.config import settings
 from app.core.auth import get_current_user
 from app.core.files import size_class as _size_class
+# WorkflowLiteral wird fuer die Form-Validierung des workflow-Parameters
+# gebraucht (s.u. Zeile ~266). Kommt zentral aus app.core.workflows;
+# schemas.py re-exportiert ihn, aber wir importieren direkt aus core damit
+# der Import-Pfad eindeutig zur Quelle der Wahrheit zeigt.
+from app.core.workflows import WorkflowLiteral
 from app.services.job_queue import job_queue, JobStatus
 from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_text, extract_style_context
