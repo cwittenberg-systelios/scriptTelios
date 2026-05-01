@@ -7,11 +7,6 @@ import time as _t
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, Depends
 from typing import Annotated, Optional
 
-from app.core.workflows import word_limit_for
-
-# statt _wl_defaults-Dict:
-_fb_min, _fb_max = word_limit_for(workflow, fallback=(200, 800))
-
 from app.core.config import settings
 from app.core.auth import get_current_user
 from app.core.files import size_class as _size_class
