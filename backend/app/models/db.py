@@ -106,8 +106,7 @@ class StyleProfile(Base):
     word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
-# v16 Audit B2: Workflow-Liste zentral aus schemas.py
-from app.models.schemas import WORKFLOW_NAMES as DOKUMENTTYPEN  # noqa: E402
+DOKUMENTTYPEN = ["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"]
 DOKUMENTTYP_LABELS = {
     "dokumentation":        "Gesprächsdokumentation",
     "anamnese":             "Anamnese",
