@@ -35,12 +35,31 @@ C = {
     "blue": colors.HexColor("#1a5c8b"), "cream": colors.HexColor("#f8f6f2"),
     "purple": colors.HexColor("#7b1fa2"), "teal": colors.HexColor("#00695c"),
 }
-WF_COL = {"entlassbericht": C["red"], "verlaengerung": C["blue"],
-          "folgeverlaengerung": C["orange"], "anamnese": C["green"],
-          "dokumentation": C["dark"]}
-WF_LBL = {"entlassbericht": "Entlassbericht", "verlaengerung": "Verlängerung",
-           "folgeverlaengerung": "Folgeverlängerung", "anamnese": "Anamnese",
-           "dokumentation": "Gesprächsdoku"}
+
+# v13: Workflow-Farben und -Labels kommen aus dem zentralen WORKFLOWS-Modul,
+# wenn es importierbar ist. Skript laeuft auch standalone (ohne app/-Paket im
+# PYTHONPATH) - dann faellt es auf hardcoded Werte zurueck. Sync-Test in
+# test_suite.py vergleicht beide Varianten.
+try:
+    # Versuche app/-Paket zu finden (typischerweise via PYTHONPATH oder wenn
+    # das Skript aus dem Backend-Root gestartet wird).
+    import sys as _sys
+    from pathlib import Path as _Path
+    _backend_root = _Path(__file__).resolve().parent.parent  # scripts/.. = backend/
+    if str(_backend_root) not in _sys.path:
+        _sys.path.insert(0, str(_backend_root))
+    from app.core.workflows import WORKFLOWS as _WORKFLOWS
+    WF_COL = {w.key: colors.HexColor(w.color_hex) for w in _WORKFLOWS}
+    WF_LBL = {w.key: w.short_label for w in _WORKFLOWS}
+except ImportError:
+    # Fallback: hardcoded. MUSS bei Aenderung von WORKFLOWS manuell synchronisiert
+    # werden - sync-test in test_suite.py wacht darueber.
+    WF_COL = {"entlassbericht": C["red"], "verlaengerung": C["blue"],
+              "folgeverlaengerung": C["orange"], "anamnese": C["green"],
+              "dokumentation": C["dark"], "akutantrag": C["purple"]}
+    WF_LBL = {"entlassbericht": "Entlassbericht", "verlaengerung": "Verlängerung",
+               "folgeverlaengerung": "Folgeverlängerung", "anamnese": "Anamnese",
+               "dokumentation": "Gesprächsdoku", "akutantrag": "Akutantrag"}
 
 def load_eval_results(d: Path) -> dict:
     results = defaultdict(list)

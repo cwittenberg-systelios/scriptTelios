@@ -13,10 +13,19 @@ Verbliebene Modelle:
                            Modell wird derzeit nicht aktiv referenziert,
                            bleibt fuer eventuelle Reaktivierung)
   - StyleEmbedding*       (von /api/style/upload und /api/style/{tid})
+
+Re-Exports:
+  - WorkflowLiteral       (aus app.core.workflows; behaelt den bisherigen
+                           Import-Pfad fuer jobs.py & Co. bei)
 """
 from datetime import datetime
 from typing import Literal, Optional
 from pydantic import BaseModel
+
+# v13: WorkflowLiteral kommt jetzt aus dem zentralen Workflow-Modul.
+# Wir re-exportieren ihn hier, damit der bisherige Import-Pfad
+# `from app.models.schemas import WorkflowLiteral` weiter funktioniert.
+from app.core.workflows import WorkflowLiteral  # noqa: F401  (re-export)
 
 
 # ── Health ────────────────────────────────────────────────────────

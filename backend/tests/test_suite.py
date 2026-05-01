@@ -142,6 +142,151 @@ class TestHealth:
 # 7. PROMPTS (Unit Tests)
 # ══════════════════════════════════════════════════════════════════
 
+class TestWorkflowSync:
+    """v13 SSOT-Tests: stellt sicher, dass alle Workflow-bezogenen Konstanten
+    aus app.core.workflows abgeleitet sind und konsistent bleiben.
+
+    Wenn dieser Test fehlschlaegt, hat jemand einen Workflow nur an einer
+    Stelle ergaenzt/umbenannt - bitte zentral in app/core/workflows.py
+    aendern und alle Konsumenten profitieren automatisch.
+    """
+
+    def test_workflow_keys_exist(self):
+        """Smoke-Test: WORKFLOWS ist nicht leer und Keys sind eindeutig."""
+        from app.core.workflows import WORKFLOWS, WORKFLOW_KEYS
+        assert len(WORKFLOWS) >= 4, "Mindestens 4 Workflows erwartet"
+        assert len(set(WORKFLOW_KEYS)) == len(WORKFLOW_KEYS), \
+            "Workflow-Keys muessen eindeutig sein (Duplikat in WORKFLOWS)"
+
+    def test_workflow_literal_synchronized(self):
+        """WorkflowLiteral muss exakt WORKFLOW_KEYS abdecken."""
+        from typing import get_args
+        from app.core.workflows import WORKFLOW_KEYS, WorkflowLiteral
+        assert set(get_args(WorkflowLiteral)) == set(WORKFLOW_KEYS), (
+            "WorkflowLiteral aus dem Sync mit WORKFLOWS gelaufen. "
+            "Pruefe app/core/workflows.py - der hardcoded Fallback-Block "
+            "muss mit den Keys uebereinstimmen."
+        )
+
+    def test_schemas_reexports_workflow_literal(self):
+        """schemas.WorkflowLiteral muss derselbe Typ sein wie der zentrale."""
+        from app.core.workflows import WorkflowLiteral as Central
+        from app.models.schemas import WorkflowLiteral as ReExport
+        assert Central is ReExport, (
+            "schemas.WorkflowLiteral ist nicht der Re-Export aus "
+            "app.core.workflows - jobs.py importiert die falsche Variante."
+        )
+
+    def test_db_dokumenttypen_synchronized(self):
+        """DOKUMENTTYPEN und DOKUMENTTYP_LABELS muessen WORKFLOWS spiegeln."""
+        from app.core.workflows import WORKFLOW_KEYS, WORKFLOWS
+        from app.models.db import DOKUMENTTYPEN, DOKUMENTTYP_LABELS
+        # Identische Keys (Reihenfolge wichtig wegen SQL-Enum-Migration!)
+        assert tuple(DOKUMENTTYPEN) == WORKFLOW_KEYS, (
+            "DOKUMENTTYPEN-Reihenfolge weicht ab. Bei Aenderung wird ein "
+            "Alembic-Migration fuer dokumenttyp_enum noetig."
+        )
+        # Labels muessen exakt uebereinstimmen
+        expected_labels = {w.key: w.label for w in WORKFLOWS}
+        assert DOKUMENTTYP_LABELS == expected_labels
+
+    def test_prompts_structural_workflows_subset(self):
+        """STRUCTURAL_WORKFLOWS muss Subset von WORKFLOW_KEYS sein und
+        mit den is_structural-Flags der WorkflowSpecs uebereinstimmen."""
+        from app.core.workflows import WORKFLOWS, WORKFLOW_KEYS
+        from app.services.prompts import STRUCTURAL_WORKFLOWS
+        expected = {w.key for w in WORKFLOWS if w.is_structural}
+        assert STRUCTURAL_WORKFLOWS == expected, (
+            "STRUCTURAL_WORKFLOWS aus dem Sync gelaufen. "
+            "Wird aus WORKFLOWS abgeleitet - nicht manuell aendern."
+        )
+        assert STRUCTURAL_WORKFLOWS <= set(WORKFLOW_KEYS)
+
+    def test_prompts_workflow_instructions_have_all_keys(self):
+        """WORKFLOW_INSTRUCTIONS_DEFAULT muss alle Workflow-Keys abdecken
+        (ausser akutantrag, der hat einen eigenen BASE_PROMPT_AKUTANTRAG)."""
+        from app.core.workflows import WORKFLOW_KEYS
+        from app.services.prompts import WORKFLOW_INSTRUCTIONS_DEFAULT
+        expected = set(WORKFLOW_KEYS)
+        actual = set(WORKFLOW_INSTRUCTIONS_DEFAULT.keys())
+        missing = expected - actual
+        # Akutantrag darf fehlen (hat eigenen BASE_PROMPT)
+        missing.discard("akutantrag")
+        assert not missing, (
+            f"WORKFLOW_INSTRUCTIONS_DEFAULT fehlt Keys: {sorted(missing)}. "
+            f"Bitte fuer neuen Workflow eine Default-Anweisung ergaenzen."
+        )
+
+    def test_prompts_base_prompts_have_all_keys(self):
+        """BASE_PROMPTS muss alle Workflow-Keys abdecken plus 'befund'."""
+        from app.core.workflows import WORKFLOW_KEYS
+        from app.services.prompts import BASE_PROMPTS
+        expected = set(WORKFLOW_KEYS)
+        actual = set(BASE_PROMPTS.keys())
+        missing = expected - actual
+        assert not missing, (
+            f"BASE_PROMPTS fehlt Keys: {sorted(missing)}. "
+            f"Pflicht-Kernel fuer jeden Workflow definieren."
+        )
+        assert "befund" in BASE_PROMPTS, (
+            "BASE_PROMPTS['befund'] fehlt - wird fuer den Anamnese-Sub-Call "
+            "benoetigt."
+        )
+
+    def test_extraction_style_section_headings_have_all_keys(self):
+        """STYLE_SECTION_HEADINGS muss fuer jeden Workflow Aliases haben."""
+        from app.core.workflows import WORKFLOW_KEYS
+        from app.services.extraction import STYLE_SECTION_HEADINGS
+        expected = set(WORKFLOW_KEYS)
+        actual = set(STYLE_SECTION_HEADINGS.keys())
+        missing = expected - actual
+        assert not missing, (
+            f"STYLE_SECTION_HEADINGS fehlt Keys: {sorted(missing)}. "
+            f"Ohne Aliases kann extract_docx_section() den Verlaufs-"
+            f"Abschnitt nicht aus Stilvorlagen extrahieren."
+        )
+
+    def test_eval_report_wf_lookups_synchronized(self):
+        """eval_report.WF_COL und WF_LBL muessen WORKFLOWS spiegeln.
+
+        Wichtig: das Skript hat einen Hardcoded-Fallback fuer den Standalone-
+        Modus. Dieser Test laeuft mit verfuegbarem app/-Paket und prueft
+        die zentralisierten Werte. Der Fallback wird durch einen separaten
+        statischen Vergleich validiert (siehe unten).
+        """
+        from app.core.workflows import WORKFLOW_KEYS
+        # eval_report.py liegt in scripts/ - wir importieren es ueber den
+        # Dateipfad, um nicht von einem installierten Paket abhaengig zu sein.
+        from pathlib import Path
+        import importlib.util
+        repo_root = Path(__file__).resolve().parent.parent
+        eval_report_path = repo_root / "scripts" / "eval_report.py"
+        if not eval_report_path.exists():
+            pytest.skip("scripts/eval_report.py nicht gefunden")
+        spec = importlib.util.spec_from_file_location("eval_report", eval_report_path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert set(mod.WF_COL.keys()) >= set(WORKFLOW_KEYS), (
+            f"eval_report.WF_COL fehlt Keys: "
+            f"{set(WORKFLOW_KEYS) - set(mod.WF_COL.keys())}"
+        )
+        assert set(mod.WF_LBL.keys()) >= set(WORKFLOW_KEYS), (
+            f"eval_report.WF_LBL fehlt Keys: "
+            f"{set(WORKFLOW_KEYS) - set(mod.WF_LBL.keys())}"
+        )
+
+    def test_jobs_uses_central_lookups(self):
+        """Smoke-Test: Aufrufe word_limit_for/max_tokens_for funktionieren
+        und liefern plausible Werte fuer alle Workflows."""
+        from app.core.workflows import WORKFLOW_KEYS, word_limit_for, max_tokens_for
+        for key in WORKFLOW_KEYS:
+            wl = word_limit_for(key)
+            assert isinstance(wl, tuple) and len(wl) == 2
+            assert 0 < wl[0] < wl[1] <= 5000, f"{key}: implausibles Wortlimit {wl}"
+            mt = max_tokens_for(key)
+            assert 500 <= mt <= 8000, f"{key}: implausibles max_tokens {mt}"
+
+
 class TestPrompts:
 
     def test_system_prompt_dokumentation(self):

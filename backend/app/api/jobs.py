@@ -7,7 +7,10 @@ import time as _t
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, Depends
 from typing import Annotated, Optional
 
-from app.models.schemas import WorkflowLiteral
+from app.core.workflows import word_limit_for
+
+# statt _wl_defaults-Dict:
+_fb_min, _fb_max = word_limit_for(workflow, fallback=(200, 800))
 
 from app.core.config import settings
 from app.core.auth import get_current_user
@@ -565,26 +568,11 @@ async def create_generate_job(
                 style_info = {"source": "style_library", "therapeut_id": therapeut_id.strip(), "chars": len(style_context)}
 
         # Wortlimit aus Roh-Texten ableiten (vor Destillation, fuer alle Quellen konsistent)
-        # Workflow-spezifische Fallback-Defaults.
-        # WICHTIG: Diese Defaults greifen jetzt auch OHNE Stilvorlage (P1).
-        # Werte sind so gewaehlt, dass sie typischen Klinik-Outputs entsprechen
-        # (gemessen an realen Stilvorlagen aus dem v12-Eval-Run):
-        #   - dokumentation: ~150-450w (z.B. dok-02 Vorlage: 143w, dok-01: 458w)
-        #   - anamnese: ~280-650w (Vorlage an-01: 426w, an-02: 270w-Range)
-        #   - verlaengerung/folgeverlaengerung: 350-650w
-        #   - entlassbericht: 500-900w
-        #   - akutantrag: 150-350w (kurzer Begruendungs-Abschnitt)
-        # Die Range ist absichtlich breit (Faktor 2-3 zwischen min/max), damit
-        # Stilvorlagen-Berechnung sie nur in Ausnahmefaellen triggert.
-        _wl_defaults = {
-            "dokumentation":     (150, 450),
-            "anamnese":          (280, 650),
-            "verlaengerung":     (350, 650),
-            "folgeverlaengerung":(350, 650),
-            "entlassbericht":    (500, 900),
-            "akutantrag":        (150, 350),
-        }
-        _fb_min, _fb_max = _wl_defaults.get(workflow, (200, 800))
+        # v13: Workflow-spezifische Defaults aus dem zentralen WORKFLOWS-Modul.
+        # Wenn ein Workflow umkalibriert werden soll, in app/core/workflows.py
+        # editieren, NICHT hier hardcoden.
+        from app.core.workflows import word_limit_for
+        _fb_min, _fb_max = word_limit_for(workflow, fallback=(200, 800))
         if _style_raw_texts:
             word_limits = derive_word_limits(_style_raw_texts, _fb_min, _fb_max)
             _wl_source = f"Stilvorlage(n) (n={len(_style_raw_texts)})"
@@ -688,19 +676,10 @@ async def create_generate_job(
             # bleibt fuer Backwards-Compat in der Signatur.
             patient_name=patient_name,
         )
-        # Workflow-spezifische max_tokens:
-        # Entlassbericht/Verlängerung: langer Fliesstext, mind. 800 Wörter → 4000 Tokens
-        # Anamnese: zwei Teile (Anamnese + Befund) → 3000 Tokens
-        # Dokumentation: kompakter → 2048 Tokens (Default)
-        max_tokens_map = {
-            "entlassbericht":       4000,
-            "verlaengerung":        3000,
-            "folgeverlaengerung":   3000,
-            "akutantrag":           2048,
-            "anamnese":             3000,
-            "dokumentation":        2048,
-        }
-        max_tok = max_tokens_map.get(workflow, 2048)
+        # v13: max_tokens kommt aus dem zentralen WORKFLOWS-Modul.
+        # Werte pro Workflow in app/core/workflows.py editierbar.
+        from app.core.workflows import max_tokens_for
+        max_tok = max_tokens_for(workflow, fallback=2048)
         from app.services.job_queue import perf_logger
 
         phase_times["extraction"] = _t.time() - _ex_t0
@@ -712,8 +691,9 @@ async def create_generate_job(
             raise RuntimeError("__CANCELLED__")
 
         lb = bands["llm"]
-        expected_tok = {"dokumentation":1000,"anamnese":1500,"verlaengerung":1500,
-                        "folgeverlaengerung":1500,"akutantrag":800,"entlassbericht":2000}.get(workflow, 1500)
+        # v13: erwartete Output-Tokens kommen aus dem zentralen WORKFLOWS-Modul.
+        from app.core.workflows import expected_tokens_for
+        expected_tok = expected_tokens_for(workflow, fallback=1500)
         def _on_tok(n):
             pct = lb[0] + (lb[1] - lb[0]) * min(1.0, n / expected_tok)
             job.set_progress(int(pct), "KI-Generierung", f"{n} Wörter")

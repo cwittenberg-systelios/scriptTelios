@@ -106,15 +106,14 @@ class StyleProfile(Base):
     word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
-DOKUMENTTYPEN = ["dokumentation", "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht"]
-DOKUMENTTYP_LABELS = {
-    "dokumentation":        "Gesprächsdokumentation",
-    "anamnese":             "Anamnese",
-    "verlaengerung":        "Verlängerungsantrag",
-    "folgeverlaengerung":   "Folgeverlängerungsantrag",
-    "akutantrag":           "Akutantrag",
-    "entlassbericht":       "Entlassbericht",
-}
+# v13: DOKUMENTTYPEN und DOKUMENTTYP_LABELS werden jetzt aus der zentralen
+# WORKFLOWS-Liste in app/core/workflows.py abgeleitet (Single Source of Truth).
+# Wenn ein Workflow ergaenzt/umbenannt wird: NUR dort aendern - hier passt sich
+# automatisch an. Der Sync-Test in test_suite.py wacht ueber Konsistenz.
+from app.core.workflows import WORKFLOWS
+
+DOKUMENTTYPEN: list[str] = [w.key for w in WORKFLOWS]
+DOKUMENTTYP_LABELS: dict[str, str] = {w.key: w.label for w in WORKFLOWS}
 
 
 class StyleEmbedding(Base):

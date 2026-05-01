@@ -11,8 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.middleware.audit import AuditMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import health
-from app.api import style_embeddings, jobs, admin, testrun, recordings
+from app.api import health, style_embeddings, jobs, admin, testrun, recordings, workflow_manifest
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -112,7 +111,7 @@ app.include_router(jobs.router,              prefix="/api", tags=["Jobs"])
 app.include_router(admin.router,             prefix="/api", tags=["Admin"])
 app.include_router(testrun.router,           prefix="/api", tags=["Tests"])
 app.include_router(recordings.router,        prefix="/api", tags=["Aufnahmen"])
-
+app.include_router(workflow_manifest.router)
 
 @app.options("/{full_path:path}")
 async def options_catchall(full_path: str):

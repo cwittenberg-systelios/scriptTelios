@@ -13,18 +13,22 @@ from typing import Optional
 
 
 # ── Workflow-Kategorisierung ─────────────────────────────────────────────────
+# v13: STRUCTURAL_WORKFLOWS wird jetzt aus der zentralen WORKFLOWS-Liste
+# abgeleitet (Single Source of Truth in app/core/workflows.py).
+#
 # Strukturelle Workflows: P2/P3/P4 - Stilbeispiel wird als Schablone verwendet
-# (Gliederung, Laenge, Absatztiefe werden uebernommen). Single source of truth -
-# wird in build_system_prompt mehrfach geprueft, frueher als is_structural-Liste
-# und has_structural_template separat - dabei kam es zu Inkonsistenzen
-# (folgeverlaengerung/akutantrag bekamen Schablone aber falschen Abschlusssatz).
-STRUCTURAL_WORKFLOWS = frozenset({
-    "anamnese",
-    "verlaengerung",
-    "folgeverlaengerung",
-    "akutantrag",
-    "entlassbericht",
-})
+# (Gliederung, Laenge, Absatztiefe werden uebernommen). Aktuell gehoeren alle
+# Workflows ausser "dokumentation" zur strukturellen Kategorie - die Information
+# steht im is_structural-Feld des WorkflowSpec.
+#
+# WORKFLOW_INSTRUCTIONS_DEFAULT und BASE_PROMPTS bleiben weiterhin in dieser
+# Datei (zu lange Multi-Line-Strings, andere Lifecycle - Therapeut kann
+# WORKFLOW_INSTRUCTIONS_DEFAULT im Frontend editieren). Der Sync-Test in
+# test_suite.py prueft dass beide Maps Keys haben fuer alle WORKFLOW_KEYS
+# (ausser Sonderfaelle wie "befund" / "akutantrag").
+from app.core.workflows import WORKFLOWS as _WORKFLOWS
+
+STRUCTURAL_WORKFLOWS = frozenset(w.key for w in _WORKFLOWS if w.is_structural)
 
 
 # ── Datenschutz-Namensregel (zentral) ────────────────────────────────────────
