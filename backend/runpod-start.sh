@@ -266,9 +266,14 @@ CREATE TABLE IF NOT EXISTS recordings (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     deleted_at  TIMESTAMPTZ
 );
+-- v18: therapeut_id fuer Mehrbenutzer-Isolation
+ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS therapeut_id VARCHAR(128);
 CREATE INDEX IF NOT EXISTS idx_recordings_created
     ON recordings (created_at DESC)
     WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_recordings_therapeut_id
+    ON recordings (therapeut_id)
+    WHERE therapeut_id IS NOT NULL;
 SQL
 echo "${OK}Schema-Migrations ausgeführt"
 
@@ -667,6 +672,14 @@ else
     echo "${OK}Python-Pakete vorhanden"
 fi
 
+# pytest-timeout: benötigt für Tests mit @pytest.mark.timeout (z.B. OCR-Tests).
+# Prüfen ob installiert, ggf. nachrüsten.
+if ! python -c "import pytest_timeout" 2>/dev/null; then
+    echo "${GO}pytest-timeout installieren..."
+    python -m pip install --quiet pytest-timeout
+    echo "${OK}pytest-timeout installiert"
+fi
+
 # pyannote.audio – nur installieren wenn DIARIZATION_ENABLED=true
 DIARIZATION_ENABLED=$(grep "^DIARIZATION_ENABLED=" "$BACKEND_DIR/.env" 2>/dev/null \
     | cut -d= -f2 | tr -d '"' | tr '[:upper:]' '[:lower:]')
@@ -768,7 +781,7 @@ WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16
 DATABASE_URL=postgresql+asyncpg://systelios:systelios@127.0.0.1:5432/systelios
 SECRET_KEY=${SECRET}
-DELETE_AUDIO_AFTER_TRANSCRIPTION=true
+DELETE_AUDIO_AFTER_TRANSCRIPTION=false
 LOG_LEVEL=INFO
 UPLOAD_DIR=/workspace/uploads
 OUTPUT_DIR=/workspace/outputs

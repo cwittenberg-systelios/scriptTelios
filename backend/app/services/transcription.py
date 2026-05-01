@@ -23,18 +23,27 @@ logger = logging.getLogger(__name__)
 CHUNK_MAX_SECONDS = 900
 
 # Klinischer Initial-Prompt fuer Whisper.
-# Verbessert Erkennung von Fachbegriffen, Eigennamen und IFS-Terminologie
-# die Whisper ohne Kontext oft verschluckt oder falsch schreibt.
-# Whisper nutzt diesen Text als "Kontext vor der Aufnahme" – kein echter Prompt,
-# sondern ein Hint der die Wahrscheinlichkeitsverteilung des Tokenizers beeinflusst.
+# Verbessert Erkennung von Fachbegriffen und Eigennamen die Whisper ohne
+# Kontext oft verschluckt oder falsch schreibt. Whisper nutzt diesen Text als
+# "Kontext vor der Aufnahme" – kein echter Prompt, sondern ein Hint der die
+# Wahrscheinlichkeitsverteilung des Tokenizers beeinflusst.
+#
+# WICHTIG: Hier KEINE schulenspezifischen Verfahrensbegriffe (IFS,
+# Manager-Anteil, Self-Energy, Exile, Feuerwehr-Anteil etc.) auflisten.
+# Whisper schreibt sonst neutrale Aussagen wie "ein Anteil von mir" zu
+# "Manager-Anteil" um, was das Transkript verfaelscht und dem nachgelagerten
+# LLM falsche Evidenz fuer IFS-Sprache liefert. Die Erkennung dieser Begriffe
+# leidet dadurch nicht spuerbar – sie sind nicht so selten, dass Whisper
+# sie ohne Hint nicht koennte; sie waeren aber so haeufig im Hint, dass
+# Whisper sie auch dort sieht wo sie nicht gesagt werden.
 WHISPER_INITIAL_PROMPT = (
-    "Psychotherapeutisches Gespräch. Fachbegriffe: IFS, Internal Family Systems, "
-    "Manager-Anteil, Exile, Feuerwehr-Anteil, Self-Energy, Selbst-Energie, "
+    "Psychotherapeutisches Gespräch. Fachbegriffe: "
+    "innere Anteile, Schutzmechanismus, Schutzmuster, "
     "hypnosystemisch, systemische Therapie, Ressourcenorientierung, "
     "Auftragsklärung, Verlaufsnotiz, Anamnese, Epikrise, Entlassbericht, "
     "Verlängerungsantrag, Kostenübernahme, Krankenkasse, "
     "AMDP, Psychopathologie, Affektregulation, Dissoziation, "
-    "Bindungsmuster, Traumatisierung, innere Anteile, Schutzmechanismus, "
+    "Bindungsmuster, Traumatisierung, "
     "Therapeut, Klient, Klientin, Sitzung, Intervention."
 )
 
@@ -279,7 +288,19 @@ def _diarize(audio_path: Path) -> list[dict] | None:
     try:
         with tempfile.TemporaryDirectory(prefix="systelios_diar_") as tmp_dir:
             wav_path = _to_wav_for_diarization(audio_path, Path(tmp_dir))
-            diarization = pipeline(str(wav_path))
+            # v18 fix: Pyannote ohne torchcodec schlaegt mit
+            # "AudioDecoder is not defined" fehl wenn ein Filepath uebergeben wird.
+            # Workaround: Waveform als Tensor + sample_rate direkt uebergeben -
+            # das umgeht pyannotes internen Decoder komplett.
+            try:
+                import torch, torchaudio
+                waveform, sample_rate = torchaudio.load(str(wav_path))
+                diarization = pipeline(
+                    {"waveform": waveform, "sample_rate": sample_rate}
+                )
+            except ImportError:
+                # torchaudio nicht verfuegbar - filepath-Fallback
+                diarization = pipeline(str(wav_path))
         segments = []
         speaker_map: dict[str, str] = {}
         labels = ["A", "B", "C", "D"]  # max 4 Sprecher realistisch

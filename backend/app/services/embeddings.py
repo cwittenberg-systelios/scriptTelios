@@ -38,6 +38,20 @@ async def get_embedding(text: str) -> list[float] | None:
 
     try:
         r = await client.post("/api/embed", json=payload)
+        if r.status_code == 400:
+            # 400 bedeutet meist: Modell nicht geladen / nicht gefunden.
+            # Ollama-Fehlermeldung loggen damit der User weiss was zu tun ist.
+            try:
+                err_detail = r.json().get("error", r.text)
+            except Exception:
+                err_detail = r.text
+            logger.warning(
+                "Embedding-Modell '%s' nicht verfuegbar (HTTP 400: %s). "
+                "Bitte sicherstellen dass das Modell geladen ist: "
+                "ollama pull %s",
+                EMBEDDING_MODEL, err_detail, EMBEDDING_MODEL,
+            )
+            return None
         r.raise_for_status()
         data = r.json()
         # /api/embed gibt {"embeddings": [[...]]} zurück (Array of arrays)
@@ -61,6 +75,36 @@ async def get_embedding(text: str) -> list[float] | None:
     except Exception as e:
         logger.warning("Embedding-Fehler: %s", e)
         return None
+
+
+async def check_embedding_model_available() -> bool:
+    """
+    Prueft beim Serverstart ob nomic-embed-text geladen ist.
+    Loggt eine klare Warnung wenn nicht — Embeddings fallen auf
+    Fallback (neueste Beispiele) zurueck, aber der Stilbibliothek-
+    Upload speichert keinen Vektor.
+    """
+    from app.services.llm import _get_ollama_client
+    client = _get_ollama_client()
+    try:
+        r = await client.get("/api/tags")
+        if r.status_code != 200:
+            return False
+        models = [m.get("name", "") for m in r.json().get("models", [])]
+        available = any(EMBEDDING_MODEL in m for m in models)
+        if not available:
+            logger.warning(
+                "Embedding-Modell '%s' nicht in Ollama gefunden. "
+                "Semantische Stilsuche nicht verfuegbar. "
+                "Laden mit: ollama pull %s",
+                EMBEDDING_MODEL, EMBEDDING_MODEL,
+            )
+        else:
+            logger.info("Embedding-Modell '%s' verfuegbar.", EMBEDDING_MODEL)
+        return available
+    except Exception as e:
+        logger.warning("Embedding-Modell-Check fehlgeschlagen: %s", e)
+        return False
 
 
 async def retrieve_style_examples(

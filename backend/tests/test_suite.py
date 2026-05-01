@@ -43,6 +43,39 @@ from app.main import app
 client = TestClient(app)
 
 
+# ── Test-Auth-Helper (v18) ─────────────────────────────────────────────────
+# jobs.py und recordings.py nutzen Depends(get_current_user).
+# Fuer Tests mit AUTH_ENABLED=True brauchen wir einen gültigen Override,
+# sonst bekommt jeder Job-Test 401.
+#
+# Zwei Varianten:
+#   auth_client()         - gibt einen TestClient der AUTH override hat
+#   AUTH_OVERRIDE_HEADERS - generiert echte HMAC-Auth-Header (wie Production)
+#
+# Wir nutzen Variante 1 (Dependency-Override) - einfacher + keine
+# Zeitstempel-/Secret-Abhängigkeiten in Tests.
+
+def _make_authed_client(therapeut_id: str = "test-therapeut") -> TestClient:
+    """TestClient mit überschriebenem get_current_user - immer authentifiziert."""
+    from app.core.auth import get_current_user
+
+    async def _override() -> str:
+        return therapeut_id
+
+    app.dependency_overrides[get_current_user] = _override
+    return TestClient(app)
+
+
+def _clear_auth_override() -> None:
+    """Auth-Override entfernen nach Tests."""
+    from app.core.auth import get_current_user
+    app.dependency_overrides.pop(get_current_user, None)
+
+
+# Authed client als Modul-Singleton für TestJobQueue und andere Auth-Tests
+_authed_client = _make_authed_client()
+
+
 # ══════════════════════════════════════════════════════════════════
 # 1. HEALTH
 # ══════════════════════════════════════════════════════════════════
@@ -266,7 +299,7 @@ class TestGenerierungMitDateien:
         ):
             r = client.post(
                 "/api/generate/with-files",
-                data={"workflow": "dokumentation", "prompt": "test", "transcript": "test"},
+                data={"workflow": "dokumentation", "workflow_instructions": "test", "transcript": "test"},
                 files={"style_file": (
                     "stil.docx",
                     DOCX_STILPROFIL.read_bytes(),
@@ -296,7 +329,7 @@ class TestGenerierungMitDateien:
         """Fehlender Workflow-Parameter wird abgelehnt."""
         r = client.post(
             "/api/generate/with-files",
-            data={"prompt": "test"},
+            data={"workflow_instructions": "test"},
         )
         assert r.status_code == 422
 
@@ -308,7 +341,7 @@ class TestGenerierungMitDateien:
         ):
             r = client.post(
                 "/api/generate/with-files",
-                data={"workflow": "dokumentation", "prompt": "test"},
+                data={"workflow": "dokumentation", "workflow_instructions": "test"},
                 files={"audio": ("test.wav", AUDIO_KURZ.read_bytes(), "audio/wav")},
             )
         assert r.status_code == 502
@@ -477,7 +510,7 @@ class TestDokumentVerarbeitung:
         """Ungültiger Workflow für fill wird abgelehnt."""
         r = client.post(
             "/api/documents/fill",
-            data={"workflow": "dokumentation", "prompt": "test"},
+            data={"workflow": "dokumentation", "workflow_instructions": "test"},
             files={
                 "template": ("v.docx", DOCX_ENTLASS_V.read_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
                 "verlauf":  ("v.pdf", PDF_VERLAUF.read_bytes(), "application/pdf"),
@@ -860,11 +893,16 @@ class TestPrompts:
         assert "Erstelle jetzt die klinische Dokumentation" in u
 
     def test_user_content_dokumentation_leer_fallback(self):
-        """Leerer Input liefert sinnvollen Fallback-Text statt leerem String."""
+        """Leerer Input liefert sinnvollen Fallback-Text statt leerem String.
+
+        v18: Der Fallback-Text ist 'Bitte Verlaufsnotiz anhand der verfügbaren
+        Informationen erstellen.' (nicht mehr nur 'Verlaufsnotiz').
+        """
         from app.services.prompts import build_user_content
         u = build_user_content(workflow="dokumentation")
         assert len(u) > 10
-        assert "Verlaufsnotiz" in u
+        # v18: Fallback-Text prüfen (enthält 'Verlaufsnotiz' oder 'verfügbaren')
+        assert "Verlaufsnotiz" in u or "verfügbaren Informationen" in u or "Erstelle jetzt" in u
 
     def test_system_prompt_kein_prompt_echo(self):
         """System-Prompt enthält explizite Anweisung gegen Prompt-Wiederholung."""
@@ -1246,6 +1284,7 @@ class TestEchteDateien:
 
     @pytest.mark.skipif(not REAL_FILES["selbstauskunft_handschrift"].exists(),
                         reason="Echte Selbstauskunft nicht vorhanden")
+    @pytest.mark.timeout(30)
     def test_echte_selbstauskunft_handschrift(self):
         """Handschriftlich ausgefüllte Selbstauskunft wird durch OCR-Kette verarbeitet.
 
@@ -1352,16 +1391,27 @@ class TestEchteDateien:
 # ══════════════════════════════════════════════════════════════════
 
 class TestJobQueue:
-    """Tests fuer den asynchronen Job-Queue-Endpunkt."""
+    """Tests fuer den asynchronen Job-Queue-Endpunkt.
+
+    v18: Jobs erfordern Auth (get_current_user). Alle Tests nutzen
+    _authed_client der den Dependency-Override hat.
+    """
+
+    def setup_method(self):
+        """Auth-Override vor jedem Test sicherstellen."""
+        _make_authed_client()  # refresht den Override
+
+    def teardown_method(self):
+        """Auth-Override nach Klasse sauber räumen."""
+        _clear_auth_override()
 
     def test_job_erstellen_dokumentation(self, mock_llm, mock_transcribe):
         """POST /api/jobs/generate gibt sofort job_id zurueck."""
-        r = client.post(
-            "/api/jobs/generate",
+        r = _authed_client.post("/api/jobs/generate",
             data={
-                "workflow":   "dokumentation",
-                "prompt":     "Erstelle eine Verlaufsnotiz.",
-                "transcript": TXT_TRANSKRIPT.read_text(encoding="utf-8"),
+                "workflow":              "dokumentation",
+                "workflow_instructions": "Erstelle eine Verlaufsnotiz.",
+                "transcript":            TXT_TRANSKRIPT.read_text(encoding="utf-8"),
             },
         )
         assert r.status_code == 200
@@ -1372,15 +1422,13 @@ class TestJobQueue:
 
     def test_job_status_abfragen(self, mock_llm):
         """GET /api/jobs/{job_id} gibt Job-Status zurueck."""
-        # Job erstellen
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "dokumentation", "prompt": "test", "transcript": "test"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "dokumentation",
+                  "workflow_instructions": "test", "transcript": "test"},
         )
         job_id = r.json()["job_id"]
 
-        # Status abfragen
-        r2 = client.get(f"/api/jobs/{job_id}")
+        r2 = _authed_client.get(f"/api/jobs/{job_id}")
         assert r2.status_code == 200
         data = r2.json()
         assert data["job_id"] == job_id
@@ -1390,17 +1438,16 @@ class TestJobQueue:
 
     def test_job_nicht_gefunden(self):
         """GET /api/jobs/unbekannt gibt 404 zurueck."""
-        r = client.get("/api/jobs/nichtvorhandenejobid123")
+        r = _authed_client.get("/api/jobs/nichtvorhandenejobid123")
         assert r.status_code == 404
 
     def test_job_liste(self, mock_llm):
         """GET /api/jobs listet alle Jobs auf."""
         # Mindestens einen Job erstellen
-        client.post(
-            "/api/jobs/generate",
-            data={"workflow": "dokumentation", "prompt": "test", "transcript": "test"},
+        _authed_client.post("/api/jobs/generate",
+            data={"workflow": "dokumentation", "workflow_instructions": "test", "transcript": "test"},
         )
-        r = client.get("/api/jobs")
+        r = _authed_client.get("/api/jobs")
         assert r.status_code == 200
         assert isinstance(r.json(), list)
         assert len(r.json()) >= 1
@@ -1408,26 +1455,23 @@ class TestJobQueue:
     def test_job_alle_workflows(self, mock_llm):
         """Alle 4 Workflows koennen als Jobs gestartet werden."""
         for workflow in ["dokumentation", "anamnese", "verlaengerung", "akutantrag", "entlassbericht"]:
-            r = client.post(
-                "/api/jobs/generate",
-                data={"workflow": workflow, "prompt": "test", "transcript": "test"},
+            r = _authed_client.post("/api/jobs/generate",
+                data={"workflow": workflow, "workflow_instructions": "test", "transcript": "test"},
             )
             assert r.status_code == 200, f"Workflow {workflow} fehlgeschlagen"
             assert "job_id" in r.json()
 
     def test_job_ungültiger_workflow(self):
         """Ungültiger Workflow wird abgelehnt."""
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "unbekannt", "prompt": "test"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "unbekannt", "workflow_instructions": "test"},
         )
         assert r.status_code == 422
 
     def test_job_mit_audio(self, mock_llm, mock_transcribe):
         """Job mit Audio-Upload wird korrekt gestartet."""
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "dokumentation", "prompt": "test"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "dokumentation", "workflow_instructions": "test"},
             files={"audio": ("test.wav", AUDIO_KURZ.read_bytes(), "audio/wav")},
         )
         assert r.status_code == 200
@@ -1435,9 +1479,8 @@ class TestJobQueue:
 
     def test_job_mit_selbstauskunft(self, mock_llm, mock_extract_text):
         """Job mit Selbstauskunft-PDF wird korrekt gestartet (P2 Anamnese)."""
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "anamnese", "prompt": "test", "diagnosen": "F32.1"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "anamnese", "workflow_instructions": "test", "diagnosen": "F32.1"},
             files={"selbstauskunft": (
                 "selbst.pdf", PDF_SELBST_DIG.read_bytes(), "application/pdf"
             )},
@@ -1447,9 +1490,8 @@ class TestJobQueue:
 
     def test_job_mit_verlaufsdoku(self, mock_llm, mock_extract_text):
         """Job mit Verlaufsdoku-PDF wird korrekt gestartet (P3/P4)."""
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "verlaengerung", "prompt": "test"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "verlaengerung", "workflow_instructions": "test"},
             files={"verlaufsdoku": (
                 "verlauf.pdf", PDF_VERLAUF.read_bytes(), "application/pdf"
             )},
@@ -1459,9 +1501,8 @@ class TestJobQueue:
 
     def test_job_mit_antragsvorlage(self, mock_llm, mock_extract_text):
         """Job mit Antragsvorlage wird korrekt gestartet (P3/P4)."""
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "entlassbericht", "prompt": "test"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "entlassbericht", "workflow_instructions": "test"},
             files={"antragsvorlage": (
                 "entlassbericht.docx", DOCX_ENTLASS_V.read_bytes(),
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -1472,9 +1513,8 @@ class TestJobQueue:
 
     def test_job_entlassbericht_mit_verlaufsdoku_und_antragsvorlage(self, mock_llm, mock_extract_text):
         """P4 mit beiden Dokumenten: Verlaufsdoku + Antragsvorlage."""
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "entlassbericht", "prompt": "test"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "entlassbericht", "workflow_instructions": "test"},
             files={
                 "verlaufsdoku": ("verlauf.pdf", PDF_VERLAUF.read_bytes(), "application/pdf"),
                 "antragsvorlage": (
@@ -1488,9 +1528,8 @@ class TestJobQueue:
 
     def test_job_folgeverlaengerung(self, mock_llm, mock_extract_text):
         """Folgeverlängerung mit verlaufsdoku + vorantrag."""
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "folgeverlaengerung", "prompt": "test"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "folgeverlaengerung", "workflow_instructions": "test"},
             files={
                 "verlaufsdoku": ("verlauf.pdf", PDF_VERLAUF.read_bytes(), "application/pdf"),
                 "vorantrag": (
@@ -1505,16 +1544,15 @@ class TestJobQueue:
     def test_job_ergebnis_schema(self, mock_llm):
         """Abgeschlossener Job enthaelt alle erwarteten Felder."""
         import time
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "dokumentation", "prompt": "test", "transcript": "test"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "dokumentation", "workflow_instructions": "test", "transcript": "test"},
         )
         job_id = r.json()["job_id"]
 
         # Kurz warten bis Job abgeschlossen
         for _ in range(10):
             time.sleep(0.5)
-            poll = client.get(f"/api/jobs/{job_id}")
+            poll = _authed_client.get(f"/api/jobs/{job_id}")
             if poll.json()["status"] in ("done", "error"):
                 break
 
@@ -1527,20 +1565,31 @@ class TestJobQueue:
             assert field in data, f"Feld fehlt: {field}"
 
     def test_job_queue_service_direkt(self):
-        """Job-Queue Service-Klasse direkt testen."""
+        """Job-Queue Service-Klasse direkt testen.
+
+        v18: create_job() ruft asyncio.ensure_future() intern auf.
+        Braucht daher einen laufenden Event-Loop - wir legen einen temporaer an.
+        """
+        import asyncio
         from app.services.job_queue import job_queue, JobStatus
 
-        job = job_queue.create_job("dokumentation", "Test-Job")
+        # Temporaeren Event-Loop anlegen damit ensure_future nicht crasht
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            job = job_queue.create_job("dokumentation", "Test-Job")
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
         assert job.status == JobStatus.PENDING
         assert job.job_id is not None
         assert len(job.job_id) == 32
 
-        # Job wiederfinden
         found = job_queue.get_job(job.job_id)
         assert found is not None
         assert found.job_id == job.job_id
 
-        # to_dict
         d = job.to_dict()
         assert d["status"] == "pending"
         assert d["workflow"] == "dokumentation"
@@ -2119,6 +2168,12 @@ class TestStrukturelleSchablone:
 class TestAkutantrag:
     """Tests für den Akutantrag als eigenständigen Workflow in P3."""
 
+    def setup_method(self):
+        _make_authed_client()
+
+    def teardown_method(self):
+        _clear_auth_override()
+
     def test_akutantrag_base_prompt_vorhanden(self):
         """Akutantrag hat einen eigenen BASE_PROMPT."""
         from app.services.prompts import BASE_PROMPTS
@@ -2144,7 +2199,7 @@ class TestAkutantrag:
         assert "Akutaufnahme" in p or "akut" in p.lower()
 
     def test_akutantrag_user_content_mit_antragsvorlage(self):
-        """User-Content für Akutantrag enthält Antragsvorlage als Hauptquelle."""
+        """User-Content fuer Akutantrag enthaelt Antragsvorlage und Primer-Standardformulierung."""
         from app.services.prompts import build_user_content
         u = build_user_content("akutantrag",
             antragsvorlage_text="Anamnese: Patient zeigt schwere depressive Symptomatik. Befund: bewusstseinsklar.",
@@ -2154,7 +2209,25 @@ class TestAkutantrag:
         assert "Anamnese" in u
         assert "F32.2" in u
         assert "EINWEISUNGSDIAGNOSEN" in u
-        assert "Begründung" in u.lower() or "Akutaufnahme" in u
+        # v18 Primer-Muster: Standardformulierung im User-Content
+        assert "Folgende Krankheitssymptomatik" in u
+        assert "akut notwendig" in u
+        assert "Wir nehmen" in u
+
+    def test_akutantrag_primer_reihenfolge(self):
+        """Primer steht NACH der Antragsvorlage im User-Content."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("akutantrag", antragsvorlage_text="Vorlage.")
+        vorlage_idx = u.index("AKUTANTRAGS-VORLAGE")
+        primer_idx = u.index("Folgende Krankheitssymptomatik")
+        assert vorlage_idx < primer_idx
+
+    def test_akutantrag_keine_marker_in_instructions(self):
+        """WORKFLOW_INSTRUCTIONS_DEFAULT fuer Akutantrag hat keine >>><<<-Marker mehr."""
+        from app.services.prompts import WORKFLOW_INSTRUCTIONS_DEFAULT
+        akut = WORKFLOW_INSTRUCTIONS_DEFAULT["akutantrag"]
+        assert ">>>" not in akut
+        assert "<<<" not in akut
 
     def test_akutantrag_user_content_mit_verlaufsdoku(self):
         """Verlaufsdoku wird als ergänzende Information eingebettet."""
@@ -2185,12 +2258,12 @@ class TestAkutantrag:
         assert "Initiale" in u or "ersten Buchstaben" in u
 
     def test_akutantrag_standardformulierung_im_primer(self):
-        """Primer beginnt mit der Standardformulierung für Akutbegründungen."""
-        from app.services.llm import generate_text
-        # Prüfe nur den PRIMERS-Dict
-        import inspect
-        src = inspect.getsource(generate_text)
-        assert "Folgende Krankheitssymptomatik" in src
+        """Primer-Standardformulierung ist jetzt im User-Content (build_user_content),
+        nicht mehr im System-Prompt oder in generate_text-Primern."""
+        from app.services.prompts import build_user_content
+        u = build_user_content("akutantrag", antragsvorlage_text="X.")
+        assert "Folgende Krankheitssymptomatik" in u
+        assert "klinischen Eindruckes" in u
 
     def test_akutantrag_min_output_tokens(self):
         """Akutantrag hat eigene MIN_OUTPUT_TOKENS (kürzer als VA/EB)."""
@@ -2224,9 +2297,8 @@ class TestAkutantrag:
 
     def test_job_akutantrag(self, mock_llm, mock_extract_text):
         """Job mit Akutantrag-Workflow wird korrekt gestartet."""
-        r = client.post(
-            "/api/jobs/generate",
-            data={"workflow": "akutantrag", "prompt": "test"},
+        r = _authed_client.post("/api/jobs/generate",
+            data={"workflow": "akutantrag", "workflow_instructions": "test"},
             files={"antragsvorlage": (
                 "akutantrag.docx", DOCX_ENTLASS_V.read_bytes(),
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

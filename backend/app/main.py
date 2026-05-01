@@ -63,6 +63,12 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(_cleanup_old_uploads())
     from app.services.retention import retention_task
     retention_task_handle = asyncio.create_task(retention_task())
+    # v18: Embedding-Modell beim Start prüfen → klare Warnung wenn nicht geladen
+    try:
+        from app.services.embeddings import check_embedding_model_available
+        asyncio.create_task(check_embedding_model_available())
+    except Exception:
+        pass
     yield
     cleanup_task.cancel()
     try: p0_worker_task.cancel()
