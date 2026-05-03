@@ -2952,7 +2952,11 @@ function P4({ toast, resumeJob, onResumed, model }) {
 }
 
 // ── Stilprofil-Verwaltung ─────────────────────────────────────────
-const DOKUMENTTYPEN = [
+// v13: Workflow-Liste wird primaer vom Backend geladen (/api/workflows),
+// der hardcoded Block hier dient nur als Fallback fuer den Fall dass
+// das Backend offline/inkompatibel ist. Single Source of Truth liegt
+// in Backend-File app/core/workflows.py.
+const DOKUMENTTYPEN_FALLBACK = [
   { value: "dokumentation",      label: "Gesprächsdokumentation" },
   { value: "anamnese",           label: "Anamnese" },
   { value: "verlaengerung",      label: "Verlängerungsantrag" },
@@ -2960,6 +2964,52 @@ const DOKUMENTTYPEN = [
   { value: "akutantrag",         label: "Akutantrag" },
   { value: "entlassbericht",     label: "Entlassbericht" },
 ];
+
+// Fuer Komponenten die das Manifest nur synchron brauchen (z.B. Initial-State).
+// Wird durch useWorkflowManifest() ueberschrieben sobald das Backend antwortet.
+const DOKUMENTTYPEN = DOKUMENTTYPEN_FALLBACK;
+
+// Strukturelle Workflows aus Backend-Manifest. Wird in P5 fuer den
+// "hatAbschnitte"-Hinweis benutzt - aktuell zeigen wir den Hinweis fuer
+// Verlaengerung und Entlassbericht (beide sind strukturell). Wenn das
+// Backend ein Workflow als is_structural meldet, taucht es hier automatisch
+// auf - keine separate JSX-Aenderung noetig.
+const STRUCTURAL_WORKFLOWS_FALLBACK = new Set([
+  "anamnese", "verlaengerung", "folgeverlaengerung", "akutantrag", "entlassbericht",
+]);
+
+// Hook: laedt das Workflow-Manifest vom Backend, faellt auf Hardcoded-Liste
+// zurueck wenn der Endpoint nicht antwortet. Cached in useState fuer den
+// Lifecycle der Component - bei Re-Mount wird neu geladen.
+function useWorkflowManifest() {
+  const [workflows, setWorkflows] = useState(DOKUMENTTYPEN_FALLBACK);
+  const [structural, setStructural] = useState(STRUCTURAL_WORKFLOWS_FALLBACK);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${getApiBase()}/workflows`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        const wfs = data.workflows || [];
+        if (wfs.length === 0) return;  // leerer Response - Fallback behalten
+        setWorkflows(wfs.map(w => ({ value: w.key, label: w.label, ...w })));
+        setStructural(new Set(wfs.filter(w => w.is_structural).map(w => w.key)));
+        setLoaded(true);
+      } catch (_e) {
+        // Backend nicht erreichbar oder altes Backend ohne Endpoint:
+        // Fallback aus Hardcoded-Liste bleibt aktiv. Kein Toast - das
+        // ist ein Soft-Failure, der UI laeuft normal weiter.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return { workflows, structural, loaded };
+}
 
 // ── Confluence-Konfiguration ─────────────────────────────────────
 // API_BASE: dynamisch aus localStorage/window lesen damit URL-Änderungen
@@ -2991,7 +3041,10 @@ function P5({ toast, liste, ladebusy, ladeListe, loeschen }) {
   const [textInput, setTextInput] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Abschnitte die für Verlängerung/Entlassbericht relevant sind
+  // v13: Workflow-Manifest dynamisch vom Backend laden (mit Fallback).
+  const { workflows: dokTypen, structural: structuralWfs } = useWorkflowManifest();
+
+  // Abschnitte die für strukturelle Workflows relevant sind
   const ABSCHNITTE_HINWEIS = [
     "Aktuelle Anamnese",
     "Verlauf und Begründung der weiteren Verlängerung",
@@ -2999,7 +3052,11 @@ function P5({ toast, liste, ladebusy, ladeListe, loeschen }) {
     "Biographische Anamnese",
     "Psychotherapeutischer Verlauf",
   ];
-  const hatAbschnitte = ["verlaengerung", "entlassbericht"].includes(dokumenttyp);
+  // v13: aus dem Manifest abgeleitet statt hardcoded ["verlaengerung", "entlassbericht"].
+  // Aktuell zeigt der Hinweis sich fuer Verlaengerung + Entlassbericht (beide strukturell);
+  // wenn Akutantrag/Folgeverlaengerung auch UI-relevante Abschnitte bekommen, einfach
+  // is_structural=true im Backend lassen und filtern hier feiner.
+  const hatAbschnitte = dokumenttyp === "verlaengerung" || dokumenttyp === "entlassbericht";
 
   async function hochladen() {
     const hasFile = !!file;
@@ -3034,8 +3091,8 @@ function P5({ toast, liste, ladebusy, ladeListe, loeschen }) {
     setBusy(false);
   }
 
-  // Gruppiere Liste nach Dokumenttyp
-  const grouped = liste ? DOKUMENTTYPEN.map(dt => ({
+  // Gruppiere Liste nach Dokumenttyp (v13: dokTypen kommt aus useWorkflowManifest)
+  const grouped = liste ? dokTypen.map(dt => ({
     ...dt,
     items: (liste.embeddings || []).filter(e => e.dokumenttyp === dt.value),
   })).filter(g => g.items.length > 0) : [];
@@ -3082,7 +3139,7 @@ function P5({ toast, liste, ladebusy, ladeListe, loeschen }) {
                            borderRadius: "var(--radius)", fontFamily: "inherit", fontSize: 14,
                            background: "white", cursor: "pointer" }}
                 >
-                  {DOKUMENTTYPEN.map(dt => (
+                  {dokTypen.map(dt => (
                     <option key={dt.value} value={dt.value}>{dt.label}</option>
                   ))}
                 </select>
