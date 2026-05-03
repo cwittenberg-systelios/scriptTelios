@@ -45,39 +45,70 @@ NAMENSREGEL = (
 
 KLINISCHES_GLOSSAR = """FACHLICHES REFERENZWISSEN (sysTelios-Klinik):
 
-Therapeutische Ansätze:
-- IFS (Anteilemodell): Manager-Anteile (schützen proaktiv: Kontrolle, Perfektionismus,
-  Leistungsorientierung, Selbstaufgabe), Feuerwehr-Anteile (reaktiv: Dissoziation, Sucht,
-  Selbstverletzung), Exile (Schmerz, Scham, Trauma, Wertlosigkeit), Self/Steuerungsposition
-  (Ruhe, Neugier, Mitgefühl, Klarheit). Ziel: Anteile entlasten, Self-Leadership.
-  Typische Anteilsnamen: Türsteher, Wächterin, König/Königin, Schutzschild.
-- Anteilearbeit / Hypnosystemik (G. Schmidt): Ressourcenaktivierung, Seitenmodell, Körpersignale als
-  Bedürfnisrückmeldung, körperliche Symptome in Bedürfnisse übersetzen, annehmende
-  Beziehung zum Organismus, selbstwirksam Einfluss nehmen.
-- Systemische Therapie: zirkuläre Fragen, Reframing, Auftragsklärung, Externalisierung,
-  Stuhlarbeit, Netzwerk-/Körperarbeit. Symptome als sinnvolle Schutzreaktion verstehen.
-- Biographiearbeit: frühere Sinnhaftigkeit von Kognitionen als Überlebensstrategie
-  würdigen, biographische Erfahrungen mit aktuellen Mustern verbinden.
-- Traumafokussiert: Window of Tolerance, Stabilisierung, Traumalandkarte, Embodiment.
-- AMDP-Schema: Bewusstsein, Orientierung, Aufmerksamkeit/Gedächtnis, formales Denken,
-  inhaltliches Denken, Wahrnehmung, Ich-Erleben, Affektivität, Antrieb, Suizidalität.
+QUELLENTREUE-REGEL (gilt durchgängig, ist die wichtigste Regel dieses Glossars):
+Verwende konkrete Therapieverfahren (IFS, Hypnosystemik, Schematherapie,
+EMDR, Stuhlarbeit etc.) und ihre Fachbegriffe (Manager-Anteile, Exile,
+Self-Energy, Self-Leadership, Schema-Modus, zirkuläre Fragen, Reframing etc.)
+NUR DANN namentlich, wenn das Verfahren oder seine Begriffe in den Quellen
+(Transkript, Stichpunkte, Verlaufsdokumentation, Antragsvorlage,
+Selbstauskunft) explizit vorkommen oder erkennbar angewendet wurden.
+Andernfalls schreibe in deskriptiv-systemischer Sprache
+('innerer Schutzanteil', 'Vermeidungsmuster', 'Selbstabwertung',
+'innere Kritikerstimme', 'überwachender Anteil') und benenne KEIN Verfahren.
+Im Zweifel: lieber neutral-deskriptiv als ein Verfahren erfinden.
 
-Therapieangebot sysTelios: Einzelgespräche (2-3/Woche), Gruppentherapie (Gesprächs-,
-Kunst-, Musik-, Körper-, Bewegungstherapie, mind. 5/Woche), Bezugsgruppe,
-Paar-/Familiengespräche. Konzept: tiefenpsychologisch fundiert,
+Therapeutische Ansätze (Referenzvokabular – nur einsetzen wenn im Material belegt):
+- IFS / Anteilemodell / Anteilearbeit: Manager-Anteile (proaktiv schützend: Kontrolle,
+  Perfektionismus, Leistungsorientierung, Selbstaufgabe), Feuerwehr-Anteile
+  (reaktiv: Dissoziation, Sucht, Selbstverletzung), Exile (Schmerz, Scham,
+  Trauma, Wertlosigkeit), Self / Steuerungsposition (Ruhe, Neugier,
+  Mitgefühl, Klarheit). Ziel: Anteile entlasten, Self-Leadership.
+  Anteile bekommen oft eigene Namen ('Türsteher', 'Wächterin',
+  'Schutzschild', 'König/Königin').
+- Hypnosystemik (G. Schmidt): Ressourcenaktivierung, Seitenmodell,
+  Körpersignale als Bedürfnisrückmeldung, körperliche Symptome in
+  Bedürfnisse übersetzen, annehmende Beziehung zum Organismus,
+  selbstwirksame Einflussnahme.
+- Systemische Therapie: zirkuläre Fragen, Reframing, Auftragsklärung,
+  Externalisierung, Stuhlarbeit, Netzwerk-/Körperarbeit.
+  Symptome als sinnvolle Schutzreaktion verstehen.
+- Biographiearbeit: frühere Sinnhaftigkeit von Strategien als
+  Überlebensleistung würdigen, biographische Erfahrungen mit aktuellen
+  Mustern verbinden.
+- Traumafokussiert: Window of Tolerance, Stabilisierung, Embodiment.
+- AMDP-Schema: Bewusstsein, Orientierung, Aufmerksamkeit/Gedächtnis,
+  formales und inhaltliches Denken, Wahrnehmung, Ich-Erleben, Affektivität,
+  Antrieb, Suizidalität.
+
+Therapieangebot sysTelios: Einzelgespräche (2-3/Woche), Gruppentherapie
+(Gesprächs-, Kunst-, Musik-, Körper-, Bewegungstherapie, mind. 5/Woche),
+Bezugsgruppe, Paar-/Familiengespräche. Konzept: tiefenpsychologisch fundiert,
 verhaltenstherapeutisch ergänzt, hypnosystemisch optimiert.
 
-Typische Formulierungen:
-- "Mithilfe des Therapiekonzepts gelang es [Name] die intrapsychischen Erlebensmuster
-  und deren Einfluss auf die Symptome zu verstehen und schrittweise zu beeinflussen."
-- "Anhand des Anteilemodells gelang es [Name] die frühere Sinnhaftigkeit der Kognitionen
-  als Überlebensstrategie zu verstehen."
-- "Durch Stuhlarbeit, Netzwerk- und Körperarbeit gelang es in ersten Schritten eine
-  Beobachterposition einzunehmen und eine wohlwollendere innere Haltung zu entwickeln."
-- "Die Alltagstauglichkeit ist derzeit noch nicht gegeben."
-- "Eine tragfähige Stabilität für den ambulanten Kontext ist noch nicht erreicht."
-- Befund: "bewusstseinsklar, allseits orientiert" / "Affekt situationsadäquat
-  schwingungsfähig" / "formalgedanklich grübelnd, eingeengtes Denken mit Fokus auf [X]"\
+Klinik-typische Wendungen (im realen Korpus belegt – nur wenn sachlich passend):
+- 'Mithilfe des Therapiekonzepts gelang es [Name] die intrapsychischen
+  Erlebensmuster und deren Einfluss auf die Symptome zu verstehen und
+  schrittweise zu beeinflussen.'
+- 'Anhand des Anteilemodells gelang es [Name] die frühere Sinnhaftigkeit
+  der Kognitionen als Überlebensstrategie zu verstehen.'
+- 'Durch Stuhlarbeit, Netzwerk- und Körperarbeit gelang es in ersten
+  Schritten eine Beobachterposition einzunehmen und eine wohlwollendere
+  innere Haltung zu entwickeln.'
+- 'Wir erlebten [Name] zu Therapiebeginn deutlich erschöpft und in
+  seinem/ihrem Selbstwert erheblich verunsichert.'
+- 'Die Alltagstauglichkeit ist derzeit noch nicht gegeben.'
+- 'Eine tragfähige Stabilität für den ambulanten Kontext ist noch nicht erreicht.'
+- Befund: 'bewusstseinsklar, allseits orientiert' / 'Affekt situationsadäquat
+  schwingungsfähig' / 'formalgedanklich grübelnd, eingeengtes Denken mit Fokus
+  auf [X]'.
+
+Häufige Beobachtungs-Vokabeln (deskriptiv, verfahrensagnostisch –
+auch ohne Verfahrensbezug einsetzbar):
+Schutzreaktion, Schutzfunktion, Selbstabwertung, Selbstmitgefühl,
+Schwingungsfähigkeit, Selbstwirksamkeit, Selbstfürsorge, Reflexionsfähigkeit,
+Emotionsregulation, Resonanzraum, Beobachterposition, innere Klarheit,
+biographische Verwurzelung, Vermeidungsmuster, Beziehungsdynamik,
+Anspannungszustände, Grübelneigung, Nähe-Distanz-Themen.\
 """
 
 
@@ -436,7 +467,8 @@ BASE_PROMPT_AKUTANTRAG = (
 # ── Rollenkontext (Präambel) ──────────────────────────────────────────────────
 
 ROLE_PREAMBLE = (
-    "Du bist ein klinisches Schreibsystem der sysTelios Klinik. "
+    "Du bist ein klinisches Schreibsystem (Dokumentationssystem) der sysTelios Klinik "
+    "fuer klinische Dokumentation. "
     "Du erstellst professionelle medizinische Berichte für Ärzte und Therapeuten: "
     "Entlassberichte, Kostenverlängerungsanträge, Aufnahmebefunde und Verlaufsnotizen. "
     "Du arbeitest wie ein erfahrener medizinischer Dokumentationsassistent – "
