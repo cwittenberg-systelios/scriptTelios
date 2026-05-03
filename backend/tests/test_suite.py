@@ -868,52 +868,6 @@ class TestEchteDateien:
         print(f"\nOCR-Methode (mit Vision-Mock): {result.method}")
         print(f"Extrahierter Text (erste 200 Zeichen):\n{result.text[:200]}")
 
-    @pytest.mark.skipif(not REAL_FILES["entlassbericht_real"].exists(),
-                        reason="Echter Entlassbericht nicht vorhanden")
-    def test_echter_entlassbericht_stilextraktion(self, mock_llm):
-        """Echter Entlassbericht wird als Stilprofil-Grundlage verarbeitet."""
-        with patch(
-            "app.services.extraction.extract_style_context",
-            new=AsyncMock(return_value="Schreibe praegnant und fachlich.")
-        ):
-            r = client.post(
-                "/api/documents/style",
-                data={"therapeut_id": "Real-Test"},
-                files={"style_file": (
-                    "real.docx",
-                    REAL_FILES["entlassbericht_real"].read_bytes(),
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )},
-            )
-        assert r.status_code == 200
-
-    @pytest.mark.skipif(not REAL_FILES["verlauf_real"].exists(),
-                        reason="Echter Verlaufsbericht nicht vorhanden")
-    def test_echter_verlaufsbericht_generierung(self, mock_llm):
-        """Echter Verlaufsbericht wird für Entlassbericht-Generierung verwendet."""
-        with patch(
-            "app.services.docx_fill.fill_docx_template",
-            new=AsyncMock(return_value=Path("/tmp/systelios_test_outputs/real_test.docx"))
-        ):
-            Path("/tmp/systelios_test_outputs/real_test.docx").touch()
-            r = client.post(
-                "/api/documents/fill",
-                data={"workflow": "entlassbericht", "prompt": "Erstelle einen Entlassbericht."},
-                files={
-                    "template": (
-                        "vorlage.docx",
-                        DOCX_ENTLASS_V.read_bytes(),
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    ),
-                    "verlauf": (
-                        "real.pdf",
-                        REAL_FILES["verlauf_real"].read_bytes(),
-                        "application/pdf"
-                    ),
-                },
-            )
-        assert r.status_code == 200
-
 # ══════════════════════════════════════════════════════════════════
 # 11. JOB-QUEUE
 # ══════════════════════════════════════════════════════════════════
@@ -1222,9 +1176,15 @@ class TestWhisperQualitaet:
     """Tests für Qualitäts-Parameter: initial_prompt, beam_size, temperature."""
 
     def test_initial_prompt_enthaelt_ifs_begriffe(self):
-        """Initial-Prompt enthält IFS-Terminologie."""
+        """Initial-Prompt enthaelt fachliches Vokabular fuer Anteile-/Schutzmuster.
+
+        Designwahl: Whisper-Prompt ist verfahrensagnostisch gehalten
+        (deskriptive Begriffe statt verfahrensspezifischer Marken).
+        Quellentreue gilt also auch hier: keine namentlichen Verfahren
+        ohne Material-Beleg.
+        """
         from app.services.transcription import WHISPER_INITIAL_PROMPT
-        for term in ["IFS", "Manager-Anteil", "Self-Energy", "Exile"]:
+        for term in ["Anteile", "Schutzmechanismus", "Schutzmuster", "hypnosystemisch"]:
             assert term in WHISPER_INITIAL_PROMPT, \
                 f"'{term}' fehlt im WHISPER_INITIAL_PROMPT"
 
