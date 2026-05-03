@@ -518,7 +518,8 @@ async def create_generate_job(
                 )
 
         # 3. Stilprofil
-        from app.services.prompts import derive_word_limits
+        # v13: derive_word_limits wird nicht mehr direkt aufgerufen; resolve_length_anchor
+        # weiter unten kapselt das. Hier nur noch Stiltexte einsammeln.
         style_context = ""
         style_is_example = False
         style_info = None   # Metadaten: source, chars – wird im Job gespeichert
@@ -567,40 +568,32 @@ async def create_generate_job(
                 _style_raw_texts.append(style_context)  # pgvector gibt bereits Rohtext
                 style_info = {"source": "style_library", "therapeut_id": therapeut_id.strip(), "chars": len(style_context)}
 
-        # Wortlimit aus Roh-Texten ableiten (vor Destillation, fuer alle Quellen konsistent)
-        # v13: Workflow-spezifische Defaults aus dem zentralen WORKFLOWS-Modul.
-        # Wenn ein Workflow umkalibriert werden soll, in app/core/workflows.py
-        # editieren, NICHT hier hardcoden.
+        # v13: Längenanker via zentralen Dispatcher resolve_length_anchor.
+        # Ersetzt den bisherigen Code-Pfad mit derive_word_limits + akutantrag-Cap +
+        # manuelles Workflow-Default-Fallback. Die Funktion ist nun die EINZIGE Stelle,
+        # die Längenanweisungen für den Prompt produziert.
+        #
+        # Resolution chain:
+        #   1. ≥1 Stilvorlage mit ≥200w → derive aus Stilvorlagen (±30%, gefloort/gecapt)
+        #   2. Stilvorlage(n) <200w (Stichworte) → Workflow-Default (Floor)
+        #   3. Keine Stilvorlage → Workflow-Default
+        #
+        # Der akutantrag-Spezialfall (Volltext-Stilvorlagen) ist durch den
+        # Ceiling-Multiplier (×1.4 statt ×1.87) automatisch abgedeckt.
+        from app.services.prompts import resolve_length_anchor
         from app.core.workflows import word_limit_for
-        _fb_min, _fb_max = word_limit_for(workflow, fallback=(200, 800))
-        if _style_raw_texts:
-            word_limits = derive_word_limits(_style_raw_texts, _fb_min, _fb_max)
-            _wl_source = f"Stilvorlage(n) (n={len(_style_raw_texts)})"
-        else:
-            # P1: Auch ohne Stilvorlage hartes TEXTLIMIT setzen.
-            # Frueher (bis v18) war word_limits=None wenn keine Stilvorlage vorlag.
-            # Folge: Anamnese und Doku produzierten 1000+ Woerter Outputs (siehe
-            # Eval-Report v12: an-02=1181w/Cap 418w, dok-02=443w/Cap 143w), weil
-            # nur der weiche "Richtwert ca. 450-700 Wörter" im BASE_PROMPT stand.
-            # Jetzt: Workflow-Default als hartes TEXTLIMIT durchreichen.
-            word_limits = (_fb_min, _fb_max)
-            _wl_source = "Workflow-Default (keine Stilvorlage)"
-        # Bug-Fix #2: Akutantrag-Stilvorlagen enthalten oft den Volltext (Anamnese,
-        # Befund, Familienanamnese), wodurch derive_word_limits faelschlich auf
-        # 400-800 Woerter aufschwingt. Die echte "Begruendung fuer Akutaufnahme"
-        # ist 100-350 Woerter. Wir cappen daher auf den Workflow-Default-Bereich
-        # wenn das berechnete Limit ueber dem max-Default liegt.
-        if workflow == "akutantrag" and word_limits:
-            _orig_min, _orig_max = word_limits
-            if _orig_max > _fb_max or _orig_min > _fb_max:
-                # Berechnetes Limit klar ausserhalb -> auf Defaults zuruecksetzen
-                word_limits = (_fb_min, _fb_max)
-                logger.info(
-                    "Akutantrag-Cap: Wortlimit %d-%d -> %d-%d (Default, Stilvorlage zu lang)",
-                    _orig_min, _orig_max, _fb_min, _fb_max,
-                )
-        logger.info("Wortlimit fuer %s: %d–%d Wörter (%s)",
-                    workflow, word_limits[0], word_limits[1], _wl_source)
+
+        _anchor = resolve_length_anchor(
+            workflow=workflow,
+            style_raw_texts=_style_raw_texts if _style_raw_texts else None,
+            workflow_default=word_limit_for(workflow, fallback=(200, 800)),
+        )
+        word_limits = (_anchor["min"], _anchor["max"])
+        logger.info(
+            "Längenanker für %s: %d–%d Wörter (target=%d, source=%s, n_substantial=%d)",
+            workflow, _anchor["min"], _anchor["max"], _anchor["target"],
+            _anchor["source"], _anchor["n_substantial"],
+        )
 
         # 4. Patientennamen ermitteln — Reihenfolge:
         #    a) Explizit uebergeben (vor allem P1 Gespraechszusammenfassung)

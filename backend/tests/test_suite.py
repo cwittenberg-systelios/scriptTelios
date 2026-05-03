@@ -133,6 +133,130 @@ class TestPrompts:
         assert "Verlaufsnotiz" in p or "Dokumentation" in p
         assert "Deutsch" in p
 
+    # ── v13: Längen-Anker Tests (Ä1) ────────────────────────────────────────
+    def test_v13_single_length_instruction_per_workflow(self):
+        """v13 Regression: Im finalen Prompt steht GENAU EINE Längenangabe.
+
+        Vor v13 gab es bis zu 4 konkurrierende Längenanweisungen:
+        - BASE_PROMPT-Hardcodes (Mindestens X Wörter, Richtwert Y-Z Wörter)
+        - WORKFLOW_INSTRUCTIONS_DEFAULT (- LÄNGE: ...)
+        - FEW_SHOT-Header (ca. X-Y Wörter)
+        - VERBINDLICHES TEXTLIMIT (aus derive_word_limits)
+        v13 zentralisiert alles in resolve_length_anchor → ein ZIELLÄNGE-Block.
+        """
+        import re
+        from app.services.prompts import build_system_prompt
+        from app.core.workflows import WORKFLOW_KEYS
+
+        length_pattern = re.compile(
+            r'(?:Mindestens|maximal|Richtwert|TEXTLIMIT|ZIELLÄNGE|LÄNGE)'
+            r'.{0,80}(?:Wörter|Woerter|Wort\b)',
+            re.IGNORECASE,
+        )
+
+        # Alle echten Workflows (befund ist Sub-Call von Anamnese)
+        for wf in WORKFLOW_KEYS:
+            p = build_system_prompt(
+                workflow=wf,
+                word_limits=(300, 500),
+                diagnosen=["F33.1"],
+                patient_name={"anrede": "Frau", "vorname": "X",
+                              "nachname": "M", "initial": "M."},
+            )
+            hits = length_pattern.findall(p)
+            assert len(hits) == 1, (
+                f"{wf}: erwartet genau 1 Längenangabe, gefunden {len(hits)}: {hits}"
+            )
+            assert "ZIELLÄNGE" in hits[0], (
+                f"{wf}: Längenangabe sollte ZIELLÄNGE-Block sein, ist: {hits[0]}"
+            )
+
+    def test_v13_resolve_length_anchor_substantial_style(self):
+        """Substantielle Stilvorlage (≥200w) → derived range mit Floor/Ceiling."""
+        from app.services.prompts import resolve_length_anchor
+
+        long_style = " ".join(["Wort"] * 350)
+        r = resolve_length_anchor("folgeverlaengerung", [long_style])
+        assert r["source"] == "style"
+        # Floor: nicht unter Workflow-Min
+        assert r["min"] >= 350
+        # Ceiling: nicht über Workflow-Max × 1.4
+        assert r["max"] <= int(650 * 1.4)
+        assert r["target"] == (r["min"] + r["max"]) // 2
+
+    def test_v13_resolve_length_anchor_short_style_falls_back(self):
+        """Stichwort-Stilvorlage (<200w) → Workflow-Default (kein 143w-Cap mehr).
+
+        Behebt den dok-02-paarthematik Bug: Stichwortskizze hatte 89w,
+        derive_word_limits cappte auf 143w max. v13 erkennt das und
+        nutzt stattdessen den Workflow-Default (150-450).
+        """
+        from app.services.prompts import resolve_length_anchor
+
+        short_style = " ".join(["Wort"] * 89)
+        r = resolve_length_anchor("dokumentation", [short_style])
+        assert r["source"] == "style_too_short_fallback"
+        assert r["min"] == 150
+        assert r["max"] == 450
+
+    def test_v13_resolve_length_anchor_no_style(self):
+        """Keine Stilvorlage → Workflow-Default."""
+        from app.services.prompts import resolve_length_anchor
+
+        r = resolve_length_anchor("anamnese", None)
+        assert r["source"] == "workflow_default"
+        assert r["min"] == 280
+        assert r["max"] == 650
+
+    def test_v13_resolve_length_anchor_akutantrag_volltext(self):
+        """Akutantrag mit Volltext-Stilvorlage → Floor-Cap auf Workflow-Default.
+
+        Behebt akutantrag-Cap Bug: Stilvorlagen enthalten oft den ganzen
+        Brief inkl. Anamnese und Befund (700+ Wörter), die echte 'Begründung
+        für Akutaufnahme' ist 100-350w. v13 erkennt invalide derived range
+        (min > workflow_max) und fällt auf Workflow-Default zurück.
+        """
+        from app.services.prompts import resolve_length_anchor
+
+        huge_style = " ".join(["Wort"] * 800)
+        r = resolve_length_anchor("akutantrag", [huge_style])
+        # Egal ob "style_invalid_range_fallback" oder gecappt:
+        # max darf nicht mehr als 1.4× Workflow-Max sein
+        assert r["max"] <= int(350 * 1.4)
+        assert r["min"] <= 350
+
+    def test_v13_anchor_block_format(self):
+        """Anker-Block enthält ZIELLÄNGE, Bandbreite und harte Obergrenze."""
+        from app.services.prompts import resolve_length_anchor
+
+        r = resolve_length_anchor("entlassbericht", None)
+        block = r["anchor_block"]
+        assert "ZIELLÄNGE" in block
+        assert "akzeptierte Bandbreite" in block
+        assert "Harte Obergrenze" in block
+        assert "NIEMALS" in block
+
+    def test_v13_no_redundant_length_in_base_prompts(self):
+        """v13: BASE_PROMPTS dürfen keine LÄNGE/Mindestens X Wörter mehr enthalten."""
+        from app.services.prompts import BASE_PROMPTS
+
+        forbidden_patterns = [
+            "LÄNGE: Mindestens",
+            "LÄNGE: Richtwert",
+            "LÄNGE Anamnese: Richtwert",
+            "Mindestens 400 Wörter",
+            "Mindestens 500 Wörter",
+            "200-350 Wörter",
+        ]
+        for wf, prompt in BASE_PROMPTS.items():
+            for pat in forbidden_patterns:
+                assert pat not in prompt, (
+                    f"BASE_PROMPTS[{wf!r}] enthält noch '{pat}' - "
+                    f"v13 verlangt zentrale Längenangabe via resolve_length_anchor"
+                )
+
+    # ── Bisherige Tests folgen ──────────────────────────────────────────────
+
     def test_system_prompt_enthaelt_ifs_glossar(self):
         """Alle Workflows enthalten das IFS/systemische Fachglossar."""
         from app.services.prompts import build_system_prompt

@@ -192,7 +192,7 @@ Alle Inhalte müssen von DIESEM Patienten stammen – KEINE Inhalte aus dem Beis
 
 FEW_SHOT_VERLÄNGERUNG = """\
 BEISPIEL (Bisheriger Verlauf und Begründung der Verlängerung /
-Verlauf und Begründung der weiteren Verlängerung – ca. 400-600 Wörter):
+Verlauf und Begründung der weiteren Verlängerung):
 
 WICHTIG: Schreibe konsequent in der WIR-FORM aus klinischer Perspektive
 ("wir nahmen auf", "wir erlebten", "uns gelang es", "in unserer Arbeit").
@@ -230,7 +230,7 @@ dringend indiziert.\
 """
 
 FEW_SHOT_ENTLASSBERICHT = """\
-BEISPIEL (reiner Fließtext, keine Überschriften, ca. 600-900 Wörter):
+BEISPIEL (reiner Fließtext, keine Überschriften):
 
 Zu Beginn des stationären Aufenthaltes formulierte Herr/[Patient/in] als zentrales Anliegen, \
 wieder inneren Halt zu finden und sich aus einem über Jahre verfestigten Erleben von \
@@ -419,7 +419,8 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "- Dekompensationszeichen und aktuelle Krisensituation\n"
         "- WIR-PERSPEKTIVE: 'Wir nehmen ... auf', 'Wir erleben ...', "
         "'Aus unserer Sicht ist eine ambulante Behandlung nicht ausreichend.'\n"
-        "- LÄNGE: 150-350 Wörter, konkret und symptombezogen"
+        "- Konkret und symptombezogen"
+        # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
     ),
 
     "entlassbericht": (
@@ -431,7 +432,7 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden "
         "(IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), "
         "konkrete Wendepunkte und Entwicklungsschritte. "
-        "Richtwert: ca. 100 Wörter pro Absatz. "
+        # v13: Absatzlängen-Hinweis entfernt - Längenanker steht zentral via resolve_length_anchor()
         "Wir-Perspektive: 'Wir erlebten...', 'Es gelang zunehmend...', 'Im Verlauf zeigte sich...'\n\n"
         "Teil 2 – EPIKRISE (kompakte Gesamtbewertung):\n"
         "Symptomatik-Entwicklung im Vergleich zu Aufnahme, entlastete Schutzanteile, "
@@ -454,7 +455,7 @@ BASE_PROMPT_AKUTANTRAG = (
     "WICHTIG ZUR WIR-PERSPEKTIVE: Nach der Standardformulierung MUSS der erste "
     "inhaltliche Satz mit 'Wir' beginnen ('Wir nehmen ... auf', 'Wir erleben ...'). "
     "NICHT mit '[Patient/in] präsentiert sich' oder '[Patient/in] berichtet'.\n"
-    "LÄNGE: 200-350 Wörter.\n\n"
+    # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
     "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
     "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
     "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden.\n\n"
@@ -547,10 +548,8 @@ BASE_PROMPTS: dict[str, str] = {
         "- NIEMALS erfinden: Beruf, Familienstand, Kinder, Wohnsituation, "
         "Vorbehandlungen, Medikamente, Suchtmittel, Diagnosen, Zeitangaben, "
         "auslösende Ereignisse, Testwerte, Zitate\n"
-        "- LÄNGE Anamnese: Richtwert ca. 450-700 Wörter Fließtext (KEINE kurzen "
-        "Absätze – schreibe ausführliche, zusammenhängende Absätze). "
-        "Falls weiter unten ein VERBINDLICHES TEXTLIMIT angegeben ist, "
-        "hat dieses absolute Vorrang vor diesem Richtwert.\n\n"
+        # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
+        "- Schreibe ausführliche, zusammenhängende Absätze (KEINE kurzen Stichwort-Absätze) als Fließtext\n\n"
         + FEW_SHOT_ANAMNESE
     ),
 
@@ -593,7 +592,8 @@ BASE_PROMPTS: dict[str, str] = {
         "'wurde bearbeitet'. Setze stattdessen das Wir-Subjekt aktiv: "
         "'wir sahen', 'wir bearbeiteten', 'es gelang uns'. "
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
-        "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
+        # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
+        "Konkret und patientenspezifisch.\n\n"
         "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
         "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
         "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden, "
@@ -604,8 +604,8 @@ BASE_PROMPTS: dict[str, str] = {
         "Fortschritte oder Zitate erfinden die nicht in den Quellen stehen. "
         "Im Zweifel weglassen statt erfinden.\n\n"
         "WICHTIG – STILBEISPIEL:\n"
-        "Falls ein Stilbeispiel bereitgestellt wird: Übernimm Struktur, Gliederung "
-        "und Länge exakt. Ersetze nur die patientenspezifischen Inhalte.\n\n"
+        "Falls ein Stilbeispiel bereitgestellt wird: Übernimm Struktur und Gliederung. "
+        "Ersetze nur die patientenspezifischen Inhalte.\n\n"
         + FEW_SHOT_VERLÄNGERUNG
     ),
 
@@ -628,7 +628,8 @@ BASE_PROMPTS: dict[str, str] = {
         "'In unserer weiteren Arbeit ...'). NICHT mit 'Im weiteren Verlauf' oder "
         "'Seither hat sich [Patient/in] ...' beginnen.\n"
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
-        "LÄNGE: Mindestens 400 Wörter. Konkret und patientenspezifisch.\n\n"
+        # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
+        "Konkret und patientenspezifisch.\n\n"
         "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
         "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
         "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden, "
@@ -639,8 +640,8 @@ BASE_PROMPTS: dict[str, str] = {
         "Keine Therapieinhalte, Methoden, Fortschritte oder Zitate erfinden. "
         "Im Zweifel weglassen statt erfinden.\n\n"
         "WICHTIG – STILBEISPIEL:\n"
-        "Falls ein Stilbeispiel bereitgestellt wird: Übernimm Struktur, Gliederung "
-        "und Länge exakt. Ersetze nur die patientenspezifischen Inhalte.\n\n"
+        "Falls ein Stilbeispiel bereitgestellt wird: Übernimm Struktur und Gliederung. "
+        "Ersetze nur die patientenspezifischen Inhalte.\n\n"
         + FEW_SHOT_VERLÄNGERUNG
     ),
 
@@ -656,8 +657,7 @@ BASE_PROMPTS: dict[str, str] = {
         "– Keine Stammdaten, Diagnosen-Kodierung, Medikation\n\n"
         "STIL: Fließtext, Wir-Perspektive, systemische Fachsprache, "
         "konkret und patientenspezifisch – keine Allgemeinplätze.\n"
-        "LÄNGE: Richtwert 600-900 Wörter gesamt. Wenn weiter unten ein VERBINDLICHES TEXTLIMIT "
-        "ueber den Stilvorlagen angegeben wird, hat dieses absolute Vorrang. "
+        # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
         "Vermeide unnötige Ausschmückungen und Wiederholungen.\n\n"
         "QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in der "
         "Verlaufsdokumentation oder Antragsvorlage zurückführbar sein. "
@@ -716,6 +716,118 @@ def derive_word_limits(
         len(counts), derived_min, derived_max, ref_min, ref_max, tolerance * 100,
     )
     return derived_min, derived_max
+
+
+# ── v13: Zentralisierter Längen-Anker ────────────────────────────────────────
+#
+# Bis v12 wurden Längenanweisungen an vier verstreuten Stellen in den Prompt
+# eingespeist:
+#   (D) BASE_PROMPTS[wf] mit hardcoded "LÄNGE: Mindestens 400 Wörter"
+#   (E) WORKFLOW_INSTRUCTIONS_DEFAULT[akutantrag] mit "- LÄNGE: 150-350 Wörter"
+#   (F) FEW_SHOT_*-Header mit "ca. 600-900 Wörter"
+#   (G) build_user_content mit "Mindestens 400 Wörter"
+#   (H) VERBINDLICHES TEXTLIMIT-Block ans Ende des base
+# Folge: Konflikte zwischen den Anweisungen, das Modell mittelt mit Tendenz
+# nach oben (an-02: 775w/Cap 418w) oder unten (fva-02: Absatzlänge 104w/Ref 360w).
+#
+# v13: resolve_length_anchor() ist die EINZIGE Quelle. Alle anderen Stellen
+# (D-G) wurden entfernt. Im finalen Prompt steht genau EIN Längenanker -
+# direkt vor dem Schreibauftrag.
+
+# Substantialitäts-Schwelle: Stilvorlagen unter 200 Wörtern werden NICHT zur
+# Längenherleitung benutzt (würden auf Stichwortskizzen Cap=143w erzeugen wie
+# in dok-02-paarthematik). Sie tragen weiterhin zum Schreibstil bei
+# (Satzlänge, Wir-Perspektive etc. via _compute_style_constraints).
+LENGTH_ANCHOR_SUBSTANTIAL_THRESHOLD = 200
+
+# Ceiling-Multiplikator: derived_max wird auf workflow_default_max × 1.4 gecappt.
+# Verhindert, dass eine ungewöhnlich lange Stilvorlage (z.B. Akutantrag mit
+# Volltext-Anhang) das Limit aufbläht. Workflow-Defaults haben absolute Priorität.
+LENGTH_ANCHOR_CEILING_MULTIPLIER = 1.4
+
+
+def resolve_length_anchor(
+    workflow: str,
+    style_raw_texts: "list[str] | None" = None,
+    workflow_default: "tuple[int, int] | None" = None,
+    tolerance: float = 0.30,
+) -> dict:
+    """
+    EINZIGE Quelle für Längenanweisungen im finalen Prompt (v13).
+
+    Resolution chain (Reihenfolge = Priorität):
+      1. Substantielle Stilvorlage(n) ≥{SUBSTANTIAL_THRESHOLD}w
+         → derive_word_limits(±tolerance), gefloort/gecapt durch Workflow-Default
+         → source = "style"
+      2. Stilvorlage(n) vorhanden, aber alle <{SUBSTANTIAL_THRESHOLD}w
+         (Stichwortskizzen, Notizen) → Workflow-Default
+         → source = "style_too_short_fallback"
+      3. Keine Stilvorlage → Workflow-Default
+         → source = "workflow_default"
+
+    Returns:
+      {
+        "min": int, "max": int, "target": int,
+        "source": str,              # für Telemetrie/Logging
+        "anchor_block": str,        # fertig formulierter Prompt-Block
+        "n_substantial": int,       # Anzahl substantieller Stilvorlagen
+      }
+
+    Der anchor_block wird in build_system_prompt() direkt vor dem
+    "Schreibe jetzt..."-Schluss eingefügt (höchste Recency-Gewichtung).
+    """
+    from app.core.workflows import word_limit_for
+
+    fb_min, fb_max = workflow_default or word_limit_for(workflow, fallback=(200, 800))
+
+    # Stilvorlagen kategorisieren
+    substantial = [
+        t for t in (style_raw_texts or [])
+        if t and len(t.split()) >= LENGTH_ANCHOR_SUBSTANTIAL_THRESHOLD
+    ]
+    has_any_style = bool(style_raw_texts and any(t and t.strip() for t in style_raw_texts))
+
+    if substantial:
+        derived_min, derived_max = derive_word_limits(
+            substantial, fb_min, fb_max, tolerance=tolerance
+        )
+        # Floor: nie unter Workflow-Minimum (Schutz vor Stichwort-Underrun)
+        anchor_min = max(fb_min, derived_min)
+        # Ceiling: nie deutlich über Workflow-Maximum (Schutz vor Volltext-Overrun)
+        anchor_max = min(int(fb_max * LENGTH_ANCHOR_CEILING_MULTIPLIER), derived_max)
+        # Sanity: min < max
+        if anchor_min >= anchor_max:
+            anchor_min, anchor_max = fb_min, fb_max
+            source = "style_invalid_range_fallback"
+        else:
+            source = "style"
+        n_sub = len(substantial)
+    elif has_any_style:
+        anchor_min, anchor_max = fb_min, fb_max
+        source = "style_too_short_fallback"
+        n_sub = 0
+    else:
+        anchor_min, anchor_max = fb_min, fb_max
+        source = "workflow_default"
+        n_sub = 0
+
+    target = (anchor_min + anchor_max) // 2
+
+    anchor_block = (
+        f"\nZIELLÄNGE: ca. {target} Wörter (akzeptierte Bandbreite {anchor_min}–{anchor_max} Wörter). "
+        f"Harte Obergrenze: {anchor_max} Wörter — überschreite sie NIEMALS. "
+        f"Lieber {max(anchor_min, target - 30)} Wörter präzise als {anchor_max + 50} Wörter ausschweifend. "
+        f"Zähle vor Abgabe deine Wörter.\n"
+    )
+
+    return {
+        "min": anchor_min,
+        "max": anchor_max,
+        "target": target,
+        "source": source,
+        "anchor_block": anchor_block,
+        "n_substantial": n_sub,
+    }
 
 
 def _compute_style_constraints(style_text: str, skip_length: bool = False) -> str:
@@ -822,20 +934,16 @@ def _compute_style_constraints(style_text: str, skip_length: bool = False) -> st
     else:
         lines.append("- Perspektive: Dritte Person (Er/Sie-Form)")
 
-    # Hartes Limit nur wenn nicht schon oben ueber VERBINDLICHES TEXTLIMIT gesetzt.
-    # Vermeidet widerspruechliche Angaben zwischen diesem Einzel-Vorlagen-Limit
-    # und dem aggregierten Limit aus derive_word_limits(alle Vorlagen).
-    if not skip_length:
-        lines.append(
-            f"- TEXTLÄNGE (verbindlich): mindestens {limit_min} Wörter, "
-            f"maximal {limit_max} Wörter. "
-            f"Die Vorlage hat {word_count} Wörter – orientiere dich genau daran."
-        )
-    else:
-        lines.append(
-            f"- Absatzstruktur: die Vorlage hat ca. {len(paragraphs)} Absätze "
-            f"(siehe TEXTLIMIT oben fuer die Gesamtlaenge)."
-        )
+    # v13: TEXTLÄNGE-Zeile in dieser Funktion entfällt vollständig.
+    # Längenangaben kommen ausschliesslich vom zentralen resolve_length_anchor
+    # in build_system_prompt. Dies hier liefert nur Stil-Metadaten (Satz-/Absatzlänge,
+    # Wir-Perspektive, Fachbegriffsdichte, Absatzanzahl).
+    # skip_length-Parameter wird nur noch für Backwards-Compat akzeptiert,
+    # hat aber keine funktionale Auswirkung mehr.
+    lines.append(
+        f"- Absatzstruktur: die Vorlage hat ca. {len(paragraphs)} Absätze "
+        f"(Längenanker steht weiter unten als ZIELLÄNGE)."
+    )
 
     return "\n".join(lines)
 
@@ -903,18 +1011,10 @@ def build_system_prompt(
         vorlage = befund_vorlage if (befund_vorlage and befund_vorlage.strip()) else BEFUND_VORLAGE
         base = base.replace("{befund_vorlage}", vorlage)
 
-    # Verbindliches Wortlimit aus Stilvorlagen anhängen (überschreibt BASE_PROMPT-Angaben)
-    if word_limits is not None:
-        limit_min, limit_max = word_limits
-        base = base + (
-            "\nVERBINDLICHES TEXTLIMIT (hat Vorrang vor allen anderen Laengenangaben "
-            "im obigen Prompt, einschliesslich 'Mindestens X Woerter' / 'LAENGE: X-Y'): "
-            f"mindestens {limit_min} Woerter, maximal {limit_max} Woerter. "
-            f"Falls dieses Limit niedriger ist als eine BASE_PROMPT-Mindestangabe "
-            f"(z.B. 'Mindestens 450 Woerter'): das BASE_PROMPT-Minimum ist UNGUELTIG, "
-            f"das hier genannte Maximum ({limit_max}) gilt als harte Obergrenze. "
-            f"Ueberschreite das Maximum NIEMALS - lieber kuerzer als zu lang.\n"
-        )
+    # v13: Der bisherige VERBINDLICHES TEXTLIMIT-Block (anhängen an base) ist
+    # entfallen. Stattdessen wird der zentrale Längenanker am Ende eingefügt -
+    # direkt vor dem "Schreibe jetzt..."-Schluss (höchste Recency-Gewichtung).
+    # Siehe unten: anchor_block aus word_limits abgeleitet.
 
     # Reihenfolge (v18):
     #   ROLE_PREAMBLE  →  WORKFLOW-ANWEISUNGEN (Frontend)  →  Stilschablone
@@ -1032,6 +1132,24 @@ def build_system_prompt(
                 f"Beispiel KORREKT: 'Nach der Aufnahme zeigte sich {anrede} {initial} zunehmend...'\n"
                 f"Beispiel FALSCH:  Nach der Aufnahme zeigte sich [Pat] zunehmend... (mit Platzhalter)\n"
             )
+
+    # v13: ZENTRALER LÄNGEN-ANKER - direkt vor dem Schreibauftrag (höchste Recency).
+    # word_limits ist ein Tuple (min, max), das jobs.py via resolve_length_anchor
+    # berechnet hat. Wenn jobs.py die alte API ohne Anker nutzt, fallen wir hier
+    # auf einen lokalen resolve_length_anchor-Call zurück (Workflow-Default).
+    if word_limits is not None:
+        _anchor_min, _anchor_max = word_limits
+        _target = (_anchor_min + _anchor_max) // 2
+        parts.append(
+            f"\nZIELLÄNGE: ca. {_target} Wörter (akzeptierte Bandbreite {_anchor_min}–{_anchor_max} Wörter). "
+            f"Harte Obergrenze: {_anchor_max} Wörter — überschreite sie NIEMALS. "
+            f"Lieber {max(_anchor_min, _target - 30)} Wörter präzise als {_anchor_max + 50} Wörter ausschweifend. "
+            f"Zähle vor Abgabe deine Wörter."
+        )
+    else:
+        # Fallback: Workflow-Default direkt aus core/workflows holen
+        _result = resolve_length_anchor(workflow, style_raw_texts=None)
+        parts.append(_result["anchor_block"].rstrip())
 
     if has_structural_template:
         parts.append(
@@ -1255,7 +1373,7 @@ def build_user_content(
             "Verwende den Sektionsnamen der in der Antragsvorlage steht, "
             "falls vorhanden – sonst: 'Bisheriger Verlauf und Begründung der Verlängerung'. "
             "Nur diesen Abschnitt – keine anderen Teile des Antrags. "
-            "Mindestens 400 Wörter. "
+            # v13: Längenangabe entfernt - Längenanker steht zentral via resolve_length_anchor()
             "Ausschließlich auf Basis der obigen Quellen – "
             "keine Informationen erfinden die nicht in den Quellen stehen."
         )
@@ -1293,7 +1411,7 @@ def build_user_content(
             "Beginne mit einem kurzen Rückbezug auf den bisherigen Verlauf (aus dem vorherigen Antrag), "
             "dann beschreibe die Entwicklung SEITDEM. "
             "Nur diesen Abschnitt – keine Anamnese, keine Diagnosen, keine Stammdaten. "
-            "Mindestens 400 Wörter. "
+            # v13: Längenangabe entfernt - Längenanker steht zentral via resolve_length_anchor()
             "Ausschließlich auf Basis der obigen Quellen."
         )
 
@@ -1323,7 +1441,8 @@ def build_user_content(
             "Der Text beginnt bereits mit der Pflicht-Standardformulierung (siehe unten). "
             "Füge direkt dahinter einen Wir-Satz an und begründe dann ausführlich "
             "mit konkreten Symptomen und Risiken aus der Antragsvorlage. "
-            "Schreibe NUR den Inhalt des Abschnitts ohne Überschrift (150-350 Wörter).\n\n"
+            "Schreibe NUR den Inhalt des Abschnitts ohne Überschrift.\n\n"
+            # v13: Längenangabe entfernt - Längenanker steht zentral via resolve_length_anchor()
             "BEGINN DES ABSCHNITTS (wörtlich so übernehmen, dann direkt weiterschreiben):\n"
             "Folgende Krankheitssymptomatik macht in der Art und Schwere sowie unter "
             "Berücksichtigung der Beurteilung des Einweisers und unseres ersten klinischen "
@@ -1347,8 +1466,9 @@ def build_user_content(
         parts.append(
             "Verfasse jetzt den psychotherapeutischen Verlaufsteil als zusammenhängenden "
             "Fließtext ohne Überschriften. "
-            "Behandlungsverlauf (mind. 500 Wörter), Epikrise (mind. 150 Wörter) und "
-            "Empfehlungen (mind. 100 Wörter) fliessen nahtlos ineinander. "
+            # v13: absolute Wortzahlen durch Proportionen ersetzt - Gesamtlänge zentral via resolve_length_anchor()
+            "Behandlungsverlauf (Hauptteil, ~70% des Textes), Epikrise (~20%) und "
+            "Therapieempfehlungen (~10%) fliessen nahtlos ineinander. "
             "Ausschliesslich auf Basis der obigen Quellen – "
             "keine Informationen erfinden die nicht in den Quellen stehen."
         )
