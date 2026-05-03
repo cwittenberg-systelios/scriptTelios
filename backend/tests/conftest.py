@@ -149,7 +149,7 @@ def mock_llm():
         "token_count": 187,
     }
     with patch("app.services.llm.generate_text",   new=AsyncMock(return_value=mock_response)), \
-         patch("app.api.documents.generate_text",   new=AsyncMock(return_value=mock_response)):
+         patch("app.api.jobs.generate_text",        new=AsyncMock(return_value=mock_response)):
         yield
 
 
@@ -172,7 +172,7 @@ def mock_llm_anamnese():
         "token_count": 221,
     }
     with patch("app.services.llm.generate_text",   new=AsyncMock(return_value=mock_response)), \
-         patch("app.api.documents.generate_text",   new=AsyncMock(return_value=mock_response)):
+         patch("app.api.jobs.generate_text",        new=AsyncMock(return_value=mock_response)):
         yield
 
 
@@ -199,7 +199,8 @@ def mock_extract_text():
     """PDF/DOCX-Extraktion durch realistischen Text ersetzen."""
     text = TXT_SELBST.read_text(encoding="utf-8")
     with patch("app.services.extraction.extract_text", new=AsyncMock(return_value=text)), \
-         patch("app.api.documents.extract_text",        new=AsyncMock(return_value=text)):
+         patch("app.api.jobs.extract_text",             new=AsyncMock(return_value=text)), \
+         patch("app.api.style_embeddings.extract_text", new=AsyncMock(return_value=text)):
         yield
 
 
