@@ -13,22 +13,18 @@ from typing import Optional
 
 
 # ── Workflow-Kategorisierung ─────────────────────────────────────────────────
-# v13: STRUCTURAL_WORKFLOWS wird jetzt aus der zentralen WORKFLOWS-Liste
-# abgeleitet (Single Source of Truth in app/core/workflows.py).
-#
 # Strukturelle Workflows: P2/P3/P4 - Stilbeispiel wird als Schablone verwendet
-# (Gliederung, Laenge, Absatztiefe werden uebernommen). Aktuell gehoeren alle
-# Workflows ausser "dokumentation" zur strukturellen Kategorie - die Information
-# steht im is_structural-Feld des WorkflowSpec.
-#
-# WORKFLOW_INSTRUCTIONS_DEFAULT und BASE_PROMPTS bleiben weiterhin in dieser
-# Datei (zu lange Multi-Line-Strings, andere Lifecycle - Therapeut kann
-# WORKFLOW_INSTRUCTIONS_DEFAULT im Frontend editieren). Der Sync-Test in
-# test_suite.py prueft dass beide Maps Keys haben fuer alle WORKFLOW_KEYS
-# (ausser Sonderfaelle wie "befund" / "akutantrag").
-from app.core.workflows import WORKFLOWS as _WORKFLOWS
-
-STRUCTURAL_WORKFLOWS = frozenset(w.key for w in _WORKFLOWS if w.is_structural)
+# (Gliederung, Laenge, Absatztiefe werden uebernommen). Single source of truth -
+# wird in build_system_prompt mehrfach geprueft, frueher als is_structural-Liste
+# und has_structural_template separat - dabei kam es zu Inkonsistenzen
+# (folgeverlaengerung/akutantrag bekamen Schablone aber falschen Abschlusssatz).
+STRUCTURAL_WORKFLOWS = frozenset({
+    "anamnese",
+    "verlaengerung",
+    "folgeverlaengerung",
+    "akutantrag",
+    "entlassbericht",
+})
 
 
 # ── Datenschutz-Namensregel (zentral) ────────────────────────────────────────
@@ -47,33 +43,41 @@ NAMENSREGEL = (
 
 # ── Fachglossar ──────────────────────────────────────────────────────────────
 
-KLINISCHES_GLOSSAR = """FACHLICHES REFERENZWISSEN (sysTelios-Klinik, kompakt):
+KLINISCHES_GLOSSAR = """FACHLICHES REFERENZWISSEN (sysTelios-Klinik):
 
-Therapieansaetze (nutze nur was im Material vorkommt - siehe Quellentreue-Regel):
-- IFS / Anteilemodell: Manager (proaktiv schuetzend: Kontrolle, Perfektionismus,
-  Selbstaufgabe), Feuerwehr (reaktiv: Dissoziation, Sucht, Selbstverletzung),
-  Exile (Schmerz, Scham, Trauma), Self/Steuerungsposition. Ziel: Anteile
-  entlasten, Self-Leadership.
-- Hypnosystemik (G. Schmidt): Ressourcenaktivierung, Seitenmodell,
-  Koerpersymptome als Beduerfnisrueckmeldung.
-- Systemische Therapie: Auftragsklaerung, Reframing, Externalisierung,
-  Stuhlarbeit, zirkulaere Fragen.
-- Biographiearbeit: Sinnhaftigkeit frueher Strategien wuerdigen.
-- Trauma: Window of Tolerance, Stabilisierung, Embodiment.
-- AMDP-Befund: Bewusstsein, Orientierung, Aufmerksamkeit, Denken (formal/inhaltl.),
-  Wahrnehmung, Ich-Erleben, Affekt, Antrieb, Suizidalitaet.
+Therapeutische Ansätze:
+- IFS (Anteilemodell): Manager-Anteile (schützen proaktiv: Kontrolle, Perfektionismus,
+  Leistungsorientierung, Selbstaufgabe), Feuerwehr-Anteile (reaktiv: Dissoziation, Sucht,
+  Selbstverletzung), Exile (Schmerz, Scham, Trauma, Wertlosigkeit), Self/Steuerungsposition
+  (Ruhe, Neugier, Mitgefühl, Klarheit). Ziel: Anteile entlasten, Self-Leadership.
+  Typische Anteilsnamen: Türsteher, Wächterin, König/Königin, Schutzschild.
+- Anteilearbeit / Hypnosystemik (G. Schmidt): Ressourcenaktivierung, Seitenmodell, Körpersignale als
+  Bedürfnisrückmeldung, körperliche Symptome in Bedürfnisse übersetzen, annehmende
+  Beziehung zum Organismus, selbstwirksam Einfluss nehmen.
+- Systemische Therapie: zirkuläre Fragen, Reframing, Auftragsklärung, Externalisierung,
+  Stuhlarbeit, Netzwerk-/Körperarbeit. Symptome als sinnvolle Schutzreaktion verstehen.
+- Biographiearbeit: frühere Sinnhaftigkeit von Kognitionen als Überlebensstrategie
+  würdigen, biographische Erfahrungen mit aktuellen Mustern verbinden.
+- Traumafokussiert: Window of Tolerance, Stabilisierung, Traumalandkarte, Embodiment.
+- AMDP-Schema: Bewusstsein, Orientierung, Aufmerksamkeit/Gedächtnis, formales Denken,
+  inhaltliches Denken, Wahrnehmung, Ich-Erleben, Affektivität, Antrieb, Suizidalität.
 
-Therapieangebot: Einzelgespraeche (2-3/Wo), Gruppentherapie (Gespraechs-, Kunst-,
-Musik-, Koerper-, Bewegungstherapie), Bezugsgruppe, Paar-/Familiengespraeche.
+Therapieangebot sysTelios: Einzelgespräche (2-3/Woche), Gruppentherapie (Gesprächs-,
+Kunst-, Musik-, Körper-, Bewegungstherapie, mind. 5/Woche), Bezugsgruppe,
+Paar-/Familiengespräche. Konzept: tiefenpsychologisch fundiert,
+verhaltenstherapeutisch ergänzt, hypnosystemisch optimiert.
 
-Klinik-typische Wendungen (nur einsetzen wenn sachlich passend, nicht reflexhaft):
-- "Mithilfe des Therapiekonzepts gelang es [Name] die intrapsychischen
-  Erlebensmuster zu verstehen."
+Typische Formulierungen:
+- "Mithilfe des Therapiekonzepts gelang es [Name] die intrapsychischen Erlebensmuster
+  und deren Einfluss auf die Symptome zu verstehen und schrittweise zu beeinflussen."
+- "Anhand des Anteilemodells gelang es [Name] die frühere Sinnhaftigkeit der Kognitionen
+  als Überlebensstrategie zu verstehen."
+- "Durch Stuhlarbeit, Netzwerk- und Körperarbeit gelang es in ersten Schritten eine
+  Beobachterposition einzunehmen und eine wohlwollendere innere Haltung zu entwickeln."
 - "Die Alltagstauglichkeit ist derzeit noch nicht gegeben."
-- "Eine tragfaehige Stabilitaet fuer den ambulanten Kontext ist noch nicht erreicht."
-- Befund-Standardphrasen: "bewusstseinsklar, allseits orientiert" /
-  "Affekt situationsadaequat schwingungsfaehig" /
-  "formalgedanklich gruebelnd, eingeengtes Denken"\
+- "Eine tragfähige Stabilität für den ambulanten Kontext ist noch nicht erreicht."
+- Befund: "bewusstseinsklar, allseits orientiert" / "Affekt situationsadäquat
+  schwingungsfähig" / "formalgedanklich grübelnd, eingeengtes Denken mit Fokus auf [X]"\
 """
 
 
@@ -86,107 +90,56 @@ BEFUND_VORLAGE = """Im Gespräch offen, wach, bewusstseinsklar, zu allen Qualit�
 
 # ── Few-Shot-Beispiele ────────────────────────────────────────────────────────
 
-# Lehrsatz vor allen Two-Shot-Bloecken (Massnahme B).
-# Macht die Variable explizit: Vokabular folgt dem Material, nicht dem Workflow.
-# Wird vor jedem Beispielpaar eingefuegt, damit das Modell die Beispiele als
-# kontrastive Instanzen einer Regel liest, nicht als zwei beliebige Muster.
-
-FEW_SHOT_KONTRAST_HINWEIS = """\
-WICHTIG – ZWEI BEISPIELE MIT KONTRASTIERENDER SPRACHE:
-
-Die folgenden zwei Beispiele zeigen denselben Texttyp in unterschiedlichem
-Vokabular. Beachte: Die Wortwahl der Doku folgt der Sprache des Transkripts
-und der Stichpunkte – sie wird NICHT vom Workflow vorgegeben.
-
-- Beispiel 1: Input MIT IFS-/Anteilevokabular ("Schutzschild", "Teil") →
-  Output verwendet IFS-Sprache.
-- Beispiel 2: Input OHNE Verfahrensvokabular ("ich ziehe mich zurueck",
-  "ich kontrolliere mich") → Output verwendet allgemein-deskriptive
-  systemische Sprache, OHNE Verfahren zu benennen oder zu erfinden.
-
-Wende dieselbe Regel auf den aktuellen Fall an: pruefe, welche Sprache im
-Material vorkommt, und schreibe in dieser Sprache. Erfinde KEIN Verfahren.
-
-────────────────────────────────────────────────────────────────────────
-"""
-
-
-# Beispiel 1 (gekuerzt P4) – IFS-Vokabular im Input -> IFS im Output.
-_FEW_SHOT_DOK_IFS = """\
-BEISPIEL 1 – Transkript MIT IFS-Vokabular:
+FEW_SHOT_DOKUMENTATION = """\
+BEISPIEL (zeigt Stil und Struktur - nicht den Inhalt übernehmen):
 
 EINGABE:
-[A]: Was war das fuer ein Teil, der sich zurueckgezogen hat?
-[B]: So ein Schutzschild. Der will nicht, dass ich verletzt werde.
-STICHPUNKTE: Rueckzugsmuster, IFS-Arbeit mit Schutzanteil
+[A]: Wie ist es Ihnen seit letzter Woche ergangen?
+[B]: Ich hatte wieder diese Anspannung vor dem Treffen mit meiner Schwester. \
+Ich hab mich dann rausgezogen, war danach aber erschöpft.
+[A]: Was war das für ein Teil, der sich zurückgezogen hat?
+[B]: So ein Schutzschild. Der will eigentlich nicht, dass ich verletzt werde.
+[A]: Können Sie dem Schild mal danken - er arbeitet ja schon lange für Sie?
+[B]: Das ist seltsam, aber ja, irgendwie fühlt sich das richtig an.
+STICHPUNKTE: Kontakt zur Schwester schwierig, Rückzugsmuster, IFS-Arbeit mit Schutzanteil
 
 AUSGABE:
 
 Auftragsklärung
 
 Im Mittelpunkt stand das wiederkehrende Anspannungserleben von [Patient/in] \
-im Vorfeld familiärer Begegnungen. Ziel war es, den Schutzmechanismus zu \
-verstehen und erste Kontaktaufnahme mit diesem Anteil zu ermöglichen.
+im Vorfeld familiärer Begegnungen, insbesondere in Kontakt mit ihrer Schwester. \
+Ziel war es, den dahinterliegenden Schutzmechanismus besser zu verstehen \
+und erste Kontaktaufnahme mit diesem Anteil zu ermöglichen.
 
 Relevante Gesprächsinhalte
 
-Im Sinne des IFS zeigte sich ein aktiver Manager-Anteil in Form eines inneren \
-Schutzschildes, der proaktiv Kontakt zu potenziell verletzenden Situationen vermeidet.
+[Patient/in] berichtete von einer erneuten Anspannungsepisode vor dem Familientreffen, \
+die im Rückzug endete und Erschöpfung hinterließ. Im Sinne des IFS zeigte sich \
+ein aktiver Manager-Anteil in Form eines inneren Schutzschildes, \
+der proaktiv Kontakt zu potenziell verletzenden Situationen vermeidet. \
+Die Erschöpfung nach dem Rückzug weist auf die hohe Aktivierungsintensität \
+dieses Anteils hin. Bemerkenswert war der spontane Zugang zu Self-Energy: \
+Als [Patient/in] eingeladen wurde, dem Schutzanteil Dankbarkeit entgegenzubringen, \
+war dies körperlich spürbar und emotional stimmig.
 
 Hypothesen und Entwicklungsperspektiven
 
-Das Rückzugsmuster lässt sich als sinnvolle Schutzleistung verstehen. \
-Wenn der Schutzanteil erfährt, dass er nicht mehr allein für die Sicherheit \
-zuständig sein muss, kann [Patient/in] schrittweise neue Beziehungserfahrungen machen.
+Das Rückzugsmuster lässt sich als sinnvolle Schutzleistung eines \
+Manager-Anteils verstehen, der früh gelernt hat, Verletzungen durch \
+Vermeidung abzuwenden. Entwicklungsperspektivisch steht die Differenzierung \
+zwischen Schutz und Kontaktfähigkeit im Vordergrund: Wenn der Schutzanteil \
+erfährt, dass er nicht mehr allein für die Sicherheit zuständig sein muss, \
+kann [Patient/in] schrittweise neue Beziehungserfahrungen machen.
 
 Einladungen
 
-[Patient/in] wurde eingeladen, in dieser Woche nach innen zu horchen, wenn sich \
-der Schutzschild aktiviert, und ihm innerlich zu danken.\
+[Patient/in] wurde eingeladen, in dieser Woche nach innen zu horchen, \
+wenn sich der Schutzschild aktiviert - nicht um ihn wegzuschieben, \
+sondern um kurz innezuhalten und ihm innerlich zu danken. \
+Unterstützend kann das Führen eines kurzen Notizbuchs sein, \
+in dem sie festhalt, wann und wie stark der Anteil aktiv wird.\
 """
-
-
-# Beispiel 2 (gekuerzt P4) – ohne Verfahrensvokabular -> deskriptive systemische Sprache.
-_FEW_SHOT_DOK_DESKRIPTIV = """\
-BEISPIEL 2 – Transkript OHNE Verfahrensvokabular:
-
-EINGABE:
-[A]: Was haben Sie ueber sich gedacht in den Momenten?
-[B]: Dass ich versagt habe. Dass ich nicht gut genug bin. Das alte Lied.
-STICHPUNKTE: Selbstabwertung nach Praesentation, biographischer Bezug Schulzeit
-
-AUSGABE:
-
-Auftragsklärung
-
-Im Mittelpunkt stand eine berufliche Belastungssituation, die bei [Patient/in] eine \
-ausgeprägte Selbstabwertung ausgelöst hatte.
-
-Relevante Gesprächsinhalte
-
-[Patient/in] berichtete von einer als gescheitert erlebten Präsentation, gefolgt von \
-intensivem Grübeln und Selbstabwertung ("ich habe versagt", "ich bin nicht gut genug"). \
-Im Gespräch zeigte sich eine klare Verbindung zu einer früheren Beschämungserfahrung \
-in der Schulzeit.
-
-Hypothesen und Entwicklungsperspektiven
-
-Die Selbstabwertung lässt sich als biographisch verständliche Bewältigungsstrategie \
-verstehen, die früh entwickelt wurde, um erneuten Beschämungserfahrungen zuvorzukommen.
-
-Einladungen
-
-[Patient/in] wurde eingeladen, selbstkritische Momente bewusst zu bemerken und sich \
-zu fragen, wovor diese innere Stimme schützen will.\
-"""
-
-
-FEW_SHOT_DOKUMENTATION = (
-    FEW_SHOT_KONTRAST_HINWEIS
-    + _FEW_SHOT_DOK_IFS
-    + "\n\n────────────────────────────────────────────────────────────────────────\n\n"
-    + _FEW_SHOT_DOK_DESKRIPTIV
-)
 
 FEW_SHOT_ANAMNESE = """\
 STILVORLAGE (zeigt den erwarteten Schreibstil – KEINE Inhalte übernehmen):
@@ -206,99 +159,83 @@ WICHTIG: Schreibe KEINE Überschriften wie 'Vorstellungsanlass:', 'Aktuelle Erkr
 Alle Inhalte müssen von DIESEM Patienten stammen – KEINE Inhalte aus dem Beispiel übernehmen.\
 """
 
-# Beispiel 1 (gekuerzt P4) – Wir-Form, MIT Anteilearbeit-Vokabular.
-_FEW_SHOT_VA_ANTEILE = """\
-BEISPIEL 1 – Verlauf MIT Anteilearbeit (Auszug, Stilreferenz):
+FEW_SHOT_VERLÄNGERUNG = """\
+BEISPIEL (Bisheriger Verlauf und Begründung der Verlängerung /
+Verlauf und Begründung der weiteren Verlängerung – ca. 400-600 Wörter):
 
 WICHTIG: Schreibe konsequent in der WIR-FORM aus klinischer Perspektive
 ("wir nahmen auf", "wir erlebten", "uns gelang es", "in unserer Arbeit").
+Vermeide Passivkonstruktionen wie "es zeigte sich" oder "konnte differenziert werden".
 
 Wir nahmen [Patient/in] im bisherigen Verlauf des stationären Aufenthaltes \
 unter anhaltendem innerem Druck, mit ausgeprägter Anspannung und emotionaler Ambivalenz \
-auf. Im hypnosystemischen Einzelprozess konnten wir mithilfe der Anteilearbeit \
-einen dominanten Kontrollanteil differenzieren, der biographisch vor dem Hintergrund \
-invalidierender Beziehungserfahrungen verständlich wurde. Parallel sahen wir jüngere, \
-verletzliche Anteile in Erscheinung treten.
+auf. Gleichzeitig erkannten wir eine zunehmende Bereitschaft, sich auf den \
+therapeutischen Prozess einzulassen und auch sehr vulnerable innere Themen \
+zu explorieren.
 
-Insgesamt sehen wir erste positive Entwicklungen wie eine verbesserte Reflexionsfähigkeit. \
-Eine fuer den ambulanten Kontext notwendige tragfaehige Stabilitaet ist derzeit noch \
-nicht ausreichend gegeben. Eine Verlängerung um weitere 14 Tage halten wir aus \
-psychotherapeutischer Sicht für dringend indiziert.\
+Im hypnosystemischen Einzelprozess konnten wir mithilfe der Anteilearbeit \
+insbesondere einen dominanten Kontrollanteil differenzieren, der biographisch \
+vor dem Hintergrund von invalidierenden Beziehungserfahrungen in der \
+Herkunftsfamilie verständlich wurde. Parallel sahen wir jüngere, verletzliche \
+Anteile in Erscheinung treten, die mit starken Gefühlen von Wertlosigkeit \
+und Trauer einhergehen. Durch Stuhlarbeit, Netzwerk- und Körperarbeit gelang \
+es uns gemeinsam mit [Patient/in], in ersten Schritten eine Beobachterposition \
+einzunehmen und eine wohlwollendere innere Haltung aufzubauen.
+
+In den therapeutischen Gruppen erlebten wir [Patient/in] zunehmend aktiv und \
+beziehungsfähig. Gleichzeitig führten gruppale Trigger und Nähedistanzthemen \
+wiederholt zu Überlastung, was die weiterhin hohe Vulnerabilität des Systems \
+unterstreicht.
+
+Insgesamt sehen wir erste positive Entwicklungen wie eine verbesserte \
+Reflexionsfähigkeit, punktuell aufgehellte Stimmung und wachsendes Verständnis \
+für die Funktionalität alter Muster. Dennoch bestehen weiterhin hohe \
+Anspannungszustände und eine eingeschränkte Emotionsregulation. Eine für den \
+ambulanten Kontext notwendige tragfähige Stabilität ist derzeit noch nicht \
+ausreichend gegeben. Zur weiteren Festigung der Steuerungsposition und \
+Vorbereitung eines gelingenden Transfers in den häuslichen Alltag halten wir \
+eine Verlängerung um weitere 14 Tage aus psychotherapeutischer Sicht für \
+dringend indiziert.\
 """
 
+FEW_SHOT_ENTLASSBERICHT = """\
+BEISPIEL (reiner Fließtext, keine Überschriften, ca. 600-900 Wörter):
 
-# Beispiel 2 (gekuerzt P4) – Wir-Form, OHNE Verfahrenslabel.
-_FEW_SHOT_VA_DESKRIPTIV = """\
-BEISPIEL 2 – Verlauf OHNE Verfahrenslabel (Auszug, Stilreferenz):
-
-Wir nahmen [Patient/in] zu Beginn des stationären Aufenthaltes deutlich erschöpft \
-und in der Selbstwahrnehmung erheblich eingeschränkt auf. Im therapeutischen Verlauf \
-gelang es zunehmend, die Verbindung zwischen aktueller Symptomatik und biographisch \
-geprägten Bewältigungsmustern herzustellen.
-
-Insgesamt sehen wir klinisch relevante Fortschritte in Reflexionsfähigkeit und \
-Selbstwahrnehmung. Dennoch bestehen weiterhin ausgeprägte Anspannungszustände. \
-Eine fuer den ambulanten Rahmen tragfaehige Stabilitaet ist derzeit nicht \
-ausreichend gegeben. Eine Verlängerung um weitere 14 Tage halten wir aus \
-psychotherapeutischer Sicht für dringend indiziert.\
-"""
-
-
-FEW_SHOT_VERLÄNGERUNG = (
-    FEW_SHOT_KONTRAST_HINWEIS
-    + _FEW_SHOT_VA_ANTEILE
-    + "\n\n────────────────────────────────────────────────────────────────────────\n\n"
-    + _FEW_SHOT_VA_DESKRIPTIV
-)
-
-# Beispiel 1 (gekuerzt P4) – hypnosystemische Anteilearbeit (Verfahren genannt).
-_FEW_SHOT_EB_ANTEILE = """\
-BEISPIEL 1 – Behandlung MIT hypnosystemischer Anteilearbeit (Auszug, Stilreferenz):
-
-Zu Beginn des stationären Aufenthaltes formulierte [Patient/in] als zentrales Anliegen, \
-wieder inneren Halt zu finden. Wir erlebten ihn/sie zu Therapiebeginn deutlich \
-erschöpft, innerlich angespannt und in seinem/ihrem Selbstwert verunsichert.
+Zu Beginn des stationären Aufenthaltes formulierte Herr/[Patient/in] als zentrales Anliegen, \
+wieder inneren Halt zu finden und sich aus einem über Jahre verfestigten Erleben von \
+innerer Überforderung und Selbstwertzweifeln zu lösen. Wir erlebten ihn/sie zu \
+Therapiebeginn deutlich erschöpft, innerlich angespannt und in seinem/ihrem Selbstwert \
+erheblich verunsichert. Gleichzeitig war bereits früh eine differenzierte \
+Selbstwahrnehmung und ein grundsätzliches Vertrauen in den therapeutischen Prozess \
+erkennbar, was eine tragfähige Arbeitsbasis ermöglichte.
 
 Im Einzelprozess stand die hypnosystemische Anteilearbeit im Zentrum. Es zeigte sich \
 eine innere Dynamik aus stark leistungsorientierten, kontrollierenden Anteilen, die \
-biographisch eng mit frühen Beziehungserfahrungen verknüpft waren. Im Verlauf gelang \
-es, diese inneren Ebenen zu differenzieren und aus einer selbstfürsorgelicheren \
-Perspektive in Kontakt zu bringen.
+biographisch eng mit frühen Beziehungserfahrungen verknüpft waren. Diese Anteile \
+hatten über lange Zeit eine schützende Funktion, gingen jedoch mit massiver innerer \
+Abwertung und emotionaler Selbstentfremdung einher. Im Verlauf gelang es zunehmend, \
+diese inneren Ebenen voneinander zu differenzieren und aus einer erwachseneren, \
+selbstfürsorgelicheren Perspektive in Kontakt zu bringen.
 
-Im Gesamtverlauf zeigte sich eine deutliche Symptomreduktion. Für den weiteren Verlauf \
-ist eine kontinuierliche ambulante psychotherapeutische Begleitung dringend zu \
-empfehlen.\
+Die therapeutischen Gruppen stellten zunächst eine erhebliche Herausforderung dar. \
+Mit zunehmender Sicherheit nutzte er/sie die Gruppe als Resonanzraum, um eigene \
+Beziehungsmuster zu erkennen. Rückmeldungen der Gruppe wirkten dabei korrigierend \
+auf das kritisch verzerrte Selbstbild und unterstützten den Aufbau eines stabilen \
+Selbstwertgefühls.
+
+Im Gesamtverlauf zeigte sich eine deutliche Entwicklung hin zu mehr innerer \
+Differenzierung, affektiver Stabilität und Selbstwirksamkeit. Herr/[Patient/in] stellte \
+sich mit [Hauptdiagnose] vor dem Hintergrund [biographischer Belastungskontext] vor. \
+Im stationären Rahmen konnte eine deutliche Symptomreduktion erreicht werden. \
+Die prämorbide Persönlichkeitsstruktur mit hoher Leistungsorientierung und \
+eingeschränkter Selbstfürsorge bleibt langfristig therapeutisch relevant.
+
+Für den weiteren Verlauf ist eine kontinuierliche ambulante psychotherapeutische \
+Begleitung mit traumatherapeutischem Schwerpunkt dringend zu empfehlen. Insbesondere \
+die weitere Arbeit an Beziehungs- und Selbstwertthemen sowie die achtsame Begleitung \
+bei anstehenden Veränderungsprozessenn erscheinen wesentlich, um die erreichten \
+Fortschritte nachhaltig im Alltag zu verankern.\
 """
-
-
-# Beispiel 2 (gekuerzt P4) – deskriptiv-systemisch, ohne Verfahrensbenennung.
-_FEW_SHOT_EB_DESKRIPTIV = """\
-BEISPIEL 2 – Behandlung OHNE explizite Verfahrensbenennung (Auszug, Stilreferenz):
-
-Zu Beginn des stationären Aufenthaltes formulierte [Patient/in] als zentrales Anliegen, \
-einen Weg aus anhaltender depressiver Erschöpfung zu finden. Wir erlebten sie/ihn zu \
-Therapiebeginn niedergedrückt, innerlich erschöpft und in der eigenen \
-Handlungsfähigkeit deutlich eingeschränkt.
-
-Im Einzelprozess arbeiteten wir an der Verbindung zwischen aktueller Symptomatik und \
-biographisch geprägten Erlebensmustern. Im Vordergrund stand eine ausgeprägte Tendenz \
-zur Selbstabwertung, die im Kontext invalidierender Erfahrungen in der Herkunftsfamilie \
-verständlich wurde. Im Verlauf gelang zunehmend ein wohlwollenderer innerer Umgang mit \
-eigenen Grenzen und ein deutlicher Zuwachs an Selbstmitgefühl.
-
-Im Gesamtverlauf zeigte sich eine klinisch relevante Entwicklung hin zu mehr innerer \
-Differenzierung. Für den weiteren Verlauf ist eine kontinuierliche ambulante \
-psychotherapeutische Begleitung mit Schwerpunkt auf Selbstwertarbeit dringend zu \
-empfehlen.\
-"""
-
-
-FEW_SHOT_ENTLASSBERICHT = (
-    FEW_SHOT_KONTRAST_HINWEIS
-    + _FEW_SHOT_EB_ANTEILE
-    + "\n\n────────────────────────────────────────────────────────────────────────\n\n"
-    + _FEW_SHOT_EB_DESKRIPTIV
-)
 
 
 # ── ARCHITEKTUR (v18) ────────────────────────────────────────────────────────
@@ -365,10 +302,8 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: "
         "Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. "
         "Konkrete Formulierungen statt allgemeiner Beschreibungen. "
-        "Beschreibe Anteile und Erlebensmuster mit dem Vokabular, das im Transkript "
-        "verwendet wurde. Wurden im Gespräch keine Verfahrensbegriffe genannt "
-        "(z.B. IFS, Manager-Anteil, Self-Energy), schreibe in allgemein-deskriptiver "
-        "systemischer Sprache und benenne kein Verfahren.\n\n"
+        "Systemische und IFS-Begriffe wo passend "
+        "(Manager-Anteile, Exile, Self-Energy, Feuerwehr-Anteile etc.).\n\n"
         "**Hypothesen und Entwicklungsperspektiven**\n"
         "Formuliere systemische Hypothesen über Sinnzusammenhänge. "
         "Zeige Entwicklungsperspektiven auf - was wird möglich, wenn... "
@@ -415,12 +350,8 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "(auch: 'Verlauf und Begründung der weiteren Verlängerung') "
         "für einen Antrag auf Verlängerung der Kostenzusage bei der Krankenversicherung.\n\n"
         "INHALT (Reihenfolge einhalten):\n"
-        "- Bisheriger Verlauf: was wurde konkret bearbeitet, welche Methoden eingesetzt. "
-        "Benenne ein Verfahren (z.B. IFS, Anteilearbeit, Hypnosystemik, Körperarbeit) "
-        "NUR DANN, wenn es in der Verlaufsdokumentation oder den Stichpunkten "
-        "tatsaechlich erwaehnt wurde. Andernfalls beschreibe das Vorgehen neutral "
-        "('einzeltherapeutische Arbeit', 'Gruppenarbeit', 'koerperorientierte "
-        "Interventionen').\n"
+        "- Bisheriger Verlauf: was wurde konkret bearbeitet, welche Methoden eingesetzt "
+        "(IFS, Anteilearbeit, Hypnosystemik, Körperarbeit, Gruppenarbeit)\n"
         "- Konkrete Fortschritte – spezifisch und belegbar aus der Verlaufsdokumentation, "
         "keine allgemeinen Behauptungen\n"
         "- Noch ausstehende Therapieziele: was bleibt zu tun, warum ist weitere "
@@ -466,18 +397,13 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "ohne Einleitung und ohne Abschluss.\n\n"
         "INHALT – drei Teile nahtlos als Fließtext ineinander (ALLE DREI MÜSSEN VORKOMMEN):\n\n"
         "Teil 1 – BEHANDLUNGSVERLAUF (Hauptteil, ausführlich):\n"
-        "Beschreibe ausführlich den therapeutischen Verlauf. Benenne eingesetzte "
-        "Methoden NUR DANN (z.B. IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, "
-        "Biographiearbeit), wenn sie in der Verlaufsdokumentation oder Antragsvorlage "
-        "tatsaechlich genannt sind oder klar erkennbar angewendet wurden. "
-        "Andernfalls beschreibe das Vorgehen neutral ('einzeltherapeutische Arbeit', "
-        "'Gruppenarbeit', 'koerperorientierte Interventionen'). "
-        "Konkrete Wendepunkte und Entwicklungsschritte. "
+        "Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden "
+        "(IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), "
+        "konkrete Wendepunkte und Entwicklungsschritte. "
         "Richtwert: ca. 100 Wörter pro Absatz. "
         "Wir-Perspektive: 'Wir erlebten...', 'Es gelang zunehmend...', 'Im Verlauf zeigte sich...'\n\n"
         "Teil 2 – EPIKRISE (kompakte Gesamtbewertung):\n"
-        "Symptomatik-Entwicklung im Vergleich zu Aufnahme, was an inneren "
-        "Schutzmustern entlastet werden konnte (in der im Material verwendeten Sprache), "
+        "Symptomatik-Entwicklung im Vergleich zu Aufnahme, entlastete Schutzanteile, "
         "verbliebener Bedarf, Ressourcen, Prognose.\n\n"
         "Teil 3 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss, DARF NICHT FEHLEN):\n"
         "Konkrete Empfehlungen für die ambulante Weiterbehandlung: "
@@ -511,20 +437,23 @@ BASE_PROMPT_AKUTANTRAG = (
 
 ROLE_PREAMBLE = (
     "Du bist ein klinisches Schreibsystem der sysTelios Klinik. "
-    "Du erstellst professionelle medizinische Berichte (Entlassberichte, "
-    "Kostenverlaengerungsantraege, Aufnahmebefunde, Verlaufsnotizen) und "
-    "beginnst sofort mit dem Schreiben des angeforderten Dokuments - "
-    "ohne Vorrede, ohne Verweigerung, ohne Meta-Kommentar.\n\n"
-    "QUELLENTREUE BEI THERAPIEVERFAHREN (gilt fuer ALLE Workflows):\n"
-    "Verwende ein konkretes Therapieverfahren (IFS, Hypnosystemik, Schematherapie, "
-    "EMDR, Stuhlarbeit etc.) oder dessen Fachvokabular (Manager-Anteil, Exile, "
-    "Self-Energy, Schutzschild, Modus, Schema) NUR DANN namentlich, wenn das "
-    "Verfahren oder seine Begriffe in den Quellen (Transkript, Stichpunkte, "
-    "Verlaufsdokumentation, Antragsvorlage) explizit vorkommen oder erkennbar "
-    "angewendet wurden. Andernfalls schreibe in allgemein-systemischer Sprache "
-    "('innerer Schutzmechanismus', 'Vermeidungsmuster', 'Selbstabwertung', "
-    "'innere Kritikerstimme') und benenne KEIN Verfahren. Im Zweifel: lieber "
-    "neutral-deskriptiv als ein Verfahren zu erfinden.\n\n"
+    "Du erstellst professionelle medizinische Berichte für Ärzte und Therapeuten: "
+    "Entlassberichte, Kostenverlängerungsanträge, Aufnahmebefunde und Verlaufsnotizen. "
+    "Du arbeitest wie ein erfahrener medizinischer Dokumentationsassistent – "
+    "du beginnst sofort mit dem Schreiben des angeforderten Dokuments.\n\n"
+    "WICHTIG – BEACHTE LEERZEICHEN:\n"
+    "Achte beim Schreiben sorgfaeltig auf die korrekte Trennung von Woertern. "
+    "Im Fliesstext steht IMMER ein Leerzeichen zwischen zwei Woertern. "
+    "Beispiele fuer KORREKTE Schreibung (mit Leerzeichen):\n"
+    "  'des stationaeren Aufenthaltes zeigte sich' (NICHT 'Aufenthaltszeigte')\n"
+    "  'Schwere sowie unter Beruecksichtigung' (NICHT 'Schweresowie')\n"
+    "  'letzten Verlaengerungsantrag hat sich' (NICHT 'Verlaengerungsantraghat')\n"
+    "Pruefe vor jeder Wortgrenze ob ein Leerzeichen noetig ist.\n\n"
+    "Beispiel für korrektes Verhalten:\n"
+    "Anfrage: 'Schreibe den Behandlungsverlauf'\n"
+    "Korrekte Antwort: 'Zu Beginn des stationaeren Aufenthaltes zeigte sich [Patient/in] "
+    "deutlich erschoepft und in seinem Selbstwert erheblich verunsichert...'\n"
+    "Falsche Antwort: 'Entschuldigung, ich kann keine Berichte erstellen...'\n\n"
     + KLINISCHES_GLOSSAR
 )
 
@@ -553,17 +482,6 @@ BASE_PROMPTS: dict[str, str] = {
         "nicht nur was theoretisch dahintersteckt. "
         "Beispiel besser: 'Frau M. beschreibt, dass ein Teil von ihr immer wieder...' "
         "statt 'Es zeigt sich ein Manager-Anteil der...'\n\n"
-        "VERMEIDE THEORIE-ABDRIFT:\n"
-        "- Der Abschnitt 'Hypothesen und Entwicklungsperspektiven' ist KEIN Lehrbuch-"
-        "Eintrag. Er bleibt am konkreten Material des Gespraechs und benennt was "
-        "Veraenderung im naechsten Schritt moeglich macht - nicht was theoretisch "
-        "ueber den Patiententypus zu sagen waere.\n"
-        "- KEINE Saetze die mit 'Die Suche nach X laesst sich als tiefe, "
-        "biographisch verankerte Bewaeltigungsstrategie verstehen' beginnen, wenn "
-        "im Gespraech nichts derartiges thematisiert wurde. Im Zweifel: konkret "
-        "bleiben am Erleben.\n"
-        "- Der Abschnitt 'Einladungen' ist 2-4 Saetze lang, nicht ein eigener Essay. "
-        "Konkrete Aufgaben/Uebungen, keine erneute Reflexion ueber den Sinn.\n\n"
         "QUELLENREGEL: Alle Inhalte müssen aus dem Transkript oder den Stichpunkten "
         "ableitbar sein. Keine Symptome, Diagnosen, Interventionen oder Zitate "
         "erfinden die nicht im Gespräch vorkamen.\n\n"
@@ -586,32 +504,19 @@ BASE_PROMPTS: dict[str, str] = {
         "– Keine Diagnosen-Wiederholung am Ende\n"
         "– Keine Therapieempfehlungen oder Behandlungspläne\n"
         "– Kein Markdown (keine **, keine ##, keine ---)\n"
-        "– KEINEN ###BEFUND###-Separator (der Befund kommt in einem separaten Call)\n"
-        "– KEINE 'NICHT-ERHOBEN-LITANEI': Wenn Informationen fehlen, fasse sie EINMAL "
-        "kompakt zusammen ('Zu Vorbehandlungen, Medikation und Suchtanamnese liegen "
-        "keine Angaben vor.') - NIEMALS Zeile fuer Zeile auflisten was alles nicht "
-        "erhoben wurde. FALSCH: 'Er nennt keine Vorbehandlungen. Er nennt keine "
-        "Medikamente. Er nennt keine Allergien. Er nennt keine Operationen...'. "
-        "RICHTIG: Knapp im Fluss erwaehnen oder ganz weglassen.\n"
-        "– KEINE Wiederholungen ganzer Absaetze. Wenn ein Thema schon einmal "
-        "behandelt wurde, nicht im Befund-Stil nochmal aufrollen.\n\n"
+        "– KEINEN ###BEFUND###-Separator (der Befund kommt in einem separaten Call)\n\n"
         "QUALITÄTSANFORDERUNGEN:\n"
         "- QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in den "
         "bereitgestellten Unterlagen (Selbstauskunft, Vorbefunde, Aufnahmegespräch) "
-        "zurückführbar sein. Findest du keine Quelle → kompakt 'nicht erhoben' "
-        "(siehe Regel oben - keine Litanei).\n"
+        "zurückführbar sein. Findest du keine Quelle → 'nicht erhoben'.\n"
         "- Lies die Selbstauskunft des AKTUELLEN Patienten sorgfältig. "
         "Schreibe über DIESEN Patienten – nicht über einen Beispielpatienten.\n"
-        "- WENN DIE QUELLEN PRAKTISCH LEER SIND (weniger als ca. 100 verwertbare "
-        "Woerter zum aktuellen Patienten): schreibe einen kurzen Hinweis-Absatz "
-        "('Auf Basis der vorliegenden Unterlagen liessen sich nur folgende "
-        "Eckpunkte erheben: ...') und beende den Text. Erfinde NICHTS aus dem "
-        "Few-Shot-Beispiel, dem Glossar oder anderen Quellen.\n"
         "- Direkte Patientenzitate NUR wenn WÖRTLICH in der Selbstauskunft\n"
         "- NIEMALS erfinden: Beruf, Familienstand, Kinder, Wohnsituation, "
         "Vorbehandlungen, Medikamente, Suchtmittel, Diagnosen, Zeitangaben, "
         "auslösende Ereignisse, Testwerte, Zitate\n"
-        "- LÄNGE Anamnese: Richtwert ca. 350-600 Wörter Fließtext. "
+        "- LÄNGE Anamnese: Richtwert ca. 450-700 Wörter Fließtext (KEINE kurzen "
+        "Absätze – schreibe ausführliche, zusammenhängende Absätze). "
         "Falls weiter unten ein VERBINDLICHES TEXTLIMIT angegeben ist, "
         "hat dieses absolute Vorrang vor diesem Richtwert.\n\n"
         + FEW_SHOT_ANAMNESE
@@ -1085,27 +990,6 @@ def build_system_prompt(
             and len(initial) <= 6
         )
         if is_plausible:
-            # P8: Pronomen-Constraint aus Anrede ableiten. Fehlerquelle in v12-Eval:
-            # eb-02-ads-trennung wechselte zwischen "Herr R." und "Frau M." aus dem
-            # Few-Shot. Hartes Mapping verhindert das.
-            if anrede.lower() == "frau":
-                pronomen = "sie/ihr/ihre"
-                pron_satz = (
-                    "Verwende konsistent weibliche Pronomen: 'sie', 'ihr', 'ihre' "
-                    "(z.B. 'sie berichtet', 'ihre Beschwerden', 'in ihrem Erleben')."
-                )
-            elif anrede.lower() == "herr":
-                pronomen = "er/sein/seine"
-                pron_satz = (
-                    "Verwende konsistent maennliche Pronomen: 'er', 'sein', 'seine' "
-                    "(z.B. 'er berichtet', 'seine Beschwerden', 'in seinem Erleben')."
-                )
-            else:
-                pronomen = "neutral"
-                pron_satz = (
-                    "Verwende neutrale Formulierungen, da das Geschlecht nicht "
-                    "eindeutig ableitbar ist."
-                )
             parts.append(
                 f"\nPATIENTENNAME (aus den Unterlagen extrahiert):\n"
                 f"Der aktuelle Patient ist {anrede} {vorname} {nachname}.\n"
@@ -1113,12 +997,6 @@ def build_system_prompt(
                 f"(Anrede + erster Buchstabe des Nachnamens + Punkt).\n"
                 f"NIEMALS den vollen Nachnamen, NIEMALS den Vornamen, "
                 f"NIEMALS einen Platzhalter (eckige Klammern um Patient/in oder Initiale, oder Pseudo-Namen wie Frau X. / Herr Y.) verwenden.\n"
-                f"PRONOMEN ({pronomen}): {pron_satz}\n"
-                f"WICHTIG: NICHT zwischen den Geschlechtsbezeichnungen wechseln "
-                f"(z.B. niemals 'Herr R.' und im naechsten Satz 'Frau M.' aus einem "
-                f"Beispiel uebernehmen). Das Stilbeispiel kann ein anderes Geschlecht "
-                f"haben - der OUTPUT folgt aber AUSSCHLIESSLICH dem Geschlecht des "
-                f"AKTUELLEN Patienten.\n"
                 f"Beispiel KORREKT: 'Nach der Aufnahme zeigte sich {anrede} {initial} zunehmend...'\n"
                 f"Beispiel FALSCH:  Nach der Aufnahme zeigte sich [Pat] zunehmend... (mit Platzhalter)\n"
             )
@@ -1323,22 +1201,7 @@ def build_user_content(
             parts.append(f"AUFNAHMEGESPRÄCH (TRANSKRIPT):\n{transcript}")
         if diagnosen:
             parts.append(f"DIAGNOSEN: {', '.join(diagnosen)}")
-        # P7: Workflow-Primer fuer Anamnese. Gibt einen typischen Anfang und
-        # einen typischen Abschluss vor, damit das Modell weiss wie der Text
-        # rahmen muss. Reduziert das "AMDP-Block-am-Ende"-Problem.
-        parts.append(
-            "Erstelle jetzt die Anamnese als zusammenhaengenden Fliesstext "
-            "(KEIN Befund - der laeuft als separater Call).\n\n"
-            "TYPISCHER ANFANG (uebernimm Form, fuelle mit Inhalten des aktuellen "
-            "Patienten):\n"
-            "'[Anrede + Initial] stellt sich mit dem Hauptanliegen vor, [Inhalt aus "
-            "Selbstauskunft]. Die Symptomatik begann vor etwa [Zeitraum] im Kontext "
-            "von [Auslöser]. Seither [Verlauf]...'\n\n"
-            "TYPISCHER ABSCHLUSS (synthetisierender Schlussabsatz):\n"
-            "'Insgesamt zeige sich ein komplexes Zusammenspiel aus [Hauptmustern], "
-            "vor dem Hintergrund [biographischer Kontext], welches aktuell zu "
-            "[Funktionseinschraenkung] gefuehrt hat.'"
-        )
+        parts.append("Anamnese und psychopathologischen Befund erstellen.")
 
     elif workflow == "verlaengerung":
         if antragsvorlage_text:
