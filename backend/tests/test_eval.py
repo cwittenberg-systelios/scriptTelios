@@ -632,6 +632,13 @@ class EvalResult:
         self.word_count = len(text.split())
         self.issues: list[str] = []
         self.passed: list[str] = []
+        # v13 Ä5: Telemetrie zum Längenanker - aus welcher Quelle kam das Limit?
+        # Werte: "style", "style_too_short_fallback", "workflow_default",
+        #        "style_invalid_range_fallback", "unknown" (Default vor Set)
+        self.length_source: str = "unknown"
+        self.length_min: int = 0
+        self.length_max: int = 0
+        self.length_n_substantial: int = 0
 
     def check_word_count(self, min_words: int, max_words: int):
         if self.word_count < min_words:
@@ -882,6 +889,18 @@ class EvalResult:
             lines.append(f"  ✗ {len(self.issues)} Probleme:")
             for issue in self.issues:
                 lines.append(f"    - {issue}")
+        # v13 Ä5: Längenquelle als Diagnose-Information
+        if self.length_source != "unknown":
+            source_label = {
+                "style": f"Stilvorlage(n) (n={self.length_n_substantial})",
+                "style_too_short_fallback": "Stilvorlage zu kurz → Workflow-Default",
+                "style_invalid_range_fallback": "Stilvorlage out-of-range → Workflow-Default",
+                "workflow_default": "Workflow-Default (keine Stilvorlage)",
+            }.get(self.length_source, self.length_source)
+            lines.append(
+                f"  Längenanker: {self.length_min}-{self.length_max}w "
+                f"(Quelle: {source_label})"
+            )
         if hasattr(self, "style_metrics") and self.style_metrics:
             ref = self.style_metrics["reference"].get("avg", self.style_metrics["reference"])
             out = self.style_metrics["output"]
@@ -987,11 +1006,26 @@ async def test_eval_workflow(workflow, test_case, request):
     _fb_min = expected.get("min_words", _wl_defaults.get(workflow, (200, 800))[0])
     _fb_max = expected.get("max_words", _wl_defaults.get(workflow, (200, 800))[1])
     _style_therapeut = test_case.get("style_therapeut")
+
+    # v13 Ä5: Identische Resolution wie Production via resolve_length_anchor.
+    # Vorher wurde derive_word_limits direkt aufgerufen - das kapselt jetzt
+    # resolve_length_anchor inkl. Floor/Ceiling-Schutz und Quellen-Telemetrie.
+    from app.services.prompts import resolve_length_anchor
     if _style_therapeut:
         _style_texts_for_limits = load_all_style_texts(_style_therapeut, workflow)
-        eff_min, eff_max = derive_word_limits(_style_texts_for_limits, _fb_min, _fb_max)
     else:
-        eff_min, eff_max = _fb_min, _fb_max
+        _style_texts_for_limits = None
+    _anchor = resolve_length_anchor(
+        workflow=workflow,
+        style_raw_texts=_style_texts_for_limits,
+        workflow_default=(_fb_min, _fb_max),
+    )
+    eff_min, eff_max = _anchor["min"], _anchor["max"]
+    # Telemetrie auf EvalResult festhalten (für Report-Aggregation)
+    ev.length_source = _anchor["source"]
+    ev.length_min = eff_min
+    ev.length_max = eff_max
+    ev.length_n_substantial = _anchor["n_substantial"]
     ev.check_word_count(eff_min, eff_max)
 
     if "required_keywords" in expected:

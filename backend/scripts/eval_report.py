@@ -71,7 +71,9 @@ def load_eval_results(d: Path) -> dict:
             tid = ef.stem.replace(".eval","")
             e = {"test_id":tid,"workflow":wf,"word_count":0,"passed":0,"issues":0,
                  "score":0.0,"status":"?","issue_list":[],"style_metrics":None,
-                 "jury_score":None,"jury_reason":None,"composite":0.0}
+                 "jury_score":None,"jury_reason":None,"composite":0.0,
+                 # v13 Ä5: Längenquellen-Telemetrie
+                 "length_source":None, "length_min":0, "length_max":0}
             for ln in ef.read_text("utf-8").split("\n"):
                 ln = ln.strip()
                 if ln.startswith("[PASS]") or ln.startswith("[FAIL]"):
@@ -84,6 +86,16 @@ def load_eval_results(d: Path) -> dict:
                 elif "Probleme:" in ln:
                     m = re.search(r"(\d+)\s+Probleme", ln)
                     if m: e["issues"] = int(m.group(1))
+                elif ln.startswith("Längenanker:"):
+                    # v13 Ä5: "Längenanker: 400-600w (Quelle: Stilvorlage(n) (n=2))"
+                    m = re.match(
+                        r"Längenanker:\s*(\d+)-(\d+)w\s*\(Quelle:\s*(.+?)\)\s*$",
+                        ln,
+                    )
+                    if m:
+                        e["length_min"] = int(m.group(1))
+                        e["length_max"] = int(m.group(2))
+                        e["length_source"] = m.group(3).strip()
                 elif ln.startswith("- "): e["issue_list"].append(ln[2:])
             tot = e["passed"]+e["issues"]
             e["score"] = e["passed"]/tot if tot else 0.0
@@ -296,15 +308,62 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
         story.append(Paragraph("Issue-Kategorien",st["H2"]))
         cl,cs = list(cats.keys()),list(cats.values())
         story.append(_issue_bars("Häufigkeit",cl,cs,[cm2.get(l,C["gray"]) for l in cl]))
+
+    # v13 Ä5: Verteilung der Längenanker-Quellen.
+    # Zeigt, ob Längenlimits aus Stilvorlagen oder aus Workflow-Defaults
+    # abgeleitet wurden. Wichtige Diagnose: wenn ein FAIL-Test
+    # source="style_too_short_fallback" zeigt, wissen wir dass die
+    # Stilvorlage zu kurz war für eine valide Längenherleitung.
+    src_counts = defaultdict(int)
+    for e in ae:
+        src = e.get("length_source")
+        if src:
+            # Kurze Labels für die Anzeige
+            short = (
+                "Stilvorlage" if src.startswith("Stilvorlage(n)")
+                else "Stil zu kurz → Default" if "zu kurz" in src
+                else "Stil ungültig → Default" if "out-of-range" in src
+                else "Workflow-Default" if "keine Stilvorlage" in src
+                else src[:30]
+            )
+            src_counts[short] += 1
+    if src_counts:
+        src_colors = {
+            "Stilvorlage": C["green"],
+            "Stil zu kurz → Default": C["orange"],
+            "Stil ungültig → Default": C["red_lt"],
+            "Workflow-Default": C["gray"],
+        }
+        story.append(Spacer(1,4*mm))
+        story.append(Paragraph("Längenanker-Quellen",st["H2"]))
+        sl, sv = list(src_counts.keys()), list(src_counts.values())
+        story.append(_issue_bars(
+            "Aus welcher Quelle kam das Wortlimit?",
+            sl, sv, [src_colors.get(l, C["gray"]) for l in sl],
+        ))
+
     story.append(PageBreak())
 
     # Detail tables
     for wf,entries in data["workflows"].items():
         story.append(Paragraph(f"Workflow: {WF_LBL.get(wf,wf)}",st["H2"]))
         # P6: Jury-Spalte ergaenzt. "—" wenn keine Jury-Bewertung vorliegt.
-        dd = [["Testfall","Wörter","Score","Jury","Composite","Status","Issues"]]
+        # v13 Ä5: Quelle-Spalte ergaenzt (kurzform: S=Stilvorlage, F=Fallback, D=Default)
+        dd = [["Testfall","Wörter","Score","Jury","Composite","Status","Issues","Quelle"]]
         for e in entries:
             jury_cell = f"{e['jury_score']:.0f}/5" if e.get("jury_score") is not None else "—"
+            # Quelle-Code: 1 Buchstabe für Kompaktheit
+            src = e.get("length_source") or ""
+            if src.startswith("Stilvorlage(n)"):
+                src_code = "S"
+            elif "zu kurz" in src:
+                src_code = "F↓"
+            elif "out-of-range" in src:
+                src_code = "F↑"
+            elif "keine Stilvorlage" in src:
+                src_code = "D"
+            else:
+                src_code = "—"
             dd.append([
                 e["test_id"],
                 str(e["word_count"]),
@@ -313,14 +372,26 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                 f"{e.get('composite', e['score'])*100:.0f}%",
                 e["status"],
                 str(e["issues"]),
+                src_code,
             ])
-        dt = Table(dd,colWidths=[5.5*cm,1.6*cm,1.6*cm,1.4*cm,1.8*cm,1.6*cm,1.2*cm])
+        dt = Table(dd,colWidths=[5.0*cm,1.4*cm,1.4*cm,1.2*cm,1.6*cm,1.4*cm,1.0*cm,1.0*cm])
         dt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),C["dark"]),("TEXTCOLOR",(0,0),(-1,0),colors.white),
             ("FONTSIZE",(0,0),(-1,-1),8),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
             ("ALIGN",(1,0),(-1,-1),"CENTER"),("GRID",(0,0),(-1,-1),.5,C["grid"]),
             ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,C["cream"]]),
             ("BOTTOMPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),3)]))
-        story.append(dt); story.append(Spacer(1,3*mm))
+        story.append(dt); story.append(Spacer(1,1*mm))
+        # v13 Ä5: Legende für Quelle-Spalte
+        story.append(Paragraph(
+            '<font size="7" color="#666666">'
+            'Quelle: <b>S</b>=Stilvorlage(n) · '
+            '<b>F↓</b>=Stilvorlage zu kurz, Default-Fallback · '
+            '<b>F↑</b>=Stilvorlage zu lang, Default-Fallback · '
+            '<b>D</b>=Workflow-Default (keine Stilvorlage)'
+            '</font>',
+            st["Normal"],
+        ))
+        story.append(Spacer(1,3*mm))
         for e in entries:
             if e["issue_list"]:
                 items = [Paragraph(f'<font color="{C["red_lt"].hexval()}"><b>{e["test_id"]}:</b></font>',st["B"])]

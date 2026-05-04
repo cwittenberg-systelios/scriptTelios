@@ -143,18 +143,22 @@ class TestPrompts:
         - FEW_SHOT-Header (ca. X-Y Wörter)
         - VERBINDLICHES TEXTLIMIT (aus derive_word_limits)
         v13 zentralisiert alles in resolve_length_anchor → ein ZIELLÄNGE-Block.
+
+        Der ZIELLÄNGE-Block selbst enthält mehrere "Wörter"-Erwähnungen
+        ("ca. X Wörter", "Bandbreite ... Wörter", "Obergrenze X Wörter") -
+        deshalb zählen wir nur die ANKER-Tokens (ZIELLÄNGE/Mindestens/...),
+        nicht jedes Vorkommen von "Wörter".
         """
         import re
         from app.services.prompts import build_system_prompt
         from app.core.workflows import WORKFLOW_KEYS
 
-        length_pattern = re.compile(
-            r'(?:Mindestens|maximal|Richtwert|TEXTLIMIT|ZIELLÄNGE|LÄNGE)'
-            r'.{0,80}(?:Wörter|Woerter|Wort\b)',
-            re.IGNORECASE,
+        # Anker-Token: distinkte Längenanweisungs-Marker, NICHT die einzelnen
+        # "Wörter"-Erwähnungen innerhalb desselben ZIELLÄNGE-Blocks
+        anchor_token_pattern = re.compile(
+            r'(?:^|\n)\s*(?:ZIELLÄNGE|VERBINDLICHES TEXTLIMIT|LÄNGE:\s|Mindestens \d+ Wörter|Richtwert \d)',
         )
 
-        # Alle echten Workflows (befund ist Sub-Call von Anamnese)
         for wf in WORKFLOW_KEYS:
             p = build_system_prompt(
                 workflow=wf,
@@ -163,12 +167,12 @@ class TestPrompts:
                 patient_name={"anrede": "Frau", "vorname": "X",
                               "nachname": "M", "initial": "M."},
             )
-            hits = length_pattern.findall(p)
+            hits = anchor_token_pattern.findall(p)
             assert len(hits) == 1, (
-                f"{wf}: erwartet genau 1 Längenangabe, gefunden {len(hits)}: {hits}"
+                f"{wf}: erwartet genau 1 Längen-Anker, gefunden {len(hits)}: {hits}"
             )
             assert "ZIELLÄNGE" in hits[0], (
-                f"{wf}: Längenangabe sollte ZIELLÄNGE-Block sein, ist: {hits[0]}"
+                f"{wf}: Längen-Anker sollte ZIELLÄNGE-Block sein, ist: {hits[0]}"
             )
 
     def test_v13_resolve_length_anchor_substantial_style(self):
@@ -254,6 +258,125 @@ class TestPrompts:
                     f"BASE_PROMPTS[{wf!r}] enthält noch '{pat}' - "
                     f"v13 verlangt zentrale Längenangabe via resolve_length_anchor"
                 )
+
+    # ── v13: Strukturzwang Folgeverlängerung Tests (Ä2) ─────────────────────
+    def test_v13_folgeverlaengerung_structure_template(self):
+        """v13 Ä2: Folgeverlängerung-Prompt enthält den STRUKTUR-Block.
+
+        Der Block entkoppelt den Konflikt zwischen 'Wir-Erstes-Wort' und
+        'Sektionsüberschrift Verlauf' indem er beides als Vorlage erzwingt:
+        Zeile 1 = Überschrift, Zeile 3 = Wir-Beginn.
+        Behebt fva-01-borderline-folge Failure (Sektion fehlt).
+        """
+        from app.services.prompts import build_system_prompt
+
+        p = build_system_prompt(
+            workflow="folgeverlaengerung",
+            word_limits=(400, 600),
+            patient_name={"anrede": "Frau", "vorname": "X",
+                          "nachname": "M", "initial": "M."},
+        )
+        assert "STRUKTUR (verbindlich" in p, "STRUKTUR-Block fehlt"
+        assert "Verlauf und Begründung der weiteren Verlängerung" in p
+        assert "Zeile 1:" in p and "Zeile 3+:" in p
+
+    def test_v13_folgeverlaengerung_structure_in_user_content(self):
+        """v13 Ä2: User-Turn-Closing wiederholt den Strukturzwang am Ende."""
+        from app.services.prompts import build_user_content
+
+        u = build_user_content(
+            workflow="folgeverlaengerung",
+            verlaufsdoku_text="Sitzung 1: ...",
+            diagnosen=["F33.1"],
+        )
+        assert "Format zwingend" in u
+        assert "Verlauf und Begründung der weiteren Verlängerung" in u
+        assert "Zeile 1" in u
+
+    def test_v13_other_workflows_have_no_structure_template(self):
+        """v13 Ä2: Strukturzwang ist nur für folgeverlaengerung aktiv.
+
+        Verlängerung (Erstantrag) hat in v12 100% PASS - dort soll der
+        Strukturzwang NICHT eingeführt werden, um Erfolg nicht zu riskieren.
+        """
+        from app.services.prompts import build_system_prompt
+
+        for wf in ("verlaengerung", "anamnese", "akutantrag",
+                   "entlassbericht", "dokumentation"):
+            p = build_system_prompt(
+                workflow=wf,
+                word_limits=(400, 600),
+                patient_name={"anrede": "Frau", "vorname": "X",
+                              "nachname": "M", "initial": "M."},
+            )
+            assert "STRUKTUR (verbindlich" not in p, (
+                f"{wf}: hat unerwarteten STRUKTUR-Block (Ä2 sollte nur "
+                f"folgeverlaengerung betreffen)"
+            )
+
+    # ── v13: Stil-Checkliste Tests (Ä3) ─────────────────────────────────────
+    def test_v13_style_checklist_format(self):
+        """v13 Ä3: Stil-Vorgaben sind als überprüfbare [ ]-Checkliste formatiert."""
+        from app.services.prompts import _compute_style_constraints
+
+        # Mindestens 30 Wörter (Funktion liefert bei <30 leeren String)
+        style = (
+            "Wir nahmen Frau M. unter anhaltendem Druck auf. "
+            "Wir erlebten sie zu Therapiebeginn deutlich erschöpft "
+            "und in ihrem Selbstwert verunsichert.\n\n"
+            "Im Einzelprozess konnten wir mit Anteilearbeit den Wächter-Anteil "
+            "differenzieren. Wir sahen verletzliche jüngere Anteile in Erscheinung "
+            "treten, die mit Gefühlen von Wertlosigkeit einhergingen.\n\n"
+            "Wir halten eine Verlängerung um 14 Tage für dringend indiziert."
+        )
+        result = _compute_style_constraints(style)
+
+        assert "STIL-CHECKS" in result, f"STIL-CHECKS fehlt in: {result[:200]}"
+        assert "[ ]" in result
+        # Mindestens 4 Checkboxen (Satzlänge, Absätze, Wir-Anteil, Erster Satz, Stiltyp)
+        assert result.count("[ ]") >= 4, f"Nur {result.count('[ ]')} Checkboxen"
+
+    def test_v13_style_checklist_includes_wir_target(self):
+        """v13 Ä3: Bei Wir-Stilvorlagen wird konkreter Wir-Anteil als Ziel gegeben.
+
+        Behebt fva-02-depression-folge Failure: Stil-Jury bemängelte
+        Wir-Perspektive 0% statt Referenz 12%. Mit konkretem Zielwert
+        bleibt das Modell in der Bandbreite.
+        """
+        from app.services.prompts import _compute_style_constraints
+
+        # Hoher Wir-Anteil
+        style_wir = " ".join([
+            "Wir nahmen Frau M. auf. Wir erlebten sie reflektiert. "
+            "Wir konnten mit ihr arbeiten. Uns gelang es. Unsere Arbeit war erfolgreich."
+        ] * 8)
+        result = _compute_style_constraints(style_wir)
+        assert "Wir-Anteil" in result
+        assert "%" in result  # konkrete Prozent-Bandbreite
+        assert "Erster Satz beginnt mit 'Wir'" in result
+
+    def test_v13_style_checklist_third_person(self):
+        """v13 Ä3: Bei Er/Sie-Stilvorlagen wird dritte Person verlangt, kein Wir."""
+        from app.services.prompts import _compute_style_constraints
+
+        # Sehr niedriger Wir-Anteil (3. Person)
+        style_3p = (
+            "Frau M. zeigte sich offen und aufgeschlossen. "
+            "Sie berichtete über ihre Symptome. Frau M. beschrieb Ängste. "
+            "Sie konnte ihre Anliegen klar formulieren. Frau M. wirkte motiviert. "
+            "Sie zeigte Bereitschaft zur Mitarbeit."
+        ) * 5
+        result = _compute_style_constraints(style_3p)
+        assert "dritte Person" in result.lower() or "Er/Sie" in result
+        # Wir-spezifische Vorgaben dürfen NICHT auftauchen
+        assert "Erster Satz beginnt mit 'Wir'" not in result
+
+    def test_v13_style_checklist_with_short_input(self):
+        """Ä3 Edge Case: zu kurze Stilvorlage (<30 Wörter) liefert leeren String."""
+        from app.services.prompts import _compute_style_constraints
+
+        result = _compute_style_constraints("Nur ein paar Wörter hier.")
+        assert result == ""
 
     # ── Bisherige Tests folgen ──────────────────────────────────────────────
 

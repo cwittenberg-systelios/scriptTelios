@@ -618,15 +618,23 @@ BASE_PROMPTS: dict[str, str] = {
         "FOKUS:\n"
         "Schreibe NUR den Abschnitt 'Verlauf und Begründung der weiteren Verlängerung' "
         "als Fließtext – keine Diagnosen, keine Stammdaten, keine Anamnese.\n\n"
+        # v13 Ä2: STRUKTURZWANG - Sektionsüberschrift + Wir-Perspektive entkoppelt.
+        # Vor Ä2 kollidierten zwei Constraints ('Erster Satz mit Wir' vs.
+        # 'Sektionsname Verlauf'). Folge: fva-01 verlor das 'Verlauf'-Keyword,
+        # weil das Modell die Wir-Konstruktion priorisierte. Lösung: explizite
+        # Vorlage, die beides erzwingt - Überschrift in Zeile 1, Wir-Satz in Zeile 3.
+        "STRUKTUR (verbindlich, exakt einhalten):\n"
+        "Zeile 1: Überschrift wörtlich: 'Verlauf und Begründung der weiteren Verlängerung'\n"
+        "Zeile 2: Leerzeile\n"
+        "Zeile 3+: Fließtext, der DIREKT mit 'Wir' oder einer Wir-Konstruktion beginnt\n"
+        "          (z.B. 'Wir erlebten ...', 'Seit dem letzten Antrag konnten wir ...',\n"
+        "          'In unserer weiteren Arbeit ...').\n"
+        "          NICHT mit 'Im weiteren Verlauf' oder 'Seither hat sich [Patient/in] ...'.\n\n"
         "STIL:\n"
         "WIR-PERSPEKTIVE des Therapeutenteams (verbindlich, nicht 3. Person/Passiv): "
         "Schreibe konsequent aus 'Wir'-Sicht: 'Seit dem letzten Antrag erlebten wir...', "
         "'In unserer weiteren Arbeit gelang es uns...', 'Wir konnten gemeinsam mit [Patient/in]...'. "
         "VERMEIDE Passivkonstruktionen wie 'es zeigte sich' oder 'konnte differenziert werden'. "
-        "WICHTIG: Der erste Satz des Textes MUSS mit 'Wir' oder einer Wir-Konstruktion "
-        "beginnen ('Wir erlebten ...', 'Seit dem letzten Antrag konnten wir ...', "
-        "'In unserer weiteren Arbeit ...'). NICHT mit 'Im weiteren Verlauf' oder "
-        "'Seither hat sich [Patient/in] ...' beginnen.\n"
         "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
         # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
         "Konkret und patientenspezifisch.\n\n"
@@ -640,7 +648,8 @@ BASE_PROMPTS: dict[str, str] = {
         "Keine Therapieinhalte, Methoden, Fortschritte oder Zitate erfinden. "
         "Im Zweifel weglassen statt erfinden.\n\n"
         "WICHTIG – STILBEISPIEL:\n"
-        "Falls ein Stilbeispiel bereitgestellt wird: Übernimm Struktur und Gliederung. "
+        "Falls ein Stilbeispiel bereitgestellt wird: Übernimm Struktur und Gliederung "
+        "(aber NICHT die Sektionsüberschrift überschreiben - die ist verbindlich oben). "
         "Ersetze nur die patientenspezifischen Inhalte.\n\n"
         + FEW_SHOT_VERLÄNGERUNG
     ),
@@ -734,11 +743,18 @@ def derive_word_limits(
 # (D-G) wurden entfernt. Im finalen Prompt steht genau EIN Längenanker -
 # direkt vor dem Schreibauftrag.
 
-# Substantialitäts-Schwelle: Stilvorlagen unter 200 Wörtern werden NICHT zur
+# Substantialitäts-Schwelle: Stilvorlagen unter dieser Wortzahl werden NICHT zur
 # Längenherleitung benutzt (würden auf Stichwortskizzen Cap=143w erzeugen wie
 # in dok-02-paarthematik). Sie tragen weiterhin zum Schreibstil bei
 # (Satzlänge, Wir-Perspektive etc. via _compute_style_constraints).
-LENGTH_ANCHOR_SUBSTANTIAL_THRESHOLD = 200
+#
+# v13 refined: Schwelle ist DYNAMISCH abhängig vom Workflow-Min. Eine 200w-Vorlage
+# taugt für eine 150w-Dokumentation (substantial), aber NICHT für einen 500w-
+# Entlassbericht (würde derived_max=260 produzieren, was nach Floor-Anhebung auf
+# 500 zu min>max führt → invalid_range). Daher: substantial = ≥0.7×workflow_min.
+# Untere Bodengrenze 100w (sehr kurze Stichwortskizzen niemals als substantial).
+LENGTH_ANCHOR_MIN_THRESHOLD = 100
+LENGTH_ANCHOR_THRESHOLD_RATIO = 0.7
 
 # Ceiling-Multiplikator: derived_max wird auf workflow_default_max × 1.4 gecappt.
 # Verhindert, dass eine ungewöhnlich lange Stilvorlage (z.B. Akutantrag mit
@@ -780,10 +796,20 @@ def resolve_length_anchor(
 
     fb_min, fb_max = workflow_default or word_limit_for(workflow, fallback=(200, 800))
 
+    # v13 refined: Dynamische Substantialitäts-Schwelle.
+    # Eine Stilvorlage taugt nur dann zur Längenherleitung, wenn sie mindestens
+    # 70% des Workflow-Minimums hat - sonst würde derive_word_limits einen Cap
+    # erzeugen, der nach Floor-Anhebung zu min>max führt (invalid_range).
+    # Bodengrenze 100w schützt zusätzlich vor sehr kurzen Stichwortskizzen.
+    substantial_threshold = max(
+        LENGTH_ANCHOR_MIN_THRESHOLD,
+        int(fb_min * LENGTH_ANCHOR_THRESHOLD_RATIO),
+    )
+
     # Stilvorlagen kategorisieren
     substantial = [
         t for t in (style_raw_texts or [])
-        if t and len(t.split()) >= LENGTH_ANCHOR_SUBSTANTIAL_THRESHOLD
+        if t and len(t.split()) >= substantial_threshold
     ]
     has_any_style = bool(style_raw_texts and any(t and t.strip() for t in style_raw_texts))
 
@@ -912,27 +938,78 @@ def _compute_style_constraints(style_text: str, skip_length: bool = False) -> st
     # Hartes Wortlimit aus Vorlagenlänge (±30%), überschreibt BASE_PROMPT-Angaben
     limit_min, limit_max = derive_word_limits([style_text], fallback_min=50, fallback_max=9999)
 
-    lines = ["\nSTIL-VORGABEN (unbedingt einhalten!):"]
-    lines.append(f"- Satzlänge: durchschnittlich {int(avg_sentence_len)} Wörter pro Satz")
-    lines.append(f"- Absatzlänge: durchschnittlich {int(avg_para_len)} Wörter pro Absatz")
-    if is_fragment_style:
-        lines.append(
-            "- STILTYP: Stichwort-/Notiz-Stil (kurze Fragmente, oft ohne Satzsubjekt, "
-            "Verben am Satzanfang). UEBERNIMM diesen Stil. Schreibe KEINE Vollsaetze "
-            "mit Subjekt-Verb-Objekt-Struktur. Beispielform der Vorlage uebernehmen."
-        )
-    if fach_density > 0:
-        lines.append(f"- Fachbegriffe: {'sparsam' if fach_density < 0.8 else 'moderat'} "
-                      f"(ca. {fach_density} pro 100 Wörter)")
-    else:
-        lines.append("- Fachbegriffe: sehr sparsam einsetzen")
+    # ── v13 Ä3: Stil-Mimik als messbare Checkliste ─────────────────────────
+    # Vor Ä3: Stil-Vorgaben als Prosa ("Wir-Form des Behandlungsteams").
+    # Modell setzte das qualitativ um, konnte aber nicht quantitativ
+    # kontrollieren - Stil-Jury bemängelte durchweg "etwas zu Wir-lastig"
+    # oder "leicht abweichend" (Ø 3.6/5).
+    #
+    # Ä3: Konkrete Zielwerte aus der Stilvorlage als Pre-Submit-Checkliste
+    # mit [ ]-Boxen. Selbst-Verifikations-Format wirkt bei Qwen3 deutlich
+    # besser als beschreibende Vorgabe. Werte sind dieselben wie vorher,
+    # nur Format ist messbar statt qualitativ.
+
+    # Toleranz-Bandbreiten (auf Basis Stilvorlage berechnet)
+    sent_lo = max(5, int(avg_sentence_len) - 5)
+    sent_hi = int(avg_sentence_len) + 5
+    para_count = len(paragraphs)
+    para_count_lo = max(1, para_count - 1)
+    para_count_hi = para_count + 1
+
+    lines = ["\nSTIL-CHECKS (vor Abgabe verifizieren - jedes Häkchen erfüllt?):"]
+    lines.append(f"  [ ] Durchschnittliche Satzlänge: {sent_lo}–{sent_hi} Wörter "
+                 f"(Stilvorlage: {int(avg_sentence_len)})")
+    lines.append(f"  [ ] Anzahl Absätze: {para_count_lo}–{para_count_hi} "
+                 f"(Stilvorlage: {para_count})")
+
     if uses_wir:
-        lines.append("- Perspektive: Wir-Form des Behandlungsteams "
-                      "(\"Wir beobachteten...\", \"In unserer Arbeit...\"). "
-                      "Der ERSTE Satz des Outputs MUSS mit 'Wir' oder einer "
-                      "Wir-Konstruktion beginnen.")
+        # Wir-Quote der Stilvorlage als Zielgröße. fva-02 zeigt: ohne konkretes
+        # Ziel rutscht das Modell auf 0% Wir-Anteil ab. Mit Zielzahl bleibt es
+        # in der Bandbreite.
+        wir_pct = round(wir_ratio * 100, 1)
+        # Relative Toleranz ±50% (Wir-Anteil ist sehr variabel)
+        wir_target_lo = max(0.3, wir_pct * 0.5)
+        wir_target_hi = wir_pct * 1.5
+        lines.append(
+            f"  [ ] Wir-Anteil: zwischen {wir_target_lo:.1f}% und {wir_target_hi:.1f}% "
+            f"aller Wörter sind 'Wir/uns/unser...' (Stilvorlage: {wir_pct}%, "
+            f"d.h. ca. {wir_count} Vorkommen auf {word_count} Wörter)"
+        )
+        lines.append(
+            "  [ ] Erster Satz beginnt mit 'Wir' oder Wir-Konstruktion "
+            "('Wir erlebten...', 'In unserer Arbeit...', 'Seit dem letzten Antrag konnten wir...')"
+        )
     else:
-        lines.append("- Perspektive: Dritte Person (Er/Sie-Form)")
+        lines.append(
+            "  [ ] Perspektive: durchgängig dritte Person (Er/Sie/Patient/in), "
+            "kein 'Wir'/'uns'/'unser' im gesamten Text"
+        )
+
+    if fach_density > 0:
+        # Fachbegriffe haben Bandbreite ±50% (selten konsistent gleichmäßig)
+        fach_lo = max(0.0, round(fach_density * 0.5, 1))
+        fach_hi = round(fach_density * 1.5, 1)
+        lines.append(
+            f"  [ ] Fachbegriffsdichte: zwischen {fach_lo} und {fach_hi} pro 100 Wörter "
+            f"(Stilvorlage: {fach_density})"
+        )
+    else:
+        lines.append(
+            "  [ ] Fachbegriffe: sehr sparsam (Stilvorlage enthält keine "
+            "spezialisierten Fachtermini - übernimm diese Zurückhaltung)"
+        )
+
+    if is_fragment_style:
+        # Stichwort-/Notiz-Stil bleibt qualitativ - schwer messbar zu quantifizieren
+        lines.append(
+            "  [ ] Stiltyp: Stichwort-/Notiz-Format (kurze Fragmente, Verben am Satzanfang, "
+            "oft ohne Satzsubjekt). KEINE Vollsätze mit Subjekt-Verb-Objekt-Struktur."
+        )
+    else:
+        lines.append(
+            "  [ ] Stiltyp: zusammenhängender Fließtext (keine Stichworte, "
+            "keine Aufzählungen, keine Bullet-Points)"
+        )
 
     # v13: TEXTLÄNGE-Zeile in dieser Funktion entfällt vollständig.
     # Längenangaben kommen ausschliesslich vom zentralen resolve_length_anchor
@@ -940,10 +1017,7 @@ def _compute_style_constraints(style_text: str, skip_length: bool = False) -> st
     # Wir-Perspektive, Fachbegriffsdichte, Absatzanzahl).
     # skip_length-Parameter wird nur noch für Backwards-Compat akzeptiert,
     # hat aber keine funktionale Auswirkung mehr.
-    lines.append(
-        f"- Absatzstruktur: die Vorlage hat ca. {len(paragraphs)} Absätze "
-        f"(Längenanker steht weiter unten als ZIELLÄNGE)."
-    )
+    # v13 Ä3: Schluss-Zeile "Absatzstruktur" entfernt - bereits in Check 2 enthalten.
 
     return "\n".join(lines)
 
@@ -1407,9 +1481,13 @@ def build_user_content(
         if fokus_themen:
             parts.append(f"THERAPEUTISCHE STICHPUNKTE / BESONDERE EREIGNISSE:\n{fokus_themen}")
         parts.append(
-            "Verfasse jetzt den Abschnitt 'Verlauf und Begründung der weiteren Verlängerung'. "
-            "Beginne mit einem kurzen Rückbezug auf den bisherigen Verlauf (aus dem vorherigen Antrag), "
-            "dann beschreibe die Entwicklung SEITDEM. "
+            # v13 Ä2: STRUKTUR-ERINNERUNG am Ende des User-Turns.
+            # Wiederholt den Strukturzwang aus dem System-Prompt direkt vor der Generation.
+            "Verfasse jetzt den Abschnitt. Format zwingend:\n"
+            "Zeile 1: 'Verlauf und Begründung der weiteren Verlängerung'\n"
+            "Zeile 2: leer\n"
+            "Zeile 3+: Fließtext, beginnt mit 'Wir' / 'Seit dem letzten Antrag' / 'In unserer weiteren Arbeit'.\n"
+            "Inhaltlich: kurzer Rückbezug auf den bisherigen Verlauf, dann Entwicklung SEITDEM. "
             "Nur diesen Abschnitt – keine Anamnese, keine Diagnosen, keine Stammdaten. "
             # v13: Längenangabe entfernt - Längenanker steht zentral via resolve_length_anchor()
             "Ausschließlich auf Basis der obigen Quellen."
