@@ -18,6 +18,8 @@ httpx==0.28.1
 
 # ── Transkription (lokal) ─────────────────────────────────────────
 faster-whisper==1.1.0
+soundfile==0.12.1                # Audio-Loader fuer pyannote-Diarization
+                                 # (umgeht torchcodec-Bug in pyannote.audio>=4.0)
 
 # ── Dokument-Verarbeitung ─────────────────────────────────────────
 pdfplumber==0.11.4               # PDF-Textextraktion (Stufe 1)
