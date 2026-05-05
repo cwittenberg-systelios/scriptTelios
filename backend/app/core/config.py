@@ -150,4 +150,9 @@ class Settings(BaseSettings):
     LOG_FILE:  str = "/workspace/systelios.log"
 
 
-settings = Settings()
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",      # <-- statt "forbid": unbekannte ENVs einfach ignorieren
+        case_sensitive=False,
+    )
