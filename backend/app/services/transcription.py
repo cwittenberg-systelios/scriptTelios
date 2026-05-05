@@ -288,19 +288,39 @@ def _diarize(audio_path: Path) -> list[dict] | None:
     try:
         with tempfile.TemporaryDirectory(prefix="systelios_diar_") as tmp_dir:
             wav_path = _to_wav_for_diarization(audio_path, Path(tmp_dir))
-            # v18 fix: Pyannote ohne torchcodec schlaegt mit
-            # "AudioDecoder is not defined" fehl wenn ein Filepath uebergeben wird.
-            # Workaround: Waveform als Tensor + sample_rate direkt uebergeben -
-            # das umgeht pyannotes internen Decoder komplett.
+            # v19 fix: Pyannote ohne torchcodec schlaegt mit
+            # "name 'AudioDecoder' is not defined" (NameError, nicht ImportError!)
+            # fehl wenn pyannote intern decodieren muss. Workaround:
+            # Waveform per soundfile laden (kein torch-Backend-Roulette) und
+            # als Dict an die Pipeline geben - umgeht pyannotes Decoder komplett.
+            #
+            # Reihenfolge der Loader (Fallback-Kette):
+            #   1. soundfile  - ffmpeg-frei, liest WAV/FLAC/OGG nativ
+            #   2. torchaudio - falls soundfile fehlt
+            #   3. filepath   - letzter Notnagel (braucht torchcodec)
             try:
-                import torch, torchaudio
-                waveform, sample_rate = torchaudio.load(str(wav_path))
+                import soundfile as sf
+                import torch
+                data, sample_rate = sf.read(str(wav_path), dtype="float32")
+                # soundfile gibt (samples,) mono oder (samples, channels) stereo
+                # pyannote erwartet (channels, samples)
+                if data.ndim == 1:
+                    waveform = torch.from_numpy(data).unsqueeze(0)
+                else:
+                    waveform = torch.from_numpy(data.T)
                 diarization = pipeline(
                     {"waveform": waveform, "sample_rate": sample_rate}
                 )
             except ImportError:
-                # torchaudio nicht verfuegbar - filepath-Fallback
-                diarization = pipeline(str(wav_path))
+                try:
+                    import torch, torchaudio
+                    waveform, sample_rate = torchaudio.load(str(wav_path))
+                    diarization = pipeline(
+                        {"waveform": waveform, "sample_rate": sample_rate}
+                    )
+                except ImportError:
+                    # weder soundfile noch torchaudio verfuegbar - filepath-Fallback
+                    diarization = pipeline(str(wav_path))
         segments = []
         speaker_map: dict[str, str] = {}
         labels = ["A", "B", "C", "D"]  # max 4 Sprecher realistisch
