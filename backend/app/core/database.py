@@ -1,12 +1,30 @@
 """
-Datenbankverbindung (SQLAlchemy async + SQLite).
-Fuer Produktion: DATABASE_URL auf PostgreSQL umstellen.
+ALTERNATIVE database.py (EMPFOHLEN):
+
+Da runpod-start.sh bereits ALLE Schema-Migrationen als Owner-User ausfuehrt
+(siehe Bash-Heredoc-Block ab Zeile 235), sind die Python-Migrationen
+redundant - und genau die Quelle deines Fehlers.
+
+Diese Variante:
+  - entfernt _MIGRATIONS / run_migrations komplett aus dem Standard-Pfad
+  - behaelt nur den Owner-Check als Diagnose-Tool beim Start
+  - run_migrations() bleibt als No-Op fuer Abwaertskompatibilitaet
+    (init_db ruft es noch auf, falls du es spaeter doch wieder brauchst)
+
+Wenn du die Migrationen NICHT in runpod-start.sh haben willst (z.B. in
+Nicht-RunPod-Deployments), nutze stattdessen die Variante mit
+DB_AUTO_FIX_OWNER=1 und einer separaten Migrations-Verbindung als Owner.
 """
+import logging
+import os
+
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import text
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 engine = create_async_engine(
     settings.DATABASE_URL,
@@ -20,8 +38,6 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
-# Alias für Background-Tasks die ihre eigene Session erstellen müssen
-# (nicht die Request-Session nutzen die nach Request-Ende geschlossen wird)
 async_session_factory = AsyncSessionLocal
 
 
@@ -35,69 +51,80 @@ async def get_db() -> AsyncSession:  # type: ignore[return]
 
 
 async def init_db() -> None:
-    """Tabellen anlegen (beim ersten Start). pgvector-Extension aktivieren."""
-    # pgvector in eigener Transaktion – Fehler darf init_db nicht abbrechen
+    """
+    Tabellen anlegen (beim ersten Start), pgvector-Extension aktivieren.
+
+    Schema-Migrationen werden NICHT mehr hier ausgefuehrt - sie laufen in
+    runpod-start.sh als Owner-User (systelios). Diese init_db braucht nur
+    DDL-Rechte fuer create_all (ungenutzt im laufenden Betrieb).
+    """
     if "postgresql" in settings.DATABASE_URL:
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                 await conn.commit()
         except Exception:
-            pass  # Extension bereits vorhanden oder nicht verfuegbar
-    # Tabellen anlegen
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    # Inkrementelle Migrationen (idempotent, laufen bei jedem Start)
-    await run_migrations()
+            pass
+
+    # create_all ist idempotent. Wenn der App-User keine CREATE-Rechte hat,
+    # passiert nichts (Tabellen wurden bereits in runpod-start.sh angelegt).
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:
+        logger.info(
+            "create_all uebersprungen (vermutlich durch Bash-Migration "
+            "bereits abgedeckt): %s", exc
+        )
+
+    # Diagnose-Owner-Check
+    await _check_table_ownership()
 
 
-# ── Inkrementelle Migrationen ─────────────────────────────────────────────────
-#
-# Werden bei JEDEM Server-Start ausgeführt, sind aber idempotent:
-# ADD COLUMN IF NOT EXISTS schlägt nicht fehl wenn die Spalte schon existiert.
-# Kein Alembic nötig für kleine Schemaänderungen.
-#
-# Neue Migrationen IMMER unten anhängen, niemals bestehende ändern.
+# ── Owner-Check (Diagnose) ────────────────────────────────────────────────────
+EXPECTED_OWNER = os.environ.get("DB_EXPECTED_OWNER")
 
-_MIGRATIONS: list[tuple[str, str]] = [
-    # v18: recordings.therapeut_id — Therapeuten-Zuordnung für P0-Aufnahmen.
-    # nullable damit Aufnahmen die vor dem Update erstellt wurden weiter
-    # zugänglich bleiben (werden jedem Therapeut angezeigt der sie sehen will,
-    # bis sie manuell gelöscht werden).
-    (
-        "recordings.therapeut_id",
-        """
-        ALTER TABLE recordings
-        ADD COLUMN IF NOT EXISTS therapeut_id VARCHAR(128);
-        """,
-    ),
-    (
-        "recordings.therapeut_id_index",
-        """
-        CREATE INDEX IF NOT EXISTS ix_recordings_therapeut_id
-        ON recordings (therapeut_id);
-        """,
-    ),
-]
+_OWNER_CHECK_SQL = text("""
+    SELECT tablename, tableowner
+    FROM pg_tables
+    WHERE schemaname = 'public'
+      AND tableowner <> :expected_owner
+    ORDER BY tablename
+""")
+
+
+async def _check_table_ownership() -> None:
+    """Warnt bei Owner-Mismatch. Korrektur passiert in runpod-start.sh."""
+    if not EXPECTED_OWNER or "postgresql" not in settings.DATABASE_URL:
+        return
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                _OWNER_CHECK_SQL, {"expected_owner": EXPECTED_OWNER}
+            )
+            mismatches = [(row.tablename, row.tableowner) for row in result]
+    except Exception as exc:
+        logger.warning("Owner-Check fehlgeschlagen: %s", exc)
+        return
+
+    if mismatches:
+        logger.warning(
+            "Owner-Mismatch: %d Tabelle(n) gehoeren nicht '%s': %s. "
+            "Naechster Pod-Restart heilt das automatisch (runpod-start.sh).",
+            len(mismatches),
+            EXPECTED_OWNER,
+            ", ".join(f"{t}={o}" for t, o in mismatches),
+        )
 
 
 async def run_migrations() -> None:
     """
-    Führt ausstehende Schemamigrationan aus.
-    Idempotent: ADD COLUMN IF NOT EXISTS / CREATE INDEX IF NOT EXISTS
-    schlagen nicht fehl wenn bereits vorhanden.
-    Nur für PostgreSQL aktiv — SQLite ignoriert IF NOT EXISTS nicht immer.
+    No-op fuer Abwaertskompatibilitaet.
+
+    Schema-Migrationen laufen in runpod-start.sh als Owner-User (systelios).
+    Dort sind sie auch besser aufgehoben:
+      - laufen vor dem Backend-Start (kein Race)
+      - laufen mit DDL-Rechten (kein Permission-Problem)
+      - sind im Server-Log und nicht im Backend-Log sichtbar
     """
-    import logging
-    logger = logging.getLogger(__name__)
-    if "postgresql" not in settings.DATABASE_URL:
-        return
-    async with engine.begin() as conn:
-        for name, sql in _MIGRATIONS:
-            try:
-                await conn.execute(text(sql.strip()))
-                logger.debug("Migration OK: %s", name)
-            except Exception as e:
-                # Fehler loggen aber nicht abbrechen — beim nächsten Start
-                # wird es erneut versucht
-                logger.warning("Migration '%s' fehlgeschlagen (ignoriert): %s", name, e)
+    return

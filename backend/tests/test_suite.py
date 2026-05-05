@@ -1782,11 +1782,25 @@ class TestStrukturelleSchablone:
         assert "Patientennamen" in p or "Namen" in p
 
     def test_ohne_stilbeispiel_kein_strukturmodus(self):
-        """Ohne Stilbeispiel kein struktureller Modus – Mindestlänge aus Prompt gilt."""
+        """Ohne Stilbeispiel kein struktureller Modus – Längen-Anker greift trotzdem.
+
+        v13: Mindestlänge kommt nicht mehr aus BASE_PROMPT (entfernt in Ä1),
+        sondern aus resolve_length_anchor mit Fallback auf Workflow-Default.
+        Der Test verifiziert nun dass:
+        1. Kein Strukturmodus aktiv ist (kein Stilbeispiel)
+        2. Trotzdem ein ZIELLÄNGE-Anker im Prompt steht (aus Workflow-Default)
+        """
         from app.services.prompts import build_system_prompt
+        from app.core.workflows import word_limit_for
+
         p = build_system_prompt("verlaengerung")
         assert "STRUKTURELLE SCHABLONE" not in p
-        assert "400" in p  # Mindestlänge aus BASE_PROMPT
+        # v13: Längenanker kommt aus Workflow-Default wenn keine Stilvorlage
+        assert "ZIELLÄNGE" in p, "Längenanker fehlt im Prompt"
+        # Workflow-Default für verlaengerung sollte als Bandbreite auftauchen
+        wf_min, wf_max = word_limit_for("verlaengerung", fallback=(200, 800))
+        assert str(wf_min) in p, f"Workflow-Min {wf_min} nicht im Prompt"
+        assert str(wf_max) in p, f"Workflow-Max {wf_max} nicht im Prompt"
 
     def test_abschluss_mit_strukturmodus_angepasst(self):
         """Abschlussanweisung im Strukturmodus verweist auf Stilbeispiel."""
