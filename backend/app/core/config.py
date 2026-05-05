@@ -15,6 +15,11 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # ENVs, die nicht als Field deklariert sind, werden ignoriert statt
+        # einen ValidationError zu werfen. Notwendig, weil runpod-start.sh
+        # die komplette .env in die Prozess-Umgebung exportiert (inkl.
+        # DB_EXPECTED_OWNER, SYSTELIOS_APP_PASSWORD, Cloudflare-Token etc.).
+        extra="ignore",
     )
 
     # ── LLM (ausschliesslich Ollama, lokal) ──────────────────────
@@ -150,9 +155,4 @@ class Settings(BaseSettings):
     LOG_FILE:  str = "/workspace/systelios.log"
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore",      # <-- statt "forbid": unbekannte ENVs einfach ignorieren
-        case_sensitive=False,
-    )
+settings = Settings()
