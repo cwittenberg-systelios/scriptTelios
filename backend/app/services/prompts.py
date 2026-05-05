@@ -10,6 +10,7 @@ Struktur:
   build_system_prompt / build_user_content – Zusammenbau-Funktionen
 """
 from typing import Optional
+import re
 
 
 # ── Workflow-Kategorisierung ─────────────────────────────────────────────────
@@ -760,6 +761,40 @@ LENGTH_ANCHOR_THRESHOLD_RATIO = 0.7
 # Verhindert, dass eine ungewöhnlich lange Stilvorlage (z.B. Akutantrag mit
 # Volltext-Anhang) das Limit aufbläht. Workflow-Defaults haben absolute Priorität.
 LENGTH_ANCHOR_CEILING_MULTIPLIER = 1.4
+
+
+# v13 Strategie 3: Marker, mit dem mehrere Stilvorlagen-Beispiele in einem
+# string verkettet werden. Erzeugt von retrieve_style_examples (pgvector-Pfad)
+# und von _build_multi_style_text in tests/test_eval.py (vorlage.txt + vorlage2.txt).
+# Format: "--- Beispiel N ---" oder "--- Beispiel N [Anker] ---"
+_STYLE_EXAMPLE_MARKER_RE = re.compile(
+    r'^---\s*Beispiel\s+\d+(?:\s*\[Anker\])?\s*---\s*$',
+    re.MULTILINE,
+)
+
+
+def split_style_examples(combined: str) -> list:
+    """
+    Splittet einen verketteten Stil-Kontext in einzelne Beispieltexte.
+
+    Erkennt das Marker-Format aus retrieve_style_examples (embeddings.py)
+    und das pro-Testcase-Format aus der Eval (vorlage.txt + vorlage2.txt
+    werden mit demselben Marker konkateniert):
+      "--- Beispiel 1 [Anker] ---\\n<text>\\n\\n--- Beispiel 2 ---\\n<text>"
+
+    Falls keine Marker vorhanden sind, wird der gesamte Text als ein einzelnes
+    Beispiel zurückgegeben (Backwards-Compat für Single-Style-Kanäle).
+
+    Returns:
+      Liste der Einzeltexte (gestrippt). Leere Strings werden gefiltert.
+    """
+    if not combined or not combined.strip():
+        return []
+    parts = _STYLE_EXAMPLE_MARKER_RE.split(combined)
+    # Nach dem Split: erstes Element ist alles VOR dem ersten Marker (meist leer
+    # oder Header). Wenn keine Marker gefunden, gibt es genau ein Element.
+    cleaned = [p.strip() for p in parts if p and p.strip()]
+    return cleaned if cleaned else [combined.strip()]
 
 
 def resolve_length_anchor(

@@ -384,6 +384,27 @@ def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
     return texts
 
 
+def _discover_style_siblings(primary_path: Path) -> list:
+    """Wrapper um eval_helpers.discover_style_siblings (siehe dort).
+
+    v13 Strategie 3: Multi-Vorlagen-Erkennung pro Testcase. Logik ist in
+    tests/eval_helpers.py ausgelagert, damit test_prompts_v16 sie ohne
+    Fixtures-Setup importieren kann.
+    """
+    from tests.eval_helpers import discover_style_siblings as _impl
+    return _impl(primary_path)
+
+
+def _build_multi_style_text(paths: list) -> str:
+    """Wrapper um eval_helpers.build_multi_style_text (siehe dort).
+
+    Bindet den lokalen _extract_docx_text als DOCX-Extractor an, damit
+    DOCX-Stilvorlagen in der Eval gelesen werden können.
+    """
+    from tests.eval_helpers import build_multi_style_text as _impl
+    return _impl(paths, docx_extractor=_extract_docx_text)
+
+
 def discover_therapeuten() -> list[str]:
     """Findet alle Therapeuten-Ordner in /workspace/eval_data/styles/."""
     if not STYLES_DIR.exists():
@@ -462,15 +483,24 @@ async def _generate(
             # Spezielle Felder die als Text (nicht File) gesendet werden
             if field_name == "style_file":
                 try:
-                    if p.suffix.lower() == ".txt":
-                        style_content = p.read_text(encoding="utf-8")
-                    elif p.suffix.lower() in (".docx", ".doc"):
-                        style_content = _extract_docx_text(p)
-                    else:
-                        style_content = ""
+                    # v13 Strategie 3: Multi-Vorlagen-Erkennung pro Testcase.
+                    # Wenn p="vorlage.txt", suche zusätzlich vorlage2.txt,
+                    # vorlage3.txt etc. im selben Verzeichnis. Alle gefundenen
+                    # werden mit "--- Beispiel N ---"-Markern verkettet (gleiches
+                    # Format wie retrieve_style_examples). split_style_examples
+                    # in jobs.py erkennt das wieder und gibt resolve_length_anchor
+                    # eine Liste von Einzelvorlagen statt einem konkatenierten Block.
+                    style_paths = _discover_style_siblings(p)
+                    style_content = _build_multi_style_text(style_paths)
                     if style_content:
                         form_data["style_text"] = style_content
-                        logger.info("Eval-Input: style_text aus %s (%d Zeichen)", p, len(style_content))
+                        logger.info(
+                            "Eval-Input: style_text aus %d Datei%s (%d Zeichen): %s",
+                            len(style_paths),
+                            "en" if len(style_paths) != 1 else "",
+                            len(style_content),
+                            ", ".join(sp.name for sp in style_paths),
+                        )
                 except Exception as e:
                     logger.warning("Stilvorlage nicht lesbar: %s (%s)", p, e)
             elif field_name == "diagnosen_file":
@@ -1010,11 +1040,38 @@ async def test_eval_workflow(workflow, test_case, request):
     # v13 Ä5: Identische Resolution wie Production via resolve_length_anchor.
     # Vorher wurde derive_word_limits direkt aufgerufen - das kapselt jetzt
     # resolve_length_anchor inkl. Floor/Ceiling-Schutz und Quellen-Telemetrie.
+    # v13 Strategie 3: Längen-Anker bekommt Multi-Vorlagen aus zwei Quellen:
+    #   a) style_file im input_files (vorlage.txt + Geschwister)
+    #   b) style_therapeut Bibliothek (Therapeuten-Ordner)
+    # Reihenfolge: testcase-spezifische Vorlagen bevorzugt, dann Bibliothek.
     from app.services.prompts import resolve_length_anchor
-    if _style_therapeut:
-        _style_texts_for_limits = load_all_style_texts(_style_therapeut, workflow)
-    else:
-        _style_texts_for_limits = None
+    _style_texts_for_limits = None
+    _input_files = test_case.get("input_files") or {}
+    if "style_file" in _input_files:
+        # Pro-Testcase Vorlagen (vorlage.txt, vorlage2.txt, ...)
+        _sp = _input_files["style_file"]
+        _sp_path = Path(_sp) if Path(_sp).is_absolute() else EVAL_DATA_DIR / _sp
+        if _sp_path.exists():
+            _siblings = _discover_style_siblings(_sp_path)
+            _style_texts_for_limits = []
+            for _sib in _siblings:
+                try:
+                    if _sib.suffix.lower() == ".txt":
+                        _t = _sib.read_text(encoding="utf-8")
+                    elif _sib.suffix.lower() in (".docx", ".doc"):
+                        _t = _extract_docx_text(_sib)
+                    else:
+                        continue
+                    if _t and _t.strip():
+                        _style_texts_for_limits.append(_t)
+                except Exception as e:
+                    logger.warning("Stilvorlage für Anker nicht lesbar: %s (%s)", _sib, e)
+            if not _style_texts_for_limits:
+                _style_texts_for_limits = None
+    # Fallback: Therapeuten-Bibliothek
+    if _style_texts_for_limits is None and _style_therapeut:
+        _style_texts_for_limits = load_all_style_texts(_style_therapeut, workflow) or None
+
     _anchor = resolve_length_anchor(
         workflow=workflow,
         style_raw_texts=_style_texts_for_limits,
@@ -1052,28 +1109,50 @@ async def test_eval_workflow(workflow, test_case, request):
         ev.check_befund_separator("###BEFUND###")
 
     # Ansatz 1: Stil-Konsistenz gegen Vorlage prüfen
+    # v13 Strategie 3: nutzt _discover_style_siblings um vorlage.txt + vorlage2.txt
+    # gemeinsam zu finden. Bei mehreren Vorlagen wird die Konsistenz gegen ALLE
+    # geprüft (StyleAnalyzer mittelt) - das ist robuster als nur gegen eine.
     style_text = None
     if input_files and "style_file" in (test_case.get("input_files") or {}):
         style_path = test_case["input_files"]["style_file"]
         p = Path(style_path) if Path(style_path).is_absolute() else EVAL_DATA_DIR / style_path
         if p.exists():
             try:
-                if p.suffix.lower() == ".txt":
-                    style_text = p.read_text(encoding="utf-8")
-                elif p.suffix.lower() in (".docx", ".doc"):
-                    # Relevanten Abschnitt aus DOCX extrahieren – gleiche Logik wie
-                    # load_all_style_texts: erst Bold-Match, dann Plain-Text-Fallback,
-                    # dann Volltext.
-                    headings = STYLE_SECTION_HEADINGS.get(workflow)
-                    style_text = None
-                    if headings:
-                        style_text = _extract_docx_section(p, headings)
-                        if not style_text or len(style_text.split()) < 20:
-                            style_text = _extract_section_by_text(p, headings)
-                    if not style_text or len(style_text.split()) < 20:
-                        style_text = _extract_docx_text(p)
-                if style_text:
-                    ev.check_style_consistency(style_text)
+                # Alle Geschwister-Vorlagen finden (vorlage.txt, vorlage2.txt, ...)
+                sibling_paths = _discover_style_siblings(p)
+                style_texts_list = []
+                for sib in sibling_paths:
+                    if sib.suffix.lower() == ".txt":
+                        t = sib.read_text(encoding="utf-8")
+                    elif sib.suffix.lower() in (".docx", ".doc"):
+                        # Relevanten Abschnitt aus DOCX extrahieren – gleiche Logik
+                        # wie load_all_style_texts: Bold-Match, Plain-Text, Volltext.
+                        headings = STYLE_SECTION_HEADINGS.get(workflow)
+                        t = None
+                        if headings:
+                            t = _extract_docx_section(sib, headings)
+                            if not t or len(t.split()) < 20:
+                                t = _extract_section_by_text(sib, headings)
+                        if not t or len(t.split()) < 20:
+                            t = _extract_docx_text(sib)
+                    else:
+                        t = ""
+                    if t and len(t.split()) >= 20:
+                        style_texts_list.append(t)
+
+                if style_texts_list:
+                    if len(style_texts_list) == 1:
+                        # Single-Vorlage: alter Pfad (string)
+                        style_text = style_texts_list[0]
+                        ev.check_style_consistency(style_text)
+                    else:
+                        # Multi-Vorlage: Liste, StyleAnalyzer mittelt
+                        style_text = style_texts_list
+                        ev.check_style_consistency(style_texts_list)
+                        logger.info(
+                            "Stil-Konsistenz gegen %d Vorlagen geprüft",
+                            len(style_texts_list),
+                        )
             except Exception as e:
                 logger.warning("Stilvorlage nicht lesbar: %s", e)
 

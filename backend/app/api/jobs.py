@@ -25,7 +25,7 @@ from app.services.llm import (
     deduplicate_paragraphs,
     substitute_patient_placeholders,
 )
-from app.services.prompts import build_system_prompt, build_user_content
+from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
 import app.services.transcription as _transcription
 
 router = APIRouter()
@@ -528,11 +528,27 @@ async def create_generate_job(
 
         if style_text and style_text.strip():
             cleaned = deduplicate_paragraphs(style_text.strip())
-            _style_raw_texts.append(cleaned)          # Roh-Text vor Truncation
+            # v13 Strategie 3: Splitter erkennt "--- Beispiel N ---"-Marker und
+            # liefert Einzeltexte zurück. Bei Single-Style-Input ist das eine
+            # 1-Element-Liste (Backwards-Compat). Bei Eval-Tests mit
+            # vorlage.txt + vorlage2.txt sind es zwei Elemente, was
+            # resolve_length_anchor präzisere Wortzahl-Schätzung erlaubt.
+            _style_raw_texts.extend(split_style_examples(cleaned))
             style_context = truncate_style_context(cleaned)
             style_is_example = True
-            style_info = {"source": "text_input", "chars": len(style_context), "words": len(style_context.split())}
-            logger.info("Stilvorlage via Text-Input: %s", _size_class(len(style_context)))
+            _n_examples = len(_style_raw_texts)
+            style_info = {
+                "source": "text_input",
+                "chars": len(style_context),
+                "words": len(style_context.split()),
+                "n_examples": _n_examples,
+            }
+            logger.info(
+                "Stilvorlage via Text-Input: %s (%d Beispiel%s)",
+                _size_class(len(style_context)),
+                _n_examples,
+                "e" if _n_examples != 1 else "",
+            )
         elif style_bytes and style_name:
             suffix = _Path(style_name).suffix.lower()
             path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
@@ -547,7 +563,11 @@ async def create_generate_job(
                     else:
                         _raw = await _extract_raw(path)
                     if _raw and len(_raw.split()) >= 50:
-                        _style_raw_texts.append(_raw)
+                        # v13 Strategie 3: Splitter ist bei Single-File no-op
+                        # (eine Datei = ein Beispiel ohne Marker), aber konsistent
+                        # mit anderen Kanälen. Falls jemals Multi-Upload kommt,
+                        # ist hier nichts zu ändern.
+                        _style_raw_texts.extend(split_style_examples(_raw))
                 except Exception:
                     pass  # Wortlimit-Berechnung faellt auf Defaults zurueck
                 style_context = await extract_style_context(path, generate_text, workflow=workflow)
@@ -565,8 +585,28 @@ async def create_generate_job(
                     db, therapeut_id.strip(), workflow, query_text
                 )
             if style_context:
-                _style_raw_texts.append(style_context)  # pgvector gibt bereits Rohtext
-                style_info = {"source": "style_library", "therapeut_id": therapeut_id.strip(), "chars": len(style_context)}
+                # v13 Strategie 3: pgvector liefert verkettete Beispiele mit
+                # "--- Beispiel N ---"-Markern. Vorher wurde die ganze
+                # Konkatenation als EIN Eintrag in _style_raw_texts gespeichert
+                # → derive_word_limits berechnete die Statistik auf dem
+                # konkatenierten Block (z.B. 5 × 400w = 2000w) und das
+                # Längen-Limit landete weit über dem Workflow-Default.
+                # Jetzt: aufgesplittet, derive_word_limits mittelt sauber
+                # über die Einzelvorlagen.
+                _style_raw_texts.extend(split_style_examples(style_context))
+                _n_examples = len(_style_raw_texts)
+                style_info = {
+                    "source": "style_library",
+                    "therapeut_id": therapeut_id.strip(),
+                    "chars": len(style_context),
+                    "n_examples": _n_examples,
+                }
+                logger.info(
+                    "Stilvorlagen aus pgvector: %d Beispiel%s für %s",
+                    _n_examples,
+                    "e" if _n_examples != 1 else "",
+                    therapeut_id.strip(),
+                )
 
         # v13: Längenanker via zentralen Dispatcher resolve_length_anchor.
         # Ersetzt den bisherigen Code-Pfad mit derive_word_limits + akutantrag-Cap +
