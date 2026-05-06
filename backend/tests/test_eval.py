@@ -31,6 +31,77 @@ import httpx
 import pytest
 
 
+# ── Transkriptions-Cache ─────────────────────────────────────────────────────
+
+def _transcript_cache_path(audio_path: Path) -> Path:
+    """<audio_stem>.transcript.txt neben der Audio-Datei."""
+    return audio_path.with_suffix(".transcript.txt")
+
+
+def _load_or_transcribe(audio_path: Path, force_transcribe: bool = False) -> str:
+    """
+    Gibt das Transkript für audio_path zurück.
+
+    - force_transcribe=False (Default):
+        Liest <audio>.transcript.txt wenn vorhanden.
+        Nur wenn kein Cache → transkribiert via /api/transcribe und speichert.
+    - force_transcribe=True (--transcribe):
+        Immer neu transkribieren, Cache überschreiben.
+
+    Transkription läuft server-seitig über den laufenden Backend-Server,
+    identisch zum normalen Produktiv-Workflow.
+    """
+    cache = _transcript_cache_path(audio_path)
+
+    if not force_transcribe and cache.exists():
+        logger.info("[TRANSCRIPT CACHE] lade %s", cache)
+        return cache.read_text(encoding="utf-8")
+
+    logger.info(
+        "[TRANSCRIPT] transkribiere %s (%s)",
+        audio_path.name,
+        "erzwungen via --transcribe" if force_transcribe else "kein Cache vorhanden",
+    )
+
+    mime_map = {
+        ".mp3":  "audio/mpeg",
+        ".m4a":  "audio/mp4",
+        ".wav":  "audio/wav",
+        ".ogg":  "audio/ogg",
+        ".flac": "audio/flac",
+        ".webm": "audio/webm",
+    }
+    mime = mime_map.get(audio_path.suffix.lower(), "application/octet-stream")
+
+    with httpx.Client(timeout=TIMEOUT) as http:
+        with open(audio_path, "rb") as fh:
+            resp = http.post(
+                f"{BACKEND_URL}/api/transcribe",
+                files={"file": (audio_path.name, fh, mime)},
+            )
+
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Transkription fehlgeschlagen [{resp.status_code}]: {resp.text[:400]}"
+        )
+
+    transcript = resp.json()["transcript"]
+
+    # Atomisch schreiben (tmp → rename)
+    tmp = cache.with_suffix(".tmp")
+    tmp.write_text(transcript, encoding="utf-8")
+    tmp.replace(cache)
+    logger.info(
+        "[TRANSCRIPT CACHE] gespeichert → %s (%d Zeichen)",
+        cache, len(transcript),
+    )
+    return transcript
+
+
+
+logger = logging.getLogger(__name__)
+
+
 def derive_word_limits(
     style_texts: list,
     fallback_min: int,
@@ -54,7 +125,6 @@ def derive_word_limits(
     )
     return derived_min, derived_max
 
-logger = logging.getLogger(__name__)
 
 # ── Konfiguration ────────────────────────────────────────────────────────────
 
@@ -442,6 +512,7 @@ async def _generate(
     diagnosen: list[str] | None = None,
     input_files: dict | None = None,
     extra_form_data: dict | None = None,
+    force_transcribe: bool = False,
 ) -> dict:
     """
     Sendet einen Generierungs-Job und wartet auf das Ergebnis.
@@ -515,8 +586,26 @@ async def _generate(
                 except Exception as e:
                     logger.warning("Diagnosen nicht lesbar: %s (%s)", p, e)
             else:
-                files_to_upload[field_name] = (p.name, open(p, "rb"))
-                logger.info("Eval-Input: %s = %s", field_name, p)
+                # Audio: nicht als Datei hochladen, sondern gecacht transkribieren
+                # und als transcript-Textfeld senden (spart Whisper-Zeit bei Folge-Runs).
+                if field_name == "audio":
+                    try:
+                        transcript_text = _load_or_transcribe(p, force_transcribe=force_transcribe)
+                        form_data["transcript"] = transcript_text
+                        logger.info(
+                            "Eval-Input: audio → transcript (%d Zeichen, cache=%s)",
+                            len(transcript_text),
+                            not force_transcribe and _transcript_cache_path(p).exists(),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Transkription fehlgeschlagen für %s: %s – Audio wird direkt gesendet",
+                            p, e,
+                        )
+                        files_to_upload[field_name] = (p.name, open(p, "rb"))
+                else:
+                    files_to_upload[field_name] = (p.name, open(p, "rb"))
+                    logger.info("Eval-Input: %s = %s", field_name, p)
 
     # Abbruch wenn kritische Input-Dateien fehlen - besser laut scheitern als
     # stillschweigend einen Job ohne Quellen starten (der dann halluziniert).
@@ -1049,6 +1138,7 @@ async def test_eval_workflow(workflow, test_case, request):
         job = await _generate(
             workflow, prompt, diagnosen, input_files,
             extra_form_data=extra_form_data,
+            force_transcribe=request.config.getoption("--transcribe", default=False),
         )
     except (RuntimeError, TimeoutError) as e:
         pytest.fail(f"Generierung fehlgeschlagen: {e}")
@@ -1328,13 +1418,16 @@ async def test_style_variance(workflow, test_case, therapeut_a, therapeut_b, req
     form_extras_b = {"style_text": style_text_b}
 
     try:
+        _ft = request.config.getoption("--transcribe", default=False)
         job_a = await _generate(
             workflow, test_case["prompt"], test_case.get("diagnosen"),
             base_input, extra_form_data=form_extras_a,
+            force_transcribe=_ft,
         )
         job_b = await _generate(
             workflow, test_case["prompt"], test_case.get("diagnosen"),
             base_input, extra_form_data=form_extras_b,
+            force_transcribe=_ft,
         )
     except (RuntimeError, TimeoutError) as e:
         pytest.fail(f"Generierung fehlgeschlagen: {e}")

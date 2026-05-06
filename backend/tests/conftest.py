@@ -243,6 +243,16 @@ def pytest_addoption(parser):
         help="PDF-Report nach eval-Tests generieren",
     )
     parser.addoption(
+        "--transcribe",
+        action="store_true",
+        default=False,
+        help=(
+            "Transkriptionen neu erzeugen und als <audio>.transcript.txt speichern. "
+            "Ohne diesen Flag wird ein vorhandenes .transcript.txt geladen "
+            "und Whisper nur aufgerufen wenn noch kein Cache existiert."
+        ),
+    )
+    parser.addoption(
         "--whisper-model",
         action="store",
         default=None,
