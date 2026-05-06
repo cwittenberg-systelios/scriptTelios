@@ -763,6 +763,28 @@ LENGTH_ANCHOR_THRESHOLD_RATIO = 0.7
 LENGTH_ANCHOR_CEILING_MULTIPLIER = 1.4
 
 
+# v13 P0: Workflows mit verbindlicher Wir-Perspektive (Therapeutenteam-Sicht).
+# Bei diesen Workflows darf STIL-CHECKS NIEMALS "dritte Person, kein Wir" sagen,
+# auch wenn die Stilvorlage in 3.-Person ist. Sonst entsteht ein Selbstwiderspruch
+# im Prompt (BASE_PROMPT/STRUKTUR-Block sagt 'Wir', Checkliste sagt '3. Person').
+# Der Konflikt verursachte im Eval-Run nach Ä1-Ä5: fva-02 (Wir 0%), eb-02 (Stil),
+# dok-01 (Stil) - drei der vier neuen Failures.
+WIR_WORKFLOWS = frozenset({
+    "akutantrag",
+    "verlaengerung",
+    "folgeverlaengerung",
+    "entlassbericht",
+})
+
+# Default-Wir-Bandbreite für Wir-Workflows wenn die Stilvorlage selbst kein Wir
+# verwendet (also keine empirische Bandbreite ableitbar ist). Erfahrungswerte
+# aus den Stilvorlagen die Wir benutzen (Frau-Sch.-Vorlagen): typischerweise
+# 0.9% bis 2.8% Wir-Anteil. Default-Untergrenze 1% verhindert dass das Modell
+# nur einen einzigen Wir-Satz schreibt und sonst 3.-Person bleibt.
+WIR_WORKFLOW_DEFAULT_LO_PCT = 1.0
+WIR_WORKFLOW_DEFAULT_HI_PCT = 3.0
+
+
 # v13 Strategie 3: Marker, mit dem mehrere Stilvorlagen-Beispiele in einem
 # string verkettet werden. Erzeugt von retrieve_style_examples (pgvector-Pfad)
 # und von _build_multi_style_text in tests/test_eval.py (vorlage.txt + vorlage2.txt).
@@ -891,7 +913,11 @@ def resolve_length_anchor(
     }
 
 
-def _compute_style_constraints(style_text: str, skip_length: bool = False) -> str:
+def _compute_style_constraints(
+    style_text: str,
+    skip_length: bool = False,
+    workflow: Optional[str] = None,
+) -> str:
     """
     Berechnet quantitative Stil-Metriken aus dem Stilbeispiel und
     formuliert sie als konkrete Vorgaben fuer den Prompt.
@@ -905,6 +931,13 @@ def _compute_style_constraints(style_text: str, skip_length: bool = False) -> st
                  aus mehreren Stilvorlagen gesetzt wurde (vermeidet
                  widersprueche zwischen destillierter Einzelvorlage und
                  aggregiertem Limit).
+    workflow:    v13 P0. Wenn der Workflow Wir-Pflicht hat (siehe
+                 WIR_WORKFLOWS), wird die Perspektive-Zeile in der
+                 Checkliste IMMER auf Wir gesetzt - egal ob die
+                 Stilvorlage selbst Wir benutzt oder nicht. Ohne diesen
+                 Override entsteht ein Prompt-interner Widerspruch
+                 zwischen BASE_PROMPT (Wir-Pflicht) und Checkliste
+                 (kein Wir, weil Stilvorlage 3.-Person).
     """
     import re as _re
 
@@ -997,24 +1030,49 @@ def _compute_style_constraints(style_text: str, skip_length: bool = False) -> st
     lines.append(f"  [ ] Anzahl Absätze: {para_count_lo}–{para_count_hi} "
                  f"(Stilvorlage: {para_count})")
 
-    if uses_wir:
+    # v13 P0: Effektive Wir-Pflicht bestimmen.
+    # Bei Wir-Workflows (akutantrag, verlaengerung, folgeverlaengerung,
+    # entlassbericht) MUSS die Checkliste Wir verlangen, auch wenn die
+    # Stilvorlage selbst 3.-Person ist. Der Workflow-Auftrag aus
+    # BASE_PROMPT überschreibt die Vorlagen-Beobachtung.
+    workflow_demands_wir = workflow in WIR_WORKFLOWS
+    effective_uses_wir = uses_wir or workflow_demands_wir
+
+    if effective_uses_wir:
         # Wir-Quote der Stilvorlage als Zielgröße. fva-02 zeigt: ohne konkretes
         # Ziel rutscht das Modell auf 0% Wir-Anteil ab. Mit Zielzahl bleibt es
         # in der Bandbreite.
-        wir_pct = round(wir_ratio * 100, 1)
-        # Relative Toleranz ±50% (Wir-Anteil ist sehr variabel)
-        wir_target_lo = max(0.3, wir_pct * 0.5)
-        wir_target_hi = wir_pct * 1.5
+        if uses_wir:
+            # Bandbreite aus Stilvorlage abgeleitet (empirisch).
+            wir_pct = round(wir_ratio * 100, 1)
+            # Relative Toleranz ±50% (Wir-Anteil ist sehr variabel)
+            wir_target_lo = max(0.3, wir_pct * 0.5)
+            wir_target_hi = wir_pct * 1.5
+            wir_source_note = (
+                f"(Stilvorlage: {wir_pct}%, "
+                f"d.h. ca. {wir_count} Vorkommen auf {word_count} Wörter)"
+            )
+        else:
+            # Stilvorlage hat kein Wir, aber Workflow verlangt es. Default-
+            # Bandbreite aus Erfahrungswerten der Wir-nutzenden Vorlagen.
+            wir_target_lo = WIR_WORKFLOW_DEFAULT_LO_PCT
+            wir_target_hi = WIR_WORKFLOW_DEFAULT_HI_PCT
+            wir_source_note = (
+                "(Workflow verlangt Wir-Perspektive, Stilvorlage nutzt es nicht "
+                "explizit - Bandbreite aus Klinik-Default)"
+            )
         lines.append(
             f"  [ ] Wir-Anteil: zwischen {wir_target_lo:.1f}% und {wir_target_hi:.1f}% "
-            f"aller Wörter sind 'Wir/uns/unser...' (Stilvorlage: {wir_pct}%, "
-            f"d.h. ca. {wir_count} Vorkommen auf {word_count} Wörter)"
+            f"aller Wörter sind 'Wir/uns/unser...' {wir_source_note}"
         )
         lines.append(
             "  [ ] Erster Satz beginnt mit 'Wir' oder Wir-Konstruktion "
             "('Wir erlebten...', 'In unserer Arbeit...', 'Seit dem letzten Antrag konnten wir...')"
         )
     else:
+        # Nur wenn weder Stilvorlage noch Workflow Wir verlangen:
+        # explizit 3.-Person fordern. Das gilt für dokumentation und anamnese,
+        # die typischerweise in 3.-Person gehalten sind.
         lines.append(
             "  [ ] Perspektive: durchgängig dritte Person (Er/Sie/Patient/in), "
             "kein 'Wir'/'uns'/'unser' im gesamten Text"
@@ -1176,7 +1234,7 @@ def build_system_prompt(
                 "NIEMALS aus dem Beispiel übernehmen: Patientennamen, Diagnosen, "
                 "ICD-Codes, konkrete Therapieinhalte, Daten – nur Struktur und Stil.\n\n"
                 f"{style_context.strip()}"
-                f"{_compute_style_constraints(style_context, skip_length=(word_limits is not None))}"
+                f"{_compute_style_constraints(style_context, skip_length=(word_limits is not None), workflow=workflow)}"
             )
         elif style_is_example:
             parts.append(
@@ -1189,7 +1247,7 @@ def build_system_prompt(
                 "Medikamente, konkrete Symptome, Therapieinhalte oder andere "
                 "patientenspezifische Informationen aus diesem Beispiel.\n\n"
                 f"{style_context.strip()}"
-                f"{_compute_style_constraints(style_context, skip_length=(word_limits is not None))}"
+                f"{_compute_style_constraints(style_context, skip_length=(word_limits is not None), workflow=workflow)}"
             )
         else:
             parts.append(
@@ -1198,7 +1256,7 @@ def build_system_prompt(
                 "NICHT die konkreten Inhalte, Diagnosen oder Patientendaten – "
                 "nur Tonalität, Satzbau und Formulierungsgewohnheiten.\n\n"
                 f"{style_context.strip()}"
-                f"{_compute_style_constraints(style_context, skip_length=(word_limits is not None))}"
+                f"{_compute_style_constraints(style_context, skip_length=(word_limits is not None), workflow=workflow)}"
             )
 
     has_structural_template = (

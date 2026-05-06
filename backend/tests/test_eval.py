@@ -518,6 +518,55 @@ async def _generate(
                 files_to_upload[field_name] = (p.name, open(p, "rb"))
                 logger.info("Eval-Input: %s = %s", field_name, p)
 
+    # v13 P3: Konsistenz Eval-Side ↔ Backend.
+    # Bisheriges Problem: Wenn eine Fixture nur "style_therapeut" hat (aber kein
+    # "style_file" in input_files), wurde die Therapeuten-Bibliothek NUR lokal
+    # für Stil-Konsistenz und Längen-Anker verwendet - ans Backend ging GAR
+    # KEINE Stilvorlage. Folge: Backend rechnete mit Workflow-Default-Längen,
+    # Eval-Check rechnete mit style-abgeleiteten Längen → Divergenz.
+    # Konkretes Beispiel aus letztem Eval-Run: anamnese hatte n_substantial=0
+    # im Backend (Workflow-Default 280-650w), aber Eval-Check hat aus der
+    # Bibliothek max=418w abgeleitet → an-02 mit 643w → Backend "OK" / Eval "FAIL".
+    #
+    # Fix: Wenn nach dem input_files-Loop kein style_text in form_data steht,
+    # aber style_therapeut im testcase, lade die Bibliothek und sende sie als
+    # style_text. split_style_examples in jobs.py splittet das dann sauber
+    # an den Markern auf (Strategie 3), so dass Backend und Eval-Side die
+    # gleichen Einzelvorlagen sehen.
+    if "style_text" not in form_data and test_case.get("style_therapeut"):
+        therapeut_id = test_case["style_therapeut"]
+        try:
+            library_texts = load_all_style_texts(therapeut_id, workflow)
+            if library_texts:
+                # Marker-Format wie split_style_examples es erwartet
+                # (identisch zu retrieve_style_examples in embeddings.py).
+                if len(library_texts) == 1:
+                    style_content = library_texts[0]
+                else:
+                    style_content = "\n\n".join(
+                        f"--- Beispiel {i} ---\n{txt}"
+                        for i, txt in enumerate(library_texts, 1)
+                    )
+                form_data["style_text"] = style_content
+                logger.info(
+                    "Eval-Input P3: style_text aus Bibliothek %s (%d Vorlage%s, %d Zeichen)",
+                    therapeut_id,
+                    len(library_texts),
+                    "n" if len(library_texts) != 1 else "",
+                    len(style_content),
+                )
+            else:
+                logger.warning(
+                    "Eval-Input P3: style_therapeut=%s gesetzt, aber keine "
+                    "Vorlagen für workflow=%s gefunden",
+                    therapeut_id, workflow,
+                )
+        except Exception as e:
+            logger.warning(
+                "Eval-Input P3: Bibliothek %s nicht lesbar (%s)",
+                therapeut_id, e,
+            )
+
     # Abbruch wenn kritische Input-Dateien fehlen - besser laut scheitern als
     # stillschweigend einen Job ohne Quellen starten (der dann halluziniert).
     if missing_critical:

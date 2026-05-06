@@ -404,3 +404,179 @@ class TestEndToEndRoundtrip:
         # Split sollte 1-Element-Liste sein
         result = split(combined)
         assert result == [original]
+
+
+# ── P0: Wir-Workflow Override für STIL-CHECKS ─────────────────────────────────
+
+class TestWirWorkflowOverride:
+    """v13 P0: STIL-CHECKS darf bei Wir-Workflows nie 'kein Wir' sagen.
+
+    Hintergrund: Bei Wir-Workflows (akutantrag, verlaengerung, folgeverlaengerung,
+    entlassbericht) verlangt der BASE_PROMPT explizit Wir-Perspektive. Wenn die
+    Stilvorlage selbst aber in 3.-Person ist (typisch Frau-F.-Vorlagen), gab die
+    Checkliste 'durchgängig dritte Person, kein Wir' aus → direkter Widerspruch
+    im Prompt. Im Eval-Run nach Ä1-Ä5 verursachte dieser Konflikt drei Failures
+    (fva-02, eb-02, dok-01).
+
+    P0 fügt einen workflow-Parameter ein, der bei Wir-Workflows die
+    Perspektive-Zeile auf eine Wir-Bandbreite umstellt.
+    """
+
+    def _make_3p_style(self):
+        """3.-Person-Stilvorlage (typisch Frau-F.-Vorlagen)."""
+        return (
+            "Frau F. konnte sich gut auf die stationäre Behandlung einlassen und "
+            "zeigte sich bereits durch die Aufnahme etwas entlastet. Sie nahm von "
+            "Anfang an motiviert an den Therapien teil. Ihr Selbstwert habe in "
+            "den letzten Jahren der Beziehung gelitten. Sie habe in der Zeit "
+            "immer mehr von sich aufgegeben und keine Grenzen gesetzt. Sie fühle "
+            "sich wertlos."
+        ) * 3
+
+    def _make_wir_style(self):
+        """Wir-Stilvorlage (typisch Frau-Sch.-Vorlagen)."""
+        return (
+            "Wir nahmen Frau M. unter Druck auf. Wir erlebten sie zu "
+            "Therapiebeginn deutlich erschöpft. Im Verlauf gelang es uns die "
+            "Anteile zu differenzieren. Wir konnten gemeinsam eine "
+            "wohlwollendere innere Haltung aufbauen. Aus medizinisch-"
+            "psychotherapeutischer Sicht halten wir eine Verlängerung für indiziert."
+        ) * 3
+
+    def test_wir_workflows_constant_complete(self):
+        """WIR_WORKFLOWS enthält genau die vier Wir-pflichtigen Workflows."""
+        from app.services.prompts import WIR_WORKFLOWS
+        assert WIR_WORKFLOWS == frozenset({
+            "akutantrag",
+            "verlaengerung",
+            "folgeverlaengerung",
+            "entlassbericht",
+        })
+
+    def test_3p_style_no_workflow_keeps_old_behavior(self):
+        """Ohne workflow-Parameter: alter Pfad, '3.-Person-Pflicht' bleibt.
+
+        Backwards-Compat: wer die Funktion ohne workflow ruft, sieht das
+        gleiche Verhalten wie vor P0.
+        """
+        from app.services.prompts import _compute_style_constraints
+        result = _compute_style_constraints(self._make_3p_style())
+        assert "dritte Person" in result
+        assert "kein 'Wir'" in result
+
+    def test_3p_style_wir_workflow_overrides_to_wir(self):
+        """Hauptfix: 3.-Person-Vorlage + Wir-Workflow → Checkliste sagt Wir.
+
+        Das war der Konflikt der fva-02, eb-02, dok-01 verursacht hat.
+        """
+        from app.services.prompts import _compute_style_constraints
+        for wf in ("akutantrag", "verlaengerung",
+                   "folgeverlaengerung", "entlassbericht"):
+            result = _compute_style_constraints(self._make_3p_style(), workflow=wf)
+            # Darf NICHT 'kein Wir' sagen
+            assert "kein 'Wir'" not in result, f"{wf}: 'kein Wir' noch da"
+            assert "dritte Person" not in result, f"{wf}: '3.-Person' noch da"
+            # MUSS Wir-Anteil-Bandbreite enthalten
+            assert "Wir-Anteil:" in result, f"{wf}: Wir-Anteil-Zeile fehlt"
+            assert "Erster Satz beginnt mit 'Wir'" in result
+
+    def test_3p_style_wir_workflow_uses_default_band(self):
+        """Bei 3.-Person-Vorlage + Wir-Workflow: Klinik-Default-Bandbreite 1-3%."""
+        from app.services.prompts import (
+            _compute_style_constraints,
+            WIR_WORKFLOW_DEFAULT_LO_PCT,
+            WIR_WORKFLOW_DEFAULT_HI_PCT,
+        )
+        result = _compute_style_constraints(
+            self._make_3p_style(), workflow="folgeverlaengerung",
+        )
+        # Default-Bandbreite muss in der Zeile auftauchen
+        assert f"{WIR_WORKFLOW_DEFAULT_LO_PCT:.1f}%" in result
+        assert f"{WIR_WORKFLOW_DEFAULT_HI_PCT:.1f}%" in result
+        # Begründungstext erkennbar
+        assert "Klinik-Default" in result
+
+    def test_wir_style_wir_workflow_uses_empirical_band(self):
+        """Wir-Vorlage + Wir-Workflow: empirische Bandbreite aus der Vorlage.
+
+        Sicherstellt: P0 ändert NICHT das alte Verhalten für Wir-Vorlagen.
+        Der Override gilt nur für 3.-Person-Vorlagen.
+        """
+        from app.services.prompts import _compute_style_constraints
+        result = _compute_style_constraints(
+            self._make_wir_style(), workflow="folgeverlaengerung",
+        )
+        assert "Wir-Anteil:" in result
+        # Empirisch (Stilvorlage: ...) statt Klinik-Default
+        assert "Stilvorlage:" in result
+        assert "Klinik-Default" not in result
+
+    def test_3p_style_non_wir_workflow_keeps_3p(self):
+        """3.-Person-Vorlage + Nicht-Wir-Workflow: weiterhin '3.-Person'.
+
+        Wichtig: dokumentation und anamnese sind klassisch 3.-Person und
+        sollen das auch bleiben.
+        """
+        from app.services.prompts import _compute_style_constraints
+        for wf in ("dokumentation", "anamnese"):
+            result = _compute_style_constraints(self._make_3p_style(), workflow=wf)
+            assert "dritte Person" in result, f"{wf}: 3.-Person fehlt"
+            assert "kein 'Wir'" in result, f"{wf}: 'kein Wir' fehlt"
+
+    def test_signature_workflow_param_is_optional(self):
+        """workflow-Parameter ist optional (Default None) - alte Aufrufer
+        ohne workflow brechen nicht."""
+        from app.services.prompts import _compute_style_constraints
+        # Kein workflow → kein Crash
+        result = _compute_style_constraints(self._make_3p_style())
+        assert isinstance(result, str)
+        # workflow=None explizit → kein Crash
+        result = _compute_style_constraints(self._make_3p_style(), workflow=None)
+        assert isinstance(result, str)
+
+    def test_unknown_workflow_falls_back_safely(self):
+        """Unbekannter Workflow-Name verhält sich wie 'kein Workflow' - kein Crash."""
+        from app.services.prompts import _compute_style_constraints
+        result = _compute_style_constraints(
+            self._make_3p_style(), workflow="completely-made-up",
+        )
+        # Unbekannter Workflow → fällt auf alten Pfad zurück (3.-Person)
+        assert "dritte Person" in result
+
+    def test_build_system_prompt_threads_workflow_through(self):
+        """Integration: build_system_prompt reicht workflow korrekt durch.
+
+        Damit ist sichergestellt dass alle drei Aufrufstellen den Parameter
+        weiterleiten - sonst hätte P0 in der Praxis keine Wirkung.
+        """
+        from app.services.prompts import build_system_prompt
+
+        style_3p = self._make_3p_style()
+
+        # Wir-Workflow: sollte KEIN 'kein Wir' im finalen Prompt haben
+        for wf in ("akutantrag", "folgeverlaengerung", "entlassbericht", "verlaengerung"):
+            p = build_system_prompt(
+                workflow=wf,
+                style_context=style_3p,
+                word_limits=(300, 500),
+                patient_name={"anrede": "Frau", "vorname": "X",
+                              "nachname": "M", "initial": "M."},
+            )
+            assert "STIL-CHECKS" in p, f"{wf}: STIL-CHECKS-Block fehlt"
+            # Die kritische Zeile darf nicht im finalen Prompt landen
+            assert "kein 'Wir'/'uns'/'unser'" not in p, (
+                f"{wf}: STIL-CHECKS sagt 'kein Wir' trotz Wir-Workflow - "
+                f"P0-Override greift nicht in build_system_prompt"
+            )
+
+        # Nicht-Wir-Workflow: 3.-Person bleibt
+        p = build_system_prompt(
+            workflow="dokumentation",
+            style_context=style_3p,
+            word_limits=(150, 450),
+            patient_name={"anrede": "Frau", "vorname": "X",
+                          "nachname": "M", "initial": "M."},
+        )
+        assert "kein 'Wir'/'uns'/'unser'" in p, (
+            "dokumentation: '3.-Person' fehlt - sollte bei Nicht-Wir-Workflow bleiben"
+        )
