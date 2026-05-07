@@ -465,36 +465,48 @@ class TestWirWorkflowOverride:
         assert "kein 'Wir'" in result
 
     def test_3p_style_wir_workflow_overrides_to_wir(self):
-        """Hauptfix: 3.-Person-Vorlage + Wir-Workflow → Checkliste sagt Wir.
+        """A korrigiert: 3.-Person-Vorlage + empathischer Workflow.
 
-        Das war der Konflikt der fva-02, eb-02, dok-01 verursacht hat.
+        NEU: KEIN Wir-Zwang mehr (P0 wurde durch A korrigiert ersetzt).
+        Stattdessen: Vorlagen-Mimik ('3.-Person erlaubt') plus explizites
+        Verbot des objektiv-distanzierten Berichtstons.
         """
         from app.services.prompts import _compute_style_constraints
         for wf in ("akutantrag", "verlaengerung",
                    "folgeverlaengerung", "entlassbericht"):
             result = _compute_style_constraints(self._make_3p_style(), workflow=wf)
-            # Darf NICHT 'kein Wir' sagen
-            assert "kein 'Wir'" not in result, f"{wf}: 'kein Wir' noch da"
-            assert "dritte Person" not in result, f"{wf}: '3.-Person' noch da"
-            # MUSS Wir-Anteil-Bandbreite enthalten
-            assert "Wir-Anteil:" in result, f"{wf}: Wir-Anteil-Zeile fehlt"
-            assert "Erster Satz beginnt mit 'Wir'" in result
+            # Wir wird NICHT mehr erzwungen
+            assert "Wir-Anteil:" not in result, (
+                f"{wf}: Wir-Anteil-Bandbreite drin, sollte aber nicht "
+                f"(A korrigiert: kein Wir-Zwang bei 3.-Person-Vorlage)"
+            )
+            assert "Erster Satz beginnt mit 'Wir'" not in result, (
+                f"{wf}: Wir-Zwang noch da"
+            )
+            # NEU: Tonfall-Hinweis MUSS da sein
+            assert "Tonfall: empathisch-konjunktivisch" in result, (
+                f"{wf}: empathischer Tonfall-Hinweis fehlt"
+            )
+            assert "objektiv-wissenden Berichtston" in result, (
+                f"{wf}: Verbot des Berichtstons fehlt"
+            )
 
-    def test_3p_style_wir_workflow_uses_default_band(self):
-        """Bei 3.-Person-Vorlage + Wir-Workflow: Klinik-Default-Bandbreite 1-3%."""
-        from app.services.prompts import (
-            _compute_style_constraints,
-            WIR_WORKFLOW_DEFAULT_LO_PCT,
-            WIR_WORKFLOW_DEFAULT_HI_PCT,
-        )
+    def test_3p_style_wir_workflow_no_more_default_band(self):
+        """A korrigiert: bei 3.-Person-Vorlage kommt KEINE Wir-Default-Bandbreite mehr.
+
+        Vorher (P0): Klinik-Default 1-3% Wir-Anteil wurde aufgezwungen.
+        Jetzt (A korrigiert): Vorlage 3.-Person → bleibt 3.-Person, aber
+        empathisch.
+        """
+        from app.services.prompts import _compute_style_constraints
         result = _compute_style_constraints(
             self._make_3p_style(), workflow="folgeverlaengerung",
         )
-        # Default-Bandbreite muss in der Zeile auftauchen
-        assert f"{WIR_WORKFLOW_DEFAULT_LO_PCT:.1f}%" in result
-        assert f"{WIR_WORKFLOW_DEFAULT_HI_PCT:.1f}%" in result
-        # Begründungstext erkennbar
-        assert "Klinik-Default" in result
+        # Klinik-Default-Bandbreite darf nicht mehr auftauchen
+        assert "Klinik-Default" not in result
+        assert "1.0%" not in result  # alte LO-Grenze
+        # Stattdessen: Tonfall-Hinweis
+        assert "empathisch-konjunktivisch" in result
 
     def test_wir_style_wir_workflow_uses_empirical_band(self):
         """Wir-Vorlage + Wir-Workflow: empirische Bandbreite aus der Vorlage.
@@ -547,13 +559,17 @@ class TestWirWorkflowOverride:
         """Integration: build_system_prompt reicht workflow korrekt durch.
 
         Damit ist sichergestellt dass alle drei Aufrufstellen den Parameter
-        weiterleiten - sonst hätte P0 in der Praxis keine Wirkung.
+        weiterleiten - sonst hätten P0 / A korrigiert in der Praxis keine Wirkung.
+
+        A korrigiert: empathische Workflows haben "Tonfall: empathisch-
+        konjunktivisch" + Verbot des objektiv-distanzierten Berichtstons.
+        Nicht-empathische Workflows behalten "kein Wir" (klassische 3.-Person).
         """
         from app.services.prompts import build_system_prompt
 
         style_3p = self._make_3p_style()
 
-        # Wir-Workflow: sollte KEIN 'kein Wir' im finalen Prompt haben
+        # Empathischer Workflow: NEU empathischer Tonfall, kein "kein Wir"
         for wf in ("akutantrag", "folgeverlaengerung", "entlassbericht", "verlaengerung"):
             p = build_system_prompt(
                 workflow=wf,
@@ -563,13 +579,16 @@ class TestWirWorkflowOverride:
                               "nachname": "M", "initial": "M."},
             )
             assert "STIL-CHECKS" in p, f"{wf}: STIL-CHECKS-Block fehlt"
-            # Die kritische Zeile darf nicht im finalen Prompt landen
+            # Die alte 3.-Person-Pflicht-Zeile darf nicht im Prompt landen
             assert "kein 'Wir'/'uns'/'unser'" not in p, (
-                f"{wf}: STIL-CHECKS sagt 'kein Wir' trotz Wir-Workflow - "
-                f"P0-Override greift nicht in build_system_prompt"
+                f"{wf}: STIL-CHECKS sagt 'kein Wir' trotz empathischem Workflow"
+            )
+            # NEU (A korrigiert): empathischer Tonfall-Hinweis MUSS da sein
+            assert "Tonfall: empathisch-konjunktivisch" in p, (
+                f"{wf}: A korrigiert greift nicht - Tonfall-Hinweis fehlt"
             )
 
-        # Nicht-Wir-Workflow: 3.-Person bleibt
+        # Nicht-empathischer Workflow: 3.-Person bleibt
         p = build_system_prompt(
             workflow="dokumentation",
             style_context=style_3p,
@@ -578,5 +597,286 @@ class TestWirWorkflowOverride:
                           "nachname": "M", "initial": "M."},
         )
         assert "kein 'Wir'/'uns'/'unser'" in p, (
-            "dokumentation: '3.-Person' fehlt - sollte bei Nicht-Wir-Workflow bleiben"
+            "dokumentation: 3.-Person-Zwang fehlt - sollte bei Nicht-empathischem "
+            "Workflow bleiben"
         )
+
+
+# ── P3: Eval-Side Bibliotheks-Fallback ─────────────────────────────────────────
+
+class TestP3EvalLibraryFallback:
+    """v13 P3: Wenn nur style_therapeut gesetzt ist (kein style_file im
+    input_files), lädt die Eval die Therapeuten-Bibliothek und sendet sie als
+    style_text ans Backend - mit Strategie-3-Markern wenn es mehrere Vorlagen
+    sind.
+
+    Diese Tests prüfen die ISOLATED Logik (kein echter HTTP-Call, kein
+    Filesystem). Die echte Integration läuft im Eval-Run selbst.
+    """
+
+    def _simulate_p3(self, input_files, test_case, library_loader):
+        """Reproduziert exakt die P3-Logik aus test_eval_workflow."""
+        extra_form_data = None
+        has_style_file = bool(input_files and "style_file" in input_files)
+        if not has_style_file and test_case.get("style_therapeut"):
+            therapeut_id = test_case["style_therapeut"]
+            try:
+                library_texts = library_loader(therapeut_id, test_case["workflow"])
+                if library_texts:
+                    if len(library_texts) == 1:
+                        style_content = library_texts[0]
+                    else:
+                        style_content = "\n\n".join(
+                            f"--- Beispiel {i} ---\n{txt}"
+                            for i, txt in enumerate(library_texts, 1)
+                        )
+                    extra_form_data = {"style_text": style_content}
+            except Exception:
+                pass
+        return extra_form_data
+
+    def test_multi_vorlagen_uses_markers(self):
+        """3 Vorlagen → Marker-Format das split_style_examples wieder splitten kann."""
+        loader = lambda t, w: ["A", "B", "C"]
+        r = self._simulate_p3(
+            input_files=None,
+            test_case={"workflow": "anamnese", "style_therapeut": "T1"},
+            library_loader=loader,
+        )
+        assert r is not None
+        assert "--- Beispiel 1 ---" in r["style_text"]
+        assert "--- Beispiel 3 ---" in r["style_text"]
+
+    def test_single_vorlage_no_marker(self):
+        """1 Vorlage → kein Marker (Backwards-Compat mit alten Eval-Cases)."""
+        loader = lambda t, w: ["Single Vorlage Text"]
+        r = self._simulate_p3(
+            input_files=None,
+            test_case={"workflow": "akutantrag", "style_therapeut": "T1"},
+            library_loader=loader,
+        )
+        assert r == {"style_text": "Single Vorlage Text"}
+
+    def test_inactive_when_style_file_present(self):
+        """input_files hat style_file → P3 darf das nicht überschreiben."""
+        loader = lambda t, w: ["Library Text"]
+        r = self._simulate_p3(
+            input_files={"style_file": "vorlage.txt"},
+            test_case={"workflow": "anamnese", "style_therapeut": "T1"},
+            library_loader=loader,
+        )
+        assert r is None
+
+    def test_inactive_without_style_therapeut(self):
+        """Ohne style_therapeut → P3 macht nichts."""
+        loader = lambda t, w: ["Should Not Appear"]
+        r = self._simulate_p3(
+            input_files=None,
+            test_case={"workflow": "anamnese"},
+            library_loader=loader,
+        )
+        assert r is None
+
+    def test_empty_library_returns_none(self):
+        """Library leer → kein Crash, P3 setzt nichts."""
+        loader = lambda t, w: []
+        r = self._simulate_p3(
+            input_files=None,
+            test_case={"workflow": "anamnese", "style_therapeut": "T1"},
+            library_loader=loader,
+        )
+        assert r is None
+
+    def test_marker_format_compatible_with_splitter(self):
+        """Roundtrip: P3-Output kann von split_style_examples wieder gesplittet werden.
+
+        Das ist die wichtigste Garantie: die Marker, die P3 in den style_text
+        einfügt, müssen exakt das Format haben, das split_style_examples in
+        jobs.py erkennt. Sonst sieht das Backend wieder einen single block.
+        """
+        from app.services.prompts import split_style_examples
+
+        loader = lambda t, w: [
+            "Erste Vorlage Inhalt.",
+            "Zweite Vorlage Inhalt.",
+        ]
+        r = self._simulate_p3(
+            input_files=None,
+            test_case={"workflow": "verlaengerung", "style_therapeut": "T1"},
+            library_loader=loader,
+        )
+        assert r is not None
+        # split_style_examples muss sauber zwei Beispiele rauspulen
+        split = split_style_examples(r["style_text"])
+        assert len(split) == 2
+        assert "Erste Vorlage" in split[0]
+        assert "Zweite Vorlage" in split[1]
+
+    def test_loader_exception_swallowed(self):
+        """Exception beim Library-Loader → P3 setzt nichts, kein Crash."""
+        def broken_loader(t, w):
+            raise RuntimeError("Filesystem broken")
+        r = self._simulate_p3(
+            input_files=None,
+            test_case={"workflow": "anamnese", "style_therapeut": "T1"},
+            library_loader=broken_loader,
+        )
+        assert r is None
+
+
+# ── A korrigiert: BASE_PROMPT-Stilanweisung gegen Berichtston ─────────────────
+
+class TestEmpathicToneOverride:
+    """v13 Iteration A korrigiert: BASE_PROMPTS für empathische Workflows
+    erzwingen nicht mehr Wir-Form, verbieten aber den objektiv-distanzierten
+    Berichtston ('Der Patient zeigte ...').
+    """
+
+    def _patient(self):
+        return {"anrede": "Frau", "vorname": "X", "nachname": "M", "initial": "M."}
+
+    def test_akutantrag_no_wir_zwang(self):
+        """Akutantrag-BASE_PROMPT erzwingt kein 'erster Satz mit Wir' mehr."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="akutantrag",
+            style_context="Sample.",
+            word_limits=(150, 350),
+            patient_name=self._patient(),
+        )
+        # Alte Wir-Pflicht muss weg sein
+        assert "MUSS der erste inhaltliche Satz mit 'Wir' beginnen" not in p
+
+    def test_akutantrag_warns_against_berichtston(self):
+        """Akutantrag-BASE_PROMPT warnt vor objektiv-distanziertem Berichtston."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="akutantrag",
+            style_context="Sample.",
+            word_limits=(150, 350),
+            patient_name=self._patient(),
+        )
+        assert "objektiv-wissenden Berichtston" in p
+        assert "Der Patient zeigte" in p  # als Negativ-Beispiel
+
+    def test_verlaengerung_no_wir_zwang(self):
+        """Verlängerung-BASE_PROMPT erzwingt nicht mehr 'Schreibe konsequent aus Wir-Sicht'."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="verlaengerung",
+            style_context="Sample.",
+            word_limits=(300, 500),
+            patient_name=self._patient(),
+        )
+        # Alte Wir-Pflicht-Phrase muss weg sein
+        assert "Schreibe konsequent aus 'Wir'-Sicht" not in p
+        # Stilanweisung muss da sein
+        assert "objektiv-wissenden Berichtston" in p
+
+    def test_folgeverlaengerung_struktur_no_wir(self):
+        """Folgeverlängerung-STRUKTUR erzwingt nicht mehr 'Zeile 3+ mit Wir'."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="folgeverlaengerung",
+            style_context="Sample.",
+            word_limits=(300, 500),
+            patient_name=self._patient(),
+        )
+        # Überschrift-Zwang muss bleiben
+        assert "'Verlauf und Begründung der weiteren Verlängerung'" in p
+        # Aber Wir-Zwang in Zeile 3 muss weg
+        assert "Fließtext, der DIREKT mit 'Wir'" not in p
+        # Stattdessen Vorlagen-Mimik
+        assert "Fließtext im Stil der Vorlage" in p
+
+    def test_entlassbericht_warns_against_berichtston(self):
+        """Entlassbericht-BASE_PROMPT warnt vor objektiv-distanziertem Berichtston."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="entlassbericht",
+            style_context="Sample.",
+            word_limits=(500, 1000),
+            patient_name=self._patient(),
+        )
+        # Alte Wir-Perspektive-Beispielzeile soll weg sein
+        assert "Wir-Perspektive: 'Wir erlebten...'," not in p
+        # Stattdessen Stilfreiheit + Berichtston-Verbot
+        assert "objektiv-distanzierter Berichtston" in p
+
+
+# ── C: Anamnese-Längen-Disziplin ──────────────────────────────────────────────
+
+class TestAnamneseLengthDiscipline:
+    """v13 Iteration C: Anamnese-Längen-Disziplin verstärken.
+
+    Hintergrund: an-02 produzierte 633w bei Max=418w (51% über Limit). Modell
+    ignoriert die ZIELLÄNGE strukturell, weil es jede Subkategorie
+    gleich-wichtig behandelt. C fügt explizite Längen-Disziplin-Anweisung ein.
+    """
+
+    def _patient(self):
+        return {"anrede": "Frau", "vorname": "X", "nachname": "M", "initial": "M."}
+
+    def test_anamnese_length_discipline_block_present(self):
+        """Anamnese-BASE_PROMPT enthält LÄNGEN-DISZIPLIN-Block."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="anamnese",
+            style_context="Sample.",
+            word_limits=(280, 418),
+            patient_name=self._patient(),
+        )
+        assert "LÄNGEN-DISZIPLIN" in p
+
+    def test_anamnese_length_discipline_says_hard_limit(self):
+        """LÄNGEN-DISZIPLIN: ZIELLÄNGE als hartes Limit, nicht offen nach oben."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="anamnese",
+            style_context="Sample.",
+            word_limits=(280, 418),
+            patient_name=self._patient(),
+        )
+        assert "hartes Limit" in p
+        assert "KEIN Zielwert nach oben offen" in p
+
+    def test_anamnese_length_discipline_priorisierung(self):
+        """LÄNGEN-DISZIPLIN nennt konkrete Priorisierung statt erschöpfende Auflistung."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="anamnese",
+            style_context="Sample.",
+            word_limits=(280, 418),
+            patient_name=self._patient(),
+        )
+        # Priorisierungs-Anweisung
+        assert "Priorisiere:" in p
+        assert "Sekundäres" in p or "kann komplett entfallen" in p
+        # Verdichtungs-Anweisung
+        assert "verdichten" in p.lower() or "Zusammenfassung" in p
+
+    def test_anamnese_length_discipline_self_count(self):
+        """LÄNGEN-DISZIPLIN sagt explizit: zähle Wörter vor Abgabe."""
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="anamnese",
+            style_context="Sample.",
+            word_limits=(280, 418),
+            patient_name=self._patient(),
+        )
+        assert "zähle deine Wörter" in p
+        assert "kürze" in p
+
+    def test_anamnese_only_no_other_workflow(self):
+        """C-Block nur in anamnese, nicht in anderen Workflows."""
+        from app.services.prompts import build_system_prompt
+        for wf in ("entlassbericht", "verlaengerung", "akutantrag", "dokumentation"):
+            p = build_system_prompt(
+                workflow=wf,
+                style_context="Sample.",
+                word_limits=(300, 500),
+                patient_name=self._patient(),
+            )
+            assert "LÄNGEN-DISZIPLIN" not in p, (
+                f"{wf}: LÄNGEN-DISZIPLIN-Block sollte nur in anamnese sein"
+            )

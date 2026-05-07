@@ -418,8 +418,10 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "- Konkrete Symptome und Risiken aus den Quellen benennen\n"
         "- Ambulante Insuffizienz begründen (warum reicht ambulant nicht?)\n"
         "- Dekompensationszeichen und aktuelle Krisensituation\n"
-        "- WIR-PERSPEKTIVE: 'Wir nehmen ... auf', 'Wir erleben ...', "
-        "'Aus unserer Sicht ist eine ambulante Behandlung nicht ausreichend.'\n"
+        # v13 A korrigiert: Wir-Pflicht durch Vorlagen-Mimik ersetzt (siehe STIL-Block).
+        # Wenn Vorlage Wir nutzt: 'Wir nehmen ... auf', 'Wir erleben ...'.
+        # Wenn Vorlage 3.-Person nutzt: empathisch-konjunktivisch, NIE 'Der
+        # Patient zeigte ...' (objektiv-distanzierter Berichtston).
         "- Konkret und symptombezogen"
         # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
     ),
@@ -434,7 +436,11 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "(IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), "
         "konkrete Wendepunkte und Entwicklungsschritte. "
         # v13: Absatzlängen-Hinweis entfernt - Längenanker steht zentral via resolve_length_anchor()
-        "Wir-Perspektive: 'Wir erlebten...', 'Es gelang zunehmend...', 'Im Verlauf zeigte sich...'\n\n"
+        # v13 A korrigiert: Stil folgt Vorlage. Bei Wir-Vorlage Wir-Sicht
+        # ('Wir erlebten ...'), bei 3.-Person empathisch ('Sie zeigte sich ...,
+        # erlebte ...'). NIE objektiv-distanzierter Berichtston.
+        "Stil folgt der Vorlage (Wir-Sicht oder empathische 3.-Person), "
+        "NIE objektiv-distanzierter Berichtston ('Der Patient zeigte X').\n\n"
         "Teil 2 – EPIKRISE (kompakte Gesamtbewertung):\n"
         "Symptomatik-Entwicklung im Vergleich zu Aufnahme, entlastete Schutzanteile, "
         "verbliebener Bedarf, Ressourcen, Prognose.\n\n"
@@ -451,11 +457,20 @@ BASE_PROMPT_AKUTANTRAG = (
     "FOKUS:\n"
     "Schreibe NUR den Abschnitt 'Begründung für Akutaufnahme' – keine Anamnese, "
     "keinen Befund, keine Diagnosen (diese stehen bereits in der Vorlage).\n\n"
-    "STIL: Knappe medizinisch-klinische Sprache aus WIR-PERSPEKTIVE des aufnehmenden "
-    "Klinikteams.\n"
-    "WICHTIG ZUR WIR-PERSPEKTIVE: Nach der Standardformulierung MUSS der erste "
-    "inhaltliche Satz mit 'Wir' beginnen ('Wir nehmen ... auf', 'Wir erleben ...'). "
-    "NICHT mit '[Patient/in] präsentiert sich' oder '[Patient/in] berichtet'.\n"
+    # v13 A korrigiert: Wir-Pflicht durch Vorlagen-Mimik ersetzt.
+    # Wenn Vorlage Wir benutzt -> Wir benutzen. Wenn Vorlage 3.-Person ist
+    # -> empathisch-konjunktivische 3.-Person. NIE objektiv-distanzierter
+    # Berichtston ('Der Patient zeigte ...').
+    "STIL: Knappe medizinisch-klinische Sprache. Folge dem Tonfall der "
+    "Stilvorlage (Wir-Sicht des aufnehmenden Klinikteams ODER empathische "
+    "3.-Person mit innerer Patientenperspektive).\n"
+    "VERMEIDE den objektiv-wissenden Berichtston ('Der Patient zeigte X', "
+    "'Die Klientin äußerte Y'). Schreibe stattdessen aus innerer Perspektive: "
+    "'Sie berichtete, sie fühle sich überfordert', 'Wir nehmen Frau X "
+    "schwer belastet auf'.\n"
+    "Erster Satz: KEINE generische Floskel wie '[Patient/in] präsentiert sich' "
+    "oder '[Patient/in] berichtet'. Beginne im Stil der Vorlage konkret und "
+    "patientenspezifisch.\n"
     # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
     "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
     "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
@@ -551,6 +566,25 @@ BASE_PROMPTS: dict[str, str] = {
         "auslösende Ereignisse, Testwerte, Zitate\n"
         # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
         "- Schreibe ausführliche, zusammenhängende Absätze (KEINE kurzen Stichwort-Absätze) als Fließtext\n\n"
+        # v13 Iteration C: Anamnese-Längen-Disziplin verstärken.
+        # Bisheriges Problem: Anamnese-Modell ignorierte ZIELLÄNGE strukturell.
+        # an-02 produzierte 633w bei Max=418w (51% über Limit).
+        # Ursache-Vermutung: Modell behandelt jede Anamnese-Subkategorie
+        # (Vorgeschichte, Familienbild, Ressourcen, Behandlungserwartungen) als
+        # gleich-wichtig zu erwähnen → schreibt erschöpfend statt selektiv.
+        # Lösung: explizite Disziplin-Anweisung mit Verbweisung Wortzählung.
+        "LÄNGEN-DISZIPLIN (kritisch):\n"
+        "Die ZIELLÄNGE im Prompt ist ein hartes Limit, KEIN Zielwert nach oben offen. "
+        "Wenn du dich der Obergrenze näherst:\n"
+        "- Lasse weniger relevante Inhalte WEG statt sie kürzer zu erwähnen.\n"
+        "- Priorisiere: Hauptanliegen + zentrale Symptome + Auslöser + 1-2 zentrale "
+        "biographische Stränge. Sekundäres (z.B. nebensächliche Hobbys, "
+        "ausführliche Dokumentation aller Vorbehandlungen) kann komplett entfallen.\n"
+        "- Bei umfangreicher Selbstauskunft: nicht alles wiedergeben, sondern "
+        "verdichten. Eine zweisätzige Zusammenfassung von 4 Themen ist oft "
+        "besser als 4 ausführliche Absätze.\n"
+        "Vor Abgabe: zähle deine Wörter (überschlägig) - wenn über Maximum, "
+        "kürze BEVOR du abgibst, nicht der Leser.\n\n"
         + FEW_SHOT_ANAMNESE
     ),
 
@@ -585,14 +619,20 @@ BASE_PROMPTS: dict[str, str] = {
         "Schreibe NUR diesen einen Abschnitt als Fließtext – keine Diagnosen, "
         "keine Stammdaten, keine anderen Sektionen des Antrags.\n\n"
         "STIL:\n"
-        "WIR-PERSPEKTIVE des Therapeutenteams (verbindlich, nicht 3. Person/Passiv): "
-        "Schreibe konsequent aus 'Wir'-Sicht: 'Wir nahmen [Patient/in] auf...', "
-        "'In unserer Arbeit gelang es uns...', 'Wir erlebten [Patient/in] zunehmend...', "
-        "'Im Einzelprozess konnten wir gemeinsam mit [Patient/in]...'. "
-        "VERMEIDE Passivkonstruktionen wie 'es zeigte sich', 'konnte differenziert werden', "
-        "'wurde bearbeitet'. Setze stattdessen das Wir-Subjekt aktiv: "
-        "'wir sahen', 'wir bearbeiteten', 'es gelang uns'. "
-        "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
+        # v13 A korrigiert: Wir-Pflicht durch Vorlagen-Mimik ersetzt.
+        # Wenn Vorlage Wir benutzt -> Wir benutzen. Wenn Vorlage 3.-Person ist
+        # -> empathisch-konjunktivische 3.-Person. NIE objektiv-distanzierter
+        # Berichtston ('Der Patient zeigte ...').
+        "Folge dem Tonfall der Stilvorlage (Wir-Sicht des Therapeutenteams ODER "
+        "empathische 3.-Person mit innerer Patientenperspektive). "
+        "VERMEIDE den objektiv-wissenden Berichtston ('Der Patient zeigte X', "
+        "'Die Klientin äußerte Y'). Schreibe stattdessen aus innerer Perspektive: "
+        "'Sie berichtete, sie fühle sich überfordert', 'Wir erlebten Frau M. "
+        "zunehmend ...'. "
+        "VERMEIDE auch reine Passivkonstruktionen ('es zeigte sich', 'konnte "
+        "differenziert werden', 'wurde bearbeitet'). Setze ein konkretes Subjekt "
+        "(Wir/Patient_in). Systemische Fachsprache wo inhaltlich passend. "
+        "Fließtext, keine Aufzählungen.\n"
         # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
         "Konkret und patientenspezifisch.\n\n"
         "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
@@ -619,24 +659,33 @@ BASE_PROMPTS: dict[str, str] = {
         "FOKUS:\n"
         "Schreibe NUR den Abschnitt 'Verlauf und Begründung der weiteren Verlängerung' "
         "als Fließtext – keine Diagnosen, keine Stammdaten, keine Anamnese.\n\n"
-        # v13 Ä2: STRUKTURZWANG - Sektionsüberschrift + Wir-Perspektive entkoppelt.
-        # Vor Ä2 kollidierten zwei Constraints ('Erster Satz mit Wir' vs.
-        # 'Sektionsname Verlauf'). Folge: fva-01 verlor das 'Verlauf'-Keyword,
-        # weil das Modell die Wir-Konstruktion priorisierte. Lösung: explizite
-        # Vorlage, die beides erzwingt - Überschrift in Zeile 1, Wir-Satz in Zeile 3.
+        # v13 Ä2 + Iteration A korrigiert: STRUKTUR erzwingt nur die Überschrift,
+        # NICHT mehr die Wir-Form. Der konkrete Tonfall (Wir vs. empathische
+        # 3.-Person) wird in STIL-CHECKS aus der Stilvorlage abgeleitet.
+        # Hintergrund: Ä2 erzwang "Zeile 3+ mit Wir" - das kollidierte mit
+        # 3.-Person-Stilvorlagen, gegen die das Modell nicht ankam (fva-02).
+        # Jetzt: Überschrift fix, erste-Zeile-Regel folgt Vorlage.
         "STRUKTUR (verbindlich, exakt einhalten):\n"
         "Zeile 1: Überschrift wörtlich: 'Verlauf und Begründung der weiteren Verlängerung'\n"
         "Zeile 2: Leerzeile\n"
-        "Zeile 3+: Fließtext, der DIREKT mit 'Wir' oder einer Wir-Konstruktion beginnt\n"
-        "          (z.B. 'Wir erlebten ...', 'Seit dem letzten Antrag konnten wir ...',\n"
-        "          'In unserer weiteren Arbeit ...').\n"
-        "          NICHT mit 'Im weiteren Verlauf' oder 'Seither hat sich [Patient/in] ...'.\n\n"
+        "Zeile 3+: Fließtext im Stil der Vorlage. NICHT mit 'Im weiteren Verlauf'\n"
+        "          oder 'Seither hat sich [Patient/in] ...' beginnen - das sind\n"
+        "          generische Floskeln. Beginne stattdessen mit einer konkreten\n"
+        "          Beobachtung im Stil der Vorlage (z.B. 'Wir erlebten Frau M. ...',\n"
+        "          'Frau M. zeigte sich ...', 'Im hypnosystemischen Einzelprozess ...').\n\n"
         "STIL:\n"
-        "WIR-PERSPEKTIVE des Therapeutenteams (verbindlich, nicht 3. Person/Passiv): "
-        "Schreibe konsequent aus 'Wir'-Sicht: 'Seit dem letzten Antrag erlebten wir...', "
-        "'In unserer weiteren Arbeit gelang es uns...', 'Wir konnten gemeinsam mit [Patient/in]...'. "
-        "VERMEIDE Passivkonstruktionen wie 'es zeigte sich' oder 'konnte differenziert werden'. "
-        "Systemische Fachsprache wo inhaltlich passend. Fließtext, keine Aufzählungen.\n"
+        # v13 A korrigiert: Wir-Pflicht durch Vorlagen-Mimik ersetzt.
+        # Wenn Vorlage Wir benutzt -> Wir benutzen. Wenn Vorlage 3.-Person ist
+        # -> empathisch-konjunktivische 3.-Person. NIE den objektiv-distanzierten
+        # Berichtston ('Der Patient zeigte ...').
+        "Folge dem Tonfall der Stilvorlage (Wir-Sicht oder empathische 3.-Person). "
+        "VERMEIDE den objektiv-wissenden Berichtston ('Der Patient zeigte X', "
+        "'Die Klientin äußerte Y'). Schreibe stattdessen aus innerer Perspektive: "
+        "'Sie berichtete, sie fühle sich überfordert', 'Er beschreibe ein Gefühl "
+        "von ...', 'Wir erlebten Frau M. erschöpft'. "
+        "VERMEIDE auch reine Passivkonstruktionen ('es zeigte sich', 'konnte "
+        "differenziert werden'). Systemische Fachsprache wo inhaltlich passend. "
+        "Fließtext, keine Aufzählungen.\n"
         # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
         "Konkret und patientenspezifisch.\n\n"
         "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
@@ -764,23 +813,35 @@ LENGTH_ANCHOR_CEILING_MULTIPLIER = 1.4
 
 
 # v13 P0: Workflows mit verbindlicher Wir-Perspektive (Therapeutenteam-Sicht).
-# Bei diesen Workflows darf STIL-CHECKS NIEMALS "dritte Person, kein Wir" sagen,
-# auch wenn die Stilvorlage in 3.-Person ist. Sonst entsteht ein Selbstwiderspruch
-# im Prompt (BASE_PROMPT/STRUKTUR-Block sagt 'Wir', Checkliste sagt '3. Person').
-# Der Konflikt verursachte im Eval-Run nach Ä1-Ä5: fva-02 (Wir 0%), eb-02 (Stil),
-# dok-01 (Stil) - drei der vier neuen Failures.
-WIR_WORKFLOWS = frozenset({
+# v13 P0 + Iteration A: Workflows die einen empathisch-therapeutischen Tonfall
+# verlangen (Therapeutenteam-Sicht, persönliches Erleben des Patienten).
+# Bei diesen Workflows ist der "objektiv-distanzierte Berichtstil" zu vermeiden:
+#   schlecht:  "Der Patient zeigte ausgeprägte Symptome", "Die Klientin äußerte..."
+#   gut:       "Wir erlebten Frau M. erschöpft" (Wir-Form), oder
+#              "Frau M. berichtete, sie fühle sich überfordert" (empathisch-konjunktivische
+#              3.-Person mit innerer Perspektive)
+#
+# Wenn die Stilvorlage selbst Wir benutzt -> wir-Bandbreite ableiten.
+# Wenn die Stilvorlage 3.-Person ist -> 3.-Person erlauben, aber nur in
+# empathisch-konjunktivischer Form, nie als objektiv-wissenden Bericht.
+#
+# Hintergrund: P0 (Wir-Zwang für alle Wir-Workflows) hat gegen die Beispiele
+# gekämpft (3.-Person-Vorlagen wirken stärker als abstrakte Wir-Anweisung).
+# Lösung: Wir-Form NICHT erzwingen wenn Vorlage 3.-Person ist, aber den
+# gefährlichen objektiv-distanzierten Berichtston explizit verbieten.
+EMPATHIC_WORKFLOWS = frozenset({
     "akutantrag",
     "verlaengerung",
     "folgeverlaengerung",
     "entlassbericht",
 })
 
-# Default-Wir-Bandbreite für Wir-Workflows wenn die Stilvorlage selbst kein Wir
-# verwendet (also keine empirische Bandbreite ableitbar ist). Erfahrungswerte
-# aus den Stilvorlagen die Wir benutzen (Frau-Sch.-Vorlagen): typischerweise
-# 0.9% bis 2.8% Wir-Anteil. Default-Untergrenze 1% verhindert dass das Modell
-# nur einen einzigen Wir-Satz schreibt und sonst 3.-Person bleibt.
+# Backwards-compat-Alias: alte Tests und ggf. externer Code nutzen WIR_WORKFLOWS
+WIR_WORKFLOWS = EMPATHIC_WORKFLOWS
+
+# Default-Wir-Bandbreite NUR aktiv wenn Stilvorlage selbst Wir benutzt.
+# Bei 3.-Person-Vorlagen wird KEIN Wir-Zwang erzeugt, sondern ein Verbot des
+# objektiv-distanzierten Berichtstils.
 WIR_WORKFLOW_DEFAULT_LO_PCT = 1.0
 WIR_WORKFLOW_DEFAULT_HI_PCT = 3.0
 
@@ -1030,49 +1091,61 @@ def _compute_style_constraints(
     lines.append(f"  [ ] Anzahl Absätze: {para_count_lo}–{para_count_hi} "
                  f"(Stilvorlage: {para_count})")
 
-    # v13 P0: Effektive Wir-Pflicht bestimmen.
-    # Bei Wir-Workflows (akutantrag, verlaengerung, folgeverlaengerung,
-    # entlassbericht) MUSS die Checkliste Wir verlangen, auch wenn die
-    # Stilvorlage selbst 3.-Person ist. Der Workflow-Auftrag aus
-    # BASE_PROMPT überschreibt die Vorlagen-Beobachtung.
-    workflow_demands_wir = workflow in WIR_WORKFLOWS
-    effective_uses_wir = uses_wir or workflow_demands_wir
+    # v13 P0 + Iteration A (korrigiert): Drei Pfade je nach Workflow + Stilvorlage.
+    #
+    # Pfad 1: Stilvorlage benutzt Wir
+    #   -> Wir-Bandbreite aus Vorlage ableiten, Wir-Form im Output erzwingen.
+    #
+    # Pfad 2: Stilvorlage in 3.-Person UND Workflow ist empathisch
+    #   (akutantrag, verlaengerung, folgeverlaengerung, entlassbericht):
+    #   -> 3.-Person erlauben (NICHT Wir-Form erzwingen, sonst kämpfen wir gegen
+    #      das konkrete Beispiel), aber den objektiv-distanzierten Berichtstil
+    #      ("Der Patient zeigte...", "Die Klientin äußerte...") explizit verbieten.
+    #      Stattdessen empathisch-konjunktivische 3.-Person ("Sie berichtete,
+    #      sie fühle sich überfordert").
+    #
+    # Pfad 3: Stilvorlage in 3.-Person UND Workflow nicht empathisch
+    #   (anamnese, dokumentation):
+    #   -> sachliche 3.-Person erlauben (klassischer Anamnese/Verlaufs-Stil).
+    #
+    # Hintergrund: P0 (Wir-Zwang für Wir-Workflows) wirkte zu schwach gegen
+    # konkrete 3.-Person-Beispiele. fva-02 zeigte: Modell folgt dem Beispiel
+    # mehr als der Checkliste. Lösung: Wir-Form NICHT erzwingen, dafür den
+    # gefährlichen "wissenden Bericht"-Stil verbieten.
+    workflow_is_empathic = workflow in EMPATHIC_WORKFLOWS
 
-    if effective_uses_wir:
-        # Wir-Quote der Stilvorlage als Zielgröße. fva-02 zeigt: ohne konkretes
-        # Ziel rutscht das Modell auf 0% Wir-Anteil ab. Mit Zielzahl bleibt es
-        # in der Bandbreite.
-        if uses_wir:
-            # Bandbreite aus Stilvorlage abgeleitet (empirisch).
-            wir_pct = round(wir_ratio * 100, 1)
-            # Relative Toleranz ±50% (Wir-Anteil ist sehr variabel)
-            wir_target_lo = max(0.3, wir_pct * 0.5)
-            wir_target_hi = wir_pct * 1.5
-            wir_source_note = (
-                f"(Stilvorlage: {wir_pct}%, "
-                f"d.h. ca. {wir_count} Vorkommen auf {word_count} Wörter)"
-            )
-        else:
-            # Stilvorlage hat kein Wir, aber Workflow verlangt es. Default-
-            # Bandbreite aus Erfahrungswerten der Wir-nutzenden Vorlagen.
-            wir_target_lo = WIR_WORKFLOW_DEFAULT_LO_PCT
-            wir_target_hi = WIR_WORKFLOW_DEFAULT_HI_PCT
-            wir_source_note = (
-                "(Workflow verlangt Wir-Perspektive, Stilvorlage nutzt es nicht "
-                "explizit - Bandbreite aus Klinik-Default)"
-            )
+    if uses_wir:
+        # Pfad 1: Wir-Vorlage -> Wir-Bandbreite empirisch.
+        wir_pct = round(wir_ratio * 100, 1)
+        wir_target_lo = max(0.3, wir_pct * 0.5)
+        wir_target_hi = wir_pct * 1.5
         lines.append(
             f"  [ ] Wir-Anteil: zwischen {wir_target_lo:.1f}% und {wir_target_hi:.1f}% "
-            f"aller Wörter sind 'Wir/uns/unser...' {wir_source_note}"
+            f"aller Wörter sind 'Wir/uns/unser...' (Stilvorlage: {wir_pct}%, "
+            f"d.h. ca. {wir_count} Vorkommen auf {word_count} Wörter)"
         )
         lines.append(
             "  [ ] Erster Satz beginnt mit 'Wir' oder Wir-Konstruktion "
             "('Wir erlebten...', 'In unserer Arbeit...', 'Seit dem letzten Antrag konnten wir...')"
         )
+    elif workflow_is_empathic:
+        # Pfad 2: 3.-Person-Vorlage + empathischer Workflow.
+        # KEIN Wir-Zwang (folgen der Vorlage), aber objektiv-distanzierten
+        # Berichtston explizit verbieten.
+        lines.append(
+            "  [ ] Perspektive: 3.-Person wie in der Vorlage. Wir-Form ist "
+            "erlaubt aber NICHT verpflichtend - folge dem Beispiel."
+        )
+        lines.append(
+            "  [ ] Tonfall: empathisch-konjunktivisch ('Sie berichtete, sie "
+            "fühle sich überfordert', 'Er beschreibe ein Gefühl von ...'). "
+            "VERMEIDE den objektiv-wissenden Berichtston ('Der Patient zeigte "
+            "ausgeprägte Symptome', 'Die Klientin äußerte deutlich reduzierte "
+            "Stimmungslage'). Innere Erlebensperspektive des Patienten muss "
+            "spürbar bleiben, nicht nur klinische Beobachtung."
+        )
     else:
-        # Nur wenn weder Stilvorlage noch Workflow Wir verlangen:
-        # explizit 3.-Person fordern. Das gilt für dokumentation und anamnese,
-        # die typischerweise in 3.-Person gehalten sind.
+        # Pfad 3: Anamnese, Dokumentation - klassische sachliche 3.-Person.
         lines.append(
             "  [ ] Perspektive: durchgängig dritte Person (Er/Sie/Patient/in), "
             "kein 'Wir'/'uns'/'unser' im gesamten Text"
