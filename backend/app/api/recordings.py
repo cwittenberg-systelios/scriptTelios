@@ -198,12 +198,15 @@ def _assert_owner(rec: Recording, therapeut_id: str) -> None:
 async def upload_recording(
     audio: UploadFile = File(...),
     label: Optional[str] = Form(None),
+    therapeut_id: Optional[str] = None,
     current_user: str = Depends(get_current_user),
 ):
     """Nimmt Audiodatei entgegen, speichert sie persistent und startet
     Transkription asynchron. Antwortet sofort (status=uploading).
     Audio bleibt 24h auf Disk (retention.py löscht danach automatisch).
+    Query-Parameter therapeut_id überschreibt current_user wenn AUTH_ENABLED=False.
     """
+    effective_user = therapeut_id.strip() if (therapeut_id and therapeut_id.strip()) else current_user
     suffix = Path(audio.filename or "aufnahme.webm").suffix.lower() or ".webm"
     if suffix not in ALLOWED_AUDIO:
         raise HTTPException(
@@ -226,7 +229,7 @@ async def upload_recording(
 
     async with async_session_factory() as session:
         rec = Recording(
-            therapeut_id=current_user,
+            therapeut_id=effective_user,
             label=label.strip()[:120] if label and label.strip() else None,
             filename=filename,
             status="uploading",
@@ -238,22 +241,27 @@ async def upload_recording(
 
     await p0_queue.put((_PRIO_P0, out.id, audio_path))
     logger.info("Recording %d (Therapeut: %s) in P0-Queue (Größe: %d)",
-                out.id, current_user, p0_queue.qsize())
+                out.id, effective_user, p0_queue.qsize())
     return out
 
 
 @router.get("", response_model=list[RecordingOut])
-async def list_recordings(current_user: str = Depends(get_current_user)):
+async def list_recordings(
+    current_user: str = Depends(get_current_user),
+    therapeut_id: Optional[str] = None,
+):
     """Eigene nicht-gelöschte Aufnahmen, neueste zuerst (max. 50).
     Aufnahmen ohne therapeut_id (vor v18) werden ebenfalls angezeigt.
+    Query-Parameter therapeut_id überschreibt current_user wenn AUTH_ENABLED=False.
     """
+    effective_user = therapeut_id.strip() if (therapeut_id and therapeut_id.strip()) else current_user
     async with async_session_factory() as session:
         result = await session.execute(
             select(Recording)
             .where(
                 Recording.deleted_at.is_(None),
                 # Eigene ODER alte (ohne therapeut_id)
-                (Recording.therapeut_id == current_user) | Recording.therapeut_id.is_(None),
+                (Recording.therapeut_id == effective_user) | Recording.therapeut_id.is_(None),
             )
             .order_by(Recording.created_at.desc())
             .limit(50)

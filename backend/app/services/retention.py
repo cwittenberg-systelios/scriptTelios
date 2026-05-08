@@ -51,32 +51,31 @@ async def cleanup_recordings_audio() -> int:
     from app.models.db import Recording
     from sqlalchemy import select
 
-    cutoff = time.time() - RETENTION["recordings_audio"]
+    from datetime import timezone as _tz
+    cutoff = datetime.now(tz=_tz.utc) - timedelta(seconds=RETENTION["recordings_audio"])
     count = 0
     try:
         rec_dir = _recordings_dir()
         if not rec_dir.exists():
             return 0
 
-        # Alle Audiodateien in recordings_dir die älter als 24h sind
-        old_files = {
-            f.name: f
-            for f in rec_dir.iterdir()
-            if f.is_file() and f.stat().st_mtime < cutoff
-        }
-        if not old_files:
-            return 0
-
-        # Nur Dateien löschen die zu nicht-soft-gelöschten Recordings gehören
-        # (Dateien ohne DB-Eintrag werden ebenfalls bereinigt)
+        # Kandidaten aus DB: nicht soft-gelöscht, created_at älter als cutoff.
+        # st_mtime wird NICHT verwendet — auf RunPod-Volumes nach rsync/Remount
+        # unzuverlässig (mtime wird auf Zeitpunkt des Mounts gesetzt).
         async with async_session_factory() as db:
             result = await db.execute(
-                select(Recording.filename, Recording.deleted_at)
-                .where(Recording.filename.in_(list(old_files.keys())))
+                select(Recording.filename)
+                .where(
+                    Recording.deleted_at.is_(None),
+                    Recording.created_at < cutoff,
+                )
             )
-            db_rows = {row.filename: row.deleted_at for row in result}
+            old_filenames = [row.filename for row in result]
 
-        for filename, f_path in old_files.items():
+        for filename in old_filenames:
+            f_path = rec_dir / filename
+            if not f_path.exists():
+                continue
             try:
                 f_path.unlink(missing_ok=True)
                 count += 1
