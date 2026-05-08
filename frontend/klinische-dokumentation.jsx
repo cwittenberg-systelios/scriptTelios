@@ -786,6 +786,7 @@ function AudioRecorder({ onRecorded, onError }) {
   const analyserRef = useRef(null);
   const gainNodeRef = useRef(null);
   const meterRafRef = useRef(null);
+  const cancelledRef = useRef(false);
 
   // Timer aktualisieren
   useEffect(() => {
@@ -824,6 +825,7 @@ function AudioRecorder({ onRecorded, onError }) {
       return;
     }
     try {
+      cancelledRef.current = false;
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -883,10 +885,6 @@ function AudioRecorder({ onRecorded, onError }) {
         if (meterRafRef.current) { cancelAnimationFrame(meterRafRef.current); meterRafRef.current = null; }
         if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => {}); audioCtxRef.current = null; }
         setLevel(0);
-        const blob = new Blob(chunksRef.current, { type: mimeType || "audio/webm" });
-        const ext = mimeType.includes("ogg") ? "ogg" : "webm";
-        const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
-        const file = new File([blob], `aufnahme-${stamp}.${ext}`, { type: blob.type });
         setState("idle");
         setSeconds(0);
         pausedAccumRef.current = 0;
@@ -894,6 +892,15 @@ function AudioRecorder({ onRecorded, onError }) {
           streamRef.current.getTracks().forEach(t => t.stop());
           streamRef.current = null;
         }
+        if (cancelledRef.current) {
+          chunksRef.current = [];
+          return; // Verworfen – onRecorded nicht aufrufen
+        }
+        const blob = new Blob(chunksRef.current, { type: mimeType || "audio/webm" });
+        const ext = mimeType.includes("ogg") ? "ogg" : "webm";
+        const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+        const file = new File([blob], `aufnahme-${stamp}.${ext}`, { type: blob.type });
+        chunksRef.current = [];
         idbSaveAudio(file).catch(() => {}); // Reload-Persistenz
         onRecorded(file);
       };
@@ -940,6 +947,7 @@ function AudioRecorder({ onRecorded, onError }) {
   }
 
   function cancel() {
+    cancelledRef.current = true;
     if (meterRafRef.current) { cancelAnimationFrame(meterRafRef.current); meterRafRef.current = null; }
     if (audioCtxRef.current) { audioCtxRef.current.close().catch(() => {}); audioCtxRef.current = null; }
     setLevel(0);
