@@ -321,10 +321,27 @@ def _diarize(audio_path: Path) -> list[dict] | None:
                 except ImportError:
                     # weder soundfile noch torchaudio verfuegbar - filepath-Fallback
                     diarization = pipeline(str(wav_path))
+        # ── pyannote 4.x API-Kompatibilitaet ─────────────────────────────────
+        # pyannote.audio 4.0 hat die Pipeline-Rueckgabe geaendert:
+        #   - 3.x: pipeline(...) -> Annotation (hat .itertracks(yield_label=True))
+        #   - 4.x: pipeline(...) -> DiarizeOutput (Annotation liegt in
+        #          .speaker_diarization)
+        # Wir extrahieren defensiv die Annotation aus beiden Varianten.
+        annotation = (
+            getattr(diarization, "speaker_diarization", None)
+            or getattr(diarization, "diarization", None)
+            or diarization
+        )
+        if not hasattr(annotation, "itertracks"):
+            raise RuntimeError(
+                f"Pyannote-Output hat keine itertracks-Methode "
+                f"(Typ: {type(diarization).__name__}, "
+                f"Attribute: {[a for a in dir(diarization) if not a.startswith('_')][:10]})"
+            )
         segments = []
         speaker_map: dict[str, str] = {}
         labels = ["A", "B", "C", "D"]  # max 4 Sprecher realistisch
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
+        for turn, _, speaker in annotation.itertracks(yield_label=True):
             if speaker not in speaker_map:
                 idx = len(speaker_map)
                 speaker_map[speaker] = labels[idx] if idx < len(labels) else str(idx)
