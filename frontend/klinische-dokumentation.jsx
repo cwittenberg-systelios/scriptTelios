@@ -1476,14 +1476,23 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   if (therapeutId)       fd.append("therapeut_id",    therapeutId);
   if (files.patientName) fd.append("patientenname",   files.patientName);
 
-  // P0-Recording: Transkript direkt übergeben, kein Audio-Upload + Priorität setzen
+  // Priorisierung der Gesprächsquelle:
+  // 1. P0-Recording (Transkript bereits vorhanden) → transcript + p0_recording_id
+  // 2. Audio-Datei (Upload) → audio-Feld, Backend transkribiert
+  // 3. Transkript-Datei (.txt/.docx) → transcript_file-Feld, Backend liest Text
+  // 4. Text direkt (userContent) → transcript-Feld
   if (files.audio && files.audio.__p0recording) {
     fd.append("transcript", files.audio.transcript || userContent);
     fd.append("p0_recording_id", String(files.audio.id));
     fd.append("priority",  "high");
+  } else if (files.audio) {
+    fd.append("transcript", userContent);
+    fd.append("audio",      files.audio);
+  } else if (files.txtFile) {
+    fd.append("transcript_file", files.txtFile);
+    if (userContent) fd.append("transcript", userContent);
   } else {
     fd.append("transcript", userContent);
-    if (files.audio)       fd.append("audio",            files.audio);
   }
 
   if (files.selbst)      fd.append("selbstauskunft",   files.selbst);
@@ -1646,6 +1655,39 @@ function P0({ toast }) {
 
           <Card num="A" title="Neue Aufnahme" open={true}>
             <AudioRecorder onRecorded={onRecorded} onError={(msg) => toast(msg)} />
+
+            {/* Audio-Datei hochladen (Alternative zur Browser-Aufnahme) */}
+            {!pendingFile && (
+              <div style={{marginTop:12}}>
+                <div style={{
+                  fontSize:11, fontWeight:600, letterSpacing:"0.06em",
+                  textTransform:"uppercase", color:"var(--st-text-soft)",
+                  marginBottom:6, textAlign:"center"
+                }}>– oder Audiodatei hochladen –</div>
+                <label style={{
+                  display:"block", border:"2px dashed var(--st-gray-mid)",
+                  borderRadius:5, padding:"12px 16px", textAlign:"center",
+                  cursor:"pointer", background:"var(--st-cream)", fontSize:13,
+                  color:"var(--st-text-soft)", transition:"border-color 0.15s",
+                }}>
+                  <span style={{fontSize:18, display:"block", marginBottom:4}}>&#128266;</span>
+                  Audiodatei wählen
+                  <div style={{fontSize:11, color:"var(--st-text-pale)", marginTop:2}}>
+                    .mp3 · .m4a · .wav · .ogg · .webm · .flac · .aac
+                  </div>
+                  <input
+                    type="file"
+                    accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*"
+                    style={{display:"none"}}
+                    onChange={(e) => {
+                      const f = e.target.files && e.target.files[0];
+                      if (f) onRecorded(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+            )}
 
             {pendingFile && (
               <div style={{marginTop:12,padding:"12px 14px",background:"var(--st-red-pale)",border:"1px solid var(--st-red)",borderRadius:6}}>
@@ -1827,6 +1869,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
     try {
       const result = await generate("dokumentation", promptMitGeschlecht, text || "", {
         audio: audio,
+        txtFile: txtFile || null,
         style: style,
         styleText: styleText || null,
         bullets: bullets || null,
@@ -1868,7 +1911,16 @@ function P1({ toast, resumeJob, onResumed, model }) {
                   <AudioInput file={audio} onFile={setAudio} />
                 )}
                 {activeTab === "file" && (
-                  <Dropzone label="Transkript-Datei hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
+                  <div style={{display:"flex", flexDirection:"column", gap:10}}>
+                    <div>
+                      <div className="upload-col-label">Transkript-Datei</div>
+                      <Dropzone label="Transkript hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
+                    </div>
+                    <div>
+                      <div className="upload-col-label">oder Audiodatei</div>
+                      <Dropzone label="Audiodatei hochladen" hint=".mp3 · .m4a · .wav · .ogg · .webm · .flac" accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*" icon="&#128266;" file={audio && !audio.__p0recording ? audio : null} onFile={(f) => setAudio(f)} />
+                    </div>
+                  </div>
                 )}
                 {activeTab === "text" && (
                   <textarea rows={6} placeholder="Gesprächsinhalt direkt hier einfügen ..." value={text} onChange={(e) => setText(e.target.value)} style={{marginTop:0}} />
@@ -2073,6 +2125,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         selbst:    selbst,
         vorbef:    befunde,
         audio:     audio,
+        txtFile:   txtFile || null,
         style:     style,
         styleText: styleText || null,
         bullets:   text || null,
@@ -2128,7 +2181,16 @@ function P2({ toast, resumeJob, onResumed, model }) {
                   <AudioInput file={audio} onFile={setAudio} />
                 )}
                 {activeTab === "file" && (
-                  <Dropzone label="Transkript-Datei hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
+                  <div style={{display:"flex", flexDirection:"column", gap:10}}>
+                    <div>
+                      <div className="upload-col-label">Transkript-Datei</div>
+                      <Dropzone label="Transkript hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
+                    </div>
+                    <div>
+                      <div className="upload-col-label">oder Audiodatei</div>
+                      <Dropzone label="Audiodatei hochladen" hint=".mp3 · .m4a · .wav · .ogg · .webm · .flac" accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*" icon="&#128266;" file={audio && !audio.__p0recording ? audio : null} onFile={(f) => setAudio(f)} />
+                    </div>
+                  </div>
                 )}
                 {activeTab === "text" && (
                   <textarea rows={5} placeholder="Gesprächsinhalt des Aufnahmegesprächs direkt einfügen ..." value={text} onChange={(e) => setText(e.target.value)} style={{marginTop:0}} />
