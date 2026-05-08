@@ -204,117 +204,91 @@ else
     done
 fi
 
-# ── Restore aus Backup falls frisches Cluster ─────────────────────────────
+# =============================================================================
+# DB-INITIALISIERUNG
+# Reihenfolge:
+#   1. User anlegen (systelios = Owner, systelios_app = DML-only)
+#   2. Membership setzen (systelios_pg muss Mitglied von systelios sein
+#      um Owner aendern zu koennen)
+#   3. DB anlegen (OWNER systelios)
+#   4. Restore aus Backup (falls Fresh-Install) MIT sichtbarem Logging
+#   5. schema.sql einspielen (Single Source of Truth, mit SET ROLE systelios)
+# =============================================================================
+
+# ── 1. User anlegen ────────────────────────────────────────────────────────
+# Owner-User (Eigentuemer aller Tabellen)
+su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_roles WHERE rolname='systelios'\"" 2>/dev/null | grep -q 1 \
+    || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE USER systelios WITH PASSWORD 'systelios';\""
+
+# App-User (nur DML, kein DDL)
+su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_roles WHERE rolname='systelios_app'\"" 2>/dev/null | grep -q 1 \
+    || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE USER systelios_app WITH PASSWORD '${SYSTELIOS_APP_PASSWORD:-systelios_app}';\""
+
+# ── 2. Membership: systelios_pg muss Mitglied von systelios sein ───────────
+# Damit der Cluster-Superuser ALTER TABLE ... OWNER TO systelios ausfuehren kann
+su -m "$PG_USER" -c "psql -d postgres -c \"GRANT systelios TO $PG_USER;\"" >/dev/null 2>&1 || true
+
+# ── 3. Datenbank anlegen ───────────────────────────────────────────────────
+su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_database WHERE datname='systelios'\"" 2>/dev/null | grep -q 1 \
+    || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE DATABASE systelios OWNER systelios;\""
+
+# Extension (laeuft pro DB)
+su -m "$PG_USER" -c "psql -d systelios -c \"CREATE EXTENSION IF NOT EXISTS vector;\"" >/dev/null 2>&1 \
+    && echo "${OK}pgvector aktiviert" \
+    || echo "${WARN}pgvector konnte nicht aktiviert werden"
+
+# ── 4. Restore aus Backup (nur bei Fresh-Install) ──────────────────────────
 if [ "$FRESH_INSTALL" = "true" ]; then
     if [ -f "$PG_BACKUP_LATEST" ]; then
-        echo "${GO}Restore aus Backup: $PG_BACKUP_LATEST"
-        # Erst User + DB, dann Dump einspielen
-        su -m "$PG_USER" -c "psql -d postgres -c \"CREATE USER systelios WITH PASSWORD 'systelios';\"" 2>/dev/null || true
-        su -m "$PG_USER" -c "psql -d postgres -c \"CREATE DATABASE systelios OWNER systelios;\"" 2>/dev/null || true
-        su -m "$PG_USER" -c "psql -d systelios -c \"CREATE EXTENSION IF NOT EXISTS vector;\"" 2>/dev/null || true
-        gunzip -c "$PG_BACKUP_LATEST" | su -m "$PG_USER" -c "psql -d systelios" > /dev/null 2>&1 &&             echo "${OK}Backup restored" ||             echo "${WARN}Backup-Restore fehlgeschlagen — starte mit leerer DB"
+        # Sanity: Dump muss mindestens eine COPY-Anweisung enthalten
+        BACKUP_SIZE=$(stat -c%s "$(readlink -f "$PG_BACKUP_LATEST")" 2>/dev/null || echo 0)
+        BACKUP_HAS_DATA=$(zcat "$PG_BACKUP_LATEST" 2>/dev/null | grep -c "^COPY public\." || echo 0)
+
+        if [ "$BACKUP_SIZE" -lt 500 ] || [ "$BACKUP_HAS_DATA" -lt 1 ]; then
+            echo "${WARN}Backup verdaechtig (size=$BACKUP_SIZE, COPY-Statements=$BACKUP_HAS_DATA) — Restore uebersprungen"
+            echo "${WARN}Pruefe aeltere Dumps in $PG_BACKUP_DIR und ggf. manuell restoren"
+        else
+            echo "${GO}Restore aus Backup: $PG_BACKUP_LATEST (size=$BACKUP_SIZE, COPYs=$BACKUP_HAS_DATA)"
+            RESTORE_LOG="$LOG_DIR/postgres_restore.log"
+            if gunzip -c "$PG_BACKUP_LATEST" | su -m "$PG_USER" -c "psql -d systelios -v ON_ERROR_STOP=0" > "$RESTORE_LOG" 2>&1; then
+                ERR_COUNT=$(grep -cE "^(ERROR|psql:.*ERROR)" "$RESTORE_LOG" 2>/dev/null || echo 0)
+                COPY_COUNT=$(grep -c "^COPY" "$RESTORE_LOG" 2>/dev/null || echo 0)
+                if [ "$ERR_COUNT" -gt 0 ]; then
+                    echo "${WARN}Restore mit $ERR_COUNT Fehler(n) abgeschlossen — Details: $RESTORE_LOG"
+                else
+                    echo "${OK}Backup restored ($COPY_COUNT Tabellen — Details: $RESTORE_LOG)"
+                fi
+            else
+                echo "${WARN}Backup-Restore fehlgeschlagen — Details: $RESTORE_LOG"
+            fi
+        fi
     else
         echo "${INFO:-[INFO]} Kein Backup vorhanden — neue leere Datenbank"
     fi
 fi
 
-# ── User + Datenbank + Extension sicherstellen ─────────────────────────────
-# Owner-User
-su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_roles WHERE rolname='systelios'\"" 2>/dev/null | grep -q 1 \
-    || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE USER systelios WITH PASSWORD 'systelios';\""
-
-# App-User (NEU) — nur DML, kein DDL/Owner
-su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_roles WHERE rolname='systelios_app'\"" 2>/dev/null | grep -q 1 \
-    || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE USER systelios_app WITH PASSWORD '${SYSTELIOS_APP_PASSWORD:-systelios_app}';\""
-
-# Datenbank
-su -m "$PG_USER" -c "psql -d postgres -tc \"SELECT 1 FROM pg_database WHERE datname='systelios'\"" 2>/dev/null | grep -q 1 \
-    || su -m "$PG_USER" -c "psql -d postgres -c \"CREATE DATABASE systelios OWNER systelios;\""
-
-# Extension
-su -m "$PG_USER" -c "psql -d systelios -c \"CREATE EXTENSION IF NOT EXISTS vector;\"" >/dev/null 2>&1 \
-    && echo "${OK}pgvector aktiviert" \
-    || echo "${WARN}pgvector konnte nicht aktiviert werden"
-
-# ── Owner-Drift heilen + App-User-Privilegien (NEU) ────────────────────────
-# Laeuft bei JEDEM Start, ist idempotent. Heilt automatisch Tabellen, deren
-# Owner durch frueheren Restore/UID-Wechsel verschoben wurde.
-su -m "$PG_USER" -c "psql -d systelios -v ON_ERROR_STOP=0" <<'SQL' >/dev/null 2>&1
--- 1) Alle Tabellen/Sequenzen im public-Schema gehoeren 'systelios'
-DO $$
-DECLARE r record;
-BEGIN
-    FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' LOOP
-        EXECUTE format('ALTER TABLE public.%I OWNER TO systelios', r.tablename);
-    END LOOP;
-    FOR r IN SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public' LOOP
-        EXECUTE format('ALTER SEQUENCE public.%I OWNER TO systelios', r.sequence_name);
-    END LOOP;
-END $$;
-
--- 2) App-User: Schema-Zugriff
-GRANT USAGE ON SCHEMA public TO systelios_app;
-
--- 3) App-User: DML auf alles BESTEHENDE
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO systelios_app;
-GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO systelios_app;
-
--- 4) App-User: DML automatisch auf alles KUENFTIGE, was 'systelios' anlegt
-ALTER DEFAULT PRIVILEGES FOR ROLE systelios IN SCHEMA public
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO systelios_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE systelios IN SCHEMA public
-    GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO systelios_app;
-SQL
-echo "${OK}Owner=systelios, App-User=systelios_app, Default-Privileges gesetzt"
-
-# ── Schema-Migrations (idempotent) ──────────────────────────────────────────
-# Bei Fresh-Install erstellt SQLAlchemy die Tabellen vollständig via create_all().
-# Bei restoreten Backups fehlen ggf. neuere Spalten → hier nachziehen.
-# Jede Zeile muss IF NOT EXISTS / IF EXISTS nutzen damit sie idempotent ist.
-su -m "$PG_USER" -c "psql -d systelios -v ON_ERROR_STOP=0" <<'SQL' >/dev/null 2>&1
-ALTER TABLE IF EXISTS style_embeddings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
--- Job-Tabelle: neue Spalten fuer DB-backed Job-Queue (v14)
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS started_at TIMESTAMP WITH TIME ZONE;
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP WITH TIME ZONE;
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS description VARCHAR(512) DEFAULT '';
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN DEFAULT FALSE;
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS progress INTEGER DEFAULT 0;
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS progress_phase VARCHAR(128) DEFAULT '';
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS progress_detail VARCHAR(256) DEFAULT '';
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS result_transcript TEXT;
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS result_befund TEXT;
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS result_akut TEXT;
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS model_used VARCHAR(128);
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS duration_s DOUBLE PRECISION;
-ALTER TABLE IF EXISTS jobs ADD COLUMN IF NOT EXISTS style_info_json TEXT;
--- Alte Spalten anpassen (step/status waren Enums, jetzt VARCHAR)
-ALTER TABLE IF EXISTS jobs ALTER COLUMN status TYPE VARCHAR(20) USING status::VARCHAR;
-ALTER TABLE IF EXISTS jobs ALTER COLUMN workflow TYPE VARCHAR(64) USING workflow::VARCHAR;
--- step-Spalte entfernen wenn vorhanden (wird nicht mehr benutzt)
-ALTER TABLE IF EXISTS jobs DROP COLUMN IF EXISTS step;
-ALTER TABLE IF EXISTS jobs DROP COLUMN IF EXISTS duration_seconds;
--- P0-Aufnahmen (v17)
-CREATE TABLE IF NOT EXISTS recordings (
-    id          SERIAL PRIMARY KEY,
-    label       VARCHAR(120),
-    filename    VARCHAR(512) NOT NULL,
-    duration_s  DOUBLE PRECISION,
-    transcript  TEXT,
-    status      VARCHAR(20) NOT NULL DEFAULT 'uploading',
-    error_msg   TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at  TIMESTAMPTZ
-);
--- v18: therapeut_id fuer Mehrbenutzer-Isolation
-ALTER TABLE IF EXISTS recordings ADD COLUMN IF NOT EXISTS therapeut_id VARCHAR(128);
-CREATE INDEX IF NOT EXISTS idx_recordings_created
-    ON recordings (created_at DESC)
-    WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS ix_recordings_therapeut_id
-    ON recordings (therapeut_id)
-    WHERE therapeut_id IS NOT NULL;
-SQL
-echo "${OK}Schema-Migrations ausgeführt"
+# ── 5. Schema einspielen (Single Source of Truth) ──────────────────────────
+# SET ROLE systelios -> alle CREATE/ALTER laufen unter Owner-Identitaet,
+# neue Objekte gehoeren automatisch 'systelios'. Owner-Reparatur und
+# App-User-Privilegien sind Teil von schema.sql.
+SCHEMA_FILE="$BACKEND_DIR/scripts/schema.sql"
+if [ -f "$SCHEMA_FILE" ]; then
+    SCHEMA_LOG="$LOG_DIR/postgres_schema.log"
+    if su -m "$PG_USER" -c "psql -d systelios -v ON_ERROR_STOP=1 -X -f -" > "$SCHEMA_LOG" 2>&1 <<EOF
+SET ROLE systelios;
+\i $SCHEMA_FILE
+RESET ROLE;
+EOF
+    then
+        echo "${OK}Schema eingespielt (Owner=systelios, Privilegien fuer systelios_app)"
+    else
+        echo "${WARN}Schema-Einspielung fehlgeschlagen — Details: $SCHEMA_LOG"
+        tail -20 "$SCHEMA_LOG" 2>/dev/null
+    fi
+else
+    echo "${ERR}Schema-Datei nicht gefunden: $SCHEMA_FILE"
+    echo "${ERR}DB ist nicht in funktionsfaehigem Zustand!"
+fi
 
 echo "${OK}Datenbank 'systelios' bereit"
 
@@ -327,7 +301,25 @@ pg_backup_dump() {
     local ts=$(date +%Y%m%d_%H%M%S)
     local tmp="$PG_BACKUP_DIR/dump_${ts}.sql.gz.tmp"
     local final="$PG_BACKUP_DIR/dump_${ts}.sql.gz"
-    if su -m "$PG_USER" -c "$PG_BIN/pg_dump systelios" 2>/dev/null | gzip > "$tmp"; then
+
+    # pg_dump explizit als 'systelios' (Owner) ausfuehren — sonst nimmt psql
+    # default 'systelios_pg' an und scheitert an Permissions / leerer DB-Rolle.
+    if su -m "$PG_USER" -c "$PG_BIN/pg_dump -U systelios -d systelios" 2>/dev/null | gzip > "$tmp"; then
+        # Verifikation: ist im Dump auch wirklich was drin?
+        local size=$(stat -c%s "$tmp" 2>/dev/null || echo 0)
+        if [ "$size" -lt 500 ]; then
+            echo "[PG-BACKUP] $(date +%H:%M:%S) Dump verworfen (zu klein: $size Bytes) — latest.sql.gz unveraendert"
+            rm -f "$tmp"
+            return 1
+        fi
+
+        # Mindestens eine COPY-Anweisung => Tabellen-Schema da, ggf. mit Daten
+        if ! zcat "$tmp" | grep -q "^COPY public\."; then
+            echo "[PG-BACKUP] $(date +%H:%M:%S) Dump verworfen (keine COPY-Statements) — latest.sql.gz unveraendert"
+            rm -f "$tmp"
+            return 1
+        fi
+
         mv "$tmp" "$final"
         ln -sf "$final" "$PG_BACKUP_LATEST"
         # Nur die letzten 5 Backups behalten
@@ -335,7 +327,7 @@ pg_backup_dump() {
         echo "[PG-BACKUP] $(date +%H:%M:%S) Dump: $(basename $final) ($(du -h $final | cut -f1))"
     else
         rm -f "$tmp"
-        echo "[PG-BACKUP] $(date +%H:%M:%S) Dump fehlgeschlagen"
+        echo "[PG-BACKUP] $(date +%H:%M:%S) Dump fehlgeschlagen (pg_dump exit-code $?)"
     fi
 }
 export -f pg_backup_dump

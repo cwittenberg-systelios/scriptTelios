@@ -697,10 +697,7 @@ async def transcribe_audio(file_path: Path) -> dict:
     import asyncio
     asyncio.ensure_future(_ollama_warmup())
 
-    # Audiodatei nach Transkription loeschen (Datenschutz / DSGVO)
-    if settings.DELETE_AUDIO_AFTER_TRANSCRIPTION and file_path.exists():
-        file_path.unlink()
-        logger.info("Audiodatei geloescht nach Transkription: %s", file_path.name)
+    # Audio bleibt erhalten — retention.py loescht nach 24h (v18)
 
     return result
 

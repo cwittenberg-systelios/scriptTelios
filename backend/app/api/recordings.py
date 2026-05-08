@@ -198,7 +198,7 @@ def _assert_owner(rec: Recording, therapeut_id: str) -> None:
 async def upload_recording(
     audio: UploadFile = File(...),
     label: Optional[str] = Form(None),
-    therapeut_id: Optional[str] = None,
+    therapeut_id: Optional[str] = Form(None),
     current_user: str = Depends(get_current_user),
 ):
     """Nimmt Audiodatei entgegen, speichert sie persistent und startet

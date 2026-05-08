@@ -1,19 +1,18 @@
 """
-ALTERNATIVE database.py (EMPFOHLEN):
+Datenbankverbindung (SQLAlchemy async + PostgreSQL).
 
-Da runpod-start.sh bereits ALLE Schema-Migrationen als Owner-User ausfuehrt
-(siehe Bash-Heredoc-Block ab Zeile 235), sind die Python-Migrationen
-redundant - und genau die Quelle deines Fehlers.
+Schema-Verwaltung:
+  Alle DDL-Operationen (CREATE/ALTER TABLE, Indizes, Owner, Privilegien)
+  passieren ausschliesslich in /workspace/scriptTelios/backend/scripts/schema.sql,
+  ausgefuehrt von runpod-start.sh als 'systelios'.
 
-Diese Variante:
-  - entfernt _MIGRATIONS / run_migrations komplett aus dem Standard-Pfad
-  - behaelt nur den Owner-Check als Diagnose-Tool beim Start
-  - run_migrations() bleibt als No-Op fuer Abwaertskompatibilitaet
-    (init_db ruft es noch auf, falls du es spaeter doch wieder brauchst)
+  Die App verbindet als 'systelios_app' (DML-only) und macht KEIN DDL mehr.
+  Insbesondere kein Base.metadata.create_all - das wuerde den App-User zum
+  Owner neuer Tabellen machen und die User-Trennung kaputtmachen.
 
-Wenn du die Migrationen NICHT in runpod-start.sh haben willst (z.B. in
-Nicht-RunPod-Deployments), nutze stattdessen die Variante mit
-DB_AUTO_FIX_OWNER=1 und einer separaten Migrations-Verbindung als Owner.
+ENV (optional):
+  DB_EXPECTED_OWNER   Erwarteter Owner aller App-Tabellen (z.B. 'systelios').
+                      Wenn gesetzt, wird beim Start als Diagnose geprueft.
 """
 import logging
 import os
@@ -38,10 +37,13 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
+# Alias für Background-Tasks die ihre eigene Session erstellen müssen
 async_session_factory = AsyncSessionLocal
 
 
 class Base(DeclarativeBase):
+    """SQLAlchemy-Base. Wird nur fuer Modell-Definitionen genutzt,
+    NICHT mehr fuer create_all (siehe Modul-Docstring)."""
     pass
 
 
@@ -52,36 +54,21 @@ async def get_db() -> AsyncSession:  # type: ignore[return]
 
 async def init_db() -> None:
     """
-    Tabellen anlegen (beim ersten Start), pgvector-Extension aktivieren.
+    Beim Backend-Start aufrufen.
 
-    Schema-Migrationen werden NICHT mehr hier ausgefuehrt - sie laufen in
-    runpod-start.sh als Owner-User (systelios). Diese init_db braucht nur
-    DDL-Rechte fuer create_all (ungenutzt im laufenden Betrieb).
+    Macht KEIN DDL mehr - das ist Aufgabe von runpod-start.sh + schema.sql.
+    Hier nur:
+      - Owner-Diagnose (Warnung im Log, falls Mismatch)
+      - Sanity-Check, dass alle erwarteten Tabellen existieren
     """
-    if "postgresql" in settings.DATABASE_URL:
-        try:
-            async with engine.connect() as conn:
-                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-                await conn.commit()
-        except Exception:
-            pass
+    if "postgresql" not in settings.DATABASE_URL:
+        return
 
-    # create_all ist idempotent. Wenn der App-User keine CREATE-Rechte hat,
-    # passiert nichts (Tabellen wurden bereits in runpod-start.sh angelegt).
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-    except Exception as exc:
-        logger.info(
-            "create_all uebersprungen (vermutlich durch Bash-Migration "
-            "bereits abgedeckt): %s", exc
-        )
-
-    # Diagnose-Owner-Check
     await _check_table_ownership()
+    await _check_required_tables()
 
 
-# ── Owner-Check (Diagnose) ────────────────────────────────────────────────────
+# ── Owner-Diagnose ────────────────────────────────────────────────────────────
 EXPECTED_OWNER = os.environ.get("DB_EXPECTED_OWNER")
 
 _OWNER_CHECK_SQL = text("""
@@ -95,7 +82,7 @@ _OWNER_CHECK_SQL = text("""
 
 async def _check_table_ownership() -> None:
     """Warnt bei Owner-Mismatch. Korrektur passiert in runpod-start.sh."""
-    if not EXPECTED_OWNER or "postgresql" not in settings.DATABASE_URL:
+    if not EXPECTED_OWNER:
         return
     try:
         async with engine.connect() as conn:
@@ -110,21 +97,38 @@ async def _check_table_ownership() -> None:
     if mismatches:
         logger.warning(
             "Owner-Mismatch: %d Tabelle(n) gehoeren nicht '%s': %s. "
-            "Naechster Pod-Restart heilt das automatisch (runpod-start.sh).",
+            "Naechster Pod-Restart heilt das (runpod-start.sh + schema.sql).",
             len(mismatches),
             EXPECTED_OWNER,
             ", ".join(f"{t}={o}" for t, o in mismatches),
         )
 
 
-async def run_migrations() -> None:
-    """
-    No-op fuer Abwaertskompatibilitaet.
+# ── Sanity-Check: alle benoetigten Tabellen vorhanden? ───────────────────────
+_REQUIRED_TABLES = ("jobs", "recordings", "style_profiles", "style_embeddings")
 
-    Schema-Migrationen laufen in runpod-start.sh als Owner-User (systelios).
-    Dort sind sie auch besser aufgehoben:
-      - laufen vor dem Backend-Start (kein Race)
-      - laufen mit DDL-Rechten (kein Permission-Problem)
-      - sind im Server-Log und nicht im Backend-Log sichtbar
-    """
-    return
+_TABLE_CHECK_SQL = text("""
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tablename = ANY(:names)
+""")
+
+
+async def _check_required_tables() -> None:
+    """Logt eine klare Fehlermeldung, wenn schema.sql nicht eingespielt wurde."""
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                _TABLE_CHECK_SQL, {"names": list(_REQUIRED_TABLES)}
+            )
+            existing = {row.tablename for row in result}
+    except Exception as exc:
+        logger.error("Tabellen-Check fehlgeschlagen: %s", exc)
+        return
+
+    missing = set(_REQUIRED_TABLES) - existing
+    if missing:
+        logger.error(
+            "Tabellen fehlen: %s. Bitte schema.sql via runpod-start.sh "
+            "einspielen. Die App wird mit Fehlern reagieren.",
+            sorted(missing),
+        )
