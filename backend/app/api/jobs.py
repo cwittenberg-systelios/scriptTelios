@@ -281,6 +281,7 @@ async def create_generate_job(
     current_user:     str = Depends(get_current_user),
     diagnosen:        Annotated[Optional[str], Form()] = None,
     transcript:       Annotated[Optional[str], Form()] = None,
+    p0_recording_id:  Annotated[Optional[str], Form(description="P0-Recording-ID: Transkript wird aus DB geholt, ggf. priorisiert transkribiert.")] = None,
     bullets:          Annotated[Optional[str], Form(description="Stichpunkte (P1) oder Fokus-Themen (P3/P4)")] = None,
     style_text:       Annotated[Optional[str], Form()] = None,
     model:            Annotated[Optional[str], Form()] = None,
@@ -393,6 +394,54 @@ async def create_generate_job(
             if "transcription" in bands:
                 job.set_progress(bands["transcription"][1])
             transkript_text = tr["transcript"]
+
+        # ── 1b. P0-Recording: Transkript aus DB holen (ggf. warten) ──
+        # Wenn kein Transkript direkt mitgegeben wurde aber eine Recording-ID,
+        # holt jobs.py das Transkript selbst. Ist die Aufnahme noch nicht
+        # fertig transkribiert, wird sie in der P0-Queue priorisiert und
+        # der Job wartet bis sie bereit ist (max. 10 Min).
+        if not transkript_text and p0_recording_id:
+            rec_id_int = None
+            try:
+                rec_id_int = int(p0_recording_id)
+            except (ValueError, TypeError):
+                logger.warning("Ungültige p0_recording_id: %r", p0_recording_id)
+
+            if rec_id_int is not None:
+                from app.core.database import async_session_factory as _asf
+                from app.models.db import Recording as _Recording
+                from sqlalchemy import select as _sel
+                from app.core.files import recordings_dir
+
+                async with _asf() as _db:
+                    _res = await _db.execute(
+                        _sel(_Recording).where(_Recording.id == rec_id_int)
+                    )
+                    _rec = _res.scalar_one_or_none()
+
+                if _rec and _rec.transcript:
+                    # Bereits fertig — direkt verwenden
+                    transkript_text = _rec.transcript
+                    logger.info("P0-Recording %d: Transkript aus DB (%d Wörter)",
+                                rec_id_int, len(transkript_text.split()))
+                elif _rec and _rec.status in ("uploading", "transcribing"):
+                    # Noch nicht fertig → priorisieren + warten
+                    from app.api.recordings import reprioritize_recording, wait_for_transcript
+                    audio_path_rec = recordings_dir() / _rec.filename
+                    if audio_path_rec.exists():
+                        await reprioritize_recording(rec_id_int, audio_path_rec)
+                    job.set_progress(5, "Warte auf Transkription",
+                                     "Aufnahme wird priorisiert transkribiert…")
+                    transkript_text = await wait_for_transcript(rec_id_int, timeout_s=600) or ""
+                    if transkript_text:
+                        logger.info("P0-Recording %d: Transkript nach Wartezeit (%d Wörter)",
+                                    rec_id_int, len(transkript_text.split()))
+                    else:
+                        logger.warning("P0-Recording %d: Transkript nach Timeout nicht verfügbar", rec_id_int)
+                elif _rec and _rec.status == "error":
+                    logger.warning("P0-Recording %d: Status=error, kein Transkript verfügbar", rec_id_int)
+                else:
+                    logger.warning("P0-Recording %d: nicht gefunden oder unbekannter Status", rec_id_int)
 
         # Cancel-Check nach Transkription (teuerster Schritt)
         if job._cancel_requested:

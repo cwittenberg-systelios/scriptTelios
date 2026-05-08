@@ -32,7 +32,42 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/recordings", tags=["Aufnahmen"])
 
 _PRIO_P0 = 10
+_PRIO_URGENT = 1  # Wenn Nutzer eine noch-transcribierende Aufnahme auswählt
 p0_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
+
+
+async def reprioritize_recording(rec_id: int, audio_path: Path) -> None:
+    """Stellt eine Aufnahme mit höchster Priorität erneut in die Queue.
+    Wird von jobs.py aufgerufen wenn p0_recording_id übergeben wird aber
+    das Transkript noch fehlt. Der p0_worker verarbeitet sie als nächstes.
+    """
+    await p0_queue.put((_PRIO_URGENT, rec_id, audio_path))
+    logger.info("Recording %d mit Priorität %d neu in Queue gestellt", rec_id, _PRIO_URGENT)
+
+
+async def wait_for_transcript(rec_id: int, timeout_s: int = 600) -> Optional[str]:
+    """Wartet bis das Transkript für rec_id verfügbar ist (max. timeout_s Sekunden).
+    Gibt das Transkript zurück oder None bei Timeout/Fehler.
+    Wird von jobs.py aufgerufen wenn transcript-Feld fehlt aber p0_recording_id gesetzt.
+    """
+    import time
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(Recording).where(Recording.id == rec_id)
+            )
+            rec = result.scalar_one_or_none()
+        if not rec:
+            return None
+        if rec.status == "ready" and rec.transcript:
+            return rec.transcript
+        if rec.status == "error":
+            logger.warning("Recording %d Transkription fehlgeschlagen — kann nicht auf Transkript warten", rec_id)
+            return None
+        await asyncio.sleep(5)
+    logger.warning("wait_for_transcript: Timeout nach %ds für Recording %d", timeout_s, rec_id)
+    return None
 
 
 async def _active_job_running() -> bool:

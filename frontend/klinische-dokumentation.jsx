@@ -9,7 +9,8 @@ const apiFetch = (url, opts) => {
   if (typeof window !== "undefined" && window.signedFetch) {
     return window.signedFetch(url, opts);
   }
-  return apiFetch(url, opts);
+  // Fallback: natives fetch ohne Auth-Header (Dev-Modus / AUTH_ENABLED=false)
+  return fetch(url, opts);
 };
 
 function JobProgressBar({ jobId }) {
@@ -722,8 +723,16 @@ const AUDIO_IDB_KEY   = "current";
 
 function idbOpen() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(AUDIO_IDB_NAME, 1);
-    req.onupgradeneeded = (e) => { e.target.result.createObjectStore(AUDIO_IDB_STORE); };
+    const req = indexedDB.open(AUDIO_IDB_NAME, 2);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(AUDIO_IDB_STORE)) {
+        db.createObjectStore(AUDIO_IDB_STORE);
+      }
+      if (!db.objectStoreNames.contains(OFFLINE_IDB_STORE)) {
+        db.createObjectStore(OFFLINE_IDB_STORE, { keyPath: "id" });
+      }
+    };
     req.onsuccess = (e) => resolve(e.target.result);
     req.onerror   = (e) => reject(e.target.error);
   });
@@ -1050,10 +1059,31 @@ function AudioInput({ file, onFile }) {
   const [p0List, setP0List]       = useState([]);
   const [p0Loading, setP0Loading] = useState(false);
   const [p0Error, setP0Error]     = useState(null);
-  const [p0Selected, setP0Selected] = useState(null); // { id, label, transcript, duration_s, created_at }
+  const [p0Selected, setP0Selected] = useState(null);
 
-  // P0-Aufnahmen beim Mounten sofort laden (mode ist immer "p0")
+  // P0-Aufnahmen beim Mounten sofort laden
   useEffect(() => { loadP0(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Polling für pending Items am Health-Intervall (30s) hängen statt eigenem Timer.
+  // Zusätzlich: st-health-ok bei Server-Rückkehr.
+  useEffect(() => {
+    const onHealthOk = () => loadP0();
+    window.addEventListener("st-health-ok", onHealthOk);
+    return () => window.removeEventListener("st-health-ok", onHealthOk);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Eigenes Polling nur solange transcribing-Items vorhanden (30s, wie Health)
+  const p0PollRef = useRef(null);
+  useEffect(() => {
+    const hasPending = p0List.some(r => r.status === "uploading" || r.status === "transcribing");
+    if (hasPending && !p0PollRef.current) {
+      p0PollRef.current = setInterval(loadP0, 30000);
+    } else if (!hasPending && p0PollRef.current) {
+      clearInterval(p0PollRef.current);
+      p0PollRef.current = null;
+    }
+    return () => { if (p0PollRef.current) { clearInterval(p0PollRef.current); p0PollRef.current = null; } };
+  }, [p0List]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleFile(f) {
     setRecError(null);
@@ -1081,9 +1111,14 @@ function AudioInput({ file, onFile }) {
     setP0Loading(true);
     setP0Error(null);
     try {
-      const res = await apiFetch(`${getApiBase()}/recordings`);
+      const tid = getConfluenceUser();
+      const url = tid
+        ? `${getApiBase()}/recordings?therapeut_id=${encodeURIComponent(tid)}`
+        : `${getApiBase()}/recordings`;
+      const res = await apiFetch(url);
       const all = await res.json();
-      setP0List(all.filter(r => r.status === "ready"));
+      // Alle nicht-gelöschten Aufnahmen anzeigen (auch transcribing/uploading)
+      setP0List(all.filter(r => r.status !== "deleted"));
     } catch (e) {
       setP0Error("Aufnahmen konnten nicht geladen werden.");
     } finally {
@@ -1113,10 +1148,15 @@ function AudioInput({ file, onFile }) {
   if (file) {
     // P0-Recording gesetzt
     if (file.__p0recording) {
+      const isPending = !file.transcript;
       return (
         <div className="recorder-box" style={{ background: "var(--st-red-pale)", borderColor: "var(--st-red)", borderStyle: "solid" }}>
           <div className="rec-status">&#127897; {file.name}</div>
-          <div className="rec-info">Transkript aus P0 · {file.transcript ? Math.round(file.transcript.split(" ").length) + " Wörter" : "–"}</div>
+          <div className="rec-info">
+            {isPending
+              ? <span style={{color:"#0060c0"}}>⏳ Transkription läuft – wird beim Generieren priorisiert</span>
+              : `Transkript aus P0 · ${Math.round(file.transcript.split(" ").length)} Wörter`}
+          </div>
           <div className="rec-buttons">
             <button className="rec-btn rec-btn-pause" onClick={clearP0}>Entfernen</button>
           </div>
@@ -1171,15 +1211,34 @@ function AudioInput({ file, onFile }) {
             </button>
           </div>
         )}
-        {p0List.map(r => (
-          <div key={r.id} className="p0-picker-item" onClick={() => pickP0(r)}>
-            <span className="p0-picker-label">{r.label || <em>Ohne Beschriftung</em>}</span>
-            <span className="p0-picker-meta">
-              {r.created_at ? new Date(r.created_at).toLocaleDateString("de-DE", {day:"2-digit",month:"2-digit",year:"2-digit"}) : ""}
-              {r.duration_s ? ` · ${Math.floor(r.duration_s/60)}:${String(Math.floor(r.duration_s%60)).padStart(2,"0")}` : ""}
-            </span>
-          </div>
-        ))}
+        {p0List.map(r => {
+          const isReady = r.status === "ready";
+          const isPending = r.status === "uploading" || r.status === "transcribing";
+          const isError = r.status === "error";
+          const statusLabel = isPending
+            ? (r.status === "transcribing" ? "⏳ Transkription läuft…" : "⏳ Wird hochgeladen…")
+            : isError ? "⚠️ Fehler" : null;
+          return (
+            <div
+              key={r.id}
+              className="p0-picker-item"
+              onClick={() => !isError && pickP0(r)}
+              style={isError ? { opacity: 0.5, cursor: "default" } : {}}
+              title={isPending ? "Transkription läuft – wird beim Generieren priorisiert" : isError ? (r.error_msg || "Fehler") : "Aufnahme auswählen"}
+            >
+              <span className="p0-picker-label">{r.label || <em>Ohne Beschriftung</em>}</span>
+              <span className="p0-picker-meta">
+                {statusLabel
+                  ? <span style={{color: isPending ? "#0060c0" : "#c02020", fontWeight:600}}>{statusLabel}</span>
+                  : <>
+                      {r.created_at ? new Date(r.created_at).toLocaleDateString("de-DE", {day:"2-digit",month:"2-digit",year:"2-digit"}) : ""}
+                      {r.duration_s ? ` · ${Math.floor(r.duration_s/60)}:${String(Math.floor(r.duration_s%60)).padStart(2,"0")}` : ""}
+                    </>
+                }
+              </span>
+            </div>
+          );
+        })}
         {p0List.length > 0 && (
           <div style={{marginTop:6,textAlign:"right"}}>
             <button
@@ -1354,7 +1413,7 @@ function PromptEditor({ value, onChange, def }) {
   );
 }
 
-function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownload, extraButtons = [] }) {
+function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownload, extraButtons = [], warn = null }) {
   const empty = !text && !loading;
   return (
     <div className="output-card">
@@ -1378,7 +1437,11 @@ function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownlo
       <div className={"output-text" + (empty ? " empty" : "")}>
         {loading
           ? (jobId ? <JobProgressBar jobId={jobId} /> : "Wird generiert ...")
-          : (text || "Der generierte Text erscheint hier.")}
+          : text
+            ? text
+            : warn
+              ? <span style={{color:"var(--st-error,#b00)", fontStyle:"normal", fontWeight:500}}>{warn}</span>
+              : "Der generierte Text erscheint hier."}
       </div>
     </div>
   );
@@ -1485,14 +1548,15 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   if (files.patientName) fd.append("patientenname",   files.patientName);
 
   // Priorisierung der Gesprächsquelle:
-  // 1. P0-Recording (Transkript bereits vorhanden) → transcript + p0_recording_id
+  // 1. P0-Recording → p0_recording_id immer senden; transcript nur wenn vorhanden
   // 2. Audio-Datei (Upload) → audio-Feld, Backend transkribiert
-  // 3. Transkript-Datei (.txt/.docx) → transcript_file-Feld, Backend liest Text
-  // 4. Text direkt (userContent) → transcript-Feld
+  // 3. Transkript-Datei (.txt/.docx) → transcript_file-Feld
+  // 4. Text direkt → transcript-Feld
   if (files.audio && files.audio.__p0recording) {
-    fd.append("transcript", files.audio.transcript || userContent);
     fd.append("p0_recording_id", String(files.audio.id));
-    fd.append("priority",  "high");
+    fd.append("priority", "high");
+    // Transkript nur mitsenden wenn bereits vorhanden — sonst holt jobs.py es selbst
+    if (files.audio.transcript) fd.append("transcript", files.audio.transcript);
   } else if (files.audio) {
     fd.append("transcript", userContent);
     fd.append("audio",      files.audio);
@@ -1554,7 +1618,61 @@ async function downloadTranscript(jobId, filename = "transkript.txt") {
   URL.revokeObjectURL(url);
 }
 
+// ── Offline-Queue IndexedDB ──────────────────────────────────────────────────
+// Speichert Aufnahmen die gemacht wurden während der Server nicht erreichbar war.
+// Format: Array von { id: uuid, blob, name, type, label, savedAt }
+const OFFLINE_IDB_STORE = "offline_queue";
+
+
+async function offlineQueueAdd(file, label) {
+  try {
+    const db = await idbOpen();
+    const id = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36);
+    const tx = db.transaction(OFFLINE_IDB_STORE, "readwrite");
+    tx.objectStore(OFFLINE_IDB_STORE).put({
+      id, blob: file, name: file.name, type: file.type, label: label || "", savedAt: Date.now()
+    });
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+    db.close();
+    return id;
+  } catch (e) { console.warn("[offline-queue] Speichern fehlgeschlagen:", e); return null; }
+}
+
+async function offlineQueueList() {
+  try {
+    const db = await idbOpen();
+    const tx = db.transaction(OFFLINE_IDB_STORE, "readonly");
+    const items = await new Promise((res, rej) => {
+      const req = tx.objectStore(OFFLINE_IDB_STORE).getAll();
+      req.onsuccess = (e) => res(e.target.result);
+      req.onerror   = (e) => rej(e.target.error);
+    });
+    db.close();
+    return items.sort((a, b) => a.savedAt - b.savedAt);
+  } catch (e) { console.warn("[offline-queue] Laden fehlgeschlagen:", e); return []; }
+}
+
+async function offlineQueueRemove(id) {
+  try {
+    const db = await idbOpen();
+    const tx = db.transaction(OFFLINE_IDB_STORE, "readwrite");
+    tx.objectStore(OFFLINE_IDB_STORE).delete(id);
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+    db.close();
+  } catch (e) { console.warn("[offline-queue] Löschen fehlgeschlagen:", e); }
+}
+
 // ── Pages ────────────────────────────────────────────────────────
+
+
+// Gibt Warntext zurück wenn das generierte Ergebnis leer oder verdächtig kurz ist,
+// sonst null. Der Text wird direkt im Ausgabefeld angezeigt.
+function getEmptyWarning(text) {
+  if (!text || text.trim().length < 20) {
+    return "⚠️ Kein Ergebnis generiert – die Eingabe war möglicherweise zu kurz oder die Generierung wurde abgebrochen. Bitte Eingabe prüfen und erneut versuchen.";
+  }
+  return null;
+}
 
 // ── P0: Aufnahmen ─────────────────────────────────────────────────
 function P0({ toast }) {
@@ -1566,35 +1684,96 @@ function P0({ toast }) {
   const [submitting, setSubmitting]   = useState(false);
   const pollRef = useRef(null);
 
+  // Offline-Queue
+  const [offlineQueue, setOfflineQueue] = useState([]);
+  const [uploading, setUploading]       = useState(false); // Auto-Upload läuft
+  const uploadingRef = useRef(false);
+
+  // Offline-Queue aus IDB laden
+  const loadOfflineQueue = useCallback(async () => {
+    const items = await offlineQueueList();
+    setOfflineQueue(items);
+  }, []);
+
+  useEffect(() => { loadOfflineQueue(); }, [loadOfflineQueue]);
+
   const loadRecordings = useCallback(async () => {
     try {
-      const res = await apiFetch(`${getApiBase()}/recordings`);
+      const tid = getConfluenceUser();
+      const url = tid
+        ? `${getApiBase()}/recordings?therapeut_id=${encodeURIComponent(tid)}`
+        : `${getApiBase()}/recordings`;
+      const res = await apiFetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setRecordings(data);
       setError(null);
+      // Server erreichbar → Offline-Queue abarbeiten
+      flushOfflineQueue();
     } catch (e) {
-      // 1a: Fehler nur bei echtem Fehler anzeigen, nicht bei leerer Liste
-      setError(null);  // Keine Fehlermeldung wenn keine Aufnahmen vorhanden
+      setError(null);
       logger.debug && logger.debug("Aufnahmen laden fehlgeschlagen:", e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Offline-Queue hochladen sobald Server erreichbar
+  const flushOfflineQueue = useCallback(async () => {
+    if (uploadingRef.current) return;
+    const items = await offlineQueueList();
+    if (items.length === 0) return;
+    uploadingRef.current = true;
+    setUploading(true);
+    for (const item of items) {
+      try {
+        const form = new FormData();
+        const file = new File([item.blob], item.name, { type: item.type });
+        form.append("audio", file);
+        if (item.label) form.append("label", item.label);
+        const tid = getConfluenceUser();
+        if (tid) form.append("therapeut_id", tid);
+        const res = await apiFetch(`${getApiBase()}/recordings`, { method: "POST", body: form });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const newRec = await res.json();
+        await offlineQueueRemove(item.id);
+        setOfflineQueue(prev => prev.filter(q => q.id !== item.id));
+        setRecordings(prev => [newRec, ...prev]);
+        toast(`Offline-Aufnahme „${item.label || item.name}" hochgeladen`);
+      } catch (e) {
+        // Server wieder weg — abbrechen, Rest bleibt in Queue
+        logger.debug && logger.debug("Offline-Upload fehlgeschlagen:", e);
+        break;
+      }
+    }
+    uploadingRef.current = false;
+    setUploading(false);
+  }, [toast]);
 
   useEffect(() => { loadRecordings(); }, [loadRecordings]);
 
-  // Polling solange pending Jobs laufen
+  // Polling solange pending Transkriptionen laufen — nutzt Health-Intervall (30s)
+  // statt eigenem setInterval. Zusätzlich: st-health-ok feuert bei Server-Rückkehr.
   useEffect(() => {
     const hasPending = recordings.some(r => r.status === "uploading" || r.status === "transcribing");
+    if (!hasPending && !pollRef.current) return;
+
+    // Eigenes Polling nur wenn transcribing-Items vorhanden
     if (hasPending && !pollRef.current) {
-      pollRef.current = setInterval(loadRecordings, 4000);
+      pollRef.current = setInterval(loadRecordings, 30000);
     } else if (!hasPending && pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
   }, [recordings, loadRecordings]);
+
+  // Bei Server-Rückkehr: Liste neu laden + Offline-Queue hochladen
+  useEffect(() => {
+    const onHealthOk = () => { loadRecordings(); };
+    window.addEventListener("st-health-ok", onHealthOk);
+    return () => window.removeEventListener("st-health-ok", onHealthOk);
+  }, [loadRecordings]);
 
   function onRecorded(file) {
     setPendingFile(file);
@@ -1608,6 +1787,8 @@ function P0({ toast }) {
       const form = new FormData();
       form.append("audio", pendingFile);
       if (labelInput.trim()) form.append("label", labelInput.trim());
+      const tid = getConfluenceUser();
+      if (tid) form.append("therapeut_id", tid);
       const res = await apiFetch(`${getApiBase()}/recordings`, { method: "POST", body: form });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const newRec = await res.json();
@@ -1616,7 +1797,16 @@ function P0({ toast }) {
       setLabelInput("");
       toast("Aufnahme gespeichert – Transkription läuft im Hintergrund");
     } catch (e) {
-      toast("Upload fehlgeschlagen: " + e.message);
+      // Server nicht erreichbar → in Offline-Queue speichern
+      try {
+        await offlineQueueAdd(pendingFile, labelInput.trim());
+        await loadOfflineQueue();
+        setPendingFile(null);
+        setLabelInput("");
+        toast("Server nicht erreichbar – Aufnahme lokal gespeichert. Upload erfolgt automatisch wenn der Server wieder erreichbar ist.");
+      } catch (e2) {
+        toast("Speichern fehlgeschlagen: " + e.message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -1725,6 +1915,42 @@ function P0({ toast }) {
           </Card>
 
           <Card num="B" title="Aufnahmen" open={true}>
+            {/* Offline-Queue: Aufnahmen die noch nicht hochgeladen wurden */}
+            {offlineQueue.length > 0 && (
+              <div style={{marginBottom:12, padding:"10px 12px", background:"#fff8e1", border:"1px solid #f0c040", borderRadius:6}}>
+                <div style={{fontSize:12, fontWeight:600, color:"#7a5800", marginBottom:6}}>
+                  📵 {offlineQueue.length} Aufnahme{offlineQueue.length > 1 ? "n" : ""} lokal gespeichert (warten auf Upload)
+                  {uploading && <span style={{marginLeft:8, fontWeight:400}}>Wird hochgeladen…</span>}
+                </div>
+                {offlineQueue.map(item => (
+                  <div key={item.id} style={{display:"flex", alignItems:"center", gap:8, marginBottom:4, fontSize:12}}>
+                    <span style={{flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                      {item.label || item.name}
+                    </span>
+                    <span style={{color:"#999", flexShrink:0}}>
+                      {new Date(item.savedAt).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"})}
+                    </span>
+                    <button
+                      style={{fontSize:11, padding:"1px 7px", border:"1px solid #ccc", borderRadius:3, background:"transparent", cursor:"pointer", flexShrink:0}}
+                      onClick={async () => {
+                        if (!window.confirm("Offline-Aufnahme löschen?")) return;
+                        await offlineQueueRemove(item.id);
+                        loadOfflineQueue();
+                      }}
+                    >✕</button>
+                  </div>
+                ))}
+                {!uploading && (
+                  <button
+                    className="btn-secondary"
+                    style={{fontSize:11, padding:"3px 10px", marginTop:4}}
+                    onClick={flushOfflineQueue}
+                  >
+                    Jetzt hochladen
+                  </button>
+                )}
+              </div>
+            )}
             {loading && <div className="p0-hint">Lade…</div>}
             {error   && <div className="upload-warn">{error}</div>}
             {!loading && recordings.length === 0 && (
@@ -1806,6 +2032,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
   const [styleText, setStyleText] = useState("");
   const [prompt, setPrompt] = useState(P_DOKU);
   const [out, setOut]           = useState("");
+  const [outWarn, setOutWarn]       = useState(null);
   const [lastJobId, setLastJobId] = useState(null);
   const [hasTranscript, setHasTranscript] = useState(false);
   const [busy, setBusy]         = useState(false);
@@ -1888,6 +2115,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
       }, "p1");
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
+      setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
       idbClearAudio().catch(() => {}); // Aufnahme nach Job-Start nicht mehr benötigt
@@ -2022,7 +2250,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId}
+          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
             onCopy={() => { navigator.clipboard.writeText(out); toast("In Zwischenablage kopiert"); }}
             extraButtons={hasTranscript ? [
               { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
@@ -2058,6 +2286,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
   // v18: Befund-Vorlage als separates editierbares Feld
   const [befundVorlage, setBefundVorlage] = useState(P_BEFUND_VORLAGE);
   const [out, setOut]             = useState("");
+  const [outWarn, setOutWarn]       = useState(null);
   const [befundOut, setBefundOut] = useState("");
   const [tab, setTab]             = useState("Anamnese");
   const [lastJobId, setLastJobId] = useState(null);
@@ -2146,6 +2375,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
       }, "p2");
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
+      setOutWarn(getEmptyWarning(result.text));
       setBefundOut(result.befundText || "");
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
@@ -2275,6 +2505,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
           </div>
 
           <Output text={tab === "Anamnese" ? out : befundOut} loading={busy} jobId={currentJobId}
+            warn={tab === "Anamnese" ? outWarn : (befundOut ? null : outWarn)}
             tabs={["Anamnese", "Psych. Befund"]}
             activeTab={tab} onTab={setTab}
             onCopy={() => {
@@ -2292,7 +2523,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
                 setSelbst(null); setBefunde(null); setAudio(null); idbClearAudio().catch(() => {});
                 setTxtFile(null);
                 setText(""); setDx([]); setStyle(null); setStyleText("");
-                setOut(""); setBefundOut("");
+                setOut(""); setBefundOut(""); setOutWarn(null);
                 setLastJobId(null); setHasTranscript(false);
                 toast("Formular zurückgesetzt");
               }}>+ Neue Anamnese</button>
@@ -2318,6 +2549,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
+  const [outWarn, setOutWarn]       = useState(null);
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -2353,7 +2585,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
     const ac = new AbortController();
     abortRef.current = ac;
     setBusy(true);
-    setOut("");
+    setOut(""); setOutWarn(null);
     setLastJobId(null);
     try {
       let patientNameExplicit = null;
@@ -2375,6 +2607,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
       }, "p2b");
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
+      setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -2470,14 +2703,14 @@ function P2b({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId}
+          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setAntrag(null); setStyle(null); setStyleText("");
-                setFokus(""); setPrompt(P_AKUT); setOut(""); setLastJobId(null);
+                setFokus(""); setPrompt(P_AKUT); setOut(""); setOutWarn(null); setLastJobId(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Akutantrag</button>
             </div>
@@ -2501,6 +2734,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
+  const [outWarn, setOutWarn]       = useState(null);
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -2537,7 +2771,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
     const ac = new AbortController();
     abortRef.current = ac;
     setBusy(true);
-    setOut("");
+    setOut(""); setOutWarn(null);
     setLastJobId(null);
     try {
       // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
@@ -2562,6 +2796,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
       }, "p3");
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
+      setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -2636,14 +2871,14 @@ function P3({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId}
+          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setAntrag(null); setStyle(null); setStyleText("");
-                setFokus(""); setPrompt(P_VERL); setOut(""); setLastJobId(null);
+                setFokus(""); setPrompt(P_VERL); setOut(""); setOutWarn(null); setLastJobId(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Verlängerungsantrag</button>
             </div>
@@ -2673,6 +2908,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
+  const [outWarn, setOutWarn]       = useState(null);
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -2708,7 +2944,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
     const ac = new AbortController();
     abortRef.current = ac;
     setBusy(true);
-    setOut("");
+    setOut(""); setOutWarn(null);
     setLastJobId(null);
     try {
       let patientNameExplicit = null;
@@ -2732,6 +2968,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
       }, "p3b");
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
+      setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -2837,7 +3074,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId}
+          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
           {out && (
@@ -2845,7 +3082,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setAntrag(null); setVorantrag(null);
                 setStyle(null); setStyleText("");
-                setFokus(""); setPrompt(P_VERL_FOLGE); setOut(""); setLastJobId(null);
+                setFokus(""); setPrompt(P_VERL_FOLGE); setOut(""); setOutWarn(null); setLastJobId(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neue Folgeverlängerung</button>
             </div>
@@ -2869,6 +3106,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
+  const [outWarn, setOutWarn]       = useState(null);
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -2905,7 +3143,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
     const ac = new AbortController();
     abortRef.current = ac;
     setBusy(true);
-    setOut("");
+    setOut(""); setOutWarn(null);
     setLastJobId(null);
     try {
       // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
@@ -2929,6 +3167,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
       }, "p4");
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
+      setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -3003,14 +3242,14 @@ function P4({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId}
+          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setBericht(null); setStyle(null); setStyleText("");
-                setFokus(""); setPrompt(P_ENTL); setOut(""); setLastJobId(null);
+                setFokus(""); setPrompt(P_ENTL); setOut(""); setOutWarn(null); setLastJobId(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Entlassbericht</button>
             </div>
@@ -3483,9 +3722,9 @@ export default function App() {
     toast("Backend-URL gespeichert");
   };
 
-  const toast = useCallback((t) => {
+  const toast = useCallback((t, opts) => {
     setMsg(t);
-    setTimeout(() => setMsg(null), 2400);
+    setTimeout(() => setMsg(null), (opts && opts.duration) || 2400);
   }, []);
 
   // Beim ersten Start ohne URL: Settings automatisch öffnen
@@ -3494,15 +3733,27 @@ export default function App() {
 
   // Backend-Erreichbarkeit prüfen (alle 30 Sekunden)
   const [backendOffline, setBackendOffline] = useState(false);
+  const wasOfflineRef = useRef(false);
   useEffect(() => {
     if (!backendUrl) return;
     let cancelled = false;
     const check = () => {
       apiFetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(5000) })
-        .then(r => { if (!cancelled) setBackendOffline(!r.ok); })
-        .catch(() => { if (!cancelled) setBackendOffline(true); });
+        .then(r => {
+          if (cancelled) return;
+          const offline = !r.ok;
+          setBackendOffline(offline);
+          if (!offline && wasOfflineRef.current) {
+            // Server wieder erreichbar → alle Komponenten informieren
+            window.dispatchEvent(new CustomEvent("st-health-ok"));
+          }
+          wasOfflineRef.current = offline;
+        })
+        .catch(() => {
+          if (!cancelled) { setBackendOffline(true); wasOfflineRef.current = true; }
+        });
     };
-    check(); // sofort prüfen
+    check();
     const interval = setInterval(check, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [backendUrl]);
