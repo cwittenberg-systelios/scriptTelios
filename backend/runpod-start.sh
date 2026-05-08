@@ -268,8 +268,31 @@ if [ "$FRESH_INSTALL" = "true" ]; then
 fi
 
 # ── 5. Schema einspielen (Single Source of Truth) ──────────────────────────
-# SET ROLE systelios -> alle CREATE/ALTER laufen unter Owner-Identitaet,
-# neue Objekte gehoeren automatisch 'systelios'. Owner-Reparatur und
+# Owner-Heilung MUSS als Cluster-Superuser laufen (nicht via SET ROLE), weil
+# ALTER ... OWNER TO neuer_owner verlangt, dass der ausfuehrende User Mitglied
+# beider Owner-Rollen ist. Cluster-Superuser umgeht das.
+su -m "$PG_USER" -c "psql -d systelios -v ON_ERROR_STOP=0 -X" >/dev/null 2>&1 <<'OWNERSQL'
+DO $$
+DECLARE r record;
+BEGIN
+    FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+        EXECUTE format('ALTER TABLE public.%I OWNER TO systelios', r.tablename);
+    END LOOP;
+    FOR r IN SELECT sequence_name FROM information_schema.sequences
+             WHERE sequence_schema = 'public' LOOP
+        EXECUTE format('ALTER SEQUENCE public.%I OWNER TO systelios', r.sequence_name);
+    END LOOP;
+    FOR r IN SELECT t.typname FROM pg_type t
+             JOIN pg_namespace n ON n.oid = t.typnamespace
+             WHERE n.nspname = 'public' AND t.typtype = 'e' LOOP
+        EXECUTE format('ALTER TYPE public.%I OWNER TO systelios', r.typname);
+    END LOOP;
+END $$;
+OWNERSQL
+echo "${OK}Owner-Heilung (Tabellen, Sequenzen, Types) als Superuser ausgefuehrt"
+
+# Schema einspielen mit SET ROLE systelios -> alle CREATE/ALTER laufen unter
+# Owner-Identitaet, neue Objekte gehoeren automatisch 'systelios'.
 # App-User-Privilegien sind Teil von schema.sql.
 SCHEMA_FILE="$BACKEND_DIR/scripts/schema.sql"
 if [ -f "$SCHEMA_FILE" ]; then

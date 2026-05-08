@@ -134,27 +134,12 @@ CREATE INDEX IF NOT EXISTS ix_style_embeddings_dokumenttyp
     ON style_embeddings (dokumenttyp);
 
 -- ── E. Owner-Reparatur ─────────────────────────────────────────────────────
--- Tabellen, die in frueheren Pod-Generationen vom Cluster-Superuser oder
--- App-User angelegt wurden, werden hier auf 'systelios' umgehaengt.
--- Setzt voraus, dass aktueller User Mitglied von 'systelios' ist
--- (siehe runpod-start.sh: GRANT systelios TO ...).
-DO $$
-DECLARE r record;
-BEGIN
-    FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
-        EXECUTE format('ALTER TABLE public.%I OWNER TO systelios', r.tablename);
-    END LOOP;
-    FOR r IN SELECT sequence_name FROM information_schema.sequences
-             WHERE sequence_schema = 'public' LOOP
-        EXECUTE format('ALTER SEQUENCE public.%I OWNER TO systelios', r.sequence_name);
-    END LOOP;
-    -- Enum-Typen: pg_type.typtype='e' = Enum
-    FOR r IN SELECT t.typname FROM pg_type t
-             JOIN pg_namespace n ON n.oid = t.typnamespace
-             WHERE n.nspname = 'public' AND t.typtype = 'e' LOOP
-        EXECUTE format('ALTER TYPE public.%I OWNER TO systelios', r.typname);
-    END LOOP;
-END $$;
+-- WICHTIG: Owner-Heilung wird NICHT mehr hier durchgefuehrt.
+-- ALTER ... OWNER TO neuer_owner verlangt Mitgliedschaft in beiden Owner-Rollen.
+-- 'systelios' (durch SET ROLE in runpod-start.sh) ist nicht Mitglied von
+-- 'systelios_app' oder 'systelios_pg' -> Heilung wuerde still scheitern.
+-- Loesung: runpod-start.sh fuehrt die Owner-Heilung als Cluster-Superuser
+-- aus, BEVOR diese schema.sql geladen wird.
 
 -- ── F. Privilegien fuer App-User ───────────────────────────────────────────
 -- DML-only, kein DDL. Default-Privileges sorgen dafuer, dass kuenftige
