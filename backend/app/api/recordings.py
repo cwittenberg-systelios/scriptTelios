@@ -187,7 +187,11 @@ def _rec_to_out(r: Recording) -> RecordingOut:
 def _assert_owner(rec: Recording, therapeut_id: str) -> None:
     """Wirft 403 wenn das Recording einem anderen Therapeuten gehört.
     Aufnahmen ohne therapeut_id (vor v18 angelegt) sind für alle sichtbar.
+    Im Dev-Modus (AUTH_ENABLED=False) wird der Check übersprungen.
     """
+    from app.core.config import settings as _settings
+    if not _settings.AUTH_ENABLED:
+        return
     if rec.therapeut_id and rec.therapeut_id != therapeut_id:
         raise HTTPException(status_code=403, detail="Zugriff verweigert")
 

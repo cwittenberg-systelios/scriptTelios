@@ -25,11 +25,23 @@ EMBEDDING_DIM   = 768
 MAX_EXAMPLES    = 5   # Maximale Anzahl Beispiele im Prompt
 TOP_K_SEMANTIC  = 3   # Wie viele semantisch aehnliche Beispiele gesucht werden
 
+# nomic-embed-text Context-Window: 8192 Tokens (~28000 Zeichen).
+# Beim Such-Query (Transkript) wird auf diesen Wert gekuerzt - die ersten
+# Zeichen reichen fuer die semantische Aehnlichkeitssuche aus.
+# Beim Stil-Upload (Speichern) wird NICHT gekuerzt - dort soll ein zu langes
+# Beispiel sichtbar fehlschlagen, damit der User es kuerzt.
+MAX_QUERY_CHARS = 24000
+
 
 async def get_embedding(text: str) -> list[float] | None:
     """
     Erzeugt einen Vektor fuer den gegebenen Text via Ollama.
-    Gibt None zurueck wenn Ollama nicht erreichbar oder Modell fehlt.
+    Gibt None zurueck wenn Ollama nicht erreichbar oder Modell fehlt
+    oder Input das Context-Window des Embedding-Modells uebersteigt.
+
+    Hinweis: kein automatisches Truncate hier - Truncate-Logik liegt
+    beim Aufrufer (siehe retrieve_style_examples). So scheitert ein
+    zu langer Stil-Upload sichtbar, statt still abgeschnitten zu werden.
     """
     from app.services.llm import _get_ollama_client
 
@@ -39,18 +51,27 @@ async def get_embedding(text: str) -> list[float] | None:
     try:
         r = await client.post("/api/embed", json=payload)
         if r.status_code == 400:
-            # 400 bedeutet meist: Modell nicht geladen / nicht gefunden.
-            # Ollama-Fehlermeldung loggen damit der User weiss was zu tun ist.
+            # 400 kann zwei Ursachen haben:
+            #   a) Modell nicht geladen / nicht gefunden
+            #   b) Input zu lang fuer Context-Window
             try:
                 err_detail = r.json().get("error", r.text)
             except Exception:
                 err_detail = r.text
-            logger.warning(
-                "Embedding-Modell '%s' nicht verfuegbar (HTTP 400: %s). "
-                "Bitte sicherstellen dass das Modell geladen ist: "
-                "ollama pull %s",
-                EMBEDDING_MODEL, err_detail, EMBEDDING_MODEL,
-            )
+
+            if "context length" in err_detail.lower() or "exceeds" in err_detail.lower():
+                logger.warning(
+                    "Embedding-Input zu lang fuer '%s' (%d Zeichen, Limit ca. %d). "
+                    "Aufrufer sollte vorher kuerzen. Ollama: %s",
+                    EMBEDDING_MODEL, len(text), MAX_QUERY_CHARS, err_detail,
+                )
+            else:
+                logger.warning(
+                    "Embedding-Modell '%s' nicht verfuegbar (HTTP 400: %s). "
+                    "Bitte sicherstellen dass das Modell geladen ist: "
+                    "ollama pull %s",
+                    EMBEDDING_MODEL, err_detail, EMBEDDING_MODEL,
+                )
             return None
         r.raise_for_status()
         data = r.json()
@@ -139,7 +160,16 @@ async def retrieve_style_examples(
 
     if remaining_slots > 0:
         # ── 2. Semantische Suche ──────────────────────────────────
-        query_embedding = await get_embedding(query_text)
+        # Transkript ist als Query oft zu lang fuers Embedding-Modell.
+        # Auf MAX_QUERY_CHARS truncaten - die ersten Zeichen (Vorgeschichte,
+        # Beschwerden, Hauptthemen) reichen fuer Aehnlichkeitssuche.
+        truncated_query = query_text[:MAX_QUERY_CHARS]
+        if len(query_text) > MAX_QUERY_CHARS:
+            logger.info(
+                "Query fuer Stil-Suche von %d auf %d Zeichen gekuerzt",
+                len(query_text), MAX_QUERY_CHARS,
+            )
+        query_embedding = await get_embedding(truncated_query)
 
         if query_embedding is not None:
             # IDs der statischen Beispiele ausschliessen
