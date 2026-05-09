@@ -1136,6 +1136,22 @@ function AudioInput({ file, onFile }) {
         : `${getApiBase()}/recordings`;
       const res = await apiFetch(url);
       const all = await res.json();
+
+      // Pending Labels flushen sobald Item ready
+      all.filter(r => r.status === "ready" && _pendingLabels[r.id] !== undefined)
+        .forEach(async r => {
+          const label = _pendingLabels[r.id];
+          delete _pendingLabels[r.id];
+          r.label = label;
+          try {
+            await apiFetch(`${getApiBase()}/recordings/${r.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ label }),
+            });
+          } catch (e) { /* ignorieren */ }
+        });
+
       setP0List(all.filter(r => r.status !== "deleted"));
     } catch (e) {
       setP0Error("Aufnahmen konnten nicht geladen werden.");
@@ -1610,6 +1626,11 @@ function getEmptyWarning(text) {
 }
 
 // Inline-Label-Editor: Klick auf Text → editierbar, Enter/Blur → speichern
+// Modul-level Cache: überlebt P0-Unmount beim Tab-Wechsel.
+// Wird beim Mount als Initialwert genutzt → Liste sofort sichtbar, kein Flackern.
+const _recordingsCache = { data: [] };
+const _pendingLabels   = {};  // { [id]: label } — überlebt P0-Unmount
+
 function LabelEdit({ value, placeholder, onSave }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft]     = useState(value);
@@ -1636,13 +1657,22 @@ function LabelEdit({ value, placeholder, onSave }) {
 }
 
 function P0({ toast }) {
-  const [recordings, setRecordings] = useState([]);
-  const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState(null);
+  const [recordings, setRecordingsRaw] = useState(_recordingsCache.data);
+  const [loading, setLoading]          = useState(_recordingsCache.data.length === 0);
+  const [error, setError]              = useState(null);
   const [offlineQueue, setOfflineQueue] = useState([]);
   const [uploading, setUploading]       = useState(false);
   const pollRef      = useRef(null);
   const uploadingRef = useRef(false);
+
+  // Wrapper: State + Modul-Cache synchron halten
+  function setRecordings(updater) {
+    setRecordingsRaw(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      _recordingsCache.data = next;
+      return next;
+    });
+  }
 
   const loadOfflineQueue = useCallback(async () => {
     const items = await offlineQueueList();
@@ -1689,6 +1719,24 @@ function P0({ toast }) {
       const res = await apiFetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+
+      // Pending Labels flushen: Items die jetzt ready sind und ein lokales Label haben
+      const flushPromises = data
+        .filter(r => r.status === "ready" && _pendingLabels[r.id] !== undefined)
+        .map(async r => {
+          const label = _pendingLabels[r.id];
+          delete _pendingLabels[r.id];
+          try {
+            await apiFetch(`${getApiBase()}/recordings/${r.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ label }),
+            });
+            r.label = label; // in-place für setRecordings unten
+          } catch (e) { /* Label-Flush fehlgeschlagen — ignorieren */ }
+        });
+      await Promise.all(flushPromises);
+
       setRecordings(data);
       setError(null);
       flushOfflineQueue();
@@ -1756,13 +1804,22 @@ function P0({ toast }) {
   }
 
   async function updateLabel(id, label) {
+    if (String(id).startsWith("tmp-")) return;
+    // Label sofort im State aktualisieren (optimistisch)
+    setRecordings(prev => prev.map(r => r.id === id ? { ...r, label } : r));
+    const rec = recordings.find(r => r.id === id);
+    if (rec && (rec.status === "uploading" || rec.status === "transcribing")) {
+      // Noch nicht ready → lokal merken, wird beim nächsten loadRecordings geflusht
+      _pendingLabels[id] = label;
+      return;
+    }
+    // Ready → sofort PATCH
     try {
       await apiFetch(`${getApiBase()}/recordings/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label }),
       });
-      setRecordings(prev => prev.map(r => r.id === id ? { ...r, label } : r));
     } catch (e) {
       toast("Label konnte nicht gespeichert werden");
     }
