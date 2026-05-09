@@ -1152,7 +1152,10 @@ function AudioInput({ file, onFile }) {
           } catch (e) { /* ignorieren */ }
         });
 
-      setP0List(all.filter(r => r.status !== "deleted"));
+      const withLabels = all.map(r =>
+        _pendingLabels[r.id] !== undefined ? { ...r, label: _pendingLabels[r.id] } : r
+      );
+      setP0List(withLabels.filter(r => r.status !== "deleted"));
     } catch (e) {
       setP0Error("Aufnahmen konnten nicht geladen werden.");
     } finally {
@@ -1666,11 +1669,15 @@ function P0({ toast }) {
   const uploadingRef = useRef(false);
 
   // Wrapper: State + Modul-Cache synchron halten
+  // Pending Labels immer einmergen damit sie nicht durch Server-Daten überschrieben werden
   function setRecordings(updater) {
     setRecordingsRaw(prev => {
       const next = typeof updater === "function" ? updater(prev) : updater;
-      _recordingsCache.data = next;
-      return next;
+      const merged = next.map(r =>
+        _pendingLabels[r.id] !== undefined ? { ...r, label: _pendingLabels[r.id] } : r
+      );
+      _recordingsCache.data = merged;
+      return merged;
     });
   }
 
