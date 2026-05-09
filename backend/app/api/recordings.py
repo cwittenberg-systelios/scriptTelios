@@ -38,17 +38,16 @@ p0_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
 
 async def reprioritize_recording(rec_id: int, audio_path: Path) -> None:
     """Stellt eine Aufnahme mit höchster Priorität erneut in die Queue.
-    Wird von jobs.py aufgerufen wenn p0_recording_id übergeben wird aber
-    das Transkript noch fehlt. Der p0_worker verarbeitet sie als nächstes.
+    Aufgerufen von jobs.py wenn p0_recording_id übergeben wird aber
+    das Transkript noch fehlt.
     """
     await p0_queue.put((_PRIO_URGENT, rec_id, audio_path))
-    logger.info("Recording %d mit Priorität %d neu in Queue gestellt", rec_id, _PRIO_URGENT)
+    logger.info("Recording %d mit Priorität %d neu in Queue", rec_id, _PRIO_URGENT)
 
 
 async def wait_for_transcript(rec_id: int, timeout_s: int = 600) -> Optional[str]:
     """Wartet bis das Transkript für rec_id verfügbar ist (max. timeout_s Sekunden).
     Gibt das Transkript zurück oder None bei Timeout/Fehler.
-    Wird von jobs.py aufgerufen wenn transcript-Feld fehlt aber p0_recording_id gesetzt.
     """
     import time
     deadline = time.monotonic() + timeout_s
@@ -63,7 +62,6 @@ async def wait_for_transcript(rec_id: int, timeout_s: int = 600) -> Optional[str
         if rec.status == "ready" and rec.transcript:
             return rec.transcript
         if rec.status == "error":
-            logger.warning("Recording %d Transkription fehlgeschlagen — kann nicht auf Transkript warten", rec_id)
             return None
         await asyncio.sleep(5)
     logger.warning("wait_for_transcript: Timeout nach %ds für Recording %d", timeout_s, rec_id)
@@ -102,6 +100,10 @@ async def p0_worker():
         except Exception as e:
             logger.exception("P0-Worker unerwarteter Fehler: %s", e)
             await asyncio.sleep(10)
+
+
+class RecordingPatch(BaseModel):
+    label: Optional[str] = None
 
 
 class RecordingOut(BaseModel):
@@ -187,11 +189,7 @@ def _rec_to_out(r: Recording) -> RecordingOut:
 def _assert_owner(rec: Recording, therapeut_id: str) -> None:
     """Wirft 403 wenn das Recording einem anderen Therapeuten gehört.
     Aufnahmen ohne therapeut_id (vor v18 angelegt) sind für alle sichtbar.
-    Im Dev-Modus (AUTH_ENABLED=False) wird der Check übersprungen.
     """
-    from app.core.config import settings as _settings
-    if not _settings.AUTH_ENABLED:
-        return
     if rec.therapeut_id and rec.therapeut_id != therapeut_id:
         raise HTTPException(status_code=403, detail="Zugriff verweigert")
 
@@ -202,15 +200,12 @@ def _assert_owner(rec: Recording, therapeut_id: str) -> None:
 async def upload_recording(
     audio: UploadFile = File(...),
     label: Optional[str] = Form(None),
-    therapeut_id: Optional[str] = Form(None),
     current_user: str = Depends(get_current_user),
 ):
     """Nimmt Audiodatei entgegen, speichert sie persistent und startet
     Transkription asynchron. Antwortet sofort (status=uploading).
     Audio bleibt 24h auf Disk (retention.py löscht danach automatisch).
-    Query-Parameter therapeut_id überschreibt current_user wenn AUTH_ENABLED=False.
     """
-    effective_user = therapeut_id.strip() if (therapeut_id and therapeut_id.strip()) else current_user
     suffix = Path(audio.filename or "aufnahme.webm").suffix.lower() or ".webm"
     if suffix not in ALLOWED_AUDIO:
         raise HTTPException(
@@ -233,7 +228,7 @@ async def upload_recording(
 
     async with async_session_factory() as session:
         rec = Recording(
-            therapeut_id=effective_user,
+            therapeut_id=current_user,
             label=label.strip()[:120] if label and label.strip() else None,
             filename=filename,
             status="uploading",
@@ -245,33 +240,50 @@ async def upload_recording(
 
     await p0_queue.put((_PRIO_P0, out.id, audio_path))
     logger.info("Recording %d (Therapeut: %s) in P0-Queue (Größe: %d)",
-                out.id, effective_user, p0_queue.qsize())
+                out.id, current_user, p0_queue.qsize())
     return out
 
 
 @router.get("", response_model=list[RecordingOut])
-async def list_recordings(
-    current_user: str = Depends(get_current_user),
-    therapeut_id: Optional[str] = None,
-):
+async def list_recordings(current_user: str = Depends(get_current_user)):
     """Eigene nicht-gelöschte Aufnahmen, neueste zuerst (max. 50).
     Aufnahmen ohne therapeut_id (vor v18) werden ebenfalls angezeigt.
-    Query-Parameter therapeut_id überschreibt current_user wenn AUTH_ENABLED=False.
     """
-    effective_user = therapeut_id.strip() if (therapeut_id and therapeut_id.strip()) else current_user
     async with async_session_factory() as session:
         result = await session.execute(
             select(Recording)
             .where(
                 Recording.deleted_at.is_(None),
                 # Eigene ODER alte (ohne therapeut_id)
-                (Recording.therapeut_id == effective_user) | Recording.therapeut_id.is_(None),
+                (Recording.therapeut_id == current_user) | Recording.therapeut_id.is_(None),
             )
             .order_by(Recording.created_at.desc())
             .limit(50)
         )
         rows = result.scalars().all()
     return [_rec_to_out(r) for r in rows]
+
+
+@router.patch("/{rec_id}", response_model=RecordingOut)
+async def update_recording(
+    rec_id: int,
+    body: RecordingPatch,
+    current_user: str = Depends(get_current_user),
+):
+    """Label einer Aufnahme nachträglich ändern."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Recording)
+            .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
+        )
+        rec = result.scalar_one_or_none()
+        if not rec:
+            raise HTTPException(status_code=404, detail="Recording nicht gefunden")
+        _assert_owner(rec, current_user)
+        rec.label = body.label.strip()[:120] if body.label and body.label.strip() else None
+        await session.commit()
+        await session.refresh(rec)
+        return _rec_to_out(rec)
 
 
 @router.get("/{rec_id}", response_model=RecordingOut)
