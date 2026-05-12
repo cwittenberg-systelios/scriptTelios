@@ -79,6 +79,8 @@ export async function generate(workflow, prompt, userContent, files = {}, page =
   if (files.fokusThemen)    fd.append("bullets",         files.fokusThemen);
   if (files.styleText)      fd.append("style_text",      files.styleText);
   if (files.model)          fd.append("model",           files.model);
+  // v19: optionale Qualitätsprüfung am generierten Text
+  if (files.qualityCheck)   fd.append("quality_check",   "true");
 
   const r = await _fetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
   const d = await r.json();
@@ -90,7 +92,12 @@ export async function generate(workflow, prompt, userContent, files = {}, page =
   try {
     const job = await pollJob(jobId, 1200, _fetch);
     clearActiveJob();
-    return { text: job.result_text || "", jobId, hasTranscript: job.has_transcript || false };
+    return {
+      text: job.result_text || "",
+      jobId,
+      hasTranscript: job.has_transcript || false,
+      qualityCheck: job.quality_check || null,
+    };
   } catch (e) {
     clearActiveJob();
     throw e;

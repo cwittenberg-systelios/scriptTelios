@@ -253,6 +253,18 @@ def pytest_addoption(parser):
         ),
     )
     parser.addoption(
+        "--qa",
+        action="store_true",
+        default=False,
+        help=(
+            "v19: Qualitätsprüfungs-Vergleich aktivieren. Pro Testfall wird "
+            "zusätzlich zur Baseline-Generierung ein Repair-Pass durchgeführt "
+            "(LLM bekommt Original-Output + Repair-Hints und schreibt neu). "
+            "Beide Versionen werden separat evaluiert und im PDF-Report verglichen. "
+            "Volltexte beider Versionen kommen in den Anhang."
+        ),
+    )
+    parser.addoption(
         "--whisper-model",
         action="store",
         default=None,

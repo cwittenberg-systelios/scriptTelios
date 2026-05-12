@@ -107,6 +107,9 @@ class JobState:
         self.style_info         : Optional[dict] = None
         self._cancel_requested  : bool = False
         self.input_meta         : Optional[dict] = None
+        # Optionales Quality-Check-Result (siehe app/services/quality_check.py).
+        # Wird gesetzt wenn der Job mit aktivierter Qualitätsprüfung läuft.
+        self.quality_check      : Optional[dict] = None
 
     def set_progress(self, pct: int, phase: str = "", detail: str = "") -> None:
         """Monotoner Progress (0-100). Thread-safe via atomic int write."""
@@ -137,6 +140,7 @@ class JobState:
             "model_used":      self.model_used,
             "duration_s":      self.duration_s,
             "style_info":      self.style_info,
+            "quality_check":   self.quality_check,
         }
 
 
@@ -285,6 +289,7 @@ class JobQueue:
                         model_used=state.model_used,
                         duration_s=state.duration_s,
                         style_info_json=json.dumps(state.style_info) if state.style_info else None,
+                        quality_check_json=json.dumps(state.quality_check) if state.quality_check else None,
                     )
                 )
                 await db.commit()
@@ -318,6 +323,7 @@ class JobQueue:
             job.result_file        = result.get("file")
             job.model_used         = result.get("model_used")
             job.style_info         = result.get("style_info")
+            job.quality_check      = result.get("quality_check")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
 
             if job._cancel_requested:

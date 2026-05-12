@@ -1449,6 +1449,122 @@ function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownlo
   );
 }
 
+// ── Qualitätsprüfung (v19) ───────────────────────────────────────
+// Optionale Checkbox neben dem Generieren-Button. Bei Aktivierung prüft
+// das Backend den generierten Text gegen workflow-spezifische Kriterien
+// (Wortzahl, verbotene Patterns, fehlende Keywords/Sektionen, Datenschutz).
+// Reines Reporting — kein Auto-Repair (kommt in einer späteren Iteration).
+
+function QualityCheckToggle({ checked, onChange, disabled = false }) {
+  return (
+    <label
+      title="Prüft den generierten Text auf typische Probleme (Wortzahl, fehlende Inhalte, Markdown-Reste, Datenschutz)."
+      style={{
+        display: "flex", alignItems: "center", gap: 6, cursor: disabled ? "not-allowed" : "pointer",
+        fontSize: 12, color: "var(--st-text-soft)", marginRight: 8,
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={e => onChange(e.target.checked)}
+        style={{cursor: disabled ? "not-allowed" : "pointer"}}
+      />
+      Qualitätsprüfung
+    </label>
+  );
+}
+
+// Visualisiert ein einzelnes QualityCheckResult (vom Backend).
+// Erwartet die Struktur aus app/services/quality_check.py::QualityCheckResult.to_dict()
+function QualityCheckPanel({ result, label }) {
+  if (!result) return null;
+  const { score, is_passing, has_critical, passed_count, issues, word_count } = result;
+  const pct = Math.round((score || 0) * 100);
+
+  // Farbgebung: grün (passing), rot (critical), gelb (sonstige issues)
+  const tone = has_critical ? "critical" : (is_passing ? "ok" : "warn");
+  const colors = {
+    ok:       { bg: "#e8f5e9", border: "#66bb6a", icon: "✓", iconColor: "#2e7d32" },
+    warn:     { bg: "#fff8e1", border: "#ffb300", icon: "⚠", iconColor: "#e65100" },
+    critical: { bg: "#ffebee", border: "#e53935", icon: "✗", iconColor: "#c62828" },
+  }[tone];
+
+  const critical = (issues || []).filter(i => i.severity === "critical");
+  const warnings = (issues || []).filter(i => i.severity === "warning");
+
+  return (
+    <div style={{
+      marginTop: 10,
+      padding: "10px 12px",
+      background: colors.bg,
+      border: `1px solid ${colors.border}`,
+      borderLeft: `4px solid ${colors.border}`,
+      borderRadius: 4,
+      fontSize: 13,
+      color: "var(--st-text)",
+    }}>
+      <div style={{display:"flex", alignItems:"center", gap:8, marginBottom: issues?.length ? 8 : 0}}>
+        <span style={{color: colors.iconColor, fontSize: 16, fontWeight: 700}}>{colors.icon}</span>
+        <strong>{label || "Qualitätsprüfung"}</strong>
+        <span style={{color:"var(--st-text-soft)", fontSize: 12}}>
+          {passed_count || 0} bestanden · Score {pct}% · {word_count}w
+        </span>
+      </div>
+      {critical.length > 0 && (
+        <div style={{marginTop: 4}}>
+          <div style={{fontWeight: 600, color: colors.iconColor, marginBottom: 2}}>
+            Kritisch ({critical.length}):
+          </div>
+          <ul style={{margin:"2px 0 6px 18px", padding: 0}}>
+            {critical.map((i, idx) => (
+              <li key={idx} style={{marginBottom: 2}}>{i.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div style={{marginTop: 4}}>
+          <div style={{fontWeight: 600, color: "#e65100", marginBottom: 2}}>
+            Hinweise ({warnings.length}):
+          </div>
+          <ul style={{margin:"2px 0 0 18px", padding: 0}}>
+            {warnings.map((i, idx) => (
+              <li key={idx} style={{marginBottom: 2}}>{i.message}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Container-Komponente: rendert main/befund/akut Panels aus dem Backend-Response
+function QualityCheckResults({ qc }) {
+  if (!qc) return null;
+  if (qc.error) {
+    return (
+      <div style={{
+        marginTop: 10, padding: "8px 10px",
+        background: "#fff3e0", border: "1px solid #ffb74d",
+        borderRadius: 4, fontSize: 12, color: "var(--st-text-soft)",
+      }}>
+        Qualitätsprüfung fehlgeschlagen: {qc.error}
+      </div>
+    );
+  }
+  return (
+    <div>
+      {qc.main   && <QualityCheckPanel result={qc.main}   label="Qualitätsprüfung – Hauptteil" />}
+      {qc.befund && <QualityCheckPanel result={qc.befund} label="Qualitätsprüfung – Befund" />}
+      {qc.akut   && <QualityCheckPanel result={qc.akut}   label="Qualitätsprüfung – Akutantrag" />}
+    </div>
+  );
+}
+
+
 function Tags({ list, onChange }) {
   const [val, setVal] = useState("");
   function add() {
@@ -1577,6 +1693,8 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   if (files.bullets)     fd.append("bullets",          files.bullets);
   if (files.styleText)   fd.append("style_text",       files.styleText);
   if (files.model)       fd.append("model",             files.model);
+  // v19: optionale Qualitätsprüfung am generierten Text
+  if (files.qualityCheck) fd.append("quality_check",   "true");
 
   // Job starten
   const r = await apiFetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
@@ -1597,6 +1715,7 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
       akutText:    job.akut_text     || "",
       jobId,
       hasTranscript: job.has_transcript || false,
+      qualityCheck:  job.quality_check  || null,
     };
   } catch (e) {
     clearActiveJob();
@@ -1978,6 +2097,9 @@ function P1({ toast, resumeJob, onResumed, model }) {
   const abortRef = useRef(null);
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]         = useState("");
+  // v19: Qualitätsprüfung
+  const [qualityCheck, setQualityCheck] = useState(false);
+  const [qcResult, setQcResult]         = useState(null);
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
@@ -2013,6 +2135,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
     setBusy(true);
     setLastJobId(null);
     setHasTranscript(false);
+    setQcResult(null);
     const k = kuerzel.trim().replace(/\.?$/, "."); // sicherstellen dass Punkt am Ende
     // v15 Bug F2: Keine Beispieltexte wie "die Klientin/Klient" mehr - das LLM
     // hat das frueher als Patientenbezeichnung uebernommen statt der Initialen.
@@ -2048,6 +2171,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
         bullets: bullets || null,
         model: model || null,
         patientName: patientNameExplicit,
+        qualityCheck: qualityCheck,
         onJobId: setCurrentJobId,
         signal: ac.signal,
       }, "p1");
@@ -2056,6 +2180,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
       setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
+      setQcResult(result.qualityCheck || null);
       idbClearAudio().catch(() => {}); // Aufnahme nach Job-Start nicht mehr benötigt
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -2173,18 +2298,21 @@ function P1({ toast, resumeJob, onResumed, model }) {
             </div>
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button
-                  className="btn-primary"
-                  onClick={run}
-                  disabled={(!audio && !txtFile && !text) || !kuerzel.trim()}
-                  title={
-                    (!audio && !txtFile && !text)
-                      ? "Gespraechsmaterial erforderlich (Audio, Transkript oder Text)"
-                      : !kuerzel.trim()
-                        ? "Patientenkuerzel ist erforderlich"
-                        : ""
-                  }
-                >Verlaufsnotiz generieren</button>
+              : <>
+                  <QualityCheckToggle checked={qualityCheck} onChange={setQualityCheck} />
+                  <button
+                    className="btn-primary"
+                    onClick={run}
+                    disabled={(!audio && !txtFile && !text) || !kuerzel.trim()}
+                    title={
+                      (!audio && !txtFile && !text)
+                        ? "Gespraechsmaterial erforderlich (Audio, Transkript oder Text)"
+                        : !kuerzel.trim()
+                          ? "Patientenkuerzel ist erforderlich"
+                          : ""
+                    }
+                  >Verlaufsnotiz generieren</button>
+                </>
             }
           </div>
 
@@ -2194,6 +2322,8 @@ function P1({ toast, resumeJob, onResumed, model }) {
               { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
             ] : []} />
 
+          <QualityCheckResults qc={qcResult} />
+
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
@@ -2201,6 +2331,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
                 setTxtFile(null); setText(""); setBullets("");
                 setStyle(null); setStyleText(""); setOut(""); setOutWarn(null);
                 setLastJobId(null); setHasTranscript(false);
+                setQcResult(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neue Verlaufsnotiz</button>
             </div>
@@ -2234,6 +2365,9 @@ function P2({ toast, resumeJob, onResumed, model }) {
   const abortRef = useRef(null);
   const [geschlecht, setGeschlecht] = useState("auto");
   const [kuerzel, setKuerzel]     = useState("");
+  // v19: Qualitätsprüfung
+  const [qualityCheck, setQualityCheck] = useState(false);
+  const [qcResult, setQcResult]         = useState(null);
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
@@ -2271,6 +2405,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
     setLastJobId(null);
     setHasTranscript(false);
     setBefundOut("");
+    setQcResult(null);
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
 
     const k = kuerzel.trim().replace(/\.?$/, ".");
@@ -2308,6 +2443,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         patientName: patientNameExplicit,
         // v18: editierbare Befund-Vorlage fuer den separaten Befund-Call
         befundVorlage: befundVorlage || null,
+        qualityCheck: qualityCheck,
         onJobId:   setCurrentJobId,
         signal:    ac.signal,
       }, "p2");
@@ -2317,6 +2453,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
       setBefundOut(result.befundText || "");
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
+      setQcResult(result.qualityCheck || null);
       idbClearAudio().catch(() => {}); // Aufnahme nach Job-Start nicht mehr benötigt
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -2438,7 +2575,10 @@ function P2({ toast, resumeJob, onResumed, model }) {
             </div>
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button className="btn-primary" onClick={run} disabled={!selbst}>Anamnese und Befund generieren</button>
+              : <>
+                  <QualityCheckToggle checked={qualityCheck} onChange={setQualityCheck} />
+                  <button className="btn-primary" onClick={run} disabled={!selbst}>Anamnese und Befund generieren</button>
+                </>
             }
           </div>
 
@@ -2455,6 +2595,8 @@ function P2({ toast, resumeJob, onResumed, model }) {
               { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
             ] : []} />
 
+          <QualityCheckResults qc={qcResult} />
+
           {(out || befundOut) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
@@ -2463,6 +2605,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
                 setText(""); setDx([]); setStyle(null); setStyleText("");
                 setOut(""); setBefundOut(""); setOutWarn(null);
                 setLastJobId(null); setHasTranscript(false);
+                setQcResult(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neue Anamnese</button>
             </div>
@@ -2492,6 +2635,9 @@ function P2b({ toast, resumeJob, onResumed, model }) {
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
   const abortRef = useRef(null);
+  // v19: Qualitätsprüfung
+  const [qualityCheck, setQualityCheck] = useState(false);
+  const [qcResult, setQcResult]         = useState(null);
 
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p2b") return;
@@ -2525,6 +2671,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
     setBusy(true);
     setOut(""); setOutWarn(null);
     setLastJobId(null);
+    setQcResult(null);
     try {
       let patientNameExplicit = null;
       if (kuerzel.trim()) {
@@ -2540,6 +2687,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
         bullets:        fokus || null,
         model:          model || null,
         patientName:    patientNameExplicit,
+        qualityCheck:   qualityCheck,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p2b");
@@ -2547,6 +2695,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
+      setQcResult(result.qualityCheck || null);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
@@ -2632,23 +2781,29 @@ function P2b({ toast, resumeJob, onResumed, model }) {
             </div>
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button
-                  className="btn-primary"
-                  onClick={run}
-                  disabled={!antrag}
-                  title={!antrag ? "Antragsvorlage erforderlich" : ""}
-                >Akutantrag erstellen</button>
+              : <>
+                  <QualityCheckToggle checked={qualityCheck} onChange={setQualityCheck} />
+                  <button
+                    className="btn-primary"
+                    onClick={run}
+                    disabled={!antrag}
+                    title={!antrag ? "Antragsvorlage erforderlich" : ""}
+                  >Akutantrag erstellen</button>
+                </>
             }
           </div>
 
           <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
+          <QualityCheckResults qc={qcResult} />
+
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setAntrag(null); setStyle(null); setStyleText("");
                 setFokus(""); setPrompt(P_AKUT); setOut(""); setOutWarn(null); setLastJobId(null);
+                setQcResult(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Akutantrag</button>
             </div>
@@ -2677,6 +2832,9 @@ function P3({ toast, resumeJob, onResumed, model }) {
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
   const abortRef = useRef(null);
+  // v19: Qualitätsprüfung
+  const [qualityCheck, setQualityCheck] = useState(false);
+  const [qcResult, setQcResult]         = useState(null);
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
@@ -2711,6 +2869,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
     setBusy(true);
     setOut(""); setOutWarn(null);
     setLastJobId(null);
+    setQcResult(null);
     try {
       // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
       // (vorher fehlte das in P3/P4 - Bug entdeckt im Audit)
@@ -2729,6 +2888,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
         bullets:        fokus || null,
         model:          model || null,
         patientName:    patientNameExplicit,
+        qualityCheck:   qualityCheck,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p3");
@@ -2736,6 +2896,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
+      setQcResult(result.qualityCheck || null);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
@@ -2796,27 +2957,33 @@ function P3({ toast, resumeJob, onResumed, model }) {
           <div className="action-bar">
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button
-                  className="btn-primary"
-                  onClick={run}
-                  disabled={!verlauf || !antrag}
-                  title={
-                    !verlauf ? "Verlaufsdokumentation erforderlich"
-                    : !antrag ? "Antragsvorlage erforderlich (Diagnosen + Anamnese)"
-                    : ""
-                  }
-                >Verlängerungsantrag erstellen</button>
+              : <>
+                  <QualityCheckToggle checked={qualityCheck} onChange={setQualityCheck} />
+                  <button
+                    className="btn-primary"
+                    onClick={run}
+                    disabled={!verlauf || !antrag}
+                    title={
+                      !verlauf ? "Verlaufsdokumentation erforderlich"
+                      : !antrag ? "Antragsvorlage erforderlich (Diagnosen + Anamnese)"
+                      : ""
+                    }
+                  >Verlängerungsantrag erstellen</button>
+                </>
             }
           </div>
 
           <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
+          <QualityCheckResults qc={qcResult} />
+
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setAntrag(null); setStyle(null); setStyleText("");
                 setFokus(""); setPrompt(P_VERL); setOut(""); setOutWarn(null); setLastJobId(null);
+                setQcResult(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Verlängerungsantrag</button>
             </div>
@@ -2851,6 +3018,9 @@ function P3b({ toast, resumeJob, onResumed, model }) {
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
   const abortRef = useRef(null);
+  // v19: Qualitätsprüfung
+  const [qualityCheck, setQualityCheck] = useState(false);
+  const [qcResult, setQcResult]         = useState(null);
 
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p3b") return;
@@ -2884,6 +3054,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
     setBusy(true);
     setOut(""); setOutWarn(null);
     setLastJobId(null);
+    setQcResult(null);
     try {
       let patientNameExplicit = null;
       if (kuerzel.trim()) {
@@ -2901,6 +3072,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
         bullets:        fokus || null,
         model:          model || null,
         patientName:    patientNameExplicit,
+        qualityCheck:   qualityCheck,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p3b");
@@ -2908,6 +3080,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
+      setQcResult(result.qualityCheck || null);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
@@ -3049,6 +3222,9 @@ function P4({ toast, resumeJob, onResumed, model }) {
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
   const abortRef = useRef(null);
+  // v19: Qualitätsprüfung
+  const [qualityCheck, setQualityCheck] = useState(false);
+  const [qcResult, setQcResult]         = useState(null);
 
   // Resume: laufenden Job nach Reload wieder aufnehmen
   useEffect(() => {
@@ -3083,6 +3259,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
     setBusy(true);
     setOut(""); setOutWarn(null);
     setLastJobId(null);
+    setQcResult(null);
     try {
       // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
       let patientNameExplicit = null;
@@ -3100,6 +3277,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
         bullets:        fokus || null,
         model:          model || null,
         patientName:    patientNameExplicit,
+        qualityCheck:   qualityCheck,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p4");
@@ -3107,6 +3285,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
       setLastJobId(result.jobId);
+      setQcResult(result.qualityCheck || null);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
     setBusy(false);
@@ -3167,27 +3346,33 @@ function P4({ toast, resumeJob, onResumed, model }) {
           <div className="action-bar">
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button
-                  className="btn-primary"
-                  onClick={run}
-                  disabled={!verlauf || !bericht}
-                  title={
-                    !verlauf ? "Verlaufsdokumentation erforderlich"
-                    : !bericht ? "Antragsvorlage erforderlich (Diagnosen + Anamnese)"
-                    : ""
-                  }
-                >Entlassbericht erstellen</button>
+              : <>
+                  <QualityCheckToggle checked={qualityCheck} onChange={setQualityCheck} />
+                  <button
+                    className="btn-primary"
+                    onClick={run}
+                    disabled={!verlauf || !bericht}
+                    title={
+                      !verlauf ? "Verlaufsdokumentation erforderlich"
+                      : !bericht ? "Antragsvorlage erforderlich (Diagnosen + Anamnese)"
+                      : ""
+                    }
+                  >Entlassbericht erstellen</button>
+                </>
             }
           </div>
 
           <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
             onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
 
+          <QualityCheckResults qc={qcResult} />
+
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setBericht(null); setStyle(null); setStyleText("");
                 setFokus(""); setPrompt(P_ENTL); setOut(""); setOutWarn(null); setLastJobId(null);
+                setQcResult(null);
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Entlassbericht</button>
             </div>

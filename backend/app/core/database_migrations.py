@@ -52,6 +52,13 @@ MIGRATIONS: tuple[Migration, ...] = (
             ON recordings (therapeut_id);
         """,
     ),
+    Migration(
+        name="jobs.quality_check_json",
+        sql="""
+            ALTER TABLE jobs
+            ADD COLUMN IF NOT EXISTS quality_check_json TEXT;
+        """,
+    ),
     # weitere Migrationen hier ergaenzen ...
 )
 

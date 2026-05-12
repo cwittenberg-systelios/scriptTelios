@@ -285,6 +285,11 @@ async def create_generate_job(
     bullets:          Annotated[Optional[str], Form(description="Stichpunkte (P1) oder Fokus-Themen (P3/P4)")] = None,
     style_text:       Annotated[Optional[str], Form()] = None,
     model:            Annotated[Optional[str], Form()] = None,
+    # v19: Optionale Qualitätsprüfung des generierten Outputs.
+    # Frontend-Checkbox "Qualitätsprüfung". Default false (keine zusätzliche Last).
+    # Bei true wird nach der Generierung run_quality_check() aufgerufen,
+    # das Ergebnis wird im Job persistiert und ans Frontend zurückgegeben.
+    quality_check:    Annotated[bool, Form(description="v19: Qualitätsprüfung am generierten Text durchfuehren (kein Auto-Repair, nur Reporting).")] = False,
     # ── Datei-Uploads (jedes Feld hat genau EINE Bedeutung) ──────────
     audio:            Optional[UploadFile] = File(None, description="Audioaufnahme eines Gesprächs (.mp3/.m4a/.wav)"),
     selbstauskunft:   Optional[UploadFile] = File(None, description="P2: Selbstauskunft des Klienten (.pdf)"),
@@ -934,6 +939,55 @@ async def create_generate_job(
             len(akut_part) if akut_part else 0,
         )
 
+        # ── v19: Optionale Qualitätsprüfung ──────────────────────────
+        # Nur wenn Therapeut die Checkbox aktiviert hat. Reines Reporting,
+        # kein Auto-Repair (das ist Phase 2 dieses Features).
+        # Wir prüfen Anamnese+Befund separat, da die Qualitätskriterien
+        # unterschiedlich sind (Befund hat festes Format, kein Wir-Stil).
+        quality_result_dict = None
+        if quality_check:
+            try:
+                from app.services.quality_check import run_quality_check
+                _t0_qc = _t.time()
+
+                # Hauptteil prüfen (Anamnese-Fließtext / Doku / Antrag etc.)
+                main_qc = run_quality_check(
+                    workflow=workflow,
+                    text=anamnese_part or "",
+                )
+
+                # Befund separat (wenn vorhanden, P2-Anamnese-Workflow)
+                befund_qc = None
+                if befund_part:
+                    befund_qc = run_quality_check(
+                        workflow="befund",
+                        text=befund_part,
+                    )
+
+                # Akutantrag-Teil (P2 mit Akutantrag-Sub-Output, falls je generiert)
+                akut_qc = None
+                if akut_part:
+                    akut_qc = run_quality_check(
+                        workflow="akutantrag",
+                        text=akut_part,
+                    )
+
+                quality_result_dict = {
+                    "main": main_qc.to_dict(),
+                    "befund": befund_qc.to_dict() if befund_qc else None,
+                    "akut": akut_qc.to_dict() if akut_qc else None,
+                    "duration_s": round(_t.time() - _t0_qc, 2),
+                }
+                logger.info(
+                    "Job %s quality_check: main_score=%.2f passing=%s issues=%d",
+                    job.job_id, main_qc.score, main_qc.is_passing, len(main_qc.issues),
+                )
+            except Exception as qc_err:
+                # Quality-Check darf den Job nicht zum Scheitern bringen.
+                logger.warning("Quality-Check fehlgeschlagen für Job %s: %s",
+                               job.job_id, qc_err)
+                quality_result_dict = {"error": str(qc_err)}
+
         return {
             "text":        anamnese_part,
             "befund_text": befund_part,
@@ -944,6 +998,8 @@ async def create_generate_job(
             # P2: OCR-Validator-Warnungen ans Frontend durchreichen.
             # UI kann eine Warnbanner anzeigen wenn diese Liste nicht leer ist.
             "ocr_warnings": _ocr_warnings if _ocr_warnings else None,
+            # v19: Optionale Qualitätsprüfung (None wenn nicht aktiviert).
+            "quality_check": quality_result_dict,
         }
 
     background_tasks.add_task(job_queue.run_job, job, _run())

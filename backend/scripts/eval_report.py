@@ -68,12 +68,23 @@ def load_eval_results(d: Path) -> dict:
             continue
         wf = wd.name
         for ef in sorted(wd.glob("*.eval.txt")):
+            # v19: .baseline.eval.txt und .qa.eval.txt sind QA-Spuren des
+            # zugehoerigen Hauptfalls und werden NICHT als eigener Eintrag
+            # geladen (sondern unten an den Hauptfall angehaengt).
+            if ef.name.endswith(".baseline.eval.txt"):
+                continue
+            if ef.name.endswith(".qa.eval.txt"):
+                continue
             tid = ef.stem.replace(".eval","")
             e = {"test_id":tid,"workflow":wf,"word_count":0,"passed":0,"issues":0,
                  "score":0.0,"status":"?","issue_list":[],"style_metrics":None,
                  "jury_score":None,"jury_reason":None,"composite":0.0,
                  # v13 Ä5: Längenquellen-Telemetrie
-                 "length_source":None, "length_min":0, "length_max":0}
+                 "length_source":None, "length_min":0, "length_max":0,
+                 # v19: QA-Vergleichsmodus (--qa)
+                 "qa_score": None, "qa_passed": 0, "qa_issues": 0,
+                 "qa_word_count": 0, "qa_status": None, "qa_issue_list": [],
+                 "qa_text": None, "baseline_text": None}
             for ln in ef.read_text("utf-8").split("\n"):
                 ln = ln.strip()
                 if ln.startswith("[PASS]") or ln.startswith("[FAIL]"):
@@ -109,6 +120,45 @@ def load_eval_results(d: Path) -> dict:
             rf = wd/f"{tid}.ref.txt"
             if rf.exists(): e["ref_text"] = rf.read_text("utf-8")
             if tf.exists(): e["output_text"] = tf.read_text("utf-8")
+
+            # v19: QA-Spuren laden (Baseline + QA-Repair)
+            # Wenn --qa lief, gibt es zusaetzlich:
+            #   <tid>.baseline.txt     - Original-Output (= identisch zu <tid>.txt)
+            #   <tid>.baseline.eval.txt - Baseline EvalResult
+            #   <tid>.qa.txt           - Korrigierter Output
+            #   <tid>.qa.eval.txt      - QA EvalResult
+            baseline_tf = wd / f"{tid}.baseline.txt"
+            if baseline_tf.exists():
+                e["baseline_text"] = baseline_tf.read_text("utf-8")
+
+            qa_ef = wd / f"{tid}.qa.eval.txt"
+            qa_tf = wd / f"{tid}.qa.txt"
+            if qa_ef.exists():
+                qa_passed = qa_issues = 0
+                qa_status = "?"
+                qa_issue_list = []
+                for ln in qa_ef.read_text("utf-8").split("\n"):
+                    ln = ln.strip()
+                    if ln.startswith("[PASS]") or ln.startswith("[FAIL]"):
+                        qa_status = "PASS" if "[PASS]" in ln else "FAIL"
+                    elif "Checks bestanden" in ln:
+                        m = re.search(r"(\d+)\s+Checks", ln)
+                        if m: qa_passed = int(m.group(1))
+                    elif "Probleme:" in ln:
+                        m = re.search(r"(\d+)\s+Probleme", ln)
+                        if m: qa_issues = int(m.group(1))
+                    elif ln.startswith("- "):
+                        qa_issue_list.append(ln[2:])
+                qa_tot = qa_passed + qa_issues
+                e["qa_score"] = qa_passed / qa_tot if qa_tot else 0.0
+                e["qa_passed"] = qa_passed
+                e["qa_issues"] = qa_issues
+                e["qa_status"] = qa_status
+                e["qa_issue_list"] = qa_issue_list
+            if qa_tf.exists():
+                e["qa_text"] = qa_tf.read_text("utf-8")
+                e["qa_word_count"] = len(e["qa_text"].split())
+
             results[wf].append(e)
     var, jury = [], []
     vd = d/"style_variance"
@@ -216,6 +266,56 @@ def _issue_bars(title, labels, sizes, icols, w=320):
         d.add(String(105+bw+4,y+4,f"{sz} ({sz/tot*100:.0f}%)",fontSize=7,fillColor=C["dark"]))
     return d
 
+def _qa_compare_bars(title, labels, baseline_vals, qa_vals, w=460, bh=10, gap=2):
+    """
+    v19: Paired-Bar-Chart: pro Testfall ein Baseline- und ein QA-Balken untereinander.
+    labels = Test-IDs; baseline_vals/qa_vals = jeweils Liste von Scores in %.
+    Baseline-Farbe: orange/gray, QA-Farbe: green wenn besser, rot wenn schlechter.
+    """
+    lw, cw = 140, w - 150
+    n = len(labels)
+    pair_h = 2 * bh + 2  # zwei Balken + winziger Gap
+    h = n * (pair_h + gap) + 50
+    d = Drawing(w, h)
+    d.add(String(w/2, h-12, title, textAnchor="middle", fontSize=10,
+                 fontName="Helvetica-Bold", fillColor=C["dark"]))
+    # Legende
+    d.add(Rect(lw, h-30, 10, 6, fillColor=C["gray"], strokeColor=colors.white, strokeWidth=.3))
+    d.add(String(lw+13, h-26, "Baseline", fontSize=7, fillColor=C["dark"]))
+    d.add(Rect(lw+70, h-30, 10, 6, fillColor=C["green"], strokeColor=colors.white, strokeWidth=.3))
+    d.add(String(lw+83, h-26, "Mit Qualitätsprüfung", fontSize=7, fillColor=C["dark"]))
+    mx = 100
+    y0 = h - 45
+    for i, (lb, b, q) in enumerate(zip(labels, baseline_vals, qa_vals)):
+        y_top = y0 - i * (pair_h + gap)
+        # Label links (vertikal mittig zwischen den zwei Balken)
+        d.add(String(lw-4, y_top - bh/2 - 1, lb, textAnchor="end", fontSize=7, fillColor=C["dark"]))
+        # Baseline-Balken (oben)
+        bw_base = max((b/mx) * cw, 1)
+        d.add(Rect(lw, y_top, bw_base, bh, fillColor=C["gray"],
+                   strokeColor=colors.white, strokeWidth=.3))
+        d.add(String(lw + bw_base + 2, y_top + 1, f"{b:.0f}%",
+                     fontSize=6, fillColor=C["dark"]))
+        # QA-Balken (unten) - Farbe je nach Delta
+        bw_qa = max((q/mx) * cw, 1)
+        if q > b + 1:    cl_qa = C["green"]
+        elif q < b - 1:  cl_qa = C["red"]
+        else:            cl_qa = C["orange"]
+        d.add(Rect(lw, y_top - bh - 1, bw_qa, bh, fillColor=cl_qa,
+                   strokeColor=colors.white, strokeWidth=.3))
+        # Delta-Anzeige rechts neben QA-Balken
+        delta = q - b
+        sign = "+" if delta >= 0 else ""
+        d.add(String(lw + bw_qa + 2, y_top - bh, f"{q:.0f}% ({sign}{delta:.0f})",
+                     fontSize=6, fillColor=cl_qa))
+    # 70%-Referenzlinie
+    rx = lw + (70/mx) * cw
+    d.add(Line(rx, y0 + bh + 2, rx, y0 - n*(pair_h+gap) + bh,
+               strokeColor=C["red_lt"], strokeWidth=.8, strokeDashArray=[3,3]))
+    d.add(String(rx+2, y0+bh+4, "Min 70%", fontSize=6, fillColor=C["red_lt"]))
+    return d
+
+
 def build_report(data: dict, out: Path, charts_dir: Path = None):
     doc = SimpleDocTemplate(str(out),pagesize=A4,leftMargin=2*cm,rightMargin=2*cm,
                             topMargin=2*cm,bottomMargin=2*cm)
@@ -279,6 +379,65 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
     story.append(_hbar("Wörter pro Testfall",lbs,[e["word_count"] for e in ae],
         [WF_COL.get(e["workflow"],C["gray"]) for e in ae],sfx="w"))
     story.append(PageBreak())
+
+    # v19: QA-Vergleich (--qa)
+    # Wenn Testlauf den --qa-Flag hatte, gibt es Baseline + QA-Scores pro Testfall.
+    qa_entries = [e for e in ae if e.get("qa_score") is not None]
+    if qa_entries:
+        story.append(Paragraph("Qualitätsprüfung: Vergleich Baseline vs. Repair", st["H2"]))
+        story.append(Paragraph(
+            "Vergleich der Eval-Scores VOR und NACH dem QA-Repair-Pass. "
+            "Grüne Balken: Repair hat verbessert. Rote Balken: Repair hat "
+            "verschlechtert. Orange: keine wesentliche Änderung. "
+            "Volltexte beider Versionen siehe Anhang.",
+            ParagraphStyle("QANote", parent=st["Normal"], fontSize=9,
+                           textColor=C["gray"], spaceAfter=4*mm)))
+
+        qa_labels = [e["test_id"].split("-",1)[-1][:25] for e in qa_entries]
+        baseline_pct = [e["score"]*100 for e in qa_entries]
+        qa_pct = [e["qa_score"]*100 for e in qa_entries]
+        story.append(_qa_compare_bars(
+            "Score-Vergleich pro Testfall (Baseline → mit Qualitätsprüfung)",
+            qa_labels, baseline_pct, qa_pct,
+        ))
+        story.append(Spacer(1, 4*mm))
+
+        # Aggregierte QA-Statistik
+        n = len(qa_entries)
+        avg_baseline = sum(baseline_pct) / n
+        avg_qa = sum(qa_pct) / n
+        delta_avg = avg_qa - avg_baseline
+        improved = sum(1 for b, q in zip(baseline_pct, qa_pct) if q > b + 1)
+        worsened = sum(1 for b, q in zip(baseline_pct, qa_pct) if q < b - 1)
+        unchanged = n - improved - worsened
+        # Wortzahl-Veränderung (Mittel)
+        wc_diffs = [(e["qa_word_count"] - e["word_count"]) for e in qa_entries
+                    if e["qa_word_count"]]
+        avg_wc_delta = sum(wc_diffs) / len(wc_diffs) if wc_diffs else 0
+
+        qa_rows = [
+            ["", ""],
+            ["Testfälle mit QA-Vergleich", f"{n}"],
+            ["Ø Score Baseline", f"{avg_baseline:.1f}%"],
+            ["Ø Score nach Repair", f"{avg_qa:.1f}%"],
+            ["Ø Delta", f"{'+' if delta_avg >= 0 else ''}{delta_avg:.1f}%-Pkt"],
+            ["Verbessert", f"{improved}/{n}"],
+            ["Verschlechtert", f"{worsened}/{n}"],
+            ["Unverändert", f"{unchanged}/{n}"],
+            ["Ø Wortzahl-Δ", f"{'+' if avg_wc_delta >= 0 else ''}{avg_wc_delta:.0f}w"],
+        ]
+        qa_table = Table(qa_rows, colWidths=[7*cm, 9*cm])
+        qa_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), C["dark"]),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+            ("GRID", (0,0), (-1,-1), .5, C["grid"]),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, C["cream"]]),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+        ]))
+        story.append(qa_table)
+        story.append(PageBreak())
 
     # Pass/Fail
     story.append(Paragraph("Checks pro Workflow",st["H2"]))
@@ -518,6 +677,90 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                 f'<font color="{cl.hexval()}"><b>{sc}/5</b></font> '
                 f'<b>{label}</b> — {reason}', jury_style))
             story.append(Spacer(1, 3*mm))
+
+    # v19: QA-Volltext-Anhang (--qa)
+    # Pro Testfall mit QA-Daten: zwei Volltexte (Baseline + Repair) untereinander
+    qa_entries_appendix = [e for wf in data["workflows"].values() for e in wf
+                           if e.get("qa_text") and e.get("baseline_text")]
+    if qa_entries_appendix:
+        story.append(PageBreak())
+        story.append(Paragraph("Anhang: QA-Volltexte (Baseline ↔ Repair)", st["H2"]))
+        story.append(Paragraph(
+            f"Volltexte beider Versionen pro Testfall ({len(qa_entries_appendix)} Fälle). "
+            f"Baseline = direkter LLM-Output. Repair = LLM-Korrektur mit "
+            f"gezielten Repair-Hints aus der Qualitätsprüfung.",
+            ParagraphStyle("QAApxNote", parent=st["Normal"], fontSize=9,
+                           textColor=C["gray"], spaceAfter=4*mm)))
+
+        # Eigene Styles fuer Volltexte und Header
+        st.add(ParagraphStyle("QABaseHdr", parent=st["Normal"], fontSize=9,
+                              textColor=colors.white, fontName="Helvetica-Bold"))
+        st.add(ParagraphStyle("QARepHdr", parent=st["Normal"], fontSize=9,
+                              textColor=colors.white, fontName="Helvetica-Bold"))
+        st.add(ParagraphStyle("QABody", parent=st["Normal"], fontSize=8,
+                              leading=11, textColor=C["dark"], spaceAfter=2*mm))
+
+        # XML-Escape Helper inline (kleine Texte, regex genuegt)
+        def _esc(s: str) -> str:
+            if not s:
+                return ""
+            return (s.replace("&", "&amp;")
+                     .replace("<", "&lt;")
+                     .replace(">", "&gt;")
+                     .replace("\n\n", "<br/><br/>")
+                     .replace("\n", "<br/>"))
+
+        for idx, e in enumerate(qa_entries_appendix):
+            wf_label = WF_LBL.get(e["workflow"], e["workflow"])
+            tid = e["test_id"]
+            base_score = e["score"] * 100
+            qa_score = (e["qa_score"] or 0) * 100
+            delta = qa_score - base_score
+            sign = "+" if delta >= 0 else ""
+
+            # Testfall-Header
+            story.append(Paragraph(
+                f"<b>{wf_label} / {tid}</b> — "
+                f"Baseline {base_score:.0f}% → Repair {qa_score:.0f}% "
+                f"({sign}{delta:.0f}%-Pkt) · "
+                f"{e['word_count']}w → {e.get('qa_word_count', 0)}w",
+                ParagraphStyle("QACase", parent=st["Normal"], fontSize=10,
+                               textColor=C["dark"], spaceBefore=4*mm, spaceAfter=2*mm)))
+
+            # Baseline-Block (grau)
+            pw = 16*cm
+            base_hdr = Table(
+                [[Paragraph(f'<font color="white">Baseline ({e["word_count"]}w, Score {base_score:.0f}%)</font>',
+                            st["QABaseHdr"])]],
+                colWidths=[pw])
+            base_hdr.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,-1), C["gray"]),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+                ("TOPPADDING", (0,0), (-1,-1), 2),
+            ]))
+            story.append(base_hdr)
+            story.append(Paragraph(_esc(e["baseline_text"]), st["QABody"]))
+            story.append(Spacer(1, 2*mm))
+
+            # Repair-Block (grün/rot je nach Delta)
+            qa_color = C["green"] if delta > 1 else (C["red"] if delta < -1 else C["orange"])
+            qa_hdr = Table(
+                [[Paragraph(f'<font color="white">Mit Qualitätsprüfung ({e.get("qa_word_count",0)}w, Score {qa_score:.0f}%)</font>',
+                            st["QARepHdr"])]],
+                colWidths=[pw])
+            qa_hdr.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,-1), qa_color),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+                ("TOPPADDING", (0,0), (-1,-1), 2),
+            ]))
+            story.append(qa_hdr)
+            story.append(Paragraph(_esc(e["qa_text"]), st["QABody"]))
+            story.append(Spacer(1, 4*mm))
+
+            # Soft page break nach jedem zweiten Fall um die PDF lesbar zu halten
+            if idx > 0 and (idx + 1) % 2 == 0:
+                story.append(PageBreak())
+
     doc.build(story)
     return out
 

@@ -59,6 +59,11 @@ class Job(Base):
     duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     style_info_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-serialisiert
 
+    # Qualitätsprüfung (optional, opt-in via Frontend-Checkbox).
+    # Persistiert das QualityCheckResult als JSON; siehe app/services/quality_check.py.
+    # NULL = kein Check ausgefuehrt (Default).
+    quality_check_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 class Recording(Base):
     """

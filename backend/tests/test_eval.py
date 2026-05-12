@@ -655,6 +655,213 @@ async def _async_sleep(seconds: float):
     await asyncio.sleep(seconds)
 
 
+# ── v19: QA-Repair-Pass (für --qa Vergleichsmodus) ──────────────────────────
+#
+# Ruft das LLM direkt mit Original-Output + Repair-Hints aus quality_check
+# auf und liefert eine korrigierte Fassung. Bewusst NICHT der Produktiv-Code -
+# das ist Phase 2 des Features. Hier nur fuer den Eval-Vergleich.
+
+async def _qa_repair_pass(
+    *,
+    workflow: str,
+    original_text: str,
+    issues: list[str],  # Issue-Strings aus EvalResult.issues
+    style_text: str | None = None,
+) -> str:
+    """
+    Schickt den Original-Output mit gezielten Repair-Hints ans LLM und gibt
+    die korrigierte Fassung zurueck.
+
+    Args:
+        workflow: Eval-Workflow (entscheidet Sprache und Erwartungen).
+        original_text: Vom Backend generierter Text aus dem ersten Pass.
+        issues: Liste der EvalResult-Issues (Strings) - daraus werden die
+                Repair-Hints abgeleitet.
+        style_text: Optional eine kurze Stilvorlage zur Erinnerung an Tonalität.
+
+    Returns:
+        Korrigierter Text. Wenn das LLM nicht erreichbar ist oder leer
+        antwortet, wird der Originaltext zurückgegeben (Diff-Schutz).
+    """
+    if not issues:
+        # Nichts zu korrigieren - identische Kopie zurueckgeben
+        return original_text
+
+    # Repair-Hints aus Issue-Strings konstruieren.
+    # EvalResult-Issues sind Strings wie "Zu kurz: 123w < 300w Minimum" oder
+    # "Keyword fehlt: 'Ressourcen'". Wir uebersetzen sie in konkrete Anweisungen.
+    hints: list[str] = []
+    for issue in issues:
+        issue_l = issue.lower()
+        if "zu kurz" in issue_l:
+            # Aus "Zu kurz: 123w < 300w Minimum" Zielwortzahl extrahieren
+            m = re.search(r"<\s*(\d+)w", issue)
+            target = m.group(1) if m else "die geforderte Mindestwortzahl"
+            hints.append(
+                f"Erweitere den Text auf mindestens {target} Wörter, indem du "
+                f"die Inhalte detaillierter ausführst. WICHTIG: Erfinde KEINE "
+                f"neuen Inhalte. Nutze nur Informationen, die bereits im Text stehen."
+            )
+        elif "zu lang" in issue_l:
+            m = re.search(r">\s*(\d+)w", issue)
+            target = m.group(1) if m else "das geforderte Maximum"
+            hints.append(
+                f"Kürze den Text auf höchstens {target} Wörter, behalte alle "
+                f"klinisch relevanten Inhalte."
+            )
+        elif "keyword fehlt" in issue_l:
+            m = re.search(r"'([^']+)'", issue)
+            kw = m.group(1) if m else "?"
+            hints.append(
+                f"Der Begriff '{kw}' (oder ein Synonym davon) fehlt im Text. "
+                f"Ergänze einen Absatz, der diesen Aspekt thematisiert."
+            )
+        elif "sektion fehlt" in issue_l:
+            m = re.search(r"'([^']+)'", issue)
+            sec = m.group(1) if m else "?"
+            hints.append(
+                f"Der Abschnitt '{sec}' fehlt. Ergänze einen entsprechenden "
+                f"Absatz, der diesen Aspekt behandelt."
+            )
+        elif "verbotenes pattern" in issue_l:
+            m = re.search(r"'([^']+)'", issue)
+            pat = m.group(1) if m else "?"
+            hints.append(
+                f"Entferne das Pattern '{pat}' vollständig aus dem Text. "
+                f"Markdown-Formatierung (** ## ---) ist nicht erlaubt - "
+                f"schreibe reinen Fließtext."
+            )
+        elif "stil wir-perspektive" in issue_l or "wir-perspektive fehlt" in issue_l:
+            hints.append(
+                "Schreibe den Text konsequent in der Wir-Perspektive um, also "
+                "'wir erlebten', 'wir vereinbarten', 'unser Eindruck'. "
+                "Beispiel: 'Frau M. zeigte sich offen.' → 'Wir erlebten Frau M. "
+                "als offen.'"
+            )
+        elif "stil absatzlänge" in issue_l or "stil satzlänge" in issue_l:
+            hints.append(
+                "Passe die Absatz-/Satzlänge an: Vermeide sowohl Bandwurmsätze "
+                "als auch Stakkato. Klinische Berichte haben mittellange Sätze "
+                "und klar gegliederte Absätze."
+            )
+        elif "datenschutz" in issue_l or "halluzination" in issue_l:
+            # Datenschutz/Halluzination NICHT automatisch reparieren -
+            # das braucht menschliches Review. Hint ueberspringen.
+            continue
+        # Sonstige issues ignorieren (keine eindeutige Anweisung ableitbar)
+
+    if not hints:
+        # Keine ableitbaren Repair-Hints
+        return original_text
+
+    style_block = ""
+    if style_text:
+        style_block = (
+            f"\n\nERINNERUNG zum Schreibstil (Stilvorlage, ~300 Wörter):\n"
+            f"{style_text[:1500]}\n"
+        )
+
+    system = (
+        "Du bist ein erfahrener Psychotherapeut und überarbeitest klinische "
+        "Berichte. Deine Aufgabe: einen bereits generierten Text korrigieren, "
+        "indem du gezielt die genannten Probleme behebst. Behalte alle "
+        "korrekten Inhalte unverändert. Erfinde KEINE neuen klinischen Fakten.\n\n"
+        "Antworte ausschließlich mit dem korrigierten Bericht — keine Erklärung, "
+        "keine Vorbemerkung, keine Markdown-Formatierung."
+    )
+
+    user = (
+        f"URSPRÜNGLICHER TEXT ({workflow}):\n"
+        f"{original_text}\n\n"
+        f"FESTGESTELLTE PROBLEME (bitte korrigieren):\n"
+        + "\n".join(f"- {h}" for h in hints)
+        + style_block
+        + "\n\nErstelle nun die korrigierte Fassung. /no_think"
+    )
+
+    try:
+        ollama_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        ollama_model = os.environ.get("OLLAMA_MODEL", "qwen3:32b")
+        async with httpx.AsyncClient(base_url=ollama_url, timeout=300.0) as client:
+            r = await client.post("/api/chat", json={
+                "model": ollama_model,
+                "stream": False,
+                "think": False,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user",   "content": user},
+                ],
+                "options": {
+                    "num_predict": 4000,
+                    "num_ctx": 16384,
+                    "temperature": 0.3,
+                },
+            })
+            if r.status_code != 200:
+                logger.warning("[QA-REPAIR] Ollama-Request fehlgeschlagen: %s", r.status_code)
+                return original_text
+            data = r.json()
+            repaired = (data.get("message", {}).get("content") or "").strip()
+    except Exception as e:
+        logger.warning("[QA-REPAIR] Ollama nicht erreichbar: %s", e)
+        return original_text
+
+    # Diff-Schutz: wenn der Repair-Output dramatisch kürzer ist als das Original
+    # (Modell hat halluziniert oder verkuerzt zu aggressiv), nimm Original.
+    orig_wc = len(original_text.split())
+    rep_wc = len(repaired.split())
+    if rep_wc < orig_wc * 0.3:
+        logger.warning(
+            "[QA-REPAIR] Repair zu kurz (%dw vs %dw original) - Original behalten",
+            rep_wc, orig_wc,
+        )
+        return original_text
+
+    return repaired
+
+
+def _rebuild_eval_result(
+    workflow: str,
+    test_id: str,
+    text: str,
+    test_case: dict,
+    eff_min: int,
+    eff_max: int,
+    style_text_for_consistency,
+) -> "EvalResult":
+    """
+    Baut ein EvalResult fuer einen (neuen) Text mit denselben Pruefungen
+    wie test_eval_workflow. Wird vom QA-Vergleichsmodus genutzt um die
+    Repair-Fassung mit identischen Kriterien zu bewerten.
+    """
+    expected = test_case["expected"]
+    ev = EvalResult(workflow, test_id, text)
+    ev.check_no_think_blocks()
+    ev.length_min = eff_min
+    ev.length_max = eff_max
+    ev.check_word_count(eff_min, eff_max)
+    if "required_keywords" in expected:
+        ev.check_required_keywords(expected["required_keywords"])
+    if "forbidden_patterns" in expected:
+        ev.check_forbidden_patterns(expected["forbidden_patterns"])
+    if "required_sections" in expected:
+        ev.check_required_sections(expected["required_sections"])
+    if "must_contain_sections" in expected:
+        ev.check_required_sections(expected["must_contain_sections"])
+    if "forbidden_names" in expected:
+        ev.check_forbidden_names(expected["forbidden_names"])
+    if "must_not_hallucinate" in expected:
+        ev.check_hallucinations(expected["must_not_hallucinate"])
+    if workflow == "anamnese" or "befund_separator" in expected:
+        ev.check_befund_separator("###BEFUND###")
+    if style_text_for_consistency:
+        try:
+            ev.check_style_consistency(style_text_for_consistency)
+        except Exception:
+            pass
+    return ev
+
+
 # ── Stil-Analyse ─────────────────────────────────────────────────────────────
 
 # IFS/systemische Fachbegriffe für Dichte-Messung
@@ -1341,7 +1548,89 @@ async def test_eval_workflow(workflow, test_case, request):
         for issue in ev.issues:
             logger.warning("[%s/%s] %s", workflow, test_case["id"], issue)
 
-    # Score mindestens 70%
+    # ── v19: QA-Vergleichsmodus ──────────────────────────────────────
+    # Wenn --qa gesetzt ist: zusaetzlichen Repair-Pass fahren und beide
+    # Versionen separat evaluieren. Der eval_report.py erkennt die
+    # .qa.eval.txt-Files und produziert einen Vergleichschart sowie beide
+    # Volltexte im Appendix.
+    qa_enabled = False
+    try:
+        qa_enabled = request.config.getoption("--qa", default=False)
+    except (ValueError, AttributeError):
+        pass
+
+    if qa_enabled:
+        # Baseline = jetzt vorliegendes EvalResult `ev` und `text`
+        # → unter neuem Suffix `.baseline.*` speichern (zusaetzlich zu den
+        # Originaldateien, die als "Default-Ansicht" stehen bleiben).
+        baseline_text_file = out_path / f"{test_case['id']}.baseline.txt"
+        baseline_eval_file = out_path / f"{test_case['id']}.baseline.eval.txt"
+        baseline_text_file.write_text(text, encoding="utf-8")
+        baseline_eval_file.write_text(ev.summary(), encoding="utf-8")
+
+        # Repair-Pass: nur wenn es Issues gibt und keine kritischen
+        # Datenschutz-/Halluzinations-Probleme (die brauchen Menschen).
+        non_critical_issues = [i for i in ev.issues
+                                if "DATENSCHUTZ" not in i and "HALLUZINATION" not in i]
+        if non_critical_issues:
+            # Style-Text als Kontext fuer den Repair-Pass
+            _ref_for_repair = None
+            if isinstance(style_text, str):
+                _ref_for_repair = style_text
+            elif isinstance(style_text, list) and style_text:
+                _ref_for_repair = style_text[0]
+
+            logger.info(
+                "[%s/%s] QA-Repair-Pass startet (%d Issues, %dw Original)",
+                workflow, test_case["id"], len(non_critical_issues), len(text.split()),
+            )
+            qa_text = await _qa_repair_pass(
+                workflow=workflow,
+                original_text=text,
+                issues=non_critical_issues,
+                style_text=_ref_for_repair,
+            )
+        else:
+            # Keine Issues → QA-Text = Baseline-Text
+            qa_text = text
+            logger.info("[%s/%s] QA: keine Issues, Repair übersprungen",
+                        workflow, test_case["id"])
+
+        # Anamnese-Spezialfall: Repair geht ueber den vereinten Text. Falls der
+        # ###BEFUND###-Separator drinwar, ist er hoffentlich auch im Repair-
+        # Output. Falls nicht: das wird im qa-Eval als Issue auftauchen, was
+        # ehrliches Reporting ist.
+
+        # QA-Result speichern + neu evaluieren mit identischen Kriterien
+        qa_text_file = out_path / f"{test_case['id']}.qa.txt"
+        qa_text_file.write_text(qa_text, encoding="utf-8")
+
+        ev_qa = _rebuild_eval_result(
+            workflow=workflow,
+            test_id=test_case["id"] + "-qa",
+            text=qa_text,
+            test_case=test_case,
+            eff_min=eff_min,
+            eff_max=eff_max,
+            style_text_for_consistency=style_text,
+        )
+        qa_eval_file = out_path / f"{test_case['id']}.qa.eval.txt"
+        qa_eval_file.write_text(ev_qa.summary(), encoding="utf-8")
+
+        # Score-Vergleich loggen
+        before = ev.score
+        after = ev_qa.score
+        delta = after - before
+        sign = "+" if delta >= 0 else ""
+        logger.info(
+            "[%s/%s] QA-Vergleich: Baseline %.0f%% → Repair %.0f%% (%s%.0f%%)",
+            workflow, test_case["id"],
+            before*100, after*100, sign, delta*100,
+        )
+        print(f"\n[QA-COMPARE] {workflow}/{test_case['id']}: "
+              f"Baseline={before:.0%} → Repair={after:.0%} ({sign}{delta:+.0%})")
+
+    # Score mindestens 70% (Assertion bezieht sich auf BASELINE, nicht QA)
     assert ev.score >= 0.7, (
         f"Score zu niedrig: {ev.score:.0%} ({len(ev.passed)}/{len(ev.passed)+len(ev.issues)} Checks)\n"
         f"{ev.summary()}"
