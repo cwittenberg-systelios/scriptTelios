@@ -113,7 +113,11 @@ CREATE TABLE IF NOT EXISTS style_embeddings (
 -- Hier landen kuenftig neue Spalten oder Anpassungen an bestehenden Tabellen.
 -- IMMER ADD COLUMN IF NOT EXISTS bzw. ALTER TABLE IF EXISTS verwenden.
 
--- (aktuell keine - bei Bedarf hier erweitern)
+-- v19: Qualitätspruefung (Frontend-Checkbox "Qualitätsprüfung").
+-- Persistiert das QualityCheckResult als JSON-Text, siehe
+-- app/services/quality_check.py. NULL = kein Check ausgefuehrt (Default).
+ALTER TABLE IF EXISTS jobs
+    ADD COLUMN IF NOT EXISTS quality_check_json TEXT;
 
 -- ── D. Indizes ─────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS ix_jobs_workflow         ON jobs (workflow);
