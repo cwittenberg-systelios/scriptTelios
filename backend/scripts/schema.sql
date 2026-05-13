@@ -122,6 +122,7 @@ ALTER TABLE IF EXISTS jobs
 -- JSONB wegen kuenftiger Auswertungen (think_ratio, tokens_hit_cap, retry_used,
 -- degraded). NULL bedeutet "Job stammt aus Pre-v19.1-Zeit" - alle neuen
 -- Jobs haben mindestens eine basale Telemetrie.
+ALTER TABLE IF EXISTS jobs
     ADD COLUMN IF NOT EXISTS generation_telemetry JSONB;
 
 -- ── D. Indizes ─────────────────────────────────────────────────────────────
