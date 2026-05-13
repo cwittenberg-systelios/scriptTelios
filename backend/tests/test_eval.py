@@ -26,48 +26,8 @@ import os
 import re
 import time
 from pathlib import Path
-
 import httpx
 import pytest
-
-
-# ── v19.2 Schritt 8: CLI-Flag fuer Eval-Modus der Two-Stage-Pipeline ────────
-#
-# --summary-mode steuert die Erwartungshaltung der Eval-Tests an Stage 1
-# (Verlauf-Verdichtung). Das Backend selbst wird nicht umkonfiguriert —
-# Stage 1 ist ueber backend/.env (STAGE1_ENABLED) konfiguriert. Dieses Flag
-# entscheidet nur, was die Eval-Tests vom Backend-Verhalten erwarten und wie
-# der Report die Information ausweist.
-#
-# Werte:
-#   auto            (default) — nimm was das Backend liefert; nur dokumentieren
-#   require_stage1            — fail wenn Workflow zur Stage-1-Whitelist gehoert
-#                                und audit.applied != True
-#   require_no_stage1         — fail wenn audit.applied == True
-#                                (fuer Regressions-A/B-Vergleiche gegen Pre-v19.2)
-#
-# Defensive Registrierung: wenn ein eigenes tests/conftest.py das schon
-# registriert hat, fangen wir den ValueError ab. Damit funktioniert das
-# unabhaengig davon ob conftest existiert oder nicht.
-def pytest_addoption(parser):
-    try:
-        parser.addoption(
-            "--summary-mode",
-            action="store",
-            default="auto",
-            choices=("auto", "require_stage1", "require_no_stage1"),
-            help=(
-                "v19.2 Two-Stage-Pipeline-Eval-Modus: 'auto' (nur reporten), "
-                "'require_stage1' (Stage 1 muss fuer Whitelist-Workflows "
-                "angeschlagen sein), 'require_no_stage1' (Stage 1 darf nicht "
-                "angeschlagen sein, fuer A/B-Vergleiche)."
-            ),
-        )
-    except ValueError:
-        # Option ist bereits registriert (z.B. durch tests/conftest.py).
-        # Wir nutzen sie dann von dort - kein Konflikt, kein Fehler.
-        pass
-
 
 # Workflows fuer die Stage 1 ueberhaupt relevant ist. Muss synchron zu
 # backend/app/api/jobs.py::_STAGE1_WORKFLOWS bleiben.
@@ -238,7 +198,7 @@ def _extract_docx_text(docx_path: Path) -> str:
 def _extract_docx_section(docx_path: Path, headings: list[str]) -> str:
     """
     Extrahiert einen Abschnitt aus einem DOCX anhand der Überschrift.
-    
+
     Sammelt ALLE Bold/Heading-Matches, sortiert nach Prioritaet in der headings-Liste,
     und probiert jeden Kandidaten durch bis einer ausreichend Inhalt liefert (>= 20 Woerter).
     Dadurch werden leere Abschnitte (z.B. Vorlagen mit leerer "Begruendung") uebersprungen
@@ -357,7 +317,7 @@ def _extract_docx_section(docx_path: Path, headings: list[str]) -> str:
 def load_style_text(therapeut: str, workflow: str) -> str | None:
     """
     Lädt die Stilvorlage für einen Therapeuten und Workflow.
-    
+
     Sucht in /workspace/eval_data/styles/{therapeut}/ nach dem
     passenden DOCX und extrahiert den relevanten Abschnitt.
     Bei mehreren Dateien (Entlassbericht_01.docx, _02.docx, ...) wird
@@ -428,10 +388,10 @@ def _extract_section_by_text(docx_path: Path, headings: list[str]) -> str:
 def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
     """
     Lädt ALLE Stilvorlagen eines Therapeuten für einen Workflow.
-    
+
     Unterstützt mehrere Dateien pro Workflow:
       Entlassbericht.docx, Entlassbericht_01.docx, Entlassbericht_02.docx, ...
-    
+
     Gibt eine Liste von extrahierten Abschnitten zurück.
     """
     therapeut_dir = STYLES_DIR / therapeut
@@ -933,7 +893,7 @@ class EvalResult:
     def check_style_consistency(self, style_text: str | list[str], tolerance: float = 0.6):
         """
         Ansatz 1: Stil-Konsistenz-Check.
-        
+
         Bei einem Referenztext: vergleicht Output gegen diesen Text.
         Bei mehreren Referenztexten: berechnet die Bandbreite des Therapeuten-Stils
         und prüft ob der Output innerhalb dieser Bandbreite (+ Toleranz) liegt.

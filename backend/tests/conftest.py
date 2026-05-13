@@ -262,6 +262,33 @@ def pytest_addoption(parser):
             "stellt nach dem Lauf das vorherige Modell wieder her."
         ),
     )
+    # ── v19.2 Schritt 8: CLI-Flag fuer Eval-Modus der Two-Stage-Pipeline ────────
+    #
+    # --summary-mode steuert die Erwartungshaltung der Eval-Tests an Stage 1
+    # (Verlauf-Verdichtung). Das Backend selbst wird nicht umkonfiguriert —
+    # Stage 1 ist ueber backend/.env (STAGE1_ENABLED) konfiguriert. Dieses Flag
+    # entscheidet nur, was die Eval-Tests vom Backend-Verhalten erwarten und wie
+    # der Report die Information ausweist.
+    #
+    # Werte:
+    #   auto            (default) — nimm was das Backend liefert; nur dokumentieren
+    #   require_stage1            — fail wenn Workflow zur Stage-1-Whitelist gehoert
+    #                                und audit.applied != True
+    #   require_no_stage1         — fail wenn audit.applied == True
+    #                                (fuer Regressions-A/B-Vergleiche gegen Pre-v19.2)
+    #
+    parser.addoption(
+        "--summary-mode",
+        action="store",
+        default="auto",
+        choices=("auto", "require_stage1", "require_no_stage1"),
+        help=(
+            "v19.2 Two-Stage-Pipeline-Eval-Modus: 'auto' (nur reporten), "
+            "'require_stage1' (Stage 1 muss fuer Whitelist-Workflows "
+            "angeschlagen sein), 'require_no_stage1' (Stage 1 darf nicht "
+            "angeschlagen sein, fuer A/B-Vergleiche)."
+        ),
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
