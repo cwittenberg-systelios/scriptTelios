@@ -630,6 +630,14 @@ if [ "$NEED_RESTART" = "true" ]; then
     if [ -n "$OLLAMA_LLM_LIB" ]; then
         export OLLAMA_LLM_LIBRARY="$OLLAMA_LLM_LIB"
     fi
+    # v19.1: VRAM-Optimierung fuer hoehere Output-Token-Budgets (Schritt 4).
+    # Flash Attention + q8_0 KV-Cache-Quantisierung halbieren den KV-Cache-
+    # Speicherbedarf bei minimalem Qualitaetsverlust. ZWINGEND erforderlich
+    # damit MAX_SAFE_CTX=20480 in llm.py keine VRAM-OOM-Crashes verursacht.
+    # Ohne diese Settings: max_tokens=5500 fuer Entlassbericht greift NICHT,
+    # der dynamische Anpasser clampt auf ~2880 (alter Stand vor v19.1).
+    export OLLAMA_FLASH_ATTENTION=true
+    export OLLAMA_KV_CACHE_TYPE=q8_0
     nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
     sleep 10
 

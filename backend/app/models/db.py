@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Enum, Float, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
 
@@ -58,6 +59,15 @@ class Job(Base):
     model_used: Mapped[str | None] = mapped_column(String(128), nullable=True)
     duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     style_info_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-serialisiert
+
+    # v19.1: Telemetrie der LLM-Generierung.
+    # Felder (siehe app/services/llm.py::_compute_telemetry):
+    #   raw_length, think_length, think_ratio,
+    #   had_orphan_think_open, had_orphan_think_close,
+    #   tokens_hit_cap, used_thinking_fallback, eval_count,
+    #   retry_used, degraded, degraded_reason, original_telemetry
+    # NULL = Job aus Pre-v19.1-Zeit oder nicht-LLM-Job.
+    generation_telemetry: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class Recording(Base):

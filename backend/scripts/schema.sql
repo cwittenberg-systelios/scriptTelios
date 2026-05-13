@@ -113,7 +113,12 @@ CREATE TABLE IF NOT EXISTS style_embeddings (
 -- Hier landen kuenftig neue Spalten oder Anpassungen an bestehenden Tabellen.
 -- IMMER ADD COLUMN IF NOT EXISTS bzw. ALTER TABLE IF EXISTS verwenden.
 
--- (aktuell keine - bei Bedarf hier erweitern)
+-- v19.1: Telemetrie der LLM-Generierung (Think-Block-Diagnose, Retry-Status).
+-- JSONB wegen kuenftiger Auswertungen (think_ratio, tokens_hit_cap, retry_used,
+-- degraded). NULL bedeutet "Job stammt aus Pre-v19.1-Zeit" - alle neuen
+-- Jobs haben mindestens eine basale Telemetrie.
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS generation_telemetry JSONB;
 
 -- ── D. Indizes ─────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS ix_jobs_workflow         ON jobs (workflow);

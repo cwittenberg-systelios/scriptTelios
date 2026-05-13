@@ -403,14 +403,21 @@ async def generate_text(
     # Sicherheitscheck: wenn Input + Output > MAX_SAFE_CTX, User-Content kuerzen.
     # VRAM-Budget haengt von der GPU ab:
     #   RTX Pro 4500 (32GB): 32GB - 19GB Modell - 1GB Overhead = ~12GB fuer KV-Cache
-    #     → 12GB / ~0.75GB pro 1024 Tokens ≈ 16384 Token sicher
+    #     → bei FP16 KV-Cache: 16384 Token sicher
+    #     → bei q8_0 KV-Cache: ~32000 Token sicher (KV halbiert)
     #   RTX 4090 (24GB):     24GB - 18GB Modell(q4_K_S) - 1GB = ~5GB fuer KV-Cache
     #     → 5GB / ~0.75GB pro 1024 Tokens ≈ 6144 Token sicher
-    #   Mit OLLAMA_KV_CACHE_TYPE=q8_0: KV-Cache halbiert → doppelte Kontextlaenge
     #
-    # Konservativ: 16384 – passt auf RTX Pro 4500 (32GB) mit FP16 KV-Cache.
-    # Fuer RTX 4090 (24GB): auf 8192 reduzieren oder OLLAMA_KV_CACHE_TYPE=q8_0 setzen.
-    MAX_SAFE_CTX = 16384
+    # v19.1: Auf 20480 angehoben damit grosse Inputs wie eb-01 (~13.300 Input-
+    # Tokens) noch genug Headroom fuer Entlassbericht-Output (~5500 Tokens
+    # max_tokens) haben. ZWINGEND erforderlich am Pod:
+    #   OLLAMA_FLASH_ATTENTION=true
+    #   OLLAMA_KV_CACHE_TYPE=q8_0
+    # Beide werden in runpod-start.sh gesetzt. Ohne diese Settings besteht
+    # bei Inputs > 17k Tokens akutes VRAM-OOM-Risiko. Der OOM-Fallback in
+    # _is_vram_error() faengt das ab (Retry mit num_ctx=8192), reduziert
+    # aber die Generierungsqualitaet bei langen Inputs deutlich.
+    MAX_SAFE_CTX = 20480
     # Workflow-spezifische Mindest-Output-Tokens:
     # Der Output darf nie unter dieses Minimum fallen, sonst wird der Input gekuerzt.
     MIN_OUTPUT_TOKENS = {
@@ -475,76 +482,96 @@ async def generate_text(
         model=model, assistant_primer=assistant_primer,
     )
 
-    # Primer war Teil des Outputs – wieder voranstellen damit der Text vollständig ist
-    if assistant_primer and result.get("text"):
-        result["text"] = assistant_primer + result["text"]
+    # ── Postprocessing (v19.1: ausgelagert in _postprocess_text, damit
+    # ein etwaiger Retry den exakt gleichen Pfad durchlaeuft) ──────────────
+    raw_first_pass = result.get("text") or ""
+    result["text"] = _postprocess_text(
+        text=raw_first_pass,
+        assistant_primer=assistant_primer,
+        workflow=workflow,
+        max_words=max_words,
+        expected_keywords=expected_keywords,
+    )
 
-    # Output-Postprocessing
-    if result.get("text"):
-        import re as _re
-        text = result["text"]
+    # ── v19.1: Think-Block-Detection + ggf. Retry ────────────────────────
+    # Wenn der erste Pass durch dominanten Think-Block faktisch gescheitert
+    # ist (zu kurzer Output UND Think-Indikatoren), starten wir EINEN
+    # haerteren Retry. Wenn auch der scheitert, geht der schlechte Output
+    # zurueck - aber mit degraded=True markiert.
+    is_too_short, reason = _is_output_implausibly_short(
+        workflow=workflow,
+        final_text=result.get("text", ""),
+        telemetry=result.get("telemetry", {}),
+    )
 
-        # Qwen3 Think-Blöcke entfernen – alle Varianten:
-        # 1. Vollstaendige <think>...</think> Blöcke
-        # 2. Orphan </think> ohne oeffnendes Tag (Primer hat <think> abgeschnitten)
-        # 3. Orphan <think> ohne schliessendes Tag (Output abgebrochen)
-        if "<think>" in text or "</think>" in text:
-            # Erst vollstaendige Bloecke
-            text = _re.sub(r"<think>.*?</think>\s*", "", text, flags=_re.DOTALL)
-            # Dann orphan </think> und alles davor bis zum letzten Absatzumbruch
-            # (der Think-Content steht vor dem </think>)
-            text = _re.sub(r"^.*?</think>\s*", "", text, flags=_re.DOTALL)
-            # Orphan <think> am Ende (unvollstaendiger Block)
-            text = _re.sub(r"<think>.*$", "", text, flags=_re.DOTALL)
-            logger.info("Qwen3 Think-Block aus Output entfernt")
+    if is_too_short:
+        logger.warning(
+            "Output-Plausibilitaetspruefung fehlgeschlagen: %s - Retry startet",
+            reason,
+        )
+        retry_result = await _retry_without_thinking(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            max_tokens=max_tokens,
+            model=model,
+            assistant_primer=assistant_primer,
+            original_telemetry=result.get("telemetry", {}),
+        )
 
-        # Doppelten Text erkennen und entfernen:
-        # Manchmal generiert Qwen3 den Text zweimal (vor und nach </think>).
-        # Wenn der Text die Anamnese-Primer-Phrase doppelt enthaelt,
-        # nur den zweiten (besseren) Teil behalten.
-        primer_phrases = [
-            "stellt sich vor", "stellt sich zur", "Vorstellungsanlass",
-            "Zu Beginn des stationären", "Im bisherigen Verlauf",
-        ]
-        for phrase in primer_phrases:
-            parts = text.split(phrase)
-            if len(parts) >= 3:
-                # Phrase kommt mindestens 2x vor → Text ist doppelt
-                # Zweiten Teil behalten (nach dem zweiten Vorkommen)
-                second_start = text.index(phrase, text.index(phrase) + 1)
-                text = text[second_start:]
-                logger.warning("Doppelten Text erkannt und bereinigt (Phrase: '%s')", phrase)
-                break
+        # Retry-Output ebenfalls durch Postprocessing
+        retry_raw = retry_result.get("text") or ""
+        retry_processed = _postprocess_text(
+            text=retry_raw,
+            assistant_primer=assistant_primer,
+            workflow=workflow,
+            max_words=max_words,
+            expected_keywords=expected_keywords,
+        )
 
-        result["text"] = strip_markdown_formatting(deduplicate_paragraphs(text))
+        retry_words = len(retry_processed.split()) if retry_processed else 0
+        first_words = len(result.get("text", "").split()) if result.get("text") else 0
 
-    # ── v16: Output-Postprocessing ──────────────────────────────────────────
-    # Drei Schritte als Verteidigungslinie gegen Modell-Quirks die per
-    # Prompt-Engineering nicht zuverlaessig abzufangen sind:
-    #   1. Komposita-Klebebugs reparieren ("Aufenthaltszeigte" -> "Aufenthaltes zeigte")
-    #   2. Loop-Repetition am Output-Ende erkennen und abschneiden
-    #   3. Optional: Hard-Cap auf Wortzahl wenn vom Caller (jobs.py) angegeben
-    #   4. Optional: Keyword-Presence-Check (nur Logging)
-    if result.get("text"):
-        try:
-            from app.services.postprocessing import postprocess_output
-            result["text"] = postprocess_output(
-                result["text"],
-                workflow=workflow,
-                max_words=max_words,
-                expected_keywords=expected_keywords,
+        if retry_processed and retry_words > first_words:
+            # Retry hat geliefert - nehmen, Original-Telemetrie als
+            # original_telemetry mitgeben fuer Audit
+            logger.info(
+                "Retry erfolgreich: Output %d -> %d Woerter (Modell hat im Retry "
+                "den Think-Block vermieden)",
+                first_words, retry_words,
             )
-        except ImportError:
-            logger.debug("postprocessing-Modul nicht verfuegbar - v16-Cleanups uebersprungen")
-        except Exception as e:
-            logger.warning("Postprocessing-Fehler (Output bleibt unveraendert): %s", e)
+            original_telemetry = result.get("telemetry", {})
+            result = {
+                "text":                retry_result["text"],  # Roh, fuer Konsistenz im result
+                "model_used":          retry_result["model_used"],
+                "token_count":         retry_result.get("token_count"),
+                "telemetry":           retry_result.get("telemetry", {}),
+                "retry_used":          True,
+                "original_too_short_reason": reason,
+                "original_telemetry":  original_telemetry,
+            }
+            result["text"] = retry_processed
+        else:
+            logger.error(
+                "Retry hat das Problem NICHT geloest - beide Versuche zu kurz "
+                "(first=%d Woerter, retry=%d Woerter). Output wird trotzdem "
+                "zurueckgegeben, aber als degraded markiert.",
+                first_words, retry_words,
+            )
+            result["degraded"] = True
+            result["degraded_reason"] = reason
+            result["retry_used"] = True
+            if retry_result.get("retry_failed"):
+                result["retry_failed"] = True
 
     result["duration_s"] = round(time.time() - t0, 1)
     logger.info(
-        "Generierung: %d Tokens in %.1fs (Modell: %s)",
+        "Generierung: %d Tokens in %.1fs (Modell: %s)%s",
         result.get("token_count", 0),
         result["duration_s"],
         result["model_used"],
+        " [DEGRADED]" if result.get("degraded") else (
+            " [RETRY]" if result.get("retry_used") else ""
+        ),
     )
     return result
 
@@ -657,6 +684,298 @@ async def _ollama_unload(model: Optional[str] = None) -> None:
         logger.debug("Ollama-Entladen nicht moeglich: %s", e)
 
 
+# =============================================================================
+# v19.1: Think-Block-Detection & Retry-Layer
+# =============================================================================
+# Hintergrund (eval_report2 vom 12.05.2026):
+#
+#   Qwen3 verbraucht bei sehr langen, anweisungsdichten Prompts (z.B.
+#   Entlassbericht mit ~10.600 Woerter Input) gelegentlich das gesamte
+#   num_predict-Budget im <think>...</think>-Block. Nach Stripping
+#   bleibt ein leerer oder fast leerer Output. /no_think + think:false
+#   reichen als Schutz nicht zuverlaessig.
+#
+# Strategie: Defense in Depth.
+#   1. Telemetrie (_compute_telemetry) -> misst was passiert
+#   2. Detection  (_is_output_implausibly_short) -> erkennt den Bug
+#   3. Retry      (_retry_without_thinking) -> haerterer 2. Versuch
+#
+# Wenn auch der Retry scheitert, geht der schlechte Output trotzdem
+# zurueck, aber mit degraded=True. Eval-Framework macht daraus dann
+# einen Hard-Fail (Schritt 7).
+# =============================================================================
+
+
+def _compute_telemetry(
+    raw_text: str,
+    eval_count: int,
+    max_tokens: int,
+    used_thinking_fallback: bool = False,
+) -> dict:
+    """
+    Misst Indikatoren fuer Think-Block-Dominanz im LLM-Output.
+
+    Wird DIREKT auf dem Rohtext aus Ollama berechnet (vor Postprocessing),
+    damit <think>-Anteile noch sichtbar sind.
+
+    Returns:
+        dict mit Feldern:
+          raw_length, think_length, think_ratio,
+          had_orphan_think_open, had_orphan_think_close,
+          tokens_hit_cap, used_thinking_fallback, eval_count
+    """
+    raw_length = len(raw_text)
+    has_open  = "<think>" in raw_text
+    has_close = "</think>" in raw_text
+    think_length = 0
+    if has_close:
+        # Inhalt vor dem ersten </think> = Think-Block
+        think_part = raw_text.split("</think>", 1)[0]
+        if has_open:
+            think_part = think_part.split("<think>", 1)[-1]
+        think_length = len(think_part)
+    elif has_open:
+        # <think> ohne </think> = abgebrochener Block, alles dahinter ist Think
+        think_part = raw_text.split("<think>", 1)[-1]
+        think_length = len(think_part)
+
+    return {
+        "raw_length":             raw_length,
+        "think_length":           think_length,
+        "think_ratio":            round(think_length / raw_length, 3) if raw_length else 0.0,
+        "had_orphan_think_open":  has_open and not has_close,
+        "had_orphan_think_close": has_close and not has_open,
+        "tokens_hit_cap":         eval_count >= max(0, max_tokens - 50),  # 50-Token-Toleranz
+        "used_thinking_fallback": used_thinking_fallback,
+        "eval_count":             eval_count,
+    }
+
+
+# Untergrenzen pro Workflow fuer plausible Output-Laenge (Wortzahl).
+# Werte sind grob 50% der min_words aus MIN_OUTPUT_TOKENS in generate_text():
+# unter dieser Schwelle ist eine legitime Generierung unwahrscheinlich.
+_MIN_PLAUSIBLE_WORDS = {
+    "entlassbericht":     300,
+    "verlaengerung":      200,
+    "folgeverlaengerung": 200,
+    "akutantrag":         100,
+    "anamnese":           175,
+    "befund":             80,
+    "dokumentation":      125,
+}
+
+
+def _is_output_implausibly_short(
+    workflow: Optional[str],
+    final_text: str,
+    telemetry: dict,
+) -> tuple[bool, str]:
+    """
+    Pruef ob der finale Output (nach Postprocessing) eindeutig zu kurz
+    ist um eine legitime Generierung zu sein UND Think-Block-Indikatoren
+    vorhanden sind.
+
+    Beide Bedingungen muessen erfuellt sein - kurze Outputs ohne
+    Think-Indikatoren sind moeglicherweise legitim (z.B. sehr kurze
+    Aufnahme) und werden NICHT als degradiert klassifiziert.
+
+    Returns:
+        (is_too_short, reason). reason ist leer wenn alles ok.
+    """
+    if not final_text:
+        return True, "Output komplett leer nach Postprocessing"
+
+    word_count = len(final_text.split())
+    threshold = _MIN_PLAUSIBLE_WORDS.get(workflow or "", 100)
+
+    if word_count < threshold:
+        suspicious = (
+            telemetry.get("think_ratio", 0) > 0.3
+            or telemetry.get("tokens_hit_cap", False)
+            or telemetry.get("had_orphan_think_open", False)
+            or telemetry.get("had_orphan_think_close", False)
+            or telemetry.get("used_thinking_fallback", False)
+        )
+        if suspicious:
+            return True, (
+                f"Output zu kurz ({word_count}w < {threshold}w threshold) "
+                f"und Think-Block-Indikatoren: ratio={telemetry.get('think_ratio'):.0%}, "
+                f"tokens_cap={telemetry.get('tokens_hit_cap')}, "
+                f"thinking_fallback={telemetry.get('used_thinking_fallback')}"
+            )
+
+    return False, ""
+
+
+def _postprocess_text(
+    text: str,
+    assistant_primer: str,
+    workflow: Optional[str],
+    max_words: Optional[int],
+    expected_keywords: Optional[list[str]],
+) -> str:
+    """
+    Wendet den gesamten Postprocessing-Pfad auf einen Rohtext an.
+    Gemeinsame Implementierung fuer den ersten Pass UND den Retry-Pass
+    in generate_text(); verhindert Code-Duplikation.
+    """
+    import re as _re
+
+    # Primer wieder voranstellen (war Teil des Outputs, vom LLM nicht
+    # nochmal mitgeneriert)
+    if assistant_primer and text:
+        text = assistant_primer + text
+
+    # Qwen3 Think-Bloecke entfernen - alle Varianten
+    if "<think>" in text or "</think>" in text:
+        text = _re.sub(r"<think>.*?</think>\s*", "", text, flags=_re.DOTALL)
+        text = _re.sub(r"^.*?</think>\s*", "", text, flags=_re.DOTALL)
+        text = _re.sub(r"<think>.*$", "", text, flags=_re.DOTALL)
+        logger.info("Qwen3 Think-Block aus Output entfernt")
+
+    # Doppelten Text erkennen (Qwen3 generiert manchmal zweimal)
+    primer_phrases = [
+        "stellt sich vor", "stellt sich zur", "Vorstellungsanlass",
+        "Zu Beginn des stationären", "Im bisherigen Verlauf",
+    ]
+    for phrase in primer_phrases:
+        parts = text.split(phrase)
+        if len(parts) >= 3:
+            second_start = text.index(phrase, text.index(phrase) + 1)
+            text = text[second_start:]
+            logger.warning("Doppelten Text erkannt und bereinigt (Phrase: '%s')", phrase)
+            break
+
+    text = strip_markdown_formatting(deduplicate_paragraphs(text))
+
+    # v16: Komposita, Loop-Repetition, Hard-Cap, Keyword-Check
+    if text:
+        try:
+            from app.services.postprocessing import postprocess_output
+            text = postprocess_output(
+                text,
+                workflow=workflow,
+                max_words=max_words,
+                expected_keywords=expected_keywords,
+            )
+        except ImportError:
+            logger.debug("postprocessing-Modul nicht verfuegbar - v16-Cleanups uebersprungen")
+        except Exception as e:
+            logger.warning("Postprocessing-Fehler (Output bleibt unveraendert): %s", e)
+
+    return text
+
+
+async def _retry_without_thinking(
+    system_prompt: str,
+    user_content: str,
+    max_tokens: int,
+    model: Optional[str],
+    assistant_primer: str,
+    original_telemetry: dict,
+) -> dict:
+    """
+    Zweiter Versuch wenn der erste durch Think-Block scheiterte.
+
+    Haertere Anti-Think-Massnahmen:
+      1. /no_think am ANFANG UND Ende des user_content (doppelt)
+      2. System-Prompt-Append: explizite Anti-Think-Anweisung
+      3. Leicht erhoehte Temperature (+0.2, max 0.6) bricht
+         deterministische Reasoning-Loops
+      4. Maximal EIN Retry - kein endloser Loop
+
+    Returns dict mit text, model_used, token_count, telemetry, retry_used=True.
+    """
+    effective_model = model or settings.OLLAMA_MODEL
+
+    # /no_think doppelt - bestehende /no_think am Ende erst entfernen,
+    # dann am Anfang UND Ende neu setzen
+    hard_no_think = (
+        "/no_think\n\n"
+        + user_content.rstrip().removesuffix("/no_think").rstrip()
+        + "\n\n/no_think"
+    )
+
+    # Strikter System-Prompt-Append
+    hard_system = system_prompt + (
+        "\n\nWICHTIG: KEIN INNERES NACHDENKEN. "
+        "Schreibe direkt den finalen Text. "
+        "KEINE <think>-Tags, KEINE Meta-Reflexion, KEINE Vorbemerkungen. "
+        "Beginne sofort mit dem Bericht-Text."
+    )
+
+    profile = _get_model_profile(effective_model)
+    num_ctx = _estimate_num_ctx(hard_system, hard_no_think, max_tokens)
+    num_ctx = max(num_ctx, profile.get("min_ctx", 2048))
+
+    payload = {
+        "model":      effective_model,
+        "stream":     False,
+        "think":      False,
+        "keep_alive": -1,
+        "options": {
+            "num_predict": max_tokens,
+            "num_ctx":     num_ctx,
+            "temperature": min(0.6, profile["temperature"] + 0.2),  # leicht hoeher
+            "top_p":       profile["top_p"],
+        },
+        "messages": [
+            {"role": "system",    "content": hard_system},
+            {"role": "user",      "content": hard_no_think},
+            *([{"role": "assistant", "content": assistant_primer}] if assistant_primer else []),
+        ],
+    }
+
+    logger.warning(
+        "Retry ohne Thinking gestartet (Original: think_ratio=%.0f%%, "
+        "tokens_cap=%s, thinking_fallback=%s)",
+        original_telemetry.get("think_ratio", 0) * 100,
+        original_telemetry.get("tokens_hit_cap"),
+        original_telemetry.get("used_thinking_fallback"),
+    )
+
+    client = _get_ollama_client()
+    try:
+        r = await client.post("/api/chat", json=payload)
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        # Retry-Fehler: keine zweite Eskalation, einfach leeres Result
+        # zurueckgeben. Aufrufer (generate_text) markiert degradiert.
+        logger.error("Retry-Call fehlgeschlagen (HTTP %s): %s", e.response.status_code, e.response.text[:200])
+        return {"text": "", "model_used": f"ollama/{effective_model}",
+                "token_count": 0, "telemetry": original_telemetry,
+                "retry_used": True, "retry_failed": True}
+    except Exception as e:
+        logger.error("Retry-Call fehlgeschlagen (%s)", e)
+        return {"text": "", "model_used": f"ollama/{effective_model}",
+                "token_count": 0, "telemetry": original_telemetry,
+                "retry_used": True, "retry_failed": True}
+
+    data = r.json()
+    msg = data.get("message", {})
+    text = (msg.get("content", "") or data.get("response", "") or "").strip()
+    used_thinking_fallback = False
+    if not text and msg.get("thinking"):
+        text = msg["thinking"].strip()
+        used_thinking_fallback = True
+
+    eval_count = data.get("eval_count") or 0
+    telemetry = _compute_telemetry(
+        raw_text=text,
+        eval_count=eval_count,
+        max_tokens=max_tokens,
+        used_thinking_fallback=used_thinking_fallback,
+    )
+
+    return {
+        "text":        text,
+        "model_used":  f"ollama/{effective_model}",
+        "token_count": eval_count,
+        "telemetry":   telemetry,
+        "retry_used":  True,
+    }
+
+
 async def _generate_ollama(
     system_prompt: str,
     user_content: str,
@@ -749,14 +1068,38 @@ async def _generate_ollama(
     ).strip()
     # Qwen3 Thinking-Fallback: wenn content leer aber thinking gefuellt,
     # hat das Modell alle Tokens im Thinking verbraucht.
+    used_thinking_fallback = False
     if not text and msg.get("thinking"):
         logger.warning(
             "Ollama content leer, verwende thinking-Feld als Fallback (%d Zeichen)",
             len(msg["thinking"]),
         )
         text = msg["thinking"].strip()
+        used_thinking_fallback = True
+
+    # v19.1: Telemetrie fuer Think-Block-Diagnose.
+    # Wird in generate_text() ausgewertet (Detection + ggf. Retry) und
+    # spaeter ueber job_queue/jobs an die DB und das Performance-Log
+    # weitergereicht.
+    eval_count = data.get("eval_count") or 0
+    telemetry = _compute_telemetry(
+        raw_text=text,
+        eval_count=eval_count,
+        max_tokens=max_tokens,
+        used_thinking_fallback=used_thinking_fallback,
+    )
+    if telemetry["think_ratio"] > 0.5 or telemetry["tokens_hit_cap"]:
+        logger.warning(
+            "Think-Block-Verdacht: think_ratio=%.0f%%, tokens_hit_cap=%s, "
+            "raw=%d think_chars=%d thinking_fallback=%s (Modell=%s)",
+            telemetry["think_ratio"] * 100, telemetry["tokens_hit_cap"],
+            telemetry["raw_length"], telemetry["think_length"],
+            telemetry["used_thinking_fallback"], effective_model,
+        )
+
     return {
         "text": text,
         "model_used": f"ollama/{effective_model}",
         "token_count": data.get("eval_count"),
+        "telemetry": telemetry,
     }

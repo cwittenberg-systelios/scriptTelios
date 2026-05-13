@@ -62,6 +62,18 @@ def _log_performance(job: "JobState", queue_size: int) -> None:
         "output_chars": len(job.result_text) if job.result_text else 0,
         "queue_size":   queue_size,
     }
+    # v19.1: Think-Block-Telemetrie ins Performance-Log einbetten.
+    # Erlaubt Auswertung "wie oft hat der Retry-Layer angeschlagen" und
+    # "wie oft kam degraded=true" ohne DB-Abfrage.
+    tel = job.generation_telemetry or {}
+    if tel:
+        entry["telemetry"] = {
+            "think_ratio":            tel.get("think_ratio"),
+            "tokens_hit_cap":         tel.get("tokens_hit_cap"),
+            "used_thinking_fallback": tel.get("used_thinking_fallback"),
+            "retry_used":             tel.get("retry_used", False),
+            "degraded":               tel.get("degraded", False),
+        }
     perf_logger.info(json.dumps(entry, ensure_ascii=False))
 
 
@@ -105,6 +117,10 @@ class JobState:
         self.model_used         : Optional[str] = None
         self.duration_s         : Optional[float] = None
         self.style_info         : Optional[dict] = None
+        # v19.1: Think-Block-Telemetrie aus llm.generate_text().
+        # Kann Felder enthalten: think_ratio, tokens_hit_cap, retry_used,
+        # degraded, degraded_reason, used_thinking_fallback, eval_count, ...
+        self.generation_telemetry: Optional[dict] = None
         self._cancel_requested  : bool = False
         self.input_meta         : Optional[dict] = None
 
@@ -137,6 +153,7 @@ class JobState:
             "model_used":      self.model_used,
             "duration_s":      self.duration_s,
             "style_info":      self.style_info,
+            "generation_telemetry": self.generation_telemetry,
         }
 
 
@@ -225,6 +242,7 @@ class JobQueue:
                     "model_used":      db_job.model_used,
                     "duration_s":      db_job.duration_s,
                     "style_info":      json.loads(db_job.style_info_json) if db_job.style_info_json else None,
+                    "generation_telemetry": db_job.generation_telemetry,
                 }
         except Exception as e:
             logger.warning("Job-DB-Lookup fehlgeschlagen: %s", e)
@@ -285,6 +303,7 @@ class JobQueue:
                         model_used=state.model_used,
                         duration_s=state.duration_s,
                         style_info_json=json.dumps(state.style_info) if state.style_info else None,
+                        generation_telemetry=state.generation_telemetry,
                     )
                 )
                 await db.commit()
@@ -318,6 +337,9 @@ class JobQueue:
             job.result_file        = result.get("file")
             job.model_used         = result.get("model_used")
             job.style_info         = result.get("style_info")
+            # v19.1: Telemetrie aus dem LLM-Result (Pipeline jobs.py
+            # haengt sie an result["generation_telemetry"] an).
+            job.generation_telemetry = result.get("generation_telemetry")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
 
             if job._cancel_requested:

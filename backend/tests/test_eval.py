@@ -758,6 +758,12 @@ class EvalResult:
         self.length_min: int = 0
         self.length_max: int = 0
         self.length_n_substantial: int = 0
+        # v19.1: Telemetrie aus llm.generate_text (Think-Block-Diagnose,
+        # Retry-Status). Vom Test gesetzt nachdem das Job-Result gefetcht
+        # wurde; vom Reporter aggregiert.
+        self.generation_telemetry: dict | None = None
+        self.degraded: bool = False
+        self.retry_used: bool = False
 
     def check_word_count(self, min_words: int, max_words: int):
         if self.word_count < min_words:
@@ -1032,11 +1038,35 @@ class EvalResult:
             lines.append(f"  Stil-Varianz (A vs B): {self.style_variance_score:.2f} (>0.15 = gut)")
         if hasattr(self, "llm_style_score"):
             lines.append(f"  LLM-Stil-Bewertung: {self.llm_style_score}/5")
+        # v19.1: Generierungs-Stabilitaet (Think-Block-Diagnose)
+        if self.generation_telemetry:
+            tel = self.generation_telemetry
+            flags = []
+            if tel.get("degraded"):
+                flags.append("DEGRADED")
+            if tel.get("retry_used"):
+                flags.append("RETRY")
+            if tel.get("tokens_hit_cap"):
+                flags.append("TOKEN-CAP")
+            if tel.get("used_thinking_fallback"):
+                flags.append("THINKING-FALLBACK")
+            flag_str = " ".join(flags) if flags else "OK"
+            tr = tel.get("think_ratio")
+            tr_str = f", think_ratio={tr:.0%}" if tr is not None else ""
+            lines.append(f"  Generierungs-Stabilitaet: {flag_str}{tr_str}")
         return "\n".join(lines)
 
     @property
     def score(self) -> float:
-        """Score 0.0-1.0 basierend auf bestandenen Checks."""
+        """Score 0.0-1.0 basierend auf bestandenen Checks.
+
+        v19.1: Wenn der LLM-Output als degraded markiert wurde
+        (Think-Block-Bug, beide Versuche zu kurz), ist der Score
+        unabhaengig von der Check-Bilanz 0 - der Output ist faktisch
+        nicht brauchbar.
+        """
+        if self.degraded:
+            return 0.0
         total = len(self.passed) + len(self.issues)
         return len(self.passed) / total if total > 0 else 0.0
 
@@ -1166,6 +1196,21 @@ async def test_eval_workflow(workflow, test_case, request):
     # Evaluieren
     expected = test_case["expected"]
     ev = EvalResult(workflow, test_case["id"], text)
+
+    # v19.1: Telemetrie aus dem Job-Result auf EvalResult uebernehmen
+    # und ggf. einen GENERATION_DEGRADED-Issue erzeugen. Das degraded-Flag
+    # treibt den score-Property auf 0 (siehe EvalResult.score).
+    _telemetry = job.get("generation_telemetry") or {}
+    ev.generation_telemetry = _telemetry
+    ev.retry_used = bool(_telemetry.get("retry_used"))
+    if _telemetry.get("degraded"):
+        ev.degraded = True
+        ev.issues.append(
+            f"GENERATION_DEGRADED: {_telemetry.get('degraded_reason') or 'unbekannt'}"
+        )
+    if ev.retry_used and not ev.degraded:
+        # Retry war erfolgreich - kein Issue, aber als Info-Pass notieren
+        ev.passed.append("Retry-Layer angeschlagen und erfolgreich")
 
     ev.check_no_think_blocks()
 
