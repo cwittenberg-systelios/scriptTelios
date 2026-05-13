@@ -4,7 +4,7 @@ Datenbankmodelle.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, Float, Integer, String, Text, JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
@@ -67,7 +67,7 @@ class Job(Base):
     #   tokens_hit_cap, used_thinking_fallback, eval_count,
     #   retry_used, degraded, degraded_reason, original_telemetry
     # NULL = Job aus Pre-v19.1-Zeit oder nicht-LLM-Job.
-    generation_telemetry: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    generation_telemetry: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=True)
 
     # v19.2: Two-Stage-Pipeline – Stage 1 (Verlauf-Verdichtung).
     # verlauf_summary_text:   der von Stage 1 erzeugte verdichtete Text
@@ -80,7 +80,7 @@ class Job(Base):
     #                         degraded, issues, fallback_reason, ...).
     #                         NULL wenn Workflow Stage 1 nicht beruehrt.
     verlauf_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    verlauf_summary_audit: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    verlauf_summary_audit: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=True)
 
 
 class Recording(Base):
