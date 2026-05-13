@@ -118,6 +118,11 @@ CREATE TABLE IF NOT EXISTS style_embeddings (
 -- app/services/quality_check.py. NULL = kein Check ausgefuehrt (Default).
 ALTER TABLE IF EXISTS jobs
     ADD COLUMN IF NOT EXISTS quality_check_json TEXT;
+-- v19.1: Telemetrie der LLM-Generierung (Think-Block-Diagnose, Retry-Status).
+-- JSONB wegen kuenftiger Auswertungen (think_ratio, tokens_hit_cap, retry_used,
+-- degraded). NULL bedeutet "Job stammt aus Pre-v19.1-Zeit" - alle neuen
+-- Jobs haben mindestens eine basale Telemetrie.
+    ADD COLUMN IF NOT EXISTS generation_telemetry JSONB;
 
 -- ── D. Indizes ─────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS ix_jobs_workflow         ON jobs (workflow);

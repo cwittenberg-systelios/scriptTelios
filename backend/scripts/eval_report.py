@@ -84,7 +84,10 @@ def load_eval_results(d: Path) -> dict:
                  # v19: QA-Vergleichsmodus (--qa)
                  "qa_score": None, "qa_passed": 0, "qa_issues": 0,
                  "qa_word_count": 0, "qa_status": None, "qa_issue_list": [],
-                 "qa_text": None, "baseline_text": None}
+                 "qa_text": None, "baseline_text": None,
+                 # v19.1: Generierungs-Telemetrie (Think-Block-Diagnose, Retry)
+                 "gen_degraded": False, "gen_retry_used": False,
+                 "gen_telemetry": None}
             for ln in ef.read_text("utf-8").split("\n"):
                 ln = ln.strip()
                 if ln.startswith("[PASS]") or ln.startswith("[FAIL]"):
@@ -116,6 +119,18 @@ def load_eval_results(d: Path) -> dict:
             if sf.exists():
                 try: e["style_metrics"] = json.loads(sf.read_text("utf-8"))
                 except: pass
+            # v19.1: Generierungs-Telemetrie (Think-Block-Diagnose, Retry-Status).
+            # Geschrieben vom test_eval.py-Patch wenn das LLM-Result entsprechende
+            # Felder lieferte; fehlt bei Pre-v19.1-Ergebnissen.
+            tf2 = wd/f"{tid}.telemetry.json"
+            if tf2.exists():
+                try:
+                    _td = json.loads(tf2.read_text("utf-8"))
+                    e["gen_degraded"]   = bool(_td.get("degraded"))
+                    e["gen_retry_used"] = bool(_td.get("retry_used"))
+                    e["gen_telemetry"]  = _td.get("telemetry") or {}
+                except Exception:
+                    pass
             # Referenz- und Output-Text fuer 2-spaltigen Vergleich
             rf = wd/f"{tid}.ref.txt"
             if rf.exists(): e["ref_text"] = rf.read_text("utf-8")
@@ -501,6 +516,108 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
             sl, sv, [src_colors.get(l, C["gray"]) for l in sl],
         ))
 
+    # ── v19.1: Generierungs-Stabilitaet (Think-Block-Diagnose) ───────────
+    # Aggregat ueber alle Testfaelle: wie oft schlug der Retry-Layer an,
+    # wie oft blieb der Output trotz Retry degradiert, wie oft traf der
+    # Generation-Cap zu. Datenquelle: *.telemetry.json (geschrieben vom
+    # test_eval.py-Patch v19.1). Fehlende Telemetrie = Pre-v19.1-Run.
+    _gen_total = sum(1 for e in ae if e.get("gen_telemetry") is not None)
+    if _gen_total:
+        _gen_retry    = sum(1 for e in ae if e.get("gen_retry_used"))
+        _gen_degraded = sum(1 for e in ae if e.get("gen_degraded"))
+        _gen_tokcap   = sum(1 for e in ae
+                            if (e.get("gen_telemetry") or {}).get("tokens_hit_cap"))
+        _gen_thinkfb  = sum(1 for e in ae
+                            if (e.get("gen_telemetry") or {}).get("used_thinking_fallback"))
+
+        story.append(Spacer(1, 4*mm))
+        story.append(Paragraph("Generierungs-Stabilität", st["H2"]))
+
+        # KPI-Tabelle: vier Indikatoren als Quick-View
+        def _pct(n: int) -> str:
+            return f"{n}/{_gen_total} ({100*n/_gen_total:.0f}%)"
+        kpi = Table(
+            [
+                ["Indikator", "Häufigkeit", "Bedeutung"],
+                ["Retry ausgelöst",     _pct(_gen_retry),
+                 "Erster Pass war zu kurz → härterer 2. Pass"],
+                ["Output degradiert",   _pct(_gen_degraded),
+                 "Beide Pässe zu kurz → Think-Block-Bug nicht behoben"],
+                ["Token-Cap erreicht",  _pct(_gen_tokcap),
+                 "num_predict-Budget voll ausgeschöpft"],
+                ["Thinking-Fallback",   _pct(_gen_thinkfb),
+                 "content leer, nur thinking-Feld vorhanden"],
+            ],
+            colWidths=[4.5*cm, 3.5*cm, 8.5*cm],
+        )
+        kpi.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), C["dark"]),
+            ("TEXTCOLOR",  (0,0), (-1,0), colors.white),
+            ("FONTNAME",   (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",   (0,0), (-1,-1), 8),
+            ("ALIGN",      (1,0), (1,-1), "CENTER"),
+            ("GRID",       (0,0), (-1,-1), .5, C["grid"]),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, C["cream"]]),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+            ("TOPPADDING",    (0,0), (-1,-1), 3),
+            # Degraded-Zeile rot einfaerben wenn >0
+            *([("BACKGROUND", (0,2), (-1,2), colors.HexColor("#fde0e0"))]
+              if _gen_degraded > 0 else []),
+        ]))
+        story.append(kpi)
+        story.append(Spacer(1, 2*mm))
+
+        # Pro-Workflow-Aggregation
+        wf_rows = [["Workflow", "Tests", "Retry", "Degraded",
+                    "Ø think_ratio", "Token-Cap"]]
+        for _wf, _entries in data["workflows"].items():
+            _wfe = [e for e in _entries if e.get("gen_telemetry") is not None]
+            if not _wfe:
+                continue
+            _n = len(_wfe)
+            _r = sum(1 for e in _wfe if e.get("gen_retry_used"))
+            _d = sum(1 for e in _wfe if e.get("gen_degraded"))
+            _tc = sum(1 for e in _wfe
+                      if (e.get("gen_telemetry") or {}).get("tokens_hit_cap"))
+            _ratios = [
+                (e.get("gen_telemetry") or {}).get("think_ratio") or 0
+                for e in _wfe
+            ]
+            _avg_ratio = sum(_ratios) / len(_ratios) if _ratios else 0.0
+            wf_rows.append([
+                WF_LBL.get(_wf, _wf),
+                str(_n),
+                str(_r),
+                str(_d),
+                f"{_avg_ratio:.0%}",
+                str(_tc),
+            ])
+        if len(wf_rows) > 1:
+            wft = Table(wf_rows, colWidths=[5.0*cm, 1.6*cm, 1.6*cm, 1.8*cm,
+                                            2.4*cm, 1.8*cm])
+            wft.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), C["dark"]),
+                ("TEXTCOLOR",  (0,0), (-1,0), colors.white),
+                ("FONTNAME",   (0,0), (-1,0), "Helvetica-Bold"),
+                ("FONTSIZE",   (0,0), (-1,-1), 8),
+                ("ALIGN",      (1,0), (-1,-1), "CENTER"),
+                ("GRID",       (0,0), (-1,-1), .5, C["grid"]),
+                ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, C["cream"]]),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+                ("TOPPADDING",    (0,0), (-1,-1), 3),
+            ]))
+            story.append(wft)
+            story.append(Spacer(1, 1*mm))
+            story.append(Paragraph(
+                '<font size="7" color="#666666">'
+                '<b>Retry</b>: Anzahl Faelle mit ausgeloestem Retry-Layer · '
+                '<b>Degraded</b>: trotz Retry leerer/zu-kurzer Output · '
+                '<b>Ø think_ratio</b>: durchschnittlicher Think-Block-Anteil · '
+                '<b>Token-Cap</b>: num_predict voll ausgeschoepft'
+                '</font>',
+                st["Normal"],
+            ))
+
     story.append(PageBreak())
 
     # Detail tables
@@ -508,8 +625,13 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
         story.append(Paragraph(f"Workflow: {WF_LBL.get(wf,wf)}",st["H2"]))
         # P6: Jury-Spalte ergaenzt. "—" wenn keine Jury-Bewertung vorliegt.
         # v13 Ä5: Quelle-Spalte ergaenzt (kurzform: S=Stilvorlage, F=Fallback, D=Default)
-        dd = [["Testfall","Wörter","Score","Jury","Composite","Status","Issues","Quelle"]]
-        for e in entries:
+        # v19.1: Gen-Spalte ergaenzt (Generierungs-Status: ✓ / ↻ / ✗)
+        dd = [["Testfall","Wörter","Score","Jury","Composite","Status",
+               "Issues","Quelle","Gen"]]
+        # Indizes der Zeilen mit kritischen Gen-States (rot einfaerben)
+        degraded_rows: list[int] = []
+        retry_rows:    list[int] = []
+        for _row_idx, e in enumerate(entries, start=1):  # 1 = nach Header
             jury_cell = f"{e['jury_score']:.0f}/5" if e.get("jury_score") is not None else "—"
             # Quelle-Code: 1 Buchstabe für Kompaktheit
             src = e.get("length_source") or ""
@@ -523,6 +645,17 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                 src_code = "D"
             else:
                 src_code = "—"
+            # v19.1: Gen-Status-Badge (ASCII-sicher fuer Helvetica)
+            if e.get("gen_degraded"):
+                gen_code = "X"
+                degraded_rows.append(_row_idx)
+            elif e.get("gen_retry_used"):
+                gen_code = "R"
+                retry_rows.append(_row_idx)
+            elif e.get("gen_telemetry") is not None:
+                gen_code = "OK"
+            else:
+                gen_code = "—"   # Pre-v19.1-Run, keine Telemetrie verfuegbar
             dd.append([
                 e["test_id"],
                 str(e["word_count"]),
@@ -532,21 +665,36 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
                 e["status"],
                 str(e["issues"]),
                 src_code,
+                gen_code,
             ])
-        dt = Table(dd,colWidths=[5.0*cm,1.4*cm,1.4*cm,1.2*cm,1.6*cm,1.4*cm,1.0*cm,1.0*cm])
-        dt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),C["dark"]),("TEXTCOLOR",(0,0),(-1,0),colors.white),
+        dt = Table(dd,colWidths=[4.6*cm,1.3*cm,1.3*cm,1.1*cm,1.5*cm,1.3*cm,
+                                  1.0*cm,1.0*cm,0.8*cm])
+        _ts = [("BACKGROUND",(0,0),(-1,0),C["dark"]),("TEXTCOLOR",(0,0),(-1,0),colors.white),
             ("FONTSIZE",(0,0),(-1,-1),8),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
             ("ALIGN",(1,0),(-1,-1),"CENTER"),("GRID",(0,0),(-1,-1),.5,C["grid"]),
             ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,C["cream"]]),
-            ("BOTTOMPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),3)]))
+            ("BOTTOMPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),3)]
+        # v19.1: Gen-Status farblich hervorheben (Spalte 8 = Gen).
+        # ROWBACKGROUNDS wird per-Cell ueberschrieben fuer auffaellige Faelle.
+        for _r in degraded_rows:
+            _ts.append(("BACKGROUND", (8,_r), (8,_r), colors.HexColor("#fde0e0")))
+            _ts.append(("TEXTCOLOR",  (8,_r), (8,_r), C["red"]))
+            _ts.append(("FONTNAME",   (8,_r), (8,_r), "Helvetica-Bold"))
+        for _r in retry_rows:
+            _ts.append(("BACKGROUND", (8,_r), (8,_r), colors.HexColor("#fff3e0")))
+            _ts.append(("TEXTCOLOR",  (8,_r), (8,_r), C["orange"]))
+        dt.setStyle(TableStyle(_ts))
         story.append(dt); story.append(Spacer(1,1*mm))
-        # v13 Ä5: Legende für Quelle-Spalte
+        # v13 Ä5 + v19.1: Legende für Quelle- und Gen-Spalte
         story.append(Paragraph(
             '<font size="7" color="#666666">'
             'Quelle: <b>S</b>=Stilvorlage(n) · '
             '<b>F↓</b>=Stilvorlage zu kurz, Default-Fallback · '
             '<b>F↑</b>=Stilvorlage zu lang, Default-Fallback · '
-            '<b>D</b>=Workflow-Default (keine Stilvorlage)'
+            '<b>D</b>=Workflow-Default (keine Stilvorlage)<br/>'
+            'Gen: <b>OK</b>=normal · <b>R</b>=Retry ausgelöst · '
+            '<b>X</b>=degradiert (Think-Block-Bug nicht behoben) · '
+            '<b>—</b>=Pre-v19.1, keine Telemetrie'
             '</font>',
             st["Normal"],
         ))

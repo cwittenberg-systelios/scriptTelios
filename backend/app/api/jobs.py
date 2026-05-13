@@ -879,12 +879,50 @@ async def create_generate_job(
                                             expected_keywords=v16_expected_keywords)
             befund_text_generated = (result_b.get("text") or "").strip()
 
+            # v19.1: Telemetrie beider Anamnese-Calls aggregieren.
+            # Worst-case-Logik: wenn EINER der beiden Calls degradiert ist,
+            # ist auch der Gesamt-Job degraded markiert.
+            tel_a = result_a.get("telemetry") or {}
+            tel_b = result_b.get("telemetry") or {}
+            agg_telemetry = {
+                "anamnese": {
+                    **tel_a,
+                    "retry_used":      result_a.get("retry_used", False),
+                    "degraded":        result_a.get("degraded", False),
+                    "degraded_reason": result_a.get("degraded_reason"),
+                },
+                "befund": {
+                    **tel_b,
+                    "retry_used":      result_b.get("retry_used", False),
+                    "degraded":        result_b.get("degraded", False),
+                    "degraded_reason": result_b.get("degraded_reason"),
+                },
+                # Top-Level-Aggregate fuer das Performance-Log
+                "retry_used": result_a.get("retry_used", False) or result_b.get("retry_used", False),
+                "degraded":   result_a.get("degraded", False)   or result_b.get("degraded", False),
+                "degraded_reason": (
+                    result_a.get("degraded_reason")
+                    or result_b.get("degraded_reason")
+                ),
+                "think_ratio": max(
+                    tel_a.get("think_ratio", 0) or 0,
+                    tel_b.get("think_ratio", 0) or 0,
+                ),
+                "tokens_hit_cap": bool(
+                    tel_a.get("tokens_hit_cap") or tel_b.get("tokens_hit_cap")
+                ),
+                "used_thinking_fallback": bool(
+                    tel_a.get("used_thinking_fallback") or tel_b.get("used_thinking_fallback")
+                ),
+            }
+
             # Direkt zwei separate Felder zurueckgeben — keine Marker noetig
             result = {
                 "text": anamnese_text,
                 "befund_text": befund_text_generated,
                 "transcript": result_a.get("transcript") or result_b.get("transcript"),
                 "model_used": result_a.get("model_used"),
+                "generation_telemetry": agg_telemetry,
             }
         else:
             _log_prompt(job.job_id, workflow, workflow, system, user)
@@ -892,6 +930,15 @@ async def create_generate_job(
                                           workflow=workflow, on_progress=_on_tok,
                                           max_words=v16_max_words,
                                           expected_keywords=v16_expected_keywords)
+            # v19.1: Telemetrie aus generate_text in result["generation_telemetry"]
+            # konsolidieren (im Anamnese-Pfad oben schon explizit gesetzt).
+            tel = result.get("telemetry") or {}
+            result["generation_telemetry"] = {
+                **tel,
+                "retry_used":      result.get("retry_used", False),
+                "degraded":        result.get("degraded", False),
+                "degraded_reason": result.get("degraded_reason"),
+            }
 
         phase_times["llm"] = _t.time() - _t0
 
@@ -998,8 +1045,9 @@ async def create_generate_job(
             # P2: OCR-Validator-Warnungen ans Frontend durchreichen.
             # UI kann eine Warnbanner anzeigen wenn diese Liste nicht leer ist.
             "ocr_warnings": _ocr_warnings if _ocr_warnings else None,
-            # v19: Optionale Qualitätsprüfung (None wenn nicht aktiviert).
-            "quality_check": quality_result_dict,
+            # v19.1: Think-Block-Telemetrie aus llm.generate_text() an
+            # job_queue durchreichen (landet in jobs.generation_telemetry).
+            "generation_telemetry": result.get("generation_telemetry"),
         }
 
     background_tasks.add_task(job_queue.run_job, job, _run())
