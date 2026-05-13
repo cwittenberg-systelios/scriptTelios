@@ -216,3 +216,200 @@ class TestCleanVerlaufTextEdgeCases:
         assert "Anteilearbeit" in result
         assert "Manager-Anteil" in result
         assert "Beziehungsmuster" in result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.2 Schritt 0: Erweiterte clean_verlauf_text-Tests
+# Neue PDF-Layouts (Klebebugs, ---Seite N---, Sitzungs-Header-Typen).
+# Die alten Tests oben bleiben unveraendert gruen — diese Tests pruefen
+# zusaetzliche Patterns.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestCleanVerlaufV192Klebebug:
+    """v19.2: OCR-Klebebugs in Headern werden global repariert."""
+
+    def test_klebebug_im_sitzungsheader_wird_repariert(self):
+        """Sitzungstyp + Zeit ohne Leerzeichen → mit Leerzeichen + Inhalt → Header bleibt."""
+        text = (
+            "Aufwecken, Anregen09:30 - 11:10\n"
+            "Patientin berichtet stabile Stimmung.\n"
+        )
+        result = clean_verlauf_text(text)
+        # Klebebug repariert
+        assert "Anregen 09:30" in result
+        assert "Anregen09:30" not in result
+
+    def test_klebebug_mit_therapeut_klammer(self):
+        """Klebebug nach schliessender Klammer: 'Wolf)11:45' → 'Wolf) 11:45'."""
+        text = (
+            "Einzelgespräch (J.Wolf)11:00 - 11:50\n"
+            "Inhaltlicher Text der Sitzung.\n"
+        )
+        result = clean_verlauf_text(text)
+        assert "Wolf) 11:00" in result
+        assert "Wolf)11:00" not in result
+
+
+class TestCleanVerlaufV192SeitenMarker:
+    """v19.2: ---Seite N--- und [Pseudonymisiertes ...] werden entfernt."""
+
+    def test_seite_marker_entfernt(self):
+        text = (
+            "--- Seite 1 ---\n"
+            "10.03.2026\n"
+            "Echter Sitzungsinhalt der bleiben muss.\n"
+            "--- Seite 2 ---\n"
+        )
+        result = clean_verlauf_text(text)
+        assert "--- Seite" not in result
+        assert "Echter Sitzungsinhalt" in result
+
+    def test_pseudonymisiert_marker_entfernt(self):
+        text = (
+            "[Pseudonymisiertes Dokument – Original-Layout nicht erhalten]\n"
+            "Inhalt der bleibt.\n"
+        )
+        result = clean_verlauf_text(text)
+        assert "Pseudonymisiertes Dokument" not in result
+        assert "Inhalt der bleibt" in result
+
+
+class TestCleanVerlaufV192LeereHeader:
+    """v19.2: Sitzungs-Header ohne folgenden Inhalt werden entfernt."""
+
+    def test_leerer_header_vor_naechstem_header_entfernt(self):
+        """Aufwecken hat KEINEN Inhalt darunter (direkt naechster Header) → weg."""
+        text = (
+            "10.03.2026\n"
+            "Aufwecken, Anregen 09:30 - 11:10\n"
+            "Bahnen, Verankern 11:50 - 12:50\n"
+            "Patientin reflektiert ueber Therapieprozess.\n"
+        )
+        result = clean_verlauf_text(text)
+        assert "Aufwecken, Anregen" not in result
+        # Bahnen hat Inhalt → bleibt
+        assert "Bahnen, Verankern" in result
+        assert "Therapieprozess" in result
+
+    def test_leerer_header_vor_naechstem_datum_entfernt(self):
+        """Beobachten hat KEINEN Inhalt darunter (Datum folgt) → weg."""
+        text = (
+            "10.03.2026\n"
+            "Einzelgespräch (J.Wolf) 11:00 - 11:50\n"
+            "Sitzungsinhalt am 10.03.\n"
+            "Beobachten, Integrieren 14:00 - 14:50\n"
+            "11.03.2026\n"
+            "Bahnen, Verankern 09:00 - 10:00\n"
+            "Sitzungsinhalt am 11.03.\n"
+        )
+        result = clean_verlauf_text(text)
+        assert "Beobachten, Integrieren" not in result
+        # Beide Tage mit Inhalt bleiben
+        assert "Sitzungsinhalt am 10.03" in result
+        assert "Sitzungsinhalt am 11.03" in result
+
+    def test_header_mit_inhalt_bleibt(self):
+        """Header gefolgt von echtem Inhalt bleibt erhalten."""
+        text = (
+            "Aufwecken, Anregen 09:30 - 11:10\n"
+            "Patientin berichtet stabile Stimmung, gute Schlafqualität.\n"
+            "Beobachten, Integrieren 14:00 - 14:50\n"
+            "Weitere therapeutische Arbeit.\n"
+        )
+        result = clean_verlauf_text(text)
+        # Beide Header haben Inhalt → bleiben beide drin
+        assert "Aufwecken, Anregen" in result
+        assert "Beobachten, Integrieren" in result
+        assert "Schlafqualität" in result
+
+
+class TestCleanVerlaufV192Datum:
+    """v19.2: Datums-Zeilen werden zu Tagestrennern normalisiert."""
+
+    def test_datum_wird_zu_tagestrenner(self):
+        text = (
+            "10.03.2026\n"
+            "Einzelgespräch (J.Wolf) 11:00 - 11:50\n"
+            "Inhalt der Sitzung.\n"
+        )
+        result = clean_verlauf_text(text)
+        assert "### 10.03.2026" in result
+
+    def test_doppel_datum_an_seitengrenze_dedupliziert(self):
+        """Datum das durch Seitenumbruch unmittelbar wiederholt wird: nur einmal behalten.
+
+        Realistischer Fall: PDF zeigt am Seiten-Ende das Datum als Footer und
+        am Seiten-Anfang derselben Folgeseite nochmal als Header — ohne dass
+        dazwischen inhaltliche Sätze liegen.
+        """
+        text = (
+            "10.03.2026\n"
+            "Einzelgespräch (J.Wolf) 11:00 - 11:50\n"
+            "Inhalt der Sitzung.\n"
+            "--- Seite 2 ---\n"
+            "10.03.2026\n"
+            "Bahnen, Verankern 13:00 - 14:00\n"
+            "Fortsetzung am gleichen Tag.\n"
+        )
+        result = clean_verlauf_text(text)
+        # 10.03 als Trenner nur einmal (zweites Vorkommen ist redundant — selber Tag)
+        assert result.count("### 10.03.2026") == 1, result
+        # Echter Inhalt beider Sitzungen bleibt
+        assert "Inhalt der Sitzung" in result
+        assert "Fortsetzung am gleichen Tag" in result
+
+    def test_zwei_verschiedene_daten_beide_drin(self):
+        text = (
+            "10.03.2026\n"
+            "Inhalt Tag 1.\n"
+            "11.03.2026\n"
+            "Inhalt Tag 2.\n"
+        )
+        result = clean_verlauf_text(text)
+        assert "### 10.03.2026" in result
+        assert "### 11.03.2026" in result
+
+
+class TestCleanVerlaufV192RealesFormat:
+    """v19.2: Smoke-Test mit realem PDF-Format (so wie es von der Extraktion kommt)."""
+
+    def test_typisches_realistisches_verlauf_fragment(self):
+        text = (
+            "[Pseudonymisiertes Dokument – Original-Layout nicht erhalten]\n"
+            "--- Seite 1 ---\n"
+            "10.03.2026\n"
+            "Aufwecken, Anregen09:30 - 11:10\n"
+            "Abschlusskontakt (J.Wolf)11:45 - 11:55\n"
+            "Frau v.M. zeigt sich stabil, aufgehellt, schwingungsfähig im Kontakt.\n"
+            "Bahnen, Verankern11:50 - 12:50\n"
+            "Beobachten, Integrieren14:00 - 14:50\n"
+            "09.03.2026\n"
+            "Aufwecken, Anregen08:50 - 10:30\n"
+            "Bilanz-Trance zum Aufenthalt.\n"
+        )
+        orig_words = len(text.split())
+        result = clean_verlauf_text(text)
+        new_words = len(result.split())
+
+        # Marker raus
+        assert "--- Seite" not in result
+        assert "Pseudonymisiertes" not in result
+        # Klebebugs repariert
+        assert "Anregen09:30" not in result
+        assert "Wolf)11:45" not in result
+        # Datums-Trenner
+        assert "### 10.03.2026" in result
+        assert "### 09.03.2026" in result
+        # Header MIT Inhalt bleiben drin
+        assert "Abschlusskontakt" in result
+        assert "Aufwecken, Anregen 08:50" in result  # zweiter Tag - hat Inhalt
+        # Header OHNE Inhalt sind raus
+        assert "Bahnen, Verankern" not in result
+        assert "Beobachten, Integrieren" not in result
+        # Echte Sitzungsinhalte bleiben unveraendert
+        assert "schwingungsfähig" in result
+        assert "Bilanz-Trance" in result
+        # Substanzielle Reduktion
+        reduction = 1 - new_words / orig_words
+        assert reduction > 0.15, f"Erwartet >15%, bekommen: {reduction:.1%}"

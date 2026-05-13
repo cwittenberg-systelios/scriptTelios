@@ -336,6 +336,87 @@ Beispiel-Eintrag:
 
 ---
 
+## Two-Stage-Generation (v19.2)
+
+Für lange Verlaufsdokumentationen (Verlängerungsantrag, Folgeverlängerung,
+Entlassbericht) läuft die Antrags-Generierung ab v19.2 in zwei Stufen:
+
+**Stage 1 — Verlauf-Verdichtung** (`app/services/verlauf_summary.py`)
+verdichtet die rohe Verlaufsdoku (typisch 10–13k Wörter) auf eine strikt
+quellentreue, strukturierte Zusammenfassung (~4 000 Wörter, vier Sections:
+Sitzungsübersicht, Bearbeitete Themen, Therapeutische Interventionen,
+Beobachtete Entwicklung). Das LLM läuft hier mit Temperatur 0.2, ohne
+Workflow-spezifischen BASE_PROMPT, ohne Stilbeispiel — die einzige Aufgabe
+ist faithful summarization.
+
+**Stage 2 — Antrags-Generierung** ist der normale Workflow-Pfad
+(Verlängerung/Entlassbericht/...) — er bekommt aber jetzt die
+Stage-1-Summary statt der vollen Doku als Verlauf-Input. Dadurch sinkt der
+VRAM-Druck und Qwen3 kann sich auf die Struktur des Antragstexts
+konzentrieren.
+
+### Aktivierung
+
+Stage 1 wird ausgelöst wenn **alle** Bedingungen erfüllt sind:
+1. `STAGE1_ENABLED=true` (Default, Notabschalter in `.env`)
+2. Workflow ∈ {`verlaengerung`, `folgeverlaengerung`, `entlassbericht`}
+3. Bereinigte Verlaufsdoku ≥ 1 500 Wörter
+
+Bei kürzeren Dokumenten oder Workflows wie Anamnese/Akutantrag läuft die
+alte Pipeline unverändert weiter.
+
+### Audit-Spur
+
+Jeder Job mit Stage 1 erhält zwei zusätzliche DB-Spalten:
+- `verlauf_summary_text` (TEXT) — die verdichtete Summary selbst
+- `verlauf_summary_audit` (JSONB) — Metadaten: `applied`,
+  `raw_word_count`, `summary_word_count`, `compression_ratio`,
+  `duration_s`, `retry_used`, `degraded`, `issues`, `fallback_reason`,
+  `telemetry`
+
+`GET /api/jobs/{id}` liefert beide Felder automatisch mit.
+Auch im `performance.log` taucht ein kompakter `stage1`-Block pro Job
+auf — siehe Abschnitt Performance-Log.
+
+### Halluzinations-Schutz
+
+Stage 1 hat einen eigenen Halluzinations-Detektor mit vier Schweregraden:
+- `critical` — erfundene ICD-Codes (löst Retry aus)
+- `high` — erfundene Therapieverfahren (IFS, EMDR, DBT, ...)
+- `medium` — erfundene Patienten-Zitate, implausible Sitzungs-Anzahl
+
+Bei `critical`-Signalen läuft genau **ein** Retry mit niedrigerer
+Temperatur (0.1) und explizitem Issue-Hinweis im Prompt. Schlägt auch der
+fehl, wird die Original-Summary mit `degraded=true` zurückgegeben — die
+Pipeline crasht nicht, aber die Eval-Suite markiert den Job als
+Hard-Fail.
+
+### Notabschalter
+
+```bash
+# In backend/.env
+STAGE1_ENABLED=false
+```
+
+Anschließend Backend neu starten. Verhalten fällt auf Pre-v19.2 zurück.
+
+### Eval-Modus für A/B-Vergleiche
+
+```bash
+# Stage 1 erzwingen (Whitelist-Workflows müssen applied=True haben):
+pytest tests/test_eval.py --summary-mode=require_stage1
+
+# Pre-v19.2-Baseline (Backend muss STAGE1_ENABLED=false haben):
+pytest tests/test_eval.py --summary-mode=require_no_stage1
+
+# Default: nur reporten was passiert ist:
+pytest tests/test_eval.py --summary-mode=auto
+```
+
+Details: `docs/architecture/two_stage_pipeline.md`.
+
+---
+
 ## Datenschutz
 
 - Alle Modelle laufen lokal (Ollama + faster-whisper) – keine Daten verlassen den Server

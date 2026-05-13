@@ -31,6 +31,49 @@ import httpx
 import pytest
 
 
+# ── v19.2 Schritt 8: CLI-Flag fuer Eval-Modus der Two-Stage-Pipeline ────────
+#
+# --summary-mode steuert die Erwartungshaltung der Eval-Tests an Stage 1
+# (Verlauf-Verdichtung). Das Backend selbst wird nicht umkonfiguriert —
+# Stage 1 ist ueber backend/.env (STAGE1_ENABLED) konfiguriert. Dieses Flag
+# entscheidet nur, was die Eval-Tests vom Backend-Verhalten erwarten und wie
+# der Report die Information ausweist.
+#
+# Werte:
+#   auto            (default) — nimm was das Backend liefert; nur dokumentieren
+#   require_stage1            — fail wenn Workflow zur Stage-1-Whitelist gehoert
+#                                und audit.applied != True
+#   require_no_stage1         — fail wenn audit.applied == True
+#                                (fuer Regressions-A/B-Vergleiche gegen Pre-v19.2)
+#
+# Defensive Registrierung: wenn ein eigenes tests/conftest.py das schon
+# registriert hat, fangen wir den ValueError ab. Damit funktioniert das
+# unabhaengig davon ob conftest existiert oder nicht.
+def pytest_addoption(parser):
+    try:
+        parser.addoption(
+            "--summary-mode",
+            action="store",
+            default="auto",
+            choices=("auto", "require_stage1", "require_no_stage1"),
+            help=(
+                "v19.2 Two-Stage-Pipeline-Eval-Modus: 'auto' (nur reporten), "
+                "'require_stage1' (Stage 1 muss fuer Whitelist-Workflows "
+                "angeschlagen sein), 'require_no_stage1' (Stage 1 darf nicht "
+                "angeschlagen sein, fuer A/B-Vergleiche)."
+            ),
+        )
+    except ValueError:
+        # Option ist bereits registriert (z.B. durch tests/conftest.py).
+        # Wir nutzen sie dann von dort - kein Konflikt, kein Fehler.
+        pass
+
+
+# Workflows fuer die Stage 1 ueberhaupt relevant ist. Muss synchron zu
+# backend/app/api/jobs.py::_STAGE1_WORKFLOWS bleiben.
+_EVAL_STAGE1_WORKFLOWS = {"verlaengerung", "folgeverlaengerung", "entlassbericht"}
+
+
 # ── Transkriptions-Cache ─────────────────────────────────────────────────────
 
 def _transcript_cache_path(audio_path: Path) -> Path:
@@ -764,6 +807,15 @@ class EvalResult:
         self.generation_telemetry: dict | None = None
         self.degraded: bool = False
         self.retry_used: bool = False
+        # v19.2: Stage-1-Pipeline-Audit aus dem Job-Result. None bei Jobs
+        # die Stage 1 nicht beruehrt haben. Wird vom Reporter aggregiert und
+        # in der LLM-Jury-Auswertung beruecksichtigt.
+        self.verlauf_summary_audit: dict | None = None
+        self.stage1_applied: bool = False
+        self.stage1_compression_ratio: float | None = None
+        self.stage1_retry_used: bool = False
+        self.stage1_degraded: bool = False
+        self.stage1_issue_count: int = 0
 
     def check_word_count(self, min_words: int, max_words: int):
         if self.word_count < min_words:
@@ -1054,6 +1106,26 @@ class EvalResult:
             tr = tel.get("think_ratio")
             tr_str = f", think_ratio={tr:.0%}" if tr is not None else ""
             lines.append(f"  Generierungs-Stabilitaet: {flag_str}{tr_str}")
+        # v19.2: Stage-1-Pipeline-Status (Verlauf-Verdichtung)
+        if self.verlauf_summary_audit is not None:
+            audit = self.verlauf_summary_audit
+            s1_flags = []
+            if self.stage1_applied:
+                s1_flags.append("APPLIED")
+            else:
+                s1_flags.append(f"SKIPPED({audit.get('fallback_reason') or 'unbekannt'})")
+            if self.stage1_retry_used:
+                s1_flags.append("RETRY")
+            if self.stage1_degraded:
+                s1_flags.append("DEGRADED")
+            if self.stage1_issue_count:
+                s1_flags.append(f"{self.stage1_issue_count}ISSUES")
+            cr = self.stage1_compression_ratio
+            cr_str = f", kompression={cr:.0%}" if cr is not None else ""
+            raw_w = audit.get("raw_word_count")
+            sum_w = audit.get("summary_word_count")
+            wc_str = f", {raw_w}w->{sum_w}w" if (raw_w and sum_w) else ""
+            lines.append(f"  Stage-1-Pipeline: {' '.join(s1_flags)}{cr_str}{wc_str}")
         return "\n".join(lines)
 
     @property
@@ -1064,8 +1136,13 @@ class EvalResult:
         (Think-Block-Bug, beide Versuche zu kurz), ist der Score
         unabhaengig von der Check-Bilanz 0 - der Output ist faktisch
         nicht brauchbar.
+
+        v19.2: Stage-1-degraded (critical Halluzinations-Signale auch
+        nach Retry) treibt den Score ebenfalls auf 0 - der nachgelagerte
+        Generierungs-Output basiert dann auf einer Quelle der nicht
+        getraut werden kann.
         """
-        if self.degraded:
+        if self.degraded or self.stage1_degraded:
             return 0.0
         total = len(self.passed) + len(self.issues)
         return len(self.passed) / total if total > 0 else 0.0
@@ -1211,6 +1288,49 @@ async def test_eval_workflow(workflow, test_case, request):
     if ev.retry_used and not ev.degraded:
         # Retry war erfolgreich - kein Issue, aber als Info-Pass notieren
         ev.passed.append("Retry-Layer angeschlagen und erfolgreich")
+
+    # v19.2: Stage-1-Audit aus dem Job-Result uebernehmen. Bei Jobs die
+    # Stage 1 nicht beruehrt haben (Workflow nicht in Whitelist oder Verlauf
+    # zu kurz) ist das Feld None - dann bleiben die EvalResult-Felder auf
+    # den Defaults (applied=False).
+    _stage1_audit = job.get("verlauf_summary_audit") or {}
+    if _stage1_audit:
+        ev.verlauf_summary_audit       = _stage1_audit
+        ev.stage1_applied              = bool(_stage1_audit.get("applied"))
+        ev.stage1_compression_ratio    = _stage1_audit.get("compression_ratio")
+        ev.stage1_retry_used           = bool(_stage1_audit.get("retry_used"))
+        ev.stage1_degraded             = bool(_stage1_audit.get("degraded"))
+        ev.stage1_issue_count          = len(_stage1_audit.get("issues") or [])
+
+        # Stage-1-Degraded ist ein Hard-Fail-Signal, analog zu GENERATION_DEGRADED
+        if ev.stage1_degraded:
+            reason = _stage1_audit.get("fallback_reason") or "stage1_degraded"
+            ev.issues.append(
+                f"STAGE1_DEGRADED: {reason} "
+                f"(critical Halluzinations-Signale auch nach Retry)"
+            )
+
+        # Stage-1-Retry erfolgreich (kein degraded) → Info-Pass
+        if ev.stage1_retry_used and not ev.stage1_degraded:
+            ev.passed.append("Stage 1 Retry angeschlagen und erfolgreich")
+
+    # --summary-mode-Enforcement: pruefen ob das Backend-Verhalten den
+    # erwarteten Modus erfuellt. Greift NUR fuer Workflows in der
+    # Stage-1-Whitelist - andere Workflows haben sowieso kein Stage 1.
+    summary_mode = request.config.getoption("--summary-mode", default="auto")
+    if workflow in _EVAL_STAGE1_WORKFLOWS:
+        if summary_mode == "require_stage1" and not ev.stage1_applied:
+            ev.issues.append(
+                "SUMMARY_MODE_VIOLATION: --summary-mode=require_stage1, "
+                "aber Stage 1 wurde nicht angewandt "
+                f"(fallback_reason={_stage1_audit.get('fallback_reason')!r})"
+            )
+        elif summary_mode == "require_no_stage1" and ev.stage1_applied:
+            ev.issues.append(
+                "SUMMARY_MODE_VIOLATION: --summary-mode=require_no_stage1, "
+                "aber Stage 1 wurde angewandt "
+                f"(compression={ev.stage1_compression_ratio})"
+            )
 
     ev.check_no_think_blocks()
 

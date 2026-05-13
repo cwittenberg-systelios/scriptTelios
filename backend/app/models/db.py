@@ -69,6 +69,19 @@ class Job(Base):
     # NULL = Job aus Pre-v19.1-Zeit oder nicht-LLM-Job.
     generation_telemetry: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # v19.2: Two-Stage-Pipeline – Stage 1 (Verlauf-Verdichtung).
+    # verlauf_summary_text:   der von Stage 1 erzeugte verdichtete Text
+    #                         (4-Abschnitt-Form: Sitzungsübersicht, Themen,
+    #                         Interventionen, Entwicklung). NULL wenn Stage 1
+    #                         nicht ausgelöst oder fehlgeschlagen ist.
+    # verlauf_summary_audit:  JSONB mit Metadaten zur Stage-1-Ausfuehrung
+    #                         (applied, raw_word_count, summary_word_count,
+    #                         compression_ratio, duration_s, retry_used,
+    #                         degraded, issues, fallback_reason, ...).
+    #                         NULL wenn Workflow Stage 1 nicht beruehrt.
+    verlauf_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verlauf_summary_audit: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
 
 class Recording(Base):
     """

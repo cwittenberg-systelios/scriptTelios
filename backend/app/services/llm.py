@@ -230,24 +230,109 @@ def substitute_patient_placeholders(text: str, patient_name: dict | None) -> str
     return text
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.2 Schritt 0: clean_verlauf_text - erweiterte Pattern-Erkennung.
+#
+# Hintergrund: Die ursprüngliche Implementierung war auf ein älteres PDF-Layout
+# zugeschnitten (Sprechende Header wie "Seite X von Y", "Verlaufsdokumentation
+# Stand:", Teilnahmezeilen "hat teilgenommen"). Die aktuelle Produktions-PDF-
+# Extraktion liefert ein anderes Format:
+#   --- Seite N ---
+#   DD.MM.YYYY
+#   Sitzungstyp[(Therapeut)]HH:MM - HH:MM     <- OCR-Klebebug, keine Trenner
+#   [optionaler Folgeinhalt ODER direkt nächster Header]
+#
+# Ergebnis: bei diesem Format griff *keiner* der alten Filter -> 0% Reduktion.
+#
+# v19.2 erweitert die Funktion ADDITIV:
+#   - Alte Patterns bleiben (für ältere PDF-Layouts und Eval-Regressionsschutz)
+#   - Neue Patterns für aktuelles Format (Klebebug-Repair, Seiten-Marker,
+#     Sitzungs-Header mit/ohne Inhalt-Lookahead, Datums-Normalisierung)
+#
+# Wichtig: keine semantische Änderung an alten Tests. Die Testklassen
+# TestCleanVerlaufTextHeaders/Participation/Admin/Leerzeilen müssen alle
+# weiter grün laufen.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Sitzungs-Typen aus der aktuellen sysTelios-Verlaufsdoku.
+# Werden als Header erkannt sobald ein Klebebug (Typ+Zeit ohne Trenner)
+# oder ein normaler "Typ Zeit"-Header gefunden wird.
+SITZUNGS_TYPEN = (
+    "Aufwecken, Anregen",
+    "Bahnen, Verankern",
+    "Beobachten, Integrieren",
+    "Prozessreflexion",
+    "Bezugsgruppe",
+    "Gruppe non-verbal 1",
+    "Gruppe non-verbal 2",
+    "Gruppe non-verbal",
+    "Einzelgespräch",
+    "Einzeldoku",
+    "Beratung - ausführlich",
+    "Beratung",
+    "Sprechstunde",
+    "Chefärztliche Wahlleistungsgruppe",
+    "Abschlusskontakt",
+    "Abschlussgespräch",
+    "Aufnahmegespräch",
+    "Kunsttherapie",
+    "Musiktherapie",
+    "Körpertherapie",
+    "Bewegungstherapie",
+    "Visite",
+    "Übergangsgruppe",
+)
+
+
 def clean_verlauf_text(text: str) -> str:
     """
-    Bereinigt extrahierten Verlaufsdokumentationstext vor dem LLM-Aufruf:
-    1. Entfernt wiederkehrende PDF-Seitenheader (Name, Zimmernummer, Datum, Seite X von Y)
-    2. Entfernt reine Teilnahmeeintraege ohne inhaltliche Information
-       ("hat teilgenommen", "nicht teilgenommen", "entschuldigt" allein in einem Block)
-    3. Entfernt leere Zeitblock-Eintraege (nur Datum + Uhrzeit + Therapiename + Teilnahme)
-    4. Entfernt Therapeutennamen-Header (nur Name ohne Inhalt)
-    5. Entfernt reine Terminplanungs-Zeilen und Administratives
-    6. Komprimiert wiederholte Leerzeilen
+    Bereinigt extrahierten Verlaufsdokumentationstext vor dem LLM-Aufruf.
+
+    Operationen (in dieser Reihenfolge):
+    1. OCR-Klebebug-Repair: "Anregen09:30" -> "Anregen 09:30" (global)
+    2. PDF-Seitenheader entfernen:
+       - "Verlaufsdokumentation - Stand: ..."
+       - "Seite X von Y"
+       - "(A12345) Zi. 123"
+       - "Name, Vorname (A12345)"
+       - "--- Seite N ---" / "[Pseudonymisiertes Dokument ...]"  (NEU v19.2)
+    3. Administrative Zeilen entfernen (Termin, Raum, AU-Bescheinigung, ...)
+    4. Reine Teilnahmezeilen ("hat teilgenommen", "entschuldigt", ...) inkl.
+       rueckwirkender Entfernung des zugehoerigen Datums-/Zeit-Blocks
+    5. Inhaltslose Sitzungs-Header (Typ+Zeit ohne folgenden Inhalt - direkt
+       naechster Header oder Datum) entfernen   (NEU v19.2)
+    6. Reine Zeiteintraege ohne nachfolgenden Inhalt entfernen
+    7. Reine Therapeutennamen-Header entfernen
+    8. Datums-Zeilen (DD.MM.YYYY allein) zu "### DD.MM.YYYY" normalisieren,
+       Doppel-Datumeintraege an Seitengrenzen deduplizieren  (NEU v19.2)
+    9. Mehrfache Leerzeilen kollabieren
+
+    Erhalten bleiben:
+    - Echte Sitzungs-Inhalte (alles nach einem Header das nicht selbst Header ist)
+    - Sitzungs-Header MIT Folge-Inhalt (als Zeit-/Methoden-Anker fuer das LLM)
+    - Datums-Marker (Chronologie wichtig fuer die Synthese)
     """
     import re
 
-    lines = text.split("\n")
-    cleaned = []
-    i = 0
+    if not text or not text.strip():
+        return text
 
-    # Pattern fuer PDF-Seitenheader
+    orig_chars = len(text)
+    orig_words = len(text.split())
+
+    # v19.2: Klebebug-Repair GLOBAL (auch im Inhalt nuetzlich, nicht nur Headern).
+    # "Anregen09:30" -> "Anregen 09:30"
+    # "Wolf)11:45"   -> "Wolf) 11:45"
+    klebe_re = re.compile(r"([a-zäöüß\)])(\d{1,2}:\d{2})")
+    text = klebe_re.sub(r"\1 \2", text)
+
+    lines = text.split("\n")
+    cleaned: list[str] = []
+    i = 0
+    leerer_header_removed = 0
+    seiten_marker_removed = 0
+
+    # Pattern fuer PDF-Seitenheader (alt, Kompatibilitaet)
     header_patterns = [
         re.compile(r"Verlaufsdokumentation\s*[-–]\s*Stand:", re.IGNORECASE),
         re.compile(r"Seite\s+\d+\s+von\s+\d+", re.IGNORECASE),
@@ -255,7 +340,14 @@ def clean_verlauf_text(text: str) -> str:
         re.compile(r"^[A-ZÄÖÜ][a-zäöüß]+,\s+[A-ZÄÖÜ][a-zäöüß-]+\s+\(A\d+\)"),  # Name (Anummer)
     ]
 
-    # Pattern fuer inhaltsleere Teilnahmezeilen
+    # v19.2: Seiten-Marker aus aktueller PDF-Extraktion
+    seite_marker_re = re.compile(
+        r"^---\s*Seite\s+\d+\s*---\s*$"
+        r"|^\[Pseudonymisiertes Dokument.*\]\s*$",
+        re.IGNORECASE,
+    )
+
+    # Pattern fuer inhaltsleere Teilnahmezeilen (alt)
     participation_only = re.compile(
         r"^(hat teilgenommen|nicht teilgenommen|entschuldigt fehlt|"
         r"hat nicht teilgenommen|teilgenommen|abgebrochen|krankgemeldet"
@@ -265,20 +357,22 @@ def clean_verlauf_text(text: str) -> str:
         re.IGNORECASE,
     )
 
-    # Pattern fuer reine Zeiteintraege (HH:MM - HH:MM Therapiename)
+    # Pattern fuer reine Zeiteintraege (HH:MM - HH:MM Therapiename), alt
     time_entry = re.compile(r"^\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}\s+\S.*$")
 
-    # Pattern fuer Datumszeilen allein (DD.MM.YYYY)
-    date_only = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
+    # Pattern fuer Datumszeilen allein
+    # Alt-Pattern (DD.MM.YYYY 4-stellig) bleibt fuer alte Tests erhalten,
+    # v19.2 erweitert das Akzept-Pattern auf 2- und 4-stellige Jahreszahlen.
+    date_only_strict = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")            # alt
+    date_only_loose  = re.compile(r"^\d{1,2}\.\d{1,2}\.\d{2,4}\s*$")   # v19.2
 
-    # Pattern fuer reine Therapeutennamen-Header
-    # z.B. "Dr. Müller" oder "Therapeutin Schmidt:" allein auf einer Zeile
+    # Pattern fuer reine Therapeutennamen-Header (alt)
     therapist_header = re.compile(
         r"^(Dr\.\s+|Dipl\.\s*-?\s*Psych\.\s+|M\.?A\.?\s+)?"
         r"[A-ZÄÖÜ][a-zäöüß]+([-\s][A-ZÄÖÜ][a-zäöüß]+)*:?\s*$"
     )
 
-    # Pattern fuer administrative Zeilen ohne therapeutischen Inhalt
+    # Pattern fuer administrative Zeilen ohne therapeutischen Inhalt (alt)
     admin_patterns = [
         re.compile(r"^\s*Termin(e|planung)?\s*(am|fuer|:)", re.IGNORECASE),
         re.compile(r"^\s*Raum\s*\d+", re.IGNORECASE),
@@ -289,86 +383,170 @@ def clean_verlauf_text(text: str) -> str:
         re.compile(r"^\s*AU[-\s]?(Bescheinigung|bis)", re.IGNORECASE),
     ]
 
+    # v19.2: Sitzungs-Header (Therapietyp + optional Therapeut + Zeit).
+    # Beispiele nach Klebebug-Repair:
+    #   "Aufwecken, Anregen 09:30 - 11:10"
+    #   "Einzelgespräch (J.Wolf) 11:00 - 11:50"
+    #   "Abschlusskontakt (J.Wolf) 11:45 - 11:55"
+    sitzungs_header_re = re.compile(
+        r"^(?P<typ>" + "|".join(re.escape(t) for t in SITZUNGS_TYPEN) + r")"
+        r"(?P<therapeut>\s*\([A-Za-zäöüÄÖÜß.\s\-/]+\))?"
+        r"\s*(?P<zeit>\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2})\s*$",
+        re.IGNORECASE,
+    )
+
+    def _is_structural_marker(line_stripped: str) -> bool:
+        """Erkennt 'leere' Marker-Zeilen die als Folge fuer einen Header nicht
+        als Inhalt zaehlen (naechster Sitzungs-Header, Datum, Seiten-Marker)."""
+        if not line_stripped:
+            return True
+        if sitzungs_header_re.match(line_stripped):
+            return True
+        if date_only_loose.match(line_stripped):
+            return True
+        if seite_marker_re.match(line_stripped):
+            return True
+        if any(p.search(line_stripped) for p in header_patterns):
+            return True
+        return False
+
     while i < len(lines):
-        line = lines[i].strip()
+        line = lines[i].rstrip()
+        stripped = line.strip()
 
         # Leere Zeilen durchlassen (werden spaeter komprimiert)
-        if not line:
+        if not stripped:
             cleaned.append("")
             i += 1
             continue
 
-        # Seitenheader ueberspringen
-        if any(p.search(line) for p in header_patterns):
+        # v19.2: Seiten-Marker aus aktueller PDF-Extraktion entfernen
+        if seite_marker_re.match(stripped):
+            seiten_marker_removed += 1
             i += 1
             continue
 
-        # Administrative Zeilen ueberspringen
-        if any(p.match(line) for p in admin_patterns):
+        # Alte Seitenheader entfernen
+        if any(p.search(stripped) for p in header_patterns):
             i += 1
             continue
 
-        # Reinen Teilnahme-Block erkennen und ueberspringen:
-        # Muster: [Datum] / [Zeit - Therapiename] / hat teilgenommen
-        if participation_only.match(line):
-            # Pruefen ob vorherige Zeilen nur Datum/Zeit waren → rueckwirkend entfernen
+        # Administrative Zeilen entfernen
+        if any(p.match(stripped) for p in admin_patterns):
+            i += 1
+            continue
+
+        # Teilnahmezeilen + zugehoerigen Block rueckwirkend entfernen
+        if participation_only.match(stripped):
             while cleaned and (
-                date_only.match(cleaned[-1].strip())
+                date_only_strict.match(cleaned[-1].strip())
+                or date_only_loose.match(cleaned[-1].strip())
                 or time_entry.match(cleaned[-1].strip())
+                or sitzungs_header_re.match(cleaned[-1].strip())
                 or cleaned[-1].strip() == ""
             ):
                 cleaned.pop()
             i += 1
             continue
 
-        # Reine Zeiteintraege ohne nachfolgenden Inhalt ueberspringen
-        # (Zeile mit nur "09:00 - 10:00 Einzeltherapie" gefolgt von Teilnahme oder Leerzeile)
-        if time_entry.match(line):
-            # Vorausschauen: naechste nicht-leere Zeile
+        # v19.2: Datums-Zeile (allein) -> Tagestrenner "### DD.MM.YYYY"
+        if date_only_loose.match(stripped):
+            normalized = f"### {stripped}"
+            # Doppel-Datum deduplizieren: wenn das LETZTE gesehene Tagestrenner-
+            # Datum dasselbe Datum war (z.B. Datum als Footer am Seiten-Ende
+            # und als Header am Anfang der Folgeseite — gleicher Tag, doppelt),
+            # ueberspringen wir das zweite Vorkommen.
+            last_date_trenner = next(
+                (c for c in reversed(cleaned)
+                 if c.startswith("### ") and date_only_loose.match(c[4:].strip())),
+                None,
+            )
+            if last_date_trenner is not None and last_date_trenner.strip() == normalized:
+                i += 1
+                continue
+            cleaned.append(normalized)
+            i += 1
+            continue
+
+        # v19.2: Sitzungs-Header (Typ+Zeit). Mit Lookahead pruefen ob Inhalt folgt.
+        sh_match = sitzungs_header_re.match(stripped)
+        if sh_match:
+            # Lookahead: naechste nicht-leere Zeile
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            # Dokument-Ende ohne Folge-Inhalt -> Header weg
+            if j >= len(lines):
+                leerer_header_removed += 1
+                i = j
+                continue
+            next_line = lines[j].strip()
+            # Wenn die naechste nicht-leere Zeile selbst ein Marker ist:
+            # dieser Header hat keinen Inhalt -> entfernen
+            if _is_structural_marker(next_line):
+                leerer_header_removed += 1
+                i = j
+                continue
+            # Header behalten, Zeit-Trennung normalisieren
+            typ = sh_match["typ"]
+            therapeut = sh_match["therapeut"] or ""
+            zeit = sh_match["zeit"]
+            cleaned.append(f"{typ}{therapeut} {zeit}".strip())
+            i += 1
+            continue
+
+        # Reine Zeiteintraege ohne nachfolgenden Inhalt ueberspringen (alt)
+        if time_entry.match(stripped):
             j = i + 1
             while j < len(lines) and not lines[j].strip():
                 j += 1
             if j < len(lines) and participation_only.match(lines[j].strip()):
-                # Zeitblock + Teilnahme → beides ueberspringen
                 i = j + 1
                 continue
-            if j >= len(lines) or date_only.match(lines[j].strip()):
-                # Zeitblock ohne Inhalt → ueberspringen
+            if j >= len(lines) or date_only_strict.match(lines[j].strip()):
                 i += 1
                 continue
 
-        # Therapeutennamen allein auf einer Zeile → ueberspringen
-        # (nur wenn keine inhaltliche Zeile folgt in den naechsten 2 Zeilen)
-        if therapist_header.match(line) and len(line) < 40:
+        # Therapeutennamen allein auf einer Zeile ueberspringen (alt)
+        if therapist_header.match(stripped) and len(stripped) < 40:
             j = i + 1
             while j < len(lines) and not lines[j].strip() and j - i < 3:
                 j += 1
             if j < len(lines) and (
                 participation_only.match(lines[j].strip())
-                or date_only.match(lines[j].strip())
+                or date_only_strict.match(lines[j].strip())
                 or time_entry.match(lines[j].strip())
             ):
                 i += 1
                 continue
 
-        cleaned.append(lines[i])
+        cleaned.append(line)
         i += 1
 
     result = "\n".join(cleaned)
 
     # Mehr als 2 aufeinanderfolgende Leerzeilen auf 1 reduzieren
     result = re.sub(r"\n{3,}", "\n\n", result)
+    result = result.strip()
 
-    original_len = len(text)
-    cleaned_len = len(result)
-    if original_len > cleaned_len:
-        reduction = int((1 - cleaned_len / original_len) * 100)
+    new_chars = len(result)
+    new_words = len(result.split()) if result else 0
+    reduction_chars_pct = (
+        (1 - new_chars / orig_chars) * 100 if orig_chars > 0 else 0.0
+    )
+    reduction_words_pct = (
+        (1 - new_words / orig_words) * 100 if orig_words > 0 else 0.0
+    )
+    if orig_chars > new_chars:
         logger.info(
-            "Verlaufsdoku bereinigt: %d → %d Zeichen (-%d%% Overhead entfernt)",
-            original_len, cleaned_len, reduction,
+            "Verlaufsdoku bereinigt: %d→%d Zeichen (-%.0f%%), %d→%d Wörter (-%.1f%%), "
+            "%d leere Sitzungs-Header, %d Seiten-Marker entfernt",
+            orig_chars, new_chars, reduction_chars_pct,
+            orig_words, new_words, reduction_words_pct,
+            leerer_header_removed, seiten_marker_removed,
         )
 
-    return result.strip()
+    return result
 
 
 async def generate_text(
@@ -380,6 +558,7 @@ async def generate_text(
     on_progress=None,
     max_words: Optional[int] = None,
     expected_keywords: Optional[list[str]] = None,
+    temperature_override: Optional[float] = None,
 ) -> dict:
     """
     Generiert Text ausschliesslich via lokalem Ollama-Modell.
@@ -396,6 +575,13 @@ async def generate_text(
       expected_keywords: Liste von Keywords die im Output vorhanden sein
                          muessten (z.B. "Trennung", "F33.1"). Fehlende
                          werden als Warnung geloggt.
+
+    v19.2-Parameter:
+      temperature_override: Wenn gesetzt, ueberschreibt die Modell-Profil-
+                         Temperatur fuer diesen Call. Wird primaer von der
+                         Stage-1-Pipeline (verlauf_summary) genutzt, die
+                         mit 0.2 / 0.1 (Retry) maximale Quellentreue
+                         erzwingt. None = Profil-Default (qwen3: 0.4).
     """
     if len(user_content) > MAX_USER_CONTENT_CHARS:
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
@@ -480,6 +666,7 @@ async def generate_text(
     result = await _generate_ollama(
         system_prompt, user_content, max_tokens,
         model=model, assistant_primer=assistant_primer,
+        temperature_override=temperature_override,
     )
 
     # ── Postprocessing (v19.1: ausgelagert in _postprocess_text, damit
@@ -982,6 +1169,7 @@ async def _generate_ollama(
     max_tokens: int,
     model: Optional[str] = None,
     assistant_primer: str = "",
+    temperature_override: Optional[float] = None,
 ) -> dict:
     """
     Ollama REST API (lokal, kein externer Aufruf).
@@ -989,16 +1177,27 @@ async def _generate_ollama(
     assistant_primer: Optionaler Einstiegstext der als Assistant-Nachricht
     vorangestellt wird. Zwingt das Modell den Text direkt fortzusetzen
     statt sich zu weigern oder Erklaerungen voranzustellen.
+
+    temperature_override: Wenn gesetzt, ueberschreibt die Modell-Profil-
+    Temperatur. Wird von Stage-1 (verlauf_summary) genutzt fuer maximal
+    quellentreue Verdichtung (0.2, beim Retry 0.1).
     """
     effective_model = model or settings.OLLAMA_MODEL
 
     profile = _get_model_profile(effective_model)
+    effective_temperature = (
+        temperature_override
+        if temperature_override is not None
+        else profile["temperature"]
+    )
     num_ctx = _estimate_num_ctx(system_prompt, user_content, max_tokens)
     # Für Reasoning-Modelle: mindestens deren Profil-Minimum respektieren
     num_ctx = max(num_ctx, profile.get("min_ctx", 2048))
     logger.debug(
-        "Modell '%s': num_ctx=%d (dynamisch berechnet, min_ctx: %d)",
-        effective_model, num_ctx, profile.get("min_ctx", 2048)
+        "Modell '%s': num_ctx=%d (dynamisch berechnet, min_ctx: %d), temperature=%.2f%s",
+        effective_model, num_ctx, profile.get("min_ctx", 2048),
+        effective_temperature,
+        " [override]" if temperature_override is not None else "",
     )
 
     async def _call(num_ctx: int) -> httpx.Response:
@@ -1010,7 +1209,7 @@ async def _generate_ollama(
             "options": {
                 "num_predict": max_tokens,
                 "num_ctx":     num_ctx,
-                "temperature": profile["temperature"],
+                "temperature": effective_temperature,
                 "top_p":       profile["top_p"],
             },
             "messages": [

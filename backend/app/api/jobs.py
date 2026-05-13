@@ -25,11 +25,23 @@ from app.services.llm import (
     deduplicate_paragraphs,
     substitute_patient_placeholders,
 )
+from app.services.verlauf_summary import summarize_verlauf
 from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
 import app.services.transcription as _transcription
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# v19.2 Schritt 5: Two-Stage-Pipeline-Konfiguration.
+# Stage 1 (Verlauf-Verdichtung) wird nur fuer Workflows aktiviert, die mit
+# der vollen Verlaufsdoku ueberlastet sind. Anamnese/Akutantrag bekommen
+# typischerweise keine grosse Verlaufsdoku und werden NICHT angefasst.
+_STAGE1_WORKFLOWS = {"verlaengerung", "folgeverlaengerung", "entlassbericht"}
+
+# Mindest-Wortzahl der bereinigten Verlaufsdoku, ab der Stage 1 lohnt.
+# Unter dieser Schwelle ist der Roh-Verlauf so kurz, dass Stage 2 ihn ohnehin
+# komplett verarbeiten kann — Stage 1 waere reine Verlustkomprimierung.
+_STAGE1_MIN_WORDS = 1500
 
 # Separater Prompt-Logger – schreibt vollständige System/User-Prompts in prompts.log
 # Zweck: manuelle Inspektion und Prompt-Debugging ohne den Haupt-Log zu fluten.
@@ -512,6 +524,7 @@ async def create_generate_job(
 
         # P3/P4: Verlaufsdokumentation der aktuellen Behandlung
         verlaufsdoku_text = ""
+        verlaufsdoku_raw_text = ""  # v19.2: Roh-Verlauf vor Stage 1 (fuer Audit)
         if verlaufsdoku_bytes and verlaufsdoku_name:
             suffix = _Path(verlaufsdoku_name).suffix.lower()
             path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
@@ -523,6 +536,123 @@ async def create_generate_job(
                     verlaufsdoku_text, "Verlaufsdokumentation", verlaufsdoku_name)
             except Exception as e:
                 logger.warning("Verlaufsdoku-Extraktion fehlgeschlagen: %s", e)
+
+        # ── v19.2 Schritt 5: Stage-1-Pipeline (Verlauf-Verdichtung) ────────
+        #
+        # Aktivierung an drei Bedingungen geknueppfft:
+        #   1. Feature-Flag STAGE1_ENABLED ist gesetzt (default: True ab v19.2)
+        #   2. Workflow gehoert zur Whitelist (Verlaengerung, Folgeverl., EB)
+        #   3. Bereinigte Verlaufsdoku hat substanzielle Laenge (>=1500 Woerter)
+        #
+        # Bei Erfolg: verlaufsdoku_text wird durch die Stage-1-Summary ersetzt.
+        # Bei Fehler (Exception, leerer/zu kurzer Output): Fallback auf das
+        # Original — Job laeuft weiter, aber mit erhoehtem VRAM-Risiko in Stage 2.
+        # Audit-Bundle wandert ans Result und in die DB-Spalte
+        # verlauf_summary_audit (siehe Schritt 7).
+        _stage1_audit: Optional[dict] = None
+        _stage1_enabled = getattr(settings, "STAGE1_ENABLED", True)
+
+        if (
+            _stage1_enabled
+            and workflow in _STAGE1_WORKFLOWS
+            and verlaufsdoku_text
+            and len(verlaufsdoku_text.split()) >= _STAGE1_MIN_WORDS
+        ):
+            verlaufsdoku_raw_text = verlaufsdoku_text
+            raw_words = len(verlaufsdoku_raw_text.split())
+            logger.info(
+                "Stage 1 aktiviert fuer Job %s (%s): Verlauf hat %d Woerter",
+                job.job_id, workflow, raw_words,
+            )
+
+            # Optional: Sub-Progress innerhalb der Extraktions-Phase
+            try:
+                if "extraction" in bands:
+                    eb = bands["extraction"]
+                    # 70% des Extraktions-Bandes ist die Stage-1-Phase
+                    stage1_progress = eb[0] + int((eb[1] - eb[0]) * 0.7)
+                    job.set_progress(stage1_progress, "Verlauf-Verdichtung (Stage 1)")
+            except Exception:
+                pass
+
+            target_words = getattr(settings, "STAGE1_TARGET_WORDS", 4000)
+            try:
+                stage1_result = await summarize_verlauf(
+                    verlauf_text=verlaufsdoku_raw_text,
+                    workflow=workflow,
+                    patient_initial=None,  # patient_name wird erst spaeter extrahiert
+                    target_words=target_words,
+                )
+                # Erfolg → ersetzen, Audit-Bundle aufbauen
+                verlaufsdoku_text = stage1_result["summary"]
+                _stage1_audit = {
+                    "applied":              True,
+                    "raw_word_count":       stage1_result["raw_word_count"],
+                    "summary_word_count":   stage1_result["summary_word_count"],
+                    "compression_ratio":    stage1_result["compression_ratio"],
+                    "duration_s":           stage1_result["duration_s"],
+                    "telemetry":            stage1_result.get("telemetry", {}),
+                    "retry_used":           stage1_result.get("retry_used", False),
+                    "retry_telemetry":      stage1_result.get("retry_telemetry", {}),
+                    "degraded":             stage1_result.get("degraded", False),
+                    "issues":               stage1_result.get("issues", []),
+                    "target_words":         target_words,
+                    "fallback_reason":      None,
+                }
+                logger.info(
+                    "Stage 1 erfolgreich: %d -> %d Woerter (Kompression %.0f%%), "
+                    "retry=%s, degraded=%s, issues=%d",
+                    stage1_result["raw_word_count"],
+                    stage1_result["summary_word_count"],
+                    (1 - stage1_result["compression_ratio"]) * 100,
+                    stage1_result["retry_used"],
+                    stage1_result["degraded"],
+                    len(stage1_result.get("issues", [])),
+                )
+            except Exception as e:
+                # Fallback: Original-Verlauf behalten, Audit-Eintrag mit Begruendung
+                logger.warning(
+                    "Stage 1 fehlgeschlagen (%s), Fallback auf Roh-Verlauf",
+                    e,
+                )
+                _stage1_audit = {
+                    "applied":              False,
+                    "raw_word_count":       raw_words,
+                    "summary_word_count":   None,
+                    "compression_ratio":    None,
+                    "duration_s":           None,
+                    "telemetry":            {},
+                    "retry_used":           False,
+                    "retry_telemetry":      {},
+                    "degraded":             False,
+                    "issues":               [],
+                    "target_words":         target_words,
+                    "fallback_reason":      f"exception: {type(e).__name__}: {str(e)[:200]}",
+                }
+                # verlaufsdoku_text bleibt unveraendert (das Original)
+        elif workflow in _STAGE1_WORKFLOWS and verlaufsdoku_text:
+            # Workflow waere passend, aber Verlauf zu kurz oder Flag aus.
+            # Trotzdem einen Mini-Audit-Eintrag, damit man im Performance-Log
+            # sehen kann _warum_ Stage 1 nicht lief.
+            reason = (
+                "stage1_disabled"
+                if not _stage1_enabled
+                else f"verlauf_kurz_{len(verlaufsdoku_text.split())}w"
+            )
+            _stage1_audit = {
+                "applied":              False,
+                "raw_word_count":       len(verlaufsdoku_text.split()),
+                "summary_word_count":   None,
+                "compression_ratio":    None,
+                "duration_s":           None,
+                "telemetry":            {},
+                "retry_used":           False,
+                "retry_telemetry":      {},
+                "degraded":             False,
+                "issues":               [],
+                "target_words":         getattr(settings, "STAGE1_TARGET_WORDS", 4000),
+                "fallback_reason":      reason,
+            }
 
         # P3/P4: Antragsvorlage (EB/VA mit Diagnosen, Anamnese, ohne Verlauf)
         antragsvorlage_text = ""
@@ -994,6 +1124,21 @@ async def create_generate_job(
             # v19.1: Think-Block-Telemetrie aus llm.generate_text() an
             # job_queue durchreichen (landet in jobs.generation_telemetry).
             "generation_telemetry": result.get("generation_telemetry"),
+            # v19.2 Schritt 5: Stage-1-Audit (None wenn Stage 1 nicht relevant).
+            # Wird in run_job in JobState.verlauf_summary_audit gespiegelt und
+            # mit dem persist-Schritt in die DB-Spalte verlauf_summary_audit
+            # geschrieben.
+            "verlauf_summary_audit": _stage1_audit,
+            # v19.2 Schritt 7: Der tatsaechliche Stage-1-Text (falls Stage 1
+            # erfolgreich war). Wird ebenfalls in JobState gespiegelt und in
+            # die DB-Spalte verlauf_summary_text geschrieben. None wenn
+            # Stage 1 nicht lief oder fehlgeschlagen ist (in dem Fall steht
+            # in verlaufsdoku_text noch das Original).
+            "verlauf_summary_text": (
+                verlaufsdoku_text
+                if (_stage1_audit and _stage1_audit.get("applied"))
+                else None
+            ),
         }
 
     background_tasks.add_task(job_queue.run_job, job, _run())

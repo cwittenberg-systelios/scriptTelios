@@ -98,6 +98,25 @@ class Settings(BaseSettings):
     RATE_LIMIT_PARALLEL_JOBS: int = 5
     ACCESS_TOKEN_EXPIRE_MINUTES:   int = 480   # 8 Stunden
 
+    # ── v19.2 Two-Stage-Pipeline (Verlauf-Verdichtung) ───────────
+    # Stage 1: separater LLM-Call der die rohe Verlaufsdokumentation auf
+    # eine strukturierte, quellentreue Zusammenfassung verdichtet. Stage 2
+    # (eigentliche Antrags-Generierung) bekommt dann die Summary statt der
+    # vollen Doku als Verlauf-Input.
+    #
+    # STAGE1_ENABLED:
+    #   true  -> Stage 1 wird fuer verlaengerung/folgeverlaengerung/
+    #            entlassbericht aktiv, wenn die bereinigte Verlaufsdoku
+    #            >=1500 Woerter hat.
+    #   false -> Stage 1 wird komplett uebersprungen (Pre-v19.2-Verhalten).
+    # Notabschalter falls Stage 1 in Produktion Probleme macht.
+    STAGE1_ENABLED: bool = True
+
+    # Zielwortzahl der Stage-1-Zusammenfassung. Stage 2 bekommt ca. so viele
+    # Woerter Verlauf-Input statt der Rohdoku (typisch ~10-13k Woerter).
+    # Akzeptiert wird 40%-200% dieses Werts; ausserhalb -> Stage 1 Fallback.
+    STAGE1_TARGET_WORDS: int = 4000
+
     # ── CORS ──────────────────────────────────────────────────────
     # Confluence-Instanz eintragen (internes Netz):
     # z.B. "http://intranet.systelios.local" oder "https://wiki.systelios.de"

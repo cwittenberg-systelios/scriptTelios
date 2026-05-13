@@ -74,6 +74,21 @@ def _log_performance(job: "JobState", queue_size: int) -> None:
             "retry_used":             tel.get("retry_used", False),
             "degraded":               tel.get("degraded", False),
         }
+    # v19.2: Stage-1-Kompaktbericht im Performance-Log (kein voller Audit-Dump,
+    # nur die Kennzahlen die fuer Trend-Auswertung relevant sind).
+    audit = job.verlauf_summary_audit or {}
+    if audit:
+        entry["stage1"] = {
+            "applied":            audit.get("applied"),
+            "raw_words":          audit.get("raw_word_count"),
+            "summary_words":      audit.get("summary_word_count"),
+            "compression_ratio":  audit.get("compression_ratio"),
+            "duration_s":         audit.get("duration_s"),
+            "retry_used":         audit.get("retry_used", False),
+            "degraded":           audit.get("degraded", False),
+            "issue_count":        len(audit.get("issues") or []),
+            "fallback_reason":    audit.get("fallback_reason"),
+        }
     perf_logger.info(json.dumps(entry, ensure_ascii=False))
 
 
@@ -121,6 +136,13 @@ class JobState:
         # Kann Felder enthalten: think_ratio, tokens_hit_cap, retry_used,
         # degraded, degraded_reason, used_thinking_fallback, eval_count, ...
         self.generation_telemetry: Optional[dict] = None
+        # v19.2: Stage-1-Ergebnis (Two-Stage-Pipeline).
+        # verlauf_summary_text:  Verdichteter Verlauf (None wenn Stage 1
+        #                        nicht lief oder fehlgeschlagen ist).
+        # verlauf_summary_audit: Audit-Bundle mit applied/raw_word_count/
+        #                        compression_ratio/retry_used/degraded/...
+        self.verlauf_summary_text : Optional[str]  = None
+        self.verlauf_summary_audit: Optional[dict] = None
         self._cancel_requested  : bool = False
         self.input_meta         : Optional[dict] = None
 
@@ -154,6 +176,10 @@ class JobState:
             "duration_s":      self.duration_s,
             "style_info":      self.style_info,
             "generation_telemetry": self.generation_telemetry,
+            # v19.2: Two-Stage-Pipeline – beide Felder default None bei
+            # Jobs die Stage 1 nicht beruehrt haben.
+            "verlauf_summary_text":  self.verlauf_summary_text,
+            "verlauf_summary_audit": self.verlauf_summary_audit,
         }
 
 
@@ -243,6 +269,10 @@ class JobQueue:
                     "duration_s":      db_job.duration_s,
                     "style_info":      json.loads(db_job.style_info_json) if db_job.style_info_json else None,
                     "generation_telemetry": db_job.generation_telemetry,
+                    # v19.2: Two-Stage-Pipeline-Felder. None bei Jobs aus
+                    # Pre-v19.2-Zeit oder Workflows die Stage 1 nicht nutzen.
+                    "verlauf_summary_text":  db_job.verlauf_summary_text,
+                    "verlauf_summary_audit": db_job.verlauf_summary_audit,
                 }
         except Exception as e:
             logger.warning("Job-DB-Lookup fehlgeschlagen: %s", e)
@@ -304,6 +334,9 @@ class JobQueue:
                         duration_s=state.duration_s,
                         style_info_json=json.dumps(state.style_info) if state.style_info else None,
                         generation_telemetry=state.generation_telemetry,
+                        # v19.2: Stage-1-Pipeline-Felder
+                        verlauf_summary_text=state.verlauf_summary_text,
+                        verlauf_summary_audit=state.verlauf_summary_audit,
                     )
                 )
                 await db.commit()
@@ -340,6 +373,16 @@ class JobQueue:
             # v19.1: Telemetrie aus dem LLM-Result (Pipeline jobs.py
             # haengt sie an result["generation_telemetry"] an).
             job.generation_telemetry = result.get("generation_telemetry")
+            # v19.2: Stage-1-Pipeline-Ergebnis.
+            # verlauf_summary_text wird aus dem Audit-Bundle abgeleitet,
+            # falls Stage 1 erfolgreich war (applied=True). Der eigentliche
+            # Summary-Text wird in der jobs.py-Pipeline NICHT separat an
+            # result angehaengt – er wandert direkt als verlaufsdoku_text in
+            # die Generierung. Wir rekonstruieren ihn fuer die Persistierung
+            # NICHT aus dem Result; statt dessen wird er von jobs.py optional
+            # an result["verlauf_summary_text"] gehaengt (kann None bleiben).
+            job.verlauf_summary_audit = result.get("verlauf_summary_audit")
+            job.verlauf_summary_text  = result.get("verlauf_summary_text")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
 
             if job._cancel_requested:

@@ -120,6 +120,20 @@ CREATE TABLE IF NOT EXISTS style_embeddings (
 ALTER TABLE jobs
     ADD COLUMN IF NOT EXISTS generation_telemetry JSONB;
 
+-- v19.2: Two-Stage-Pipeline – Stage 1 (Verlauf-Verdichtung).
+-- verlauf_summary_text:  TEXT der verdichteten Verlaufsdokumentation
+--                        (4-Abschnitt-Form). NULL wenn Stage 1 nicht lief.
+-- verlauf_summary_audit: JSONB mit Audit-Metadaten der Stage-1-Ausfuehrung.
+--                        Enthaelt u.a.: applied, raw_word_count,
+--                        summary_word_count, compression_ratio, duration_s,
+--                        retry_used, degraded, issues, fallback_reason,
+--                        telemetry.
+--                        NULL wenn Workflow nicht zur Stage-1-Whitelist gehoert.
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS verlauf_summary_text TEXT;
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS verlauf_summary_audit JSONB;
+
 -- ── D. Indizes ─────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS ix_jobs_workflow         ON jobs (workflow);
 CREATE INDEX IF NOT EXISTS ix_jobs_status           ON jobs (status);
