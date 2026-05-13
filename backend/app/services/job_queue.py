@@ -307,11 +307,8 @@ class JobQueue:
                         model_used=state.model_used,
                         duration_s=state.duration_s,
                         style_info_json=json.dumps(state.style_info) if state.style_info else None,
-<<<<<<< HEAD
                         quality_check_json=json.dumps(state.quality_check) if state.quality_check else None,
-=======
                         generation_telemetry=state.generation_telemetry,
->>>>>>> main
                     )
                 )
                 await db.commit()
@@ -345,13 +342,10 @@ class JobQueue:
             job.result_file        = result.get("file")
             job.model_used         = result.get("model_used")
             job.style_info         = result.get("style_info")
-<<<<<<< HEAD
             job.quality_check      = result.get("quality_check")
-=======
             # v19.1: Telemetrie aus dem LLM-Result (Pipeline jobs.py
             # haengt sie an result["generation_telemetry"] an).
             job.generation_telemetry = result.get("generation_telemetry")
->>>>>>> main
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
 
             if job._cancel_requested:
