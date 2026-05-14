@@ -575,15 +575,24 @@ async def create_generate_job(
             except Exception:
                 pass
 
-            target_words = getattr(settings, "STAGE1_TARGET_WORDS", 4000)
+            # v19.2.1: STAGE1_TARGET_WORDS nur nutzen wenn explizit gesetzt.
+            # Andernfalls den proportionalen Default von summarize_verlauf greifen lassen
+            # (target = max(800, raw_words * 0.12)). Hintergrund: fixe 4000w war zu hoch,
+            # fuehrte zu 95% Failure-Rate weil Qwen3 konsistent ~500-1500w produziert.
+            target_words_override = getattr(settings, "STAGE1_TARGET_WORDS", None)
             try:
-                stage1_result = await summarize_verlauf(
-                    verlauf_text=verlaufsdoku_raw_text,
-                    workflow=workflow,
-                    patient_initial=None,  # patient_name wird erst spaeter extrahiert
-                    target_words=target_words,
-                )
+                summarize_kwargs = {
+                    "verlauf_text":     verlaufsdoku_raw_text,
+                    "workflow":         workflow,
+                    "patient_initial":  None,  # patient_name wird erst spaeter extrahiert
+                }
+                if target_words_override is not None:
+                    summarize_kwargs["target_words"] = target_words_override
+                stage1_result = await summarize_verlauf(**summarize_kwargs)
                 # Erfolg → ersetzen, Audit-Bundle aufbauen
+                # target_words kommt jetzt aus stage1_result (echter Wert),
+                # nicht aus der lokalen Variable
+                effective_target = stage1_result.get("target_words", target_words_override)
                 verlaufsdoku_text = stage1_result["summary"]
                 _stage1_audit = {
                     "applied":              True,
@@ -596,7 +605,7 @@ async def create_generate_job(
                     "retry_telemetry":      stage1_result.get("retry_telemetry", {}),
                     "degraded":             stage1_result.get("degraded", False),
                     "issues":               stage1_result.get("issues", []),
-                    "target_words":         target_words,
+                    "target_words":         effective_target,
                     "fallback_reason":      None,
                 }
                 logger.info(
@@ -626,7 +635,7 @@ async def create_generate_job(
                     "retry_telemetry":      {},
                     "degraded":             False,
                     "issues":               [],
-                    "target_words":         target_words,
+                    "target_words":         target_words_override,
                     "fallback_reason":      f"exception: {type(e).__name__}: {str(e)[:200]}",
                 }
                 # verlaufsdoku_text bleibt unveraendert (das Original)
@@ -650,7 +659,7 @@ async def create_generate_job(
                 "retry_telemetry":      {},
                 "degraded":             False,
                 "issues":               [],
-                "target_words":         getattr(settings, "STAGE1_TARGET_WORDS", 4000),
+                "target_words":         getattr(settings, "STAGE1_TARGET_WORDS", None),
                 "fallback_reason":      reason,
             }
 

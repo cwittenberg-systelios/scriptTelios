@@ -308,30 +308,49 @@ async def summarize_verlauf(
     max_acceptable = int(target_words * 2.5)  # mehr Headroom nach oben
 
     focus_hint = _build_focus_hint(workflow)
+    # v19.2.2: Anti-Think-Anweisung direkt im System-Prompt anhängen.
+    # Hintergrund (Eval-Lauf 14.05.2026): Stage-1 zeigte think_ratio=50-67%
+    # bei 12962w-Inputs. Qwen3:32b ignoriert "think:False" + einmaliges
+    # "/no_think" bei komplexen Verdichtungsaufgaben — defense in depth nötig.
+    anti_think_system = (
+        "\n\nWICHTIG: KEIN INNERES NACHDENKEN. "
+        "Schreibe direkt die Zusammenfassung. "
+        "KEINE <think>-Tags, KEINE Meta-Reflexion, KEINE Vorbemerkungen. "
+        "Beginne sofort mit dem ersten Abschnitt '### Übersicht'."
+    )
     system_prompt = (
         VERLAUF_SUMMARY_SYSTEM_PROMPT
         + "\n\n"
         + VERLAUF_SUMMARY_STRUCTURE
         + (f"\n\nFOCUS: {focus_hint}\n" if focus_hint else "")
+        + anti_think_system
     )
 
+    # v19.2.2: /no_think doppelt - Anfang UND Ende des user_content.
+    # llm.py haengt am Ende sowieso /no_think an (idempotent durch rstrip),
+    # aber am Anfang ist hier neu und wirkt staerker.
     user_content = (
-        (f"AKTUELLER PATIENT: {patient_initial}\n\n" if patient_initial else "")
+        "/no_think\n\n"
+        + (f"AKTUELLER PATIENT: {patient_initial}\n\n" if patient_initial else "")
         + "QUELLE — Verlaufsdokumentation:\n"
         + ">>>VERLAUFSDOKU<<<\n"
         + verlauf_text
         + "\n>>>/VERLAUFSDOKU<<<\n\n"
         + f"Verdichte diese Verlaufsdokumentation jetzt. "
         + f"Zielwortzahl: ca. {target_words} Wörter "
-        + f"(akzeptiert: {min_acceptable}–{max_acceptable})."
+        + f"(akzeptiert: {min_acceptable}–{max_acceptable}).\n\n"
+        + "/no_think"
     )
 
-    # Erste Generierung — niedrige Temperatur, kein Workflow (kein BASE_PROMPT,
-    # kein Primer), eigenes Token-Budget.
+    # Erste Generierung — kein Workflow (kein BASE_PROMPT, kein Primer),
+    # eigenes Token-Budget.
     # v19.2.1: skip_aggressive_dedup=True - thematische Wiederholungen in Stage-1
     # Synthesen sind strukturell erwuenscht ("Sitzung X kam in Themen-Block A
     # vor"), nicht echte Dopplungen. Eval-Befund: 8 von 10 Stage-1-Failures
     # wurden durch faelschliche Dedup-Aktion zu kurz (12-18 Absaetze entfernt).
+    # v19.2.2: Temperatur 0.4 statt 0.2 — bricht deterministische Reasoning-Loops
+    # bei Qwen3. Niedrige Temperatur (0.0-0.2) provoziert lange Think-Bloecke
+    # weil das Modell deterministisch in den "vorsichtig denken"-Pfad geht.
     import time as _t
     t0 = _t.time()
     result = await generate_text(
@@ -339,7 +358,7 @@ async def summarize_verlauf(
         user_content=user_content,
         max_tokens=int(target_words * 1.5),  # Wort->Token-Puffer
         workflow=None,
-        temperature_override=0.2,
+        temperature_override=0.4,
         skip_aggressive_dedup=True,
     )
 
@@ -440,8 +459,7 @@ async def _retry_stricter_summary(
     Zweiter Versuch wenn Stage 1 critical Halluzinations-Signale hatte.
 
     Strengeres Prompt mit expliziter Erwähnung der gefundenen Issues.
-    Temperatur noch niedriger (0.1) fuer maximale Reproduktion.
-    Maximal EIN Retry, kein Loop.
+    Anti-Think-Schutz wie im Hauptcall (v19.2.2). Maximal EIN Retry, kein Loop.
 
     Returns:
         (retry_summary, retry_telemetry)
@@ -457,6 +475,13 @@ async def _retry_stricter_summary(
     max_acceptable = int(target_words * 2.5)
 
     focus_hint = _build_focus_hint(workflow)
+    # v19.2.2: Anti-Think auch im retry-Pfad konsistent
+    anti_think_system = (
+        "\n\nWICHTIG: KEIN INNERES NACHDENKEN. "
+        "Schreibe direkt die Zusammenfassung. "
+        "KEINE <think>-Tags, KEINE Meta-Reflexion, KEINE Vorbemerkungen. "
+        "Beginne sofort mit dem ersten Abschnitt '### Übersicht'."
+    )
     system_prompt = (
         VERLAUF_SUMMARY_SYSTEM_PROMPT
         + "\n\n"
@@ -467,17 +492,21 @@ async def _retry_stricter_summary(
         + f"Halluzinations-Probleme auf: {issue_summary}. "
         + "Vermeide diese diesmal strikt. Wenn du unsicher bist ob etwas in "
         + "der Quelle steht, lass es weg."
+        + anti_think_system
     )
 
+    # v19.2.2: /no_think doppelt - Anfang UND Ende
     user_content = (
-        (f"AKTUELLER PATIENT: {patient_initial}\n\n" if patient_initial else "")
+        "/no_think\n\n"
+        + (f"AKTUELLER PATIENT: {patient_initial}\n\n" if patient_initial else "")
         + "QUELLE — Verlaufsdokumentation:\n"
         + ">>>VERLAUFSDOKU<<<\n"
         + verlauf_text
         + "\n>>>/VERLAUFSDOKU<<<\n\n"
         + f"Verdichte diese Verlaufsdokumentation jetzt. "
         + f"Zielwortzahl: ca. {target_words} Wörter "
-        + f"(akzeptiert: {min_acceptable}–{max_acceptable})."
+        + f"(akzeptiert: {min_acceptable}–{max_acceptable}).\n\n"
+        + "/no_think"
     )
 
     try:
@@ -486,7 +515,9 @@ async def _retry_stricter_summary(
             user_content=user_content,
             max_tokens=int(target_words * 1.5),
             workflow=None,
-            temperature_override=0.1,  # noch niedriger
+            # v19.2.2: Temperatur 0.3 statt 0.1 - selbst beim Halluzinations-Retry
+            # nicht zu deterministisch, sonst greift Anti-Think-Schutz nicht
+            temperature_override=0.3,
             skip_aggressive_dedup=True,  # v19.2.1: konsistent zu summarize_verlauf
         )
     except Exception as e:
