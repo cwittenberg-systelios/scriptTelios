@@ -111,29 +111,42 @@ def truncate_style_context(text: str) -> str:
     return truncated
 
 
-def deduplicate_paragraphs(text: str) -> str:
+def deduplicate_paragraphs(text: str, *, strict_mode: bool = False) -> str:
     """
     Entfernt wiederholte Absätze aus dem LLM-Output.
     qwen3:32b neigt bei zu langem Kontext dazu denselben Absatz
     mehrfach zu generieren – dieser Filter erkennt und entfernt Duplikate.
     Überschriften (**Fett** oder Zeile mit nur Grossbuchstaben) bleiben erhalten.
+
+    Args:
+        text: Der zu deduplizierende Text.
+        strict_mode: Wenn True, nur byte-identische Absätze entfernen
+                     (für Stage-1-Synthesen, wo thematische Wiederholungen
+                     mit leicht anderer Formulierung legitim sind).
+                     Default False = bisheriges Verhalten (case-insensitive,
+                     whitespace-normalisiert).
     """
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     seen: set[str] = set()
     result = []
     duplicates = 0
     for p in paragraphs:
-        # Normalisierter Vergleichsschlüssel: Leerzeichen zusammenfassen, lowercase
-        key = " ".join(p.lower().split())
+        if strict_mode:
+            # Nur byte-identische Absätze entfernen (kein lower, kein split-join)
+            key = p
+        else:
+            # Bisheriges Verhalten: normalisierter Vergleichsschlüssel
+            key = " ".join(p.lower().split())
         if key in seen:
             duplicates += 1
             continue
         seen.add(key)
         result.append(p)
     if duplicates:
+        mode_label = "strict" if strict_mode else "normal"
         logger.warning(
-            "LLM-Output: %d doppelte Absätze entfernt (Wiederholungsloop erkannt)",
-            duplicates,
+            "LLM-Output: %d doppelte Absätze entfernt (Wiederholungsloop erkannt, mode=%s)",
+            duplicates, mode_label,
         )
     return "\n\n".join(result)
 
@@ -559,6 +572,7 @@ async def generate_text(
     max_words: Optional[int] = None,
     expected_keywords: Optional[list[str]] = None,
     temperature_override: Optional[float] = None,
+    skip_aggressive_dedup: bool = False,
 ) -> dict:
     """
     Generiert Text ausschliesslich via lokalem Ollama-Modell.
@@ -582,6 +596,14 @@ async def generate_text(
                          Stage-1-Pipeline (verlauf_summary) genutzt, die
                          mit 0.2 / 0.1 (Retry) maximale Quellentreue
                          erzwingt. None = Profil-Default (qwen3: 0.4).
+
+    v19.2.1-Parameter:
+      skip_aggressive_dedup: Wenn True, nutzt deduplicate_paragraphs den
+                         strict_mode (nur byte-identische Duplikate). Fuer
+                         Stage-1-Synthesen, wo thematische Wiederholungen
+                         strukturell vorkommen (eine Sitzung kann zu mehreren
+                         Themen-Buckets gehoeren). Default False = bisheriges
+                         Verhalten (case-insensitive Dedup).
     """
     if len(user_content) > MAX_USER_CONTENT_CHARS:
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
@@ -678,6 +700,7 @@ async def generate_text(
         workflow=workflow,
         max_words=max_words,
         expected_keywords=expected_keywords,
+        strict_dedup=skip_aggressive_dedup,
     )
 
     # ── v19.1: Think-Block-Detection + ggf. Retry ────────────────────────
@@ -713,6 +736,7 @@ async def generate_text(
             workflow=workflow,
             max_words=max_words,
             expected_keywords=expected_keywords,
+            strict_dedup=skip_aggressive_dedup,
         )
 
         retry_words = len(retry_processed.split()) if retry_processed else 0
@@ -1000,11 +1024,17 @@ def _postprocess_text(
     workflow: Optional[str],
     max_words: Optional[int],
     expected_keywords: Optional[list[str]],
+    *,
+    strict_dedup: bool = False,
 ) -> str:
     """
     Wendet den gesamten Postprocessing-Pfad auf einen Rohtext an.
     Gemeinsame Implementierung fuer den ersten Pass UND den Retry-Pass
     in generate_text(); verhindert Code-Duplikation.
+
+    Args:
+        strict_dedup: Wenn True, nutzt deduplicate_paragraphs den strict_mode
+                      (nur byte-identische Duplikate entfernen). Fuer Stage-1.
     """
     import re as _re
 
@@ -1033,7 +1063,7 @@ def _postprocess_text(
             logger.warning("Doppelten Text erkannt und bereinigt (Phrase: '%s')", phrase)
             break
 
-    text = strip_markdown_formatting(deduplicate_paragraphs(text))
+    text = strip_markdown_formatting(deduplicate_paragraphs(text, strict_mode=strict_dedup))
 
     # v16: Komposita, Loop-Repetition, Hard-Cap, Keyword-Check
     if text:

@@ -45,40 +45,51 @@ ABSOLUTE REGELN — JEDE VERLETZUNG IST EIN FEHLER:
    wenn sie nicht im Quelltext stehen. Bleib bei den Quell-Adjektiven.
 
 4. ZITAT-NAH BEI FACHBEGRIFFEN: Therapieverfahren (IFS, Stuhlarbeit, EMDR, ...)
-   werden NUR übernommen wenn sie im Quelltext namentlich vorkommen. Sonst
-   beschreibst du, was gemacht wurde, ohne das Verfahren zu benennen.
+   und Anteilnamen ("Türsteher", "Wächter", ...) werden NUR übernommen wenn
+   sie im Quelltext namentlich vorkommen. Sonst beschreibst du, was gemacht
+   wurde, ohne das Verfahren zu benennen.
 
-5. UNSICHERHEIT KENNZEICHNEN: Wenn aus dem Text unklar bleibt was passiert ist,
+5. PRO SITZUNG NUR EINMAL: Jede Sitzung erscheint im "Verlauf"-Abschnitt
+   GENAU EINMAL. Wenn eine Sitzung mehrere Themen oder Methoden hatte,
+   nenne sie in DEMSELBEN Absatz, nicht in mehreren.
+
+6. KEINE STRUKTURELLEN DOPPLUNGEN: Schreibe NICHT denselben Inhalt
+   in zwei verschiedenen Abschnitten. Wenn du Methode X bei Sitzung 5 schon
+   erwähnt hast, erwähne sie nicht nochmal in einem späteren Abschnitt.
+
+7. UNSICHERHEIT KENNZEICHNEN: Wenn aus dem Text unklar bleibt was passiert ist,
    schreibe "im Protokoll unklar" oder "nicht weiter ausgeführt" — nicht raten.
 
-6. SITZUNGS-BEZUG: Wo immer möglich, beziehe Aussagen auf das Sitzungs-Datum
+8. SITZUNGS-BEZUG: Wo immer möglich, beziehe Aussagen auf das Sitzungs-Datum
    oder die Seitenzahl ("am 12.01.", "S. 4"). Das ist die Audit-Spur.
 """
 
 
 VERLAUF_SUMMARY_STRUCTURE = """STRUKTUR DER ZUSAMMENFASSUNG:
 
-Schreibe in vier Abschnitten, jeweils mit Überschrift:
+Schreibe in DREI Abschnitten, jeweils mit Überschrift:
 
-### Sitzungsübersicht
+### Übersicht
 Anzahl und Art der Sitzungen, Zeitraum, Dichte (z.B. "12 Einzelgespräche
 und 8 Gruppensitzungen vom 01.01. bis 03.02., zusätzlich 4 nonverbale
-Therapien").
+Therapien"). 2-4 Sätze.
 
-### Bearbeitete Themen (chronologisch)
-Pro Thema 1–3 Sätze, mit Sitzungs-Datum oder Seitenzahl in Klammern.
-Konzentriere dich auf das WAS, nicht das WIE.
-Beispiel: "Thema Selbstabwertung in Familienkontext (12.01., 15.01., 22.01.):
-Patientin bringt wiederkehrend ein Gefühl ein, in der Familie nicht
-gesehen zu werden, insbesondere im Verhältnis zum Bruder."
+### Verlauf
+Chronologische Darstellung der Sitzungen.
+Pro Sitzung EIN Absatz mit Datum, Sitzungstyp, Themen UND Methoden zusammen.
 
-### Therapeutische Interventionen
-Welche Methoden, Techniken, Übungen wurden eingesetzt? Mit Sitzungs-Bezug.
-NUR benannte Verfahren übernehmen — nicht eigenständig Verfahrensnamen vergeben.
+Beispiel-Format:
+"12.01. (Einzelgespräch): Patientin bearbeitet Selbstabwertung in
+Familienkontext. Therapeut nutzt Stuhlarbeit und Externalisierung
+des inneren Kritikers."
 
-### Beobachtete Entwicklung
-Was hat sich verändert — strikt nach Protokoll. Stabilisierung,
-Destabilisierung, neue Symptome, Verschlechterung. Mit Sitzungs-Bezug.
+Fasse aufeinanderfolgende Sitzungen mit demselben Thema zu einem Block zusammen:
+"15.01.–19.01. (3 Gruppensitzungen): Bearbeitung von Bindungsmustern in
+Konfliktsituationen. Schwerpunkt Imaginationstechniken."
+
+### Gesamtentwicklung
+Was hat sich im Behandlungszeitraum verändert. 3-6 Sätze. Strikt nach
+Protokoll. Stabilisierung, Destabilisierung, neue Symptome, Verschlechterung.
 Wenn keine Veränderung beschrieben: "Verlauf im Protokoll weitgehend
 gleichbleibend beschrieben."
 """
@@ -234,7 +245,7 @@ async def summarize_verlauf(
     workflow: Optional[str],
     patient_initial: Optional[str] = None,
     *,
-    target_words: int = 4000,
+    target_words: Optional[int] = None,
 ) -> dict:
     """
     Stage 1 der Two-Stage-Pipeline.
@@ -247,7 +258,11 @@ async def summarize_verlauf(
         workflow:         Workflow-Key (verlaengerung/folgeverlaengerung/
                           entlassbericht); steuert focus_hint
         patient_initial:  Patient-Kuerzel fuer Anrede in der Quelle
-        target_words:     Ziel-Wortzahl der Zusammenfassung
+        target_words:     Ziel-Wortzahl der Zusammenfassung. None = proportional
+                          zum Input berechnet (12% des Inputs, mind. 800w).
+                          v19.2.1: Eval-Daten zeigen dass das LLM konsistent
+                          4-20% des Inputs als Synthese produziert. Fixe 4000w
+                          waren unrealistisch hoch und fuehrten zu 95% Failure-Rate.
 
     Returns:
         {
@@ -260,11 +275,13 @@ async def summarize_verlauf(
           "issues":               list  — gefundene Halluzinations-Signale
           "retry_used":           bool
           "degraded":             bool  — Output war auch nach Retry verdaechtig
+          "target_words":         int   — verwendetes Target (fuer Audit)
+          "min_acceptable":       int   — verwendete Untergrenze (fuer Audit)
         }
 
     Raises:
         RuntimeError wenn auch der initiale Call keinen plausibel langen
-        Output liefert (< 40% Zielwortzahl). Der Aufrufer (Pipeline) faengt
+        Output liefert (< 50% Zielwortzahl). Der Aufrufer (Pipeline) faengt
         das ab und faellt auf das Original zurueck.
     """
     # Lokal-Import um Zirkelimport zu vermeiden (llm.py kennt diese Datei nicht).
@@ -274,6 +291,21 @@ async def summarize_verlauf(
         raise RuntimeError("Stage 1: leerer Verlauf-Text")
 
     raw_words = len(verlauf_text.split())
+
+    # v19.2.1: target_words proportional zum Input statt fix 4000.
+    # Hintergrund: Eval-Daten (13.05.2026) zeigten dass das LLM bei 6789-12962w
+    # Input konsistent 500-1500w produziert (mit dem einen Erfolg bei 2571w).
+    # Fixe 4000w + min_acceptable=1600w fuehrten zu 95% Failure-Rate.
+    if target_words is None:
+        target_words = max(800, int(raw_words * 0.12))
+        # Beispiel:
+        #   raw=12962w → target=1555w
+        #   raw= 6789w → target= 814w
+        #   raw= 3000w → target= 800w (Floor)
+
+    # v19.2.1: Threshold ebenfalls relativ - 50% statt 40%, Floor 400.
+    min_acceptable = max(400, int(target_words * 0.5))
+    max_acceptable = int(target_words * 2.5)  # mehr Headroom nach oben
 
     focus_hint = _build_focus_hint(workflow)
     system_prompt = (
@@ -291,11 +323,15 @@ async def summarize_verlauf(
         + "\n>>>/VERLAUFSDOKU<<<\n\n"
         + f"Verdichte diese Verlaufsdokumentation jetzt. "
         + f"Zielwortzahl: ca. {target_words} Wörter "
-        + f"(akzeptiert: {int(target_words*0.6)}–{int(target_words*1.4)})."
+        + f"(akzeptiert: {min_acceptable}–{max_acceptable})."
     )
 
     # Erste Generierung — niedrige Temperatur, kein Workflow (kein BASE_PROMPT,
     # kein Primer), eigenes Token-Budget.
+    # v19.2.1: skip_aggressive_dedup=True - thematische Wiederholungen in Stage-1
+    # Synthesen sind strukturell erwuenscht ("Sitzung X kam in Themen-Block A
+    # vor"), nicht echte Dopplungen. Eval-Befund: 8 von 10 Stage-1-Failures
+    # wurden durch faelschliche Dedup-Aktion zu kurz (12-18 Absaetze entfernt).
     import time as _t
     t0 = _t.time()
     result = await generate_text(
@@ -304,20 +340,18 @@ async def summarize_verlauf(
         max_tokens=int(target_words * 1.5),  # Wort->Token-Puffer
         workflow=None,
         temperature_override=0.2,
+        skip_aggressive_dedup=True,
     )
 
     summary = (result.get("text") or "").strip()
     summary_words = len(summary.split()) if summary else 0
-
-    min_acceptable = int(target_words * 0.4)
-    max_acceptable = int(target_words * 2.0)
 
     if not summary:
         raise RuntimeError("Stage 1: Zusammenfassung leer")
     if summary_words < min_acceptable:
         raise RuntimeError(
             f"Stage 1: Zusammenfassung implausibel kurz: {summary_words}w "
-            f"< {min_acceptable}w Minimum (target={target_words}w)"
+            f"< {min_acceptable}w Minimum (target={target_words}w, raw={raw_words}w)"
         )
     if summary_words > max_acceptable:
         logger.warning(
@@ -390,6 +424,8 @@ async def summarize_verlauf(
         "issues":               issues,
         "retry_used":           retry_used,
         "degraded":             degraded,
+        "target_words":         target_words,
+        "min_acceptable":       min_acceptable,
     }
 
 
@@ -416,6 +452,10 @@ async def _retry_stricter_summary(
         f"{i['type']}: {i['detail']}" for i in previous_issues
     )
 
+    # Akzeptanz-Range konsistent zu summarize_verlauf
+    min_acceptable = max(400, int(target_words * 0.5))
+    max_acceptable = int(target_words * 2.5)
+
     focus_hint = _build_focus_hint(workflow)
     system_prompt = (
         VERLAUF_SUMMARY_SYSTEM_PROMPT
@@ -437,7 +477,7 @@ async def _retry_stricter_summary(
         + "\n>>>/VERLAUFSDOKU<<<\n\n"
         + f"Verdichte diese Verlaufsdokumentation jetzt. "
         + f"Zielwortzahl: ca. {target_words} Wörter "
-        + f"(akzeptiert: {int(target_words*0.6)}–{int(target_words*1.4)})."
+        + f"(akzeptiert: {min_acceptable}–{max_acceptable})."
     )
 
     try:
@@ -447,6 +487,7 @@ async def _retry_stricter_summary(
             max_tokens=int(target_words * 1.5),
             workflow=None,
             temperature_override=0.1,  # noch niedriger
+            skip_aggressive_dedup=True,  # v19.2.1: konsistent zu summarize_verlauf
         )
     except Exception as e:
         logger.error("Stage 1 Retry-Call fehlgeschlagen: %s", e)
