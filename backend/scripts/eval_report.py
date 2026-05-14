@@ -178,8 +178,16 @@ def load_eval_results(d: Path) -> dict:
     return {"workflows": dict(results), "variance": var, "jury": jury}
 
 def _hbar(title, labels, values, bcols, w=460, bh=18, ref=None, rl=None, sfx="%", mx=None):
+    # A4 minus top+bottom margins (2cm each) ≈ 716pt usable frame height.
+    # reportlab kann Drawings nicht paginate — wenn das Drawing zu hoch wird
+    # schrumpfen wir bh automatisch bis es passt. Untergrenze bh=8 (lesbar).
+    MAX_H = 700
     lw, cw = 140, w-150
-    n = len(labels); gap = 5; h = n*(bh+gap)+40
+    n = len(labels); gap = 5
+    # Auto-shrink bh wenn noetig
+    while bh > 8 and n*(bh+gap)+40 > MAX_H:
+        bh -= 1
+    h = n*(bh+gap)+40
     d = Drawing(w, h)
     d.add(String(w/2, h-12, title, textAnchor="middle", fontSize=10,
                  fontName="Helvetica-Bold", fillColor=C["dark"]))
@@ -231,6 +239,16 @@ def _issue_bars(title, labels, sizes, icols, w=320):
         d.add(String(105+bw+4,y+4,f"{sz} ({sz/tot*100:.0f}%)",fontSize=7,fillColor=C["dark"]))
     return d
 
+def _safe_drawing(story, drawing, max_h=700):
+    """Haengt drawing an story an. Wenn es hoeher als max_h ist, wird
+    erst ein PageBreak eingefuegt damit reportlab nicht mit
+    LayoutError abbricht (Drawings koennen nicht automatisch paginiert
+    werden). Bei auto-shrink in _hbar sollte das in der Praxis nicht
+    mehr notig sein — Sicherheitsnetz fuer _issue_bars und _stacked."""
+    if hasattr(drawing, 'height') and drawing.height > max_h:
+        story.append(PageBreak())
+    story.append(drawing)
+
 def build_report(data: dict, out: Path, charts_dir: Path = None):
     doc = SimpleDocTemplate(str(out),pagesize=A4,leftMargin=2*cm,rightMargin=2*cm,
                             topMargin=2*cm,bottomMargin=2*cm)
@@ -280,7 +298,7 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
     story.append(Paragraph("Qualitäts-Scores",st["H2"]))
     lbs = [e["test_id"].split("-",1)[-1][:25] for e in ae]
     # P6: Composite-Score (Regex + Jury) als Hauptchart, mit Jury-Faehnchen.
-    story.append(_hbar("Composite-Score pro Testfall (70% Regex + 30% Jury)",
+    _safe_drawing(story, _hbar("Composite-Score pro Testfall (70% Regex + 30% Jury)",
         lbs,[e.get("composite", e["score"])*100 for e in ae],
         [WF_COL.get(e["workflow"],C["gray"]) for e in ae],ref=70,rl="Min 70%",mx=105))
     story.append(Spacer(1,4*mm))
@@ -291,7 +309,7 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
     story.append(Spacer(1,6*mm))
 
     story.append(Paragraph("Output-Länge",st["H2"]))
-    story.append(_hbar("Wörter pro Testfall",lbs,[e["word_count"] for e in ae],
+    _safe_drawing(story, _hbar("Wörter pro Testfall",lbs,[e["word_count"] for e in ae],
         [WF_COL.get(e["workflow"],C["gray"]) for e in ae],sfx="w"))
     story.append(PageBreak())
 
