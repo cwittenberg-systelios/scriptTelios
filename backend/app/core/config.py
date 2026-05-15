@@ -115,8 +115,9 @@ class Settings(BaseSettings):
     # Zielwortzahl der Stage-1-Zusammenfassung. Stage 2 bekommt ca. so viele
     # Woerter Verlauf-Input statt der Rohdoku (typisch ~10-13k Woerter).
     # Akzeptiert wird 40%-200% dieses Werts; ausserhalb -> Stage 1 Fallback.
-    STAGE1_TARGET_WORDS: int = 4000
-
+    # None = proportional zum Input (raw_words * 0.12, min 800)
+    STAGE1_TARGET_WORDS: int | None = None
+      
     # ── CORS ──────────────────────────────────────────────────────
     # Confluence-Instanz eintragen (internes Netz):
     # z.B. "http://intranet.systelios.local" oder "https://wiki.systelios.de"
