@@ -79,10 +79,10 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         short_label="Anamnese",
         is_structural=True,
         word_limit=(280, 650),
-        max_tokens=4500,           # v19.1: 3000 → 4500 (anamnese teilt intern
-                                   # in 2 LLM-Calls mit 0.6/0.5-Faktor → Anamnese
-                                   # ~2700, Befund ~2250 Tokens Headroom)
-        expected_tokens=1500,
+        max_tokens=5500,           # v19.2.3: 4500 → 5500 (Split 0.6/0.5: Anamnese
+                                   # ~3300, Befund ~2750 Tokens. 0.6-Bottleneck
+                                   # bestimmt Mindestwert fuer 650W Anamnese.)
+        expected_tokens=1800,
         color_hex="#2d7a3a",
     ),
     WorkflowSpec(
@@ -91,8 +91,9 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         short_label="Verlängerung",
         is_structural=True,
         word_limit=(350, 650),
-        max_tokens=4500,           # v19.1: 3000 → 4500 (Headroom fuer Think+Output)
-        expected_tokens=1500,
+        max_tokens=5000,           # v19.2.3: 4500 → 5000 (650W word_limit ×5
+                                   # + 700 Buffer fuer Thinking-Leak + Satzende)
+        expected_tokens=2000,
         color_hex="#1a5c8b",
     ),
     WorkflowSpec(
@@ -101,8 +102,9 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         short_label="Folgeverlängerung",
         is_structural=True,
         word_limit=(350, 650),
-        max_tokens=4500,           # v19.1: 3000 → 4500 (Headroom fuer Think+Output)
-        expected_tokens=1500,
+        max_tokens=5000,           # v19.2.3: 4500 → 5000 (analog verlaengerung;
+                                   # 650W × 5 + 700 Buffer Thinking-Leak + Satzende)
+        expected_tokens=2000,
         color_hex="#c47d1a",
     ),
     WorkflowSpec(
@@ -111,8 +113,9 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         short_label="Akutantrag",
         is_structural=True,
         word_limit=(150, 350),
-        max_tokens=2048,
-        expected_tokens=800,
+        max_tokens=2800,           # v19.2.3: 2048 → 2800 (350W × 5 + 700 Buffer
+                                   # fuer Krisen-/Verlaufsargumentation + Satzende)
+        expected_tokens=1000,
         color_hex="#7b1fa2",
     ),
     WorkflowSpec(
@@ -121,9 +124,10 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         short_label="Entlassbericht",
         is_structural=True,
         word_limit=(500, 900),
-        max_tokens=5500,           # v19.1: 4000 → 5500 (Headroom fuer Think+Output;
-                                   # Eval c9cf7204 traf Hard-Cap bei 4000 Tokens)
-        expected_tokens=2000,
+        max_tokens=6000,           # v19.2.3: 5500 → 6000 (900W × 5 + 700 Buffer;
+                                   # Entlassbericht hat mehrere Sektionen, dadurch
+                                   # haeufiger Overshoot ueber word_limit)
+        expected_tokens=2800,
         color_hex="#8b1a1a",
     ),
 )
