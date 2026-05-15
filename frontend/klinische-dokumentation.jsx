@@ -1130,10 +1130,7 @@ function AudioInput({ file, onFile }) {
     setP0Loading(true);
     setP0Error(null);
     try {
-      const tid = getConfluenceUser();
-      const url = tid
-        ? `${getApiBase()}/recordings?therapeut_id=${encodeURIComponent(tid)}`
-        : `${getApiBase()}/recordings`;
+      const url = `${getApiBase()}/recordings`;
       const res = await apiFetch(url);
       const all = await res.json();
 

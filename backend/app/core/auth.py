@@ -51,16 +51,16 @@ async def get_current_user(request: Request) -> str:
     """
     FastAPI-Dependency: liefert den validierten Username aus dem Confluence-Header.
 
-    Bei deaktivierter Auth (Dev-Modus) wird "dev-user" zurückgegeben.
+    Bei deaktivierter Auth (Dev-Modus) und keinem confluence user wird "dev-user" zurückgegeben.
     Bei fehlender/falscher Signatur wird HTTP 401 geworfen.
     """
-    if not settings.AUTH_ENABLED:
-        request.state.user_id = "dev-user"
-        return "dev-user"
-
     user = request.headers.get("X-Systelios-User", "")
     timestamp = request.headers.get("X-Systelios-Timestamp", "")
     signature = request.headers.get("X-Systelios-Signature", "")
+
+    if not settings.AUTH_ENABLED and not user:
+        request.state.user_id = "dev-user"
+        return "dev-user"
 
     if not verify_signature(user, timestamp, signature):
         raise AuthError("Ungültige oder fehlende Authentifizierung")
