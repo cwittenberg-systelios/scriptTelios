@@ -117,7 +117,38 @@ class Settings(BaseSettings):
     # Akzeptiert wird 40%-200% dieses Werts; ausserhalb -> Stage 1 Fallback.
     # None = proportional zum Input (raw_words * 0.12, min 800)
     STAGE1_TARGET_WORDS: int | None = None
-      
+
+    # ── v19.3 Transkript-Stage-1 (Transkript-Verdichtung) ────────
+    # Stage 1 fuer Sitzungs-Transkripte: verdichtet rohe Whisper-Outputs
+    # auf eine 3-Sektionen-Synthese, bevor sie in den Hauptcall gehen.
+    # Verhindert dass _sample_uniformly in llm.py (greift ab ~5000-6000w
+    # weil estimated_input_tokens + max_tokens > MAX_SAFE_CTX=20480) den
+    # Inhalt in 10 Fenstern mit Luecken willkuerlich kuerzt.
+    #
+    # Wirkt aktuell nur fuer Workflows {dokumentation, anamnese}, da
+    # akutantrag/verlaengerung/folgeverlaengerung/entlassbericht in
+    # Produktion kein Transkript bekommen.
+    #
+    # TRANSCRIPT_STAGE1_ENABLED:
+    #   true  -> Stage 1 wird fuer dokumentation/anamnese aktiv wenn das
+    #            Transkript >= TRANSCRIPT_STAGE1_MIN_WORDS Woerter hat.
+    #   false -> Stage 1 wird komplett uebersprungen (Pre-v19.3-Verhalten,
+    #            _sample_uniformly greift weiter).
+    TRANSCRIPT_STAGE1_ENABLED: bool = True
+
+    # Schwelle ab der die Transkript-Verdichtung lohnt. 5000w liegt
+    # bewusst UNTER der _sample_uniformly-Schwelle (~6000-7000w), damit
+    # die Verdichtung sicher davor greift. Darunter passt das Transkript
+    # ohnehin sauber in MAX_SAFE_CTX.
+    TRANSCRIPT_STAGE1_MIN_WORDS: int = 5000
+
+    # Zielwortzahl der Transkript-Verdichtung. None = proportional zum
+    # Input mit Hard-Cap: min(1500, max(600, raw_words * 0.20)).
+    # Beispiel:
+    #   raw= 7000w → target=1400w
+    #   raw=10000w → target=1500w (Hard-Cap)
+    TRANSCRIPT_STAGE1_TARGET_WORDS: int | None = None
+
     # ── CORS ──────────────────────────────────────────────────────
     # Confluence-Instanz eintragen (internes Netz):
     # z.B. "http://intranet.systelios.local" oder "https://wiki.systelios.de"

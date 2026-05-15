@@ -26,6 +26,7 @@ from app.services.llm import (
     substitute_patient_placeholders,
 )
 from app.services.verlauf_summary import summarize_verlauf
+from app.services.transcript_summary import summarize_transcript
 from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
 import app.services.transcription as _transcription
 
@@ -42,6 +43,14 @@ _STAGE1_WORKFLOWS = {"verlaengerung", "folgeverlaengerung", "entlassbericht"}
 # Unter dieser Schwelle ist der Roh-Verlauf so kurz, dass Stage 2 ihn ohnehin
 # komplett verarbeiten kann — Stage 1 waere reine Verlustkomprimierung.
 _STAGE1_MIN_WORDS = 1500
+
+# v19.3: Transkript-Stage-1 fuer dokumentation/anamnese.
+# akutantrag/verlaengerung/folgeverlaengerung/entlassbericht bekommen in
+# Produktion kein Transkript - daher hier NICHT aktiv.
+# Schwelle 5000w liegt unter der _sample_uniformly-Schwelle (~6000-7000w),
+# damit die Verdichtung sicher davor greift.
+_TRANSCRIPT_STAGE1_WORKFLOWS = {"dokumentation", "anamnese"}
+_TRANSCRIPT_STAGE1_MIN_WORDS = 5000
 
 # Separater Prompt-Logger – schreibt vollständige System/User-Prompts in prompts.log
 # Zweck: manuelle Inspektion und Prompt-Debugging ohne den Haupt-Log zu fluten.
@@ -663,6 +672,137 @@ async def create_generate_job(
                 "fallback_reason":      reason,
             }
 
+        # ── v19.3 Transkript-Stage-1 (Transkript-Verdichtung) ──────────────
+        #
+        # Verdichtet Sitzungs-Transkripte auf eine 3-Sektionen-Synthese BEVOR
+        # sie in den Hauptcall gehen. Verhindert dass _sample_uniformly in
+        # llm.py (greift ab estimated_input_tokens + max_tokens > MAX_SAFE_CTX
+        # = 20480, was bei Transkripten > ~5000-6000w eintritt) den Inhalt
+        # willkuerlich in 10 Fenstern mit Luecken kuerzt.
+        #
+        # Wirkt nur fuer Workflows {dokumentation, anamnese} - die anderen
+        # bekommen in Produktion kein Transkript.
+        #
+        # Bei Erfolg: transkript_text wird durch die Stage-1-Synthese ersetzt.
+        # Bei Fehler: Fallback auf Roh-Transkript (Sampling-Risiko bleibt).
+        # Audit-Bundle landet im result-Dict als "transcript_summary_audit".
+        #
+        # WICHTIG: Wir snapshotten das Roh-Transkript VOR dem Stage-1-Lauf
+        # in _transkript_raw_for_result. Das Result-Dict liefert immer das
+        # ROH-Transkript an's Frontend (Therapeut*innen wollen Whisper-Output
+        # zum Download), waehrend die LLM-Pipeline (build_user_content,
+        # P2-Befund) mit der Verdichtung weiterarbeitet.
+        _transkript_raw_for_result = transkript_text
+        _transcript_stage1_audit: Optional[dict] = None
+        _tr_stage1_enabled = getattr(settings, "TRANSCRIPT_STAGE1_ENABLED", True)
+        _tr_stage1_min_words = getattr(
+            settings, "TRANSCRIPT_STAGE1_MIN_WORDS", _TRANSCRIPT_STAGE1_MIN_WORDS,
+        )
+
+        if (
+            _tr_stage1_enabled
+            and workflow in _TRANSCRIPT_STAGE1_WORKFLOWS
+            and transkript_text
+            and len(transkript_text.split()) >= _tr_stage1_min_words
+        ):
+            transkript_raw_text = transkript_text
+            tr_raw_words = len(transkript_raw_text.split())
+            logger.info(
+                "Transcript-Stage 1 aktiviert fuer Job %s (%s): Transkript hat %d Woerter",
+                job.job_id, workflow, tr_raw_words,
+            )
+
+            try:
+                if "extraction" in bands:
+                    eb = bands["extraction"]
+                    # 90% des Extraktions-Bandes ist die Transkript-Stage-1-Phase
+                    # (Verlauf-Stage-1 nutzt 70%; Transkript-Stage-1 kommt danach)
+                    tr_stage1_progress = eb[0] + int((eb[1] - eb[0]) * 0.9)
+                    job.set_progress(tr_stage1_progress, "Transkript-Verdichtung (Stage 1)")
+            except Exception:
+                pass
+
+            tr_target_override = getattr(settings, "TRANSCRIPT_STAGE1_TARGET_WORDS", None)
+            try:
+                tr_kwargs = {
+                    "transcript_text": transkript_raw_text,
+                    "workflow":        workflow,
+                    "patient_initial": None,
+                }
+                if tr_target_override is not None:
+                    tr_kwargs["target_words"] = tr_target_override
+                tr_result = await summarize_transcript(**tr_kwargs)
+
+                effective_target = tr_result.get("target_words", tr_target_override)
+                transkript_text = tr_result["summary"]   # ÜBERSCHREIBEN
+                _transcript_stage1_audit = {
+                    "applied":              True,
+                    "raw_word_count":       tr_result["raw_word_count"],
+                    "summary_word_count":   tr_result["summary_word_count"],
+                    "compression_ratio":    tr_result["compression_ratio"],
+                    "duration_s":           tr_result["duration_s"],
+                    "telemetry":            tr_result.get("telemetry", {}),
+                    "retry_used":           tr_result.get("retry_used", False),
+                    "retry_telemetry":      tr_result.get("retry_telemetry", {}),
+                    "degraded":             tr_result.get("degraded", False),
+                    "issues":               tr_result.get("issues", []),
+                    "target_words":         effective_target,
+                    "fallback_reason":      None,
+                }
+                logger.info(
+                    "Transcript-Stage 1 erfolgreich: %d -> %d Woerter "
+                    "(Kompression %.0f%%), retry=%s",
+                    tr_result["raw_word_count"],
+                    tr_result["summary_word_count"],
+                    (1 - tr_result["compression_ratio"]) * 100,
+                    tr_result["retry_used"],
+                )
+            except Exception as e:
+                # Fallback: Roh-Transkript behalten, Audit mit Begruendung.
+                # _sample_uniformly in llm.py wird dann vermutlich greifen.
+                logger.warning(
+                    "Transcript-Stage 1 fehlgeschlagen (%s), Fallback auf "
+                    "Roh-Transkript (_sample_uniformly wird vermutlich greifen)",
+                    e,
+                )
+                _transcript_stage1_audit = {
+                    "applied":              False,
+                    "raw_word_count":       tr_raw_words,
+                    "summary_word_count":   None,
+                    "compression_ratio":    None,
+                    "duration_s":           None,
+                    "telemetry":            {},
+                    "retry_used":           False,
+                    "retry_telemetry":      {},
+                    "degraded":             False,
+                    "issues":               [],
+                    "target_words":         tr_target_override,
+                    "fallback_reason":      f"exception: {type(e).__name__}: {str(e)[:200]}",
+                }
+                # transkript_text bleibt das Original (mit Sampling-Risiko)
+        elif workflow in _TRANSCRIPT_STAGE1_WORKFLOWS and transkript_text:
+            # Workflow waere passend, aber Transkript zu kurz oder Flag aus.
+            # Mini-Audit-Eintrag damit man im Performance-Log sieht _warum_.
+            reason = (
+                "transcript_stage1_disabled"
+                if not _tr_stage1_enabled
+                else f"transkript_kurz_{len(transkript_text.split())}w"
+            )
+            _transcript_stage1_audit = {
+                "applied":              False,
+                "raw_word_count":       len(transkript_text.split()),
+                "summary_word_count":   None,
+                "compression_ratio":    None,
+                "duration_s":           None,
+                "telemetry":            {},
+                "retry_used":           False,
+                "retry_telemetry":      {},
+                "degraded":             False,
+                "issues":               [],
+                "target_words":         getattr(settings, "TRANSCRIPT_STAGE1_TARGET_WORDS", None),
+                "fallback_reason":      reason,
+            }
+
         # P3/P4: Antragsvorlage (EB/VA mit Diagnosen, Anamnese, ohne Verlauf)
         antragsvorlage_text = ""
         if antragsvorlage_bytes and antragsvorlage_name:
@@ -1124,7 +1264,13 @@ async def create_generate_job(
             "text":        anamnese_part,
             "befund_text": befund_part,
             "akut_text":   akut_part,
-            "transcript":  transkript_text or None,
+            # v19.3: ROH-Transkript an's Frontend (Therapeut*in soll den
+            # ungekuerzten Whisper-Output sehen/herunterladen koennen).
+            # transkript_text selbst kann durch Stage-1 mit der Verdichtung
+            # ueberschrieben sein; _transkript_raw_for_result haelt das
+            # Original (wird unbedingt vor dem Stage-1-Block gesetzt, siehe
+            # weiter oben in _run).
+            "transcript":  _transkript_raw_for_result or None,
             "model_used":  result["model_used"],
             "style_info":  style_info,
             # P2: OCR-Validator-Warnungen ans Frontend durchreichen.
@@ -1148,6 +1294,12 @@ async def create_generate_job(
                 if (_stage1_audit and _stage1_audit.get("applied"))
                 else None
             ),
+            # v19.3: Transkript-Stage-1-Audit (None wenn nicht relevant oder
+            # Workflow nicht in _TRANSCRIPT_STAGE1_WORKFLOWS). Aktuell nur
+            # im Result-Dict — keine eigene DB-Spalte/JobState-Spiegelung,
+            # weil job_queue.run_job das Feld nicht kennt. Folge-PR
+            # falls Persistenz/Telemetrie-Aggregation gewuenscht.
+            "transcript_summary_audit": _transcript_stage1_audit,
         }
 
     background_tasks.add_task(job_queue.run_job, job, _run())
