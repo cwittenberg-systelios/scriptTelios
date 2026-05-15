@@ -1178,7 +1178,7 @@ function AudioInput({ file, onFile }) {
           <div className="rec-info">
             {isPending
               ? <span style={{color:"#0060c0"}}>⏳ Transkription läuft – wird beim Generieren priorisiert</span>
-              : `Transkript aus P0 · ${Math.round(file.transcript.split(" ").length)} Wörter`}
+              : `Transkript aus der Aufnahmeliste · ${Math.round(file.transcript.split(" ").length)} Wörter`}
           </div>
           <div className="rec-buttons">
             <button className="rec-btn rec-btn-pause" onClick={clearP0}>Entfernen</button>
@@ -1245,7 +1245,7 @@ function AudioInput({ file, onFile }) {
           <div style={{marginTop:6,textAlign:"right"}}>
             <button className="btn-secondary" style={{fontSize:11,padding:"2px 8px"}}
               onClick={() => window.dispatchEvent(new CustomEvent("st-nav", { detail: "p0" }))}>
-              + Neue Aufnahme in P0
+              + Neue Aufnahme
             </button>
           </div>
         )}

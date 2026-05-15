@@ -66,7 +66,10 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         short_label="Gesprächsdoku",
         is_structural=False,
         word_limit=(150, 450),
-        max_tokens=2048,
+        max_tokens=3500,           # v19.2.3: 2048 → 3500 (Headroom fuer 450W
+                                   # word_limit + Thinking-Leak + sauberer
+                                   # Satzabschluss; 2048 fuehrte regelmaessig
+                                   # zu mid-word cap-hits bei P1)
         expected_tokens=1000,
         color_hex="#2c2c2c",
     ),
