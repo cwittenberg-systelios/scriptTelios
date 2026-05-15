@@ -249,7 +249,6 @@ async def list_recordings(current_user: str = Depends(get_current_user)):
     """Eigene nicht-gelöschte Aufnahmen, neueste zuerst (max. 50).
     Aufnahmen ohne therapeut_id (vor v18) werden ebenfalls angezeigt.
     """
-    async def list_recordings(current_user: str = Depends(get_current_user)):
     async with async_session_factory() as session:
         result = await session.execute(
             select(Recording)
