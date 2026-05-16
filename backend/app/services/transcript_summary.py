@@ -150,17 +150,19 @@ async def summarize_transcript(
 
     raw_words = len(transcript_text.split())
 
-    # target_words proportional, mit Hard-Cap 1500w (sichert MAX_SAFE_CTX=20480
-    # Token, siehe Plan v0.3 Abschnitt 1.3) und Floor 600w (greift unter den
-    # _TRANSCRIPT_STAGE1_MIN_WORDS=5000 nicht, ist nur ein Sicherheitsnetz
-    # falls jemand target=None mit kleinerem Input aufruft).
+    # target_words und min_acceptable kommen aus staging.py (testbar).
+    from app.services.staging import (
+        compute_transcript_target_words,
+        compute_transcript_min_acceptable,
+    )
     if target_words is None:
-        target_words = min(1500, max(600, int(raw_words * 0.20)))
+        target_words = compute_transcript_target_words(raw_words)
+        # Beispiele:
+        #   raw= 5000w → target=1000w
+        #   raw= 7000w → target=1400w
+        #   raw=10000w → target=1500w (Hard-Cap)
 
-    # 40% Untergrenze (Plan §2.2). Niedriger als Verlauf (50%) weil
-    # Transkripte unstrukturiert sind und der Kompressionsgrad pro Sitzung
-    # stark variiert.
-    min_acceptable = max(300, int(target_words * 0.4))
+    min_acceptable = compute_transcript_min_acceptable(target_words)
     max_acceptable = int(target_words * 2.5)
 
     wir_hint = _wir_hint(workflow)

@@ -24,7 +24,12 @@ if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 
 # Lazy import damit wir nicht die ganze test_eval.py-Test-Suite triggern
-test_eval_module = importlib.import_module("test_eval")
+# (Datei wurde in Phase 2 nach tests/eval/test_eval.py verschoben)
+import importlib.util
+_EVAL_FILE = Path(__file__).parent.parent / "eval" / "test_eval.py"
+_spec = importlib.util.spec_from_file_location("test_eval", _EVAL_FILE)
+test_eval_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(test_eval_module)
 StyleAnalyzer = test_eval_module.StyleAnalyzer
 EvalResult = test_eval_module.EvalResult
 

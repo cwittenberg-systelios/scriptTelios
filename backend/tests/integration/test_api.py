@@ -1,7 +1,7 @@
 """
-Tests fuer das sysTelios Backend.
+Tests fuer das sysTelios Backend (Integration via FastAPI TestClient).
 
-Ausfuehren:  pytest -v
+Ausfuehren:  pytest tests/integration -v
 """
 import io
 import json
@@ -10,18 +10,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-# Testumgebung konfigurieren bevor App importiert wird
-import os
-os.environ.update({
-    "LLM_BACKEND":              "anthropic",
-    "ANTHROPIC_API_KEY":        "test-key",
-    "WHISPER_BACKEND":          "local",
-    "DATABASE_URL":             "sqlite+aiosqlite:///./test.db",
-    "SECRET_KEY":               "test-secret",
-    "DELETE_AUDIO_AFTER_TRANSCRIPTION": "false",
-    "UPLOAD_DIR":               "/tmp/systelios_test_uploads",
-    "OUTPUT_DIR":               "/tmp/systelios_test_outputs",
-})
+# Testumgebung wird bereits von tests/conftest.py gesetzt - keine doppelte
+# Konfiguration mehr hier. Stale Anthropic/whisper-Backend-Refs entfernt
+# (Phase 2 Refactor): diese ENVs existieren nicht mehr in der App, wurden
+# durch `extra="ignore"` schweigend geschluckt.
 
 from app.main import app  # noqa: E402
 
@@ -75,7 +67,7 @@ def test_build_user_content():
     u = build_user_content(
         workflow="dokumentation",
         transcript="Patient berichtet ...",
-        bullets="- Schlafprobleme",
+        fokus_themen="- Schlafprobleme",
     )
     assert "TRANSKRIPT" in u
     assert "STICHPUNKTE" in u

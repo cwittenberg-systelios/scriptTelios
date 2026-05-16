@@ -1,28 +1,89 @@
 """
-Tests fuer die v15 -> v16 Patches: Multi-Vorlagen-Unterstützung.
+Laengen-Anker: derive_word_limits, resolve_length_anchor, Multi-Style-Vorlagen.
 
-Schwerpunkte:
-- v13 Strategie 3: vorlage.txt + vorlage2.txt automatisch erkennen
-- split_style_examples: Marker-Format korrekt parsen
-- _discover_style_siblings: Geschwister-Dateien finden
-- _build_multi_style_text: Marker-Format korrekt erzeugen
-- jobs.py: alle drei _style_raw_texts-Sites benutzen Splitter
-- resolve_length_anchor mit Liste: mittelt korrekt statt zu konkatenieren
-- End-to-End-Roundtrip: Eval baut → jobs.py splittet wieder
-
-Hintergrund:
-Vor v16 wurde bei mehreren Stilvorlagen (z.B. pgvector liefert 5 Beispiele)
-der konkatenierte Block als EIN Eintrag in _style_raw_texts gespeichert.
-Folge: derive_word_limits berechnete die Statistik auf 5×400=2000 Wörter,
-das Längen-Limit landete bei ~2000±30%. Strategie 3: an "--- Beispiel N ---"-
-Markern aufsplitten, Liste durchreichen, Limit mittelt sauber bei ~400±30%.
+Konsolidiert aus den frueheren Versions-Dateien test_prompts_v13.py bis
+test_prompts_v16.py. Tests sind unveraendert, nur nach Feature-Area
+umgruppiert. Versions-Geschichte steht im Git-Log.
 """
-import re
 import pytest
+import re
+from unittest.mock import patch, MagicMock
+
+# ──── aus test_prompts_v14.py: TestWordLimitsVorrang
+class TestWordLimitsVorrang:
+    """VERBINDLICHES TEXTLIMIT muss klar Vorrang ueber BASE_PROMPT-Mindestangaben haben."""
+
+    def test_word_limits_block_erwaehnt_vorrang(self):
+        from app.services.prompts import build_system_prompt
+        p = build_system_prompt(
+            workflow="anamnese",
+            word_limits=(200, 400),
+        )
+        assert "VERBINDLICHES TEXTLIMIT" in p
+        # Klare Anweisung dass das BASE_PROMPT-Minimum ungueltig wird
+        assert "UNGUELTIG" in p or "überschreibt" in p or "Vorrang" in p
+        assert "harte Obergrenze" in p or "maximal 400" in p
+
+    def test_anamnese_basis_keine_harten_mindestens(self):
+        """Anamnese-BASE_PROMPT darf kein 'Mindestens 450' mehr stehen
+        ohne Vorrang-Hinweis auf VERBINDLICHES TEXTLIMIT."""
+        from app.services.prompts import BASE_PROMPTS
+        text = BASE_PROMPTS["anamnese"]
+        if "Mindestens 450" in text or "mindestens 450" in text:
+            # Wenn 450 noch drinsteht, MUSS auch der Vorrang-Hinweis da sein
+            assert "VERBINDLICHES TEXTLIMIT" in text or "absolute Vorrang" in text or "Richtwert" in text
+
+    def test_entlassbericht_basis_keine_harten_teil_mindestens(self):
+        """Entlassbericht: 'mindestens 300', 'mindestens 100', 'mindestens 80'
+        sollten weich formuliert sein."""
+        from app.services.prompts import BASE_PROMPTS
+        text = BASE_PROMPTS["entlassbericht"]
+        # Entweder weich formuliert (Richtwert/ca.) oder mit Vorrang-Hinweis
+        if "mindestens 300" in text:
+            assert "Richtwert" in text or "VERBINDLICHES TEXTLIMIT" in text
 
 
-# ── Splitter (prompts.py) ─────────────────────────────────────────────────────
+# ── Bug 8: Fragment-Stil-Erkennung ───────────────────────────────────────────
 
+# ──── aus test_prompts_v14.py: TestFragmentStilErkennung
+class TestFragmentStilErkennung:
+    """_compute_style_constraints erkennt Stichwort-/Notiz-Stil."""
+
+    def test_fragment_stil_wird_erkannt(self):
+        from app.services.prompts import _compute_style_constraints
+        # Fragment-artiger Text wie dok-02-Stilvorlage
+        fragment_text = (
+            "thematisiert, dass hier für sie ein guter Ort sei.\n"
+            "signalisiere ihr, dass es okay ist.\n"
+            "bringt Bilder mit, die sie gezeichnet habe.\n"
+            "Wunsch, Tod ungeschehen zu machen.\n"
+            "Schuldgefühle, Kontaktaufnahme zur Tochter.\n"
+            "Bilder nicht angucken können.\n"
+            "Gegen Ende des Gesprächs Entlastung.\n"
+            "Kein Hinweis auf akute Suizidalität."
+        )
+        result = _compute_style_constraints(fragment_text)
+        assert "Stichwort" in result or "Notiz-Stil" in result or "STILTYP" in result
+
+    def test_normaler_stil_wird_nicht_als_fragment_erkannt(self):
+        from app.services.prompts import _compute_style_constraints
+        # Normaler Fliesstext (Wir-Form, lange Saetze)
+        normal_text = (
+            "Wir nahmen Frau M. im bisherigen Verlauf des stationären Aufenthaltes "
+            "unter anhaltendem innerem Druck auf, mit ausgeprägter Anspannung und "
+            "emotionaler Ambivalenz. Gleichzeitig erkannten wir eine zunehmende "
+            "Bereitschaft, sich auf den therapeutischen Prozess einzulassen und "
+            "auch sehr vulnerable innere Themen zu explorieren. Im hypnosystemischen "
+            "Einzelprozess konnten wir mithilfe der Anteilearbeit insbesondere einen "
+            "dominanten Kontrollanteil differenzieren."
+        )
+        result = _compute_style_constraints(normal_text)
+        assert "Stichwort" not in result and "Notiz-Stil" not in result
+
+
+# ── Bug 9: Patientenspezifische Keywords beibehalten ──────────────────────────
+
+# ──── aus test_prompts_v16.py: TestSplitStyleExamples
 class TestSplitStyleExamples:
     """split_style_examples erkennt das Marker-Format und liefert Einzeltexte."""
 
@@ -102,6 +163,7 @@ class TestSplitStyleExamples:
 
 # ── resolve_length_anchor mit Multi-Beispielen ────────────────────────────────
 
+# ──── aus test_prompts_v16.py: TestResolveLengthAnchorMulti
 class TestResolveLengthAnchorMulti:
     """resolve_length_anchor mittelt sauber wenn Liste statt konkatenierter Block."""
 
@@ -173,11 +235,12 @@ class TestResolveLengthAnchorMulti:
 
 # ── Eval-Discovery Helpers ────────────────────────────────────────────────────
 
+# ──── aus test_prompts_v16.py: TestDiscoverStyleSiblings
 class TestDiscoverStyleSiblings:
     """discover_style_siblings findet vorlage.txt + vorlage2.txt etc."""
 
     def _import_helper(self):
-        from tests.eval_helpers import discover_style_siblings
+        from tests.eval.eval_helpers import discover_style_siblings
         return discover_style_siblings
 
     def test_single_vorlage(self, tmp_path):
@@ -258,12 +321,12 @@ class TestDiscoverStyleSiblings:
         assert "vorlage.txt" in names
         assert "vorlage2.txt" in names
 
-
+# ──── aus test_prompts_v16.py: TestBuildMultiStyleText
 class TestBuildMultiStyleText:
     """build_multi_style_text erzeugt das korrekte Marker-Format."""
 
     def _import_helper(self):
-        from tests.eval_helpers import build_multi_style_text
+        from tests.eval.eval_helpers import build_multi_style_text
         return build_multi_style_text
 
     def test_empty_paths(self):
@@ -335,6 +398,7 @@ class TestBuildMultiStyleText:
 
 # ── End-to-End Roundtrip ──────────────────────────────────────────────────────
 
+# ──── aus test_prompts_v16.py: TestEndToEndRoundtrip
 class TestEndToEndRoundtrip:
     """Eval baut Multi-Style → jobs.py-Splitter findet Einzelvorlagen wieder.
 
@@ -343,7 +407,7 @@ class TestEndToEndRoundtrip:
     """
 
     def _import_helpers(self):
-        from tests.eval_helpers import build_multi_style_text
+        from tests.eval.eval_helpers import build_multi_style_text
         from app.services.prompts import split_style_examples
         return build_multi_style_text, split_style_examples
 
@@ -408,6 +472,7 @@ class TestEndToEndRoundtrip:
 
 # ── P0: Wir-Workflow Override für STIL-CHECKS ─────────────────────────────────
 
+# ──── aus test_prompts_v16.py: TestWirWorkflowOverride
 class TestWirWorkflowOverride:
     """v13 P0: STIL-CHECKS darf bei Wir-Workflows nie 'kein Wir' sagen.
 
@@ -604,6 +669,7 @@ class TestWirWorkflowOverride:
 
 # ── P3: Eval-Side Bibliotheks-Fallback ─────────────────────────────────────────
 
+# ──── aus test_prompts_v16.py: TestP3EvalLibraryFallback
 class TestP3EvalLibraryFallback:
     """v13 P3: Wenn nur style_therapeut gesetzt ist (kein style_file im
     input_files), lädt die Eval die Therapeuten-Bibliothek und sendet sie als
@@ -726,6 +792,7 @@ class TestP3EvalLibraryFallback:
 
 # ── A korrigiert: BASE_PROMPT-Stilanweisung gegen Berichtston ─────────────────
 
+# ──── aus test_prompts_v16.py: TestEmpathicToneOverride
 class TestEmpathicToneOverride:
     """v13 Iteration A korrigiert: BASE_PROMPTS für empathische Workflows
     erzwingen nicht mehr Wir-Form, verbieten aber den objektiv-distanzierten
@@ -806,6 +873,7 @@ class TestEmpathicToneOverride:
 
 # ── C: Anamnese-Längen-Disziplin ──────────────────────────────────────────────
 
+# ──── aus test_prompts_v16.py: TestAnamneseLengthDiscipline
 class TestAnamneseLengthDiscipline:
     """v13 Iteration C: Anamnese-Längen-Disziplin verstärken.
 
@@ -880,3 +948,4 @@ class TestAnamneseLengthDiscipline:
             assert "LÄNGEN-DISZIPLIN" not in p, (
                 f"{wf}: LÄNGEN-DISZIPLIN-Block sollte nur in anamnese sein"
             )
+

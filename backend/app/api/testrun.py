@@ -12,19 +12,17 @@ Sicherheits-Hinweis:
     NICHT oeffentlich freigeben! In Produktion durch API-Auth (K1)
     und/oder IP-Allowlist absichern.
 
-Default-Verhalten (v16):
-    POST /api/testrun {} laeuft NUR die expliziten Unit-Test-Dateien
-    UND setzt Umgebungsvariablen die Ollama-Initialisierung im
-    pytest-Setup verhindern (z.B. autouse-Fixture 'ollama_vision_setup'
-    in conftest.py das 'ollama pull llava' triggert).
+Default-Verhalten (Phase 2 Refactor):
+    POST /api/testrun {} laeuft die Verzeichnisse tests/unit + tests/integration.
+    tests/eval/ wird NICHT mit-gelaufen (braucht echtes LLM, 10-30 Min).
 
 Optional-Parameter:
-    selector:     pytest -k Filter (z.B. "test_prompts_v15", "TestPatient")
+    selector:     pytest -k Filter (z.B. "TestPatientName")
     paths:        Liste von Test-Dateien/-Verzeichnissen (relativ zu BACKEND_ROOT)
-                  Default: explizite Unit-Test-Whitelist (siehe _DEFAULT_UNIT_TEST_FILES)
+                  Default: ["tests/unit", "tests/integration"]
     timeout_s:    Hartes Timeout in Sekunden. Default: 300 (5 Min - Unit-Tests).
     verbose:      "-v" Flag aktivieren. Default: True.
-    include_eval: Wenn True: test_eval.py wird mitgelaufen (braucht Ollama).
+    include_eval: Wenn True: tests/eval wird mitgelaufen (braucht Ollama).
                   Default: False.
 
 Verhalten:
@@ -62,47 +60,36 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 _MAX_OUTPUT_BYTES = 2 * 1024 * 1024  # 2 MB
 
 
-# ── Whitelist der Unit-Test-Dateien (Default-Run) ────────────────────────────
+# ── Default-Pfade fuer den Test-Run ──────────────────────────────────────────
 #
-# Wichtig: NICHT einfach "tests/" verwenden! conftest.py hat einen
-# autouse=True Session-Fixture (ollama_vision_setup) das beim Start
-# 'ollama pull llava' ausfuehrt - das laedt Ollama hoch und kann den
-# Endpoint blockieren bis hin zum 524-Timeout.
+# Mit der neuen tests/{unit,integration,eval}/-Struktur sind die Pfad-Defaults
+# klar:
+#   - tests/unit         - pure Logik, keine Netz-Aufrufe, kein autouse-DB
+#   - tests/integration  - FastAPI TestClient + gemockte LLMs, init_test_db
+#   - tests/eval         - echtes LLM, NICHT im default-run
 #
-# Stattdessen explizit nur die Test-Dateien aufzaehlen die garantiert
-# keine echten Ollama-Aufrufe haben (alle Mocken via patch).
-#
-# Wenn neue Test-Dateien hinzukommen die NICHT Eval/LLM brauchen:
-# hier ergaenzen.
-_DEFAULT_UNIT_TEST_FILES = [
-    "tests/test_suite.py",          # Hauptsuite, alles gemockt
-    "tests/test_api.py",            # API-Integration, alles gemockt
-    "tests/test_extraction.py",     # PDF/DOCX-Extraktion, kein LLM
-    "tests/test_services.py",       # Service-Unit-Tests, alles gemockt
-    "tests/test_prompts_v13.py",    # v13 Patches
-    "tests/test_prompts_v14.py",    # v14 Patches
-    "tests/test_prompts_v15.py",    # v15 Patches
-    "tests/test_postprocessing.py", # v16 Postprocessor-Tests
+# Frueher mussten einzelne Test-Dateien hier weiss-gelistet werden, weil das
+# alte conftest.py einen autouse-Fixture (ollama_vision_setup) hatte das beim
+# Start `ollama pull llava` ausfuehrte. Mit dem split-conftest (eval/ hat den
+# Vision-Setup, unit/+integration/ nicht) entfaellt das.
+_DEFAULT_TEST_PATHS = [
+    "tests/unit",
+    "tests/integration",
 ]
 
 # Tests die echtes LLM/Ollama brauchen - werden im Default NICHT gelaufen.
 _LLM_DEPENDENT_TESTS = [
-    "tests/test_eval.py",
+    "tests/eval",
 ]
 
-# Umgebungsvariablen die das pytest-Setup zwingen Ollama nicht anzufassen.
+# Umgebungsvariablen die das pytest-Setup zwingen, Ollama nicht anzufassen.
 # Greift auf:
-#   - conftest.py::ollama_vision_setup (prueft urlopen auf OLLAMA_HOST)
-#   - llm.py / embeddings.py (alle Mocks via Fixture aktiv)
+#   - tests/eval/conftest.py::ollama_vision_setup (prueft urlopen auf OLLAMA_HOST)
+#   - llm.py (clients werden via _reset_ollama_client-Fixture geleert)
 _OLLAMA_DISABLE_ENV = {
     # Nicht erreichbarer Host -> ollama_vision_setup gibt sofort auf
-    # statt 'ollama pull llava' zu starten.
+    # statt `ollama pull llava` zu starten.
     "OLLAMA_HOST": "http://127.0.0.1:1",
-    # Anthropic-Backend signalisiert dass kein Ollama erwartet wird.
-    "LLM_BACKEND": "anthropic",
-    "ANTHROPIC_API_KEY": "test-key-not-used",
-    # Whisper auf Mock-Modus
-    "WHISPER_BACKEND": "local",
     # Test-DB
     "DATABASE_URL": "sqlite+aiosqlite:///./testrun.db",
     "SECRET_KEY": "testrun-secret",
@@ -304,7 +291,7 @@ async def testrun(req: TestRunRequest = TestRunRequest()) -> TestRunResponse:
         # Default: explizite Whitelist von Unit-Test-Dateien (KEIN "tests/")
         # Grund: pytest auf "tests/" laedt conftest.py mit autouse-Fixture
         # die 'ollama pull llava' triggert (Ollama wird hochgefahren).
-        paths = _filter_existing_paths(_DEFAULT_UNIT_TEST_FILES)
+        paths = _filter_existing_paths(_DEFAULT_TEST_PATHS)
         if req.include_eval:
             paths.extend(_filter_existing_paths(_LLM_DEPENDENT_TESTS))
             env_overrides = {}
@@ -315,7 +302,7 @@ async def testrun(req: TestRunRequest = TestRunRequest()) -> TestRunResponse:
         return TestRunResponse(
             exitCode=5,
             output="[FEHLER] Keine Test-Dateien gefunden. Whitelist: "
-                   + ", ".join(_DEFAULT_UNIT_TEST_FILES),
+                   + ", ".join(_DEFAULT_TEST_PATHS),
         )
 
     # Selector validieren

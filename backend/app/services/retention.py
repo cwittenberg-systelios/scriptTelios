@@ -12,6 +12,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 from app.core.config import settings
 
@@ -136,6 +137,39 @@ async def cleanup_inactive_style_embeddings() -> int:
     return count
 
 
+def _ts_to_epoch(ts) -> Optional[float]:
+    """Konvertiert einen Log-Timestamp in Unix-Epoch oder None.
+
+    Akzeptiert beide in unseren Logs vorkommenden Formate:
+      - int/float  -> Unix-Epoch (z.B. audit.py schreibt int(time.time()))
+      - ISO 8601   -> Strings wie '2026-05-15T13:42:01+00:00' oder
+                       '2026-05-15T13:42:01Z' (z.B. job_queue.py via
+                       datetime.isoformat())
+
+    Hintergrund: Frueher griff nur der int/float-Pfad. ISO-Strings fielen
+    in den else-Zweig der Hauptschleife und wurden unabhaengig vom
+    tatsaechlichen Alter geloescht — performance.log war faktisch nicht
+    retentiert. Dieses Modul-Level-Helper macht beide Pfade gleichwertig.
+
+    Returns None fuer:
+      - leeren String oder None
+      - unparsbare Strings ('not-a-date')
+      - unbekannte Typen (bool, dict, list)
+    """
+    if isinstance(ts, bool):
+        # bool ist int-Subklasse - explizit ausschliessen, sonst wird True=1
+        return None
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    if isinstance(ts, str) and ts:
+        try:
+            # fromisoformat akzeptiert auch +HH:MM Offsets ab Python 3.11
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+    return None
+
+
 async def cleanup_old_logs() -> int:
     """Trunkiert performance.log und audit.log jenseits der Retention."""
     count = 0
@@ -151,25 +185,6 @@ async def cleanup_old_logs() -> int:
             kept = []
             removed = 0
             import json as _j
-
-            def _ts_to_epoch(ts):
-                """Beide Timestamp-Formate akzeptieren:
-                   - int/float  -> unix epoch (audit.py: int(time.time()))
-                   - ISO 8601   -> ISO-String (job_queue.py: datetime.isoformat())
-                Frueher griff nur der int/float-Pfad: ISO-Strings fielen in
-                den else-Zweig der Hauptschleife und wurden unabhaengig vom
-                tatsaechlichen Alter geloescht (performance.log war faktisch
-                nicht retentiert).
-                """
-                if isinstance(ts, (int, float)):
-                    return float(ts)
-                if isinstance(ts, str) and ts:
-                    try:
-                        # fromisoformat akzeptiert auch +HH:MM Offsets ab 3.11
-                        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-                    except Exception:
-                        return None
-                return None
 
             for line in lines:
                 try:

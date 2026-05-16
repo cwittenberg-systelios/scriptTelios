@@ -709,6 +709,56 @@ def detect_extraction_garbage(
     return issues
 
 
+# Hard-Reject-Schwelle: ab so vielen Garbage-Signalen wird die Quelle
+# komplett verworfen. Vorher: inline in jobs.py:_check_ocr_garbage. Jetzt
+# zentrale Konstante damit Tests + Aufrufer dieselbe Zahl sehen.
+EXTRACTION_HARD_REJECT_THRESHOLD = 3
+
+
+def validate_or_reject(
+    text: str,
+    label: str,
+    file_name: str = "",
+    *,
+    min_chars_for_check: int = 50,
+    hard_reject_threshold: int = EXTRACTION_HARD_REJECT_THRESHOLD,
+) -> tuple[str, str | None]:
+    """
+    Pruefe einen extrahierten Text auf OCR/Vision-Halluzinations-Signale.
+
+    Returns:
+        (text_out, warning):
+            text_out:  Original-Text wenn akzeptabel,
+                       "" wenn Hard-Reject (>= hard_reject_threshold Probleme).
+            warning:   None wenn unauffaellig, sonst eine menschenlesbare
+                       Beschreibung der gefundenen Probleme (zum Auflisten
+                       im UI/Audit).
+
+    Hintergrund (v18): Vor dem Auszug stand diese Logik als _check_ocr_garbage
+    inline in jobs.py und mutierte eine outer-scope Liste _ocr_warnings — nicht
+    testbar ausser durch Reproduktion. Mit dem Auszug:
+      - kein Side-Effect (Aufrufer haengt warning selbst an)
+      - testbar als reine Funktion
+      - hard_reject_threshold ist Parameter (Default 3)
+    """
+    if not text or len(text.strip()) < min_chars_for_check:
+        return text, None
+
+    problems = detect_extraction_garbage(text, file_name)
+    if not problems:
+        return text, None
+
+    warning = f"{label} ({file_name or '?'}): " + "; ".join(problems)
+
+    if len(problems) >= hard_reject_threshold:
+        # Hard-Reject: Quelle ist offensichtlich Muell, wir leeren sie um
+        # zu verhindern dass das LLM aus Halluzinationen einen plausibel
+        # klingenden Bericht baut.
+        return "", warning
+
+    return text, warning
+
+
 def _normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFC", text)
     text = re.sub(r"[^\S\n\t ]+", " ", text)

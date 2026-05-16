@@ -28,35 +28,29 @@ from app.services.llm import (
 from app.services.verlauf_summary import summarize_verlauf
 from app.services.transcript_summary import summarize_transcript
 from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
+from app.services.staging import (
+    STAGE1_VERLAUF_WORKFLOWS,
+    STAGE1_VERLAUF_MIN_WORDS,
+    STAGE1_TRANSCRIPT_WORKFLOWS,
+    STAGE1_TRANSCRIPT_MIN_WORDS,
+    should_run_verlauf_stage1,
+    should_run_transcript_stage1,
+    verlauf_stage1_skip_reason,
+    transcript_stage1_skip_reason,
+)
 import app.services.transcription as _transcription
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# v19.2 Schritt 5: Two-Stage-Pipeline-Konfiguration.
-# Stage 1 (Verlauf-Verdichtung) wird nur fuer Workflows aktiviert, die mit
-# der vollen Verlaufsdoku ueberlastet sind. Anamnese/Akutantrag bekommen
-# typischerweise keine grosse Verlaufsdoku und werden NICHT angefasst.
-_STAGE1_WORKFLOWS = {"verlaengerung", "folgeverlaengerung", "entlassbericht"}
-
-# Mindest-Wortzahl der bereinigten Verlaufsdoku, ab der Stage 1 lohnt.
-# Unter dieser Schwelle ist der Roh-Verlauf so kurz, dass Stage 2 ihn ohnehin
-# komplett verarbeiten kann — Stage 1 waere reine Verlustkomprimierung.
-_STAGE1_MIN_WORDS = 1500
-
-# v19.3: Transkript-Stage-1 fuer dokumentation/anamnese.
-# akutantrag/verlaengerung/folgeverlaengerung/entlassbericht bekommen in
-# Produktion kein Transkript - daher hier NICHT aktiv.
-# Schwelle 3500w (v19.3.1, vorher 5000w):
-# - Dokumentations-Transkripte sind ~6.500-7.000w → unverändert betroffen
-# - Anamnese-Transkripte sind ~4.500-5.000w → vorher KNAPP verfehlt (4951w<5000w),
-#   jetzt zuverlässig getriggert. Eval-Run 15.05. zeigte: 0/2 Anamnese-Aktivierungen
-#   bei Threshold=5000w, an-02-schulangst FAILED mit "zu lang" + Keyword 'Ressourcen'
-#   weil Modell ungefiltertes Transkript bekam und alles unterbringen wollte.
-# - Schwelle bleibt unter der _sample_uniformly-Trigger-Schwelle (~6.000-7.000w
-#   User-Content-Total inkl. System/Stilvorlage), damit die Verdichtung davor greift.
-_TRANSCRIPT_STAGE1_WORKFLOWS = {"dokumentation", "anamnese"}
-_TRANSCRIPT_STAGE1_MIN_WORDS = 3500
+# v19.2 / v19.3: Stage-1-Pipeline-Konfiguration kommt jetzt aus
+# app.services.staging - einzige Quelle der Wahrheit fuer Workflow-Whitelist
+# und Min-Wortzahl. Test: tests/unit/test_staging.py.
+# Backwards-kompatibel re-exportiert:
+_STAGE1_WORKFLOWS = STAGE1_VERLAUF_WORKFLOWS
+_STAGE1_MIN_WORDS = STAGE1_VERLAUF_MIN_WORDS
+_TRANSCRIPT_STAGE1_WORKFLOWS = STAGE1_TRANSCRIPT_WORKFLOWS
+_TRANSCRIPT_STAGE1_MIN_WORDS = STAGE1_TRANSCRIPT_MIN_WORDS
 
 # Separater Prompt-Logger – schreibt vollständige System/User-Prompts in prompts.log
 # Zweck: manuelle Inspektion und Prompt-Debugging ohne den Haupt-Log zu fluten.
@@ -485,32 +479,26 @@ async def create_generate_job(
         # gibt im Job einen Warn-Hinweis zurueck. Verworfen wird nichts hart -
         # die Klinik soll trotzdem ein Ergebnis bekommen, aber im UI sehen
         # dass die Quelle problematisch war.
-        from app.services.extraction import detect_extraction_garbage
+        from app.services.extraction import validate_or_reject
         _ocr_warnings: list[str] = []
 
         def _check_ocr_garbage(text: str, label: str, file_name: str = "") -> str:
-            """Prueft Text auf OCR-Mülldaten und sammelt Warnungen.
-            Gibt den Text unveraendert zurueck (kein Hard-Filter), damit der
-            Job weiterlaeuft. Eskalation auf Reject-Schwelle: wenn drei oder
-            mehr Probleme auf einer Quelle erkannt werden, wird der Text
-            geleert um Halluzinationen zu verhindern."""
-            if not text or len(text.strip()) < 50:
-                return text
-            problems = detect_extraction_garbage(text, file_name)
-            if problems:
-                msg = f"{label} ({file_name or '?'}): " + "; ".join(problems)
-                logger.warning("[OCR-Validator] %s", msg)
-                _ocr_warnings.append(msg)
-                # Hard-Reject ab 3+ Problemen: Quelle ist offensichtlich Müll,
-                # wir leeren sie um zu verhindern dass das LLM aus Halluzinationen
-                # einen plausibel klingenden Bericht baut.
-                if len(problems) >= 3:
-                    logger.error(
-                        "[OCR-Validator] %s als unbrauchbar verworfen (%d Probleme)",
-                        label, len(problems)
-                    )
-                    return ""
-            return text
+            """Duenner Wrapper um extraction.validate_or_reject, der den
+            Warn-Text in die outer-scope-Liste _ocr_warnings legt und das
+            Logging zentral erledigt. Die eigentliche Logik
+            (Garbage-Detection + Hard-Reject ab 3+ Problemen) sitzt jetzt
+            getestet in extraction.py."""
+            text_out, warning = validate_or_reject(text, label, file_name)
+            if warning is None:
+                return text_out
+            logger.warning("[OCR-Validator] %s", warning)
+            _ocr_warnings.append(warning)
+            if text_out == "" and text:
+                logger.error(
+                    "[OCR-Validator] %s als unbrauchbar verworfen (Hard-Reject)",
+                    label,
+                )
+            return text_out
 
         selbstauskunft_text = ""
         if selbstauskunft_bytes and selbstauskunft_name:
@@ -567,11 +555,10 @@ async def create_generate_job(
         _stage1_audit: Optional[dict] = None
         _stage1_enabled = getattr(settings, "STAGE1_ENABLED", True)
 
-        if (
-            _stage1_enabled
-            and workflow in _STAGE1_WORKFLOWS
-            and verlaufsdoku_text
-            and len(verlaufsdoku_text.split()) >= _STAGE1_MIN_WORDS
+        if should_run_verlauf_stage1(
+            workflow,
+            verlaufsdoku_text,
+            flag_enabled=_stage1_enabled,
         ):
             verlaufsdoku_raw_text = verlaufsdoku_text
             raw_words = len(verlaufsdoku_raw_text.split())
@@ -654,14 +641,14 @@ async def create_generate_job(
                     "fallback_reason":      f"exception: {type(e).__name__}: {str(e)[:200]}",
                 }
                 # verlaufsdoku_text bleibt unveraendert (das Original)
-        elif workflow in _STAGE1_WORKFLOWS and verlaufsdoku_text:
+        elif workflow in STAGE1_VERLAUF_WORKFLOWS and verlaufsdoku_text:
             # Workflow waere passend, aber Verlauf zu kurz oder Flag aus.
             # Trotzdem einen Mini-Audit-Eintrag, damit man im Performance-Log
             # sehen kann _warum_ Stage 1 nicht lief.
-            reason = (
-                "stage1_disabled"
-                if not _stage1_enabled
-                else f"verlauf_kurz_{len(verlaufsdoku_text.split())}w"
+            reason = verlauf_stage1_skip_reason(
+                workflow,
+                verlaufsdoku_text,
+                flag_enabled=_stage1_enabled,
             )
             _stage1_audit = {
                 "applied":              False,
@@ -705,11 +692,11 @@ async def create_generate_job(
             settings, "TRANSCRIPT_STAGE1_MIN_WORDS", _TRANSCRIPT_STAGE1_MIN_WORDS,
         )
 
-        if (
-            _tr_stage1_enabled
-            and workflow in _TRANSCRIPT_STAGE1_WORKFLOWS
-            and transkript_text
-            and len(transkript_text.split()) >= _tr_stage1_min_words
+        if should_run_transcript_stage1(
+            workflow,
+            transkript_text,
+            flag_enabled=_tr_stage1_enabled,
+            min_words=_tr_stage1_min_words,
         ):
             transkript_raw_text = transkript_text
             tr_raw_words = len(transkript_raw_text.split())
@@ -786,14 +773,15 @@ async def create_generate_job(
                     "fallback_reason":      f"exception: {type(e).__name__}: {str(e)[:200]}",
                 }
                 # transkript_text bleibt das Original (mit Sampling-Risiko)
-        elif workflow in _TRANSCRIPT_STAGE1_WORKFLOWS and transkript_text:
+        elif workflow in STAGE1_TRANSCRIPT_WORKFLOWS and transkript_text:
             # Workflow waere passend, aber Transkript zu kurz oder Flag aus.
             # Mini-Audit-Eintrag damit man im Performance-Log sieht _warum_.
             _tr_actual_words = len(transkript_text.split())
-            reason = (
-                "transcript_stage1_disabled"
-                if not _tr_stage1_enabled
-                else f"transkript_kurz_{_tr_actual_words}w_min_{_tr_stage1_min_words}w"
+            reason = transcript_stage1_skip_reason(
+                workflow,
+                transkript_text,
+                flag_enabled=_tr_stage1_enabled,
+                min_words=_tr_stage1_min_words,
             )
             logger.info(
                 "Transcript-Stage 1 NICHT aktiviert fuer Job %s (%s): %s",

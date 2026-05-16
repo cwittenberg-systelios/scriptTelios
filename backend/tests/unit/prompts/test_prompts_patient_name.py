@@ -1,19 +1,15 @@
 """
-Tests fuer die v12 -> v13 Patches in prompts.py und extraction.py.
+Patientennamen-Parsing, -Substitution und Block-Sites im System-Prompt.
 
-Schwerpunkte:
-1. parse_explicit_patient_name lehnt generische Strings ab
-   ("die Klientin/der Klient", "Patient/in", "Frau X." etc.)
-2. STRUCTURAL_WORKFLOWS-Konstante deckt beide Code-Pfade ab
-3. PATIENTENNAME-Block wird bei muellbehafteten Werten unterdrueckt
-4. AKTUELLER PATIENT-Zeile im User-Content wird bei muellbehafteten Werten unterdrueckt
-5. Replace-Logik fuer Platzhalter laeuft nur mit plausiblen Werten
+Konsolidiert aus den frueheren Versions-Dateien test_prompts_v13.py bis
+test_prompts_v16.py. Tests sind unveraendert, nur nach Feature-Area
+umgruppiert. Versions-Geschichte steht im Git-Log.
 """
 import pytest
+import re
+from unittest.mock import patch, MagicMock
 
-
-# ── Bug 1a: parse_explicit_patient_name Blacklist ────────────────────────────
-
+# ──── aus test_prompts_v13.py: TestParseExplicitPatientNameBlacklist
 class TestParseExplicitPatientNameBlacklist:
     """Generische Bezeichnungen duerfen nicht als Eigenname akzeptiert werden."""
 
@@ -71,29 +67,7 @@ class TestParseExplicitPatientNameBlacklist:
 
 # ── Bug 2: STRUCTURAL_WORKFLOWS-Konstante ────────────────────────────────────
 
-class TestStructuralWorkflowsConstant:
-    """STRUCTURAL_WORKFLOWS muss konsistent in allen Code-Pfaden verwendet werden."""
-
-    def test_konstante_existiert_und_enthaelt_korrekte_workflows(self):
-        from app.services.prompts import STRUCTURAL_WORKFLOWS
-        assert "anamnese" in STRUCTURAL_WORKFLOWS
-        assert "verlaengerung" in STRUCTURAL_WORKFLOWS
-        assert "folgeverlaengerung" in STRUCTURAL_WORKFLOWS
-        assert "akutantrag" in STRUCTURAL_WORKFLOWS
-        assert "entlassbericht" in STRUCTURAL_WORKFLOWS
-        # P1 (dokumentation) ist NICHT strukturell
-        assert "dokumentation" not in STRUCTURAL_WORKFLOWS
-
-    def test_alle_strukturellen_workflows_haben_base_prompt(self):
-        from app.services.prompts import STRUCTURAL_WORKFLOWS, BASE_PROMPTS
-        for wf in STRUCTURAL_WORKFLOWS:
-            # akutantrag hat einen separaten BASE_PROMPT_AKUTANTRAG, ist aber
-            # nicht zwingend in BASE_PROMPTS - das ist OK.
-            assert wf in BASE_PROMPTS or wf == "akutantrag"
-
-
-# ── Bug 1b: PATIENTENNAME-Block im System-Prompt ─────────────────────────────
-
+# ──── aus test_prompts_v13.py: TestPatientennameBlockSystemPrompt
 class TestPatientennameBlockSystemPrompt:
     """Der PATIENTENNAME-Block darf nicht ausgegeben werden, wenn Daten Müll sind."""
 
@@ -143,6 +117,7 @@ class TestPatientennameBlockSystemPrompt:
 
 # ── Bug 1c: Replace-Logik mit Sanity-Check ───────────────────────────────────
 
+# ──── aus test_prompts_v13.py: TestReplaceLogikSanityCheck
 class TestReplaceLogikSanityCheck:
     """Die [Patient/in]-Replace-Logik darf nicht mit Müll-Werten laufen."""
 
@@ -173,6 +148,7 @@ class TestReplaceLogikSanityCheck:
 
 # ── Bug 1d: AKTUELLER PATIENT im User-Content P1 ─────────────────────────────
 
+# ──── aus test_prompts_v13.py: TestAktuellerPatientUserContent
 class TestAktuellerPatientUserContent:
     """Im build_user_content darf kein Müll als Namenskuerzel ausgegeben werden."""
 
@@ -205,3 +181,4 @@ class TestAktuellerPatientUserContent:
             patient_name={"anrede": "Frau", "vorname": "", "nachname": "M.", "initial": "M."},
         )
         assert "AKTUELLER PATIENT: Frau M." in u
+

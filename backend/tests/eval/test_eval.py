@@ -26,12 +26,9 @@ import os
 import re
 import time
 from pathlib import Path
+
 import httpx
 import pytest
-
-# Workflows fuer die Stage 1 ueberhaupt relevant ist. Muss synchron zu
-# backend/app/api/jobs.py::_STAGE1_WORKFLOWS bleiben.
-_EVAL_STAGE1_WORKFLOWS = {"verlaengerung", "folgeverlaengerung", "entlassbericht"}
 
 
 # ── Transkriptions-Cache ─────────────────────────────────────────────────────
@@ -105,34 +102,17 @@ def _load_or_transcribe(audio_path: Path, force_transcribe: bool = False) -> str
 logger = logging.getLogger(__name__)
 
 
-def derive_word_limits(
-    style_texts: list,
-    fallback_min: int,
-    fallback_max: int,
-    tolerance: float = 0.30,
-) -> tuple:
-    """
-    Leitet min/max Wortlimit dynamisch aus Stilvorlagen ab.
-    Spiegelt die gleichnamige Funktion in prompts.py (Option A):
-    beide operieren auf dem gleichen Rohtext, gleiche Logik.
-    """
-    counts = [len(t.split()) for t in style_texts if t and len(t.split()) >= 50]
-    if not counts:
-        return fallback_min, fallback_max
-    ref_min, ref_max = min(counts), max(counts)
-    derived_min = max(50, int(ref_min * (1 - tolerance)))
-    derived_max = int(ref_max * (1 + tolerance))
-    logger.info(
-        "Wortlimit aus %d Stilvorlage(n) abgeleitet: %d–%d (Referenz: %d–%d, ±%.0f%%)",
-        len(counts), derived_min, derived_max, ref_min, ref_max, tolerance * 100,
-    )
-    return derived_min, derived_max
+# v18 / Phase 2 Refactor: Spec-Duplikation entfernt.
+# Vorher wurde derive_word_limits hier lokal definiert, was "Test gegen Kopie"
+# bedeutete - Aenderungen in prompts.py wurden nicht mit-getestet. Jetzt
+# direkt aus prompts importiert.
+from app.services.prompts import derive_word_limits  # noqa: E402
 
 
 # ── Konfiguration ────────────────────────────────────────────────────────────
 
 BACKEND_URL = os.environ.get("EVAL_BACKEND_URL", "http://localhost:8000")
-FIXTURES_PATH = Path(__file__).parent / "fixtures" / "eval" / "fixtures.json"
+FIXTURES_PATH = Path(__file__).parent.parent / "fixtures" / "eval" / "fixtures.json"
 EVAL_DATA_DIR = Path(os.environ.get("EVAL_DATA_DIR", "/workspace/eval_data"))
 EVAL_RESULTS_DIR = Path(os.environ.get("EVAL_RESULTS_DIR", "/workspace/eval_results"))
 STYLES_DIR = EVAL_DATA_DIR / "styles"
@@ -198,7 +178,7 @@ def _extract_docx_text(docx_path: Path) -> str:
 def _extract_docx_section(docx_path: Path, headings: list[str]) -> str:
     """
     Extrahiert einen Abschnitt aus einem DOCX anhand der Überschrift.
-
+    
     Sammelt ALLE Bold/Heading-Matches, sortiert nach Prioritaet in der headings-Liste,
     und probiert jeden Kandidaten durch bis einer ausreichend Inhalt liefert (>= 20 Woerter).
     Dadurch werden leere Abschnitte (z.B. Vorlagen mit leerer "Begruendung") uebersprungen
@@ -317,7 +297,7 @@ def _extract_docx_section(docx_path: Path, headings: list[str]) -> str:
 def load_style_text(therapeut: str, workflow: str) -> str | None:
     """
     Lädt die Stilvorlage für einen Therapeuten und Workflow.
-
+    
     Sucht in /workspace/eval_data/styles/{therapeut}/ nach dem
     passenden DOCX und extrahiert den relevanten Abschnitt.
     Bei mehreren Dateien (Entlassbericht_01.docx, _02.docx, ...) wird
@@ -388,10 +368,10 @@ def _extract_section_by_text(docx_path: Path, headings: list[str]) -> str:
 def load_all_style_texts(therapeut: str, workflow: str) -> list[str]:
     """
     Lädt ALLE Stilvorlagen eines Therapeuten für einen Workflow.
-
+    
     Unterstützt mehrere Dateien pro Workflow:
       Entlassbericht.docx, Entlassbericht_01.docx, Entlassbericht_02.docx, ...
-
+    
     Gibt eine Liste von extrahierten Abschnitten zurück.
     """
     therapeut_dir = STYLES_DIR / therapeut
@@ -464,7 +444,7 @@ def _discover_style_siblings(primary_path: Path) -> list:
     tests/eval_helpers.py ausgelagert, damit test_prompts_v16 sie ohne
     Fixtures-Setup importieren kann.
     """
-    from tests.eval_helpers import discover_style_siblings as _impl
+    from tests.eval.eval_helpers import discover_style_siblings as _impl
     return _impl(primary_path)
 
 
@@ -474,7 +454,7 @@ def _build_multi_style_text(paths: list) -> str:
     Bindet den lokalen _extract_docx_text als DOCX-Extractor an, damit
     DOCX-Stilvorlagen in der Eval gelesen werden können.
     """
-    from tests.eval_helpers import build_multi_style_text as _impl
+    from tests.eval.eval_helpers import build_multi_style_text as _impl
     return _impl(paths, docx_extractor=_extract_docx_text)
 
 
@@ -761,21 +741,6 @@ class EvalResult:
         self.length_min: int = 0
         self.length_max: int = 0
         self.length_n_substantial: int = 0
-        # v19.1: Telemetrie aus llm.generate_text (Think-Block-Diagnose,
-        # Retry-Status). Vom Test gesetzt nachdem das Job-Result gefetcht
-        # wurde; vom Reporter aggregiert.
-        self.generation_telemetry: dict | None = None
-        self.degraded: bool = False
-        self.retry_used: bool = False
-        # v19.2: Stage-1-Pipeline-Audit aus dem Job-Result. None bei Jobs
-        # die Stage 1 nicht beruehrt haben. Wird vom Reporter aggregiert und
-        # in der LLM-Jury-Auswertung beruecksichtigt.
-        self.verlauf_summary_audit: dict | None = None
-        self.stage1_applied: bool = False
-        self.stage1_compression_ratio: float | None = None
-        self.stage1_retry_used: bool = False
-        self.stage1_degraded: bool = False
-        self.stage1_issue_count: int = 0
 
     def check_word_count(self, min_words: int, max_words: int):
         if self.word_count < min_words:
@@ -893,7 +858,7 @@ class EvalResult:
     def check_style_consistency(self, style_text: str | list[str], tolerance: float = 0.6):
         """
         Ansatz 1: Stil-Konsistenz-Check.
-
+        
         Bei einem Referenztext: vergleicht Output gegen diesen Text.
         Bei mehreren Referenztexten: berechnet die Bandbreite des Therapeuten-Stils
         und prüft ob der Output innerhalb dieser Bandbreite (+ Toleranz) liegt.
@@ -1050,60 +1015,11 @@ class EvalResult:
             lines.append(f"  Stil-Varianz (A vs B): {self.style_variance_score:.2f} (>0.15 = gut)")
         if hasattr(self, "llm_style_score"):
             lines.append(f"  LLM-Stil-Bewertung: {self.llm_style_score}/5")
-        # v19.1: Generierungs-Stabilitaet (Think-Block-Diagnose)
-        if self.generation_telemetry:
-            tel = self.generation_telemetry
-            flags = []
-            if tel.get("degraded"):
-                flags.append("DEGRADED")
-            if tel.get("retry_used"):
-                flags.append("RETRY")
-            if tel.get("tokens_hit_cap"):
-                flags.append("TOKEN-CAP")
-            if tel.get("used_thinking_fallback"):
-                flags.append("THINKING-FALLBACK")
-            flag_str = " ".join(flags) if flags else "OK"
-            tr = tel.get("think_ratio")
-            tr_str = f", think_ratio={tr:.0%}" if tr is not None else ""
-            lines.append(f"  Generierungs-Stabilitaet: {flag_str}{tr_str}")
-        # v19.2: Stage-1-Pipeline-Status (Verlauf-Verdichtung)
-        if self.verlauf_summary_audit is not None:
-            audit = self.verlauf_summary_audit
-            s1_flags = []
-            if self.stage1_applied:
-                s1_flags.append("APPLIED")
-            else:
-                s1_flags.append(f"SKIPPED({audit.get('fallback_reason') or 'unbekannt'})")
-            if self.stage1_retry_used:
-                s1_flags.append("RETRY")
-            if self.stage1_degraded:
-                s1_flags.append("DEGRADED")
-            if self.stage1_issue_count:
-                s1_flags.append(f"{self.stage1_issue_count}ISSUES")
-            cr = self.stage1_compression_ratio
-            cr_str = f", kompression={cr:.0%}" if cr is not None else ""
-            raw_w = audit.get("raw_word_count")
-            sum_w = audit.get("summary_word_count")
-            wc_str = f", {raw_w}w->{sum_w}w" if (raw_w and sum_w) else ""
-            lines.append(f"  Stage-1-Pipeline: {' '.join(s1_flags)}{cr_str}{wc_str}")
         return "\n".join(lines)
 
     @property
     def score(self) -> float:
-        """Score 0.0-1.0 basierend auf bestandenen Checks.
-
-        v19.1: Wenn der LLM-Output als degraded markiert wurde
-        (Think-Block-Bug, beide Versuche zu kurz), ist der Score
-        unabhaengig von der Check-Bilanz 0 - der Output ist faktisch
-        nicht brauchbar.
-
-        v19.2: Stage-1-degraded (critical Halluzinations-Signale auch
-        nach Retry) treibt den Score ebenfalls auf 0 - der nachgelagerte
-        Generierungs-Output basiert dann auf einer Quelle der nicht
-        getraut werden kann.
-        """
-        if self.degraded or self.stage1_degraded:
-            return 0.0
+        """Score 0.0-1.0 basierend auf bestandenen Checks."""
         total = len(self.passed) + len(self.issues)
         return len(self.passed) / total if total > 0 else 0.0
 
@@ -1233,64 +1149,6 @@ async def test_eval_workflow(workflow, test_case, request):
     # Evaluieren
     expected = test_case["expected"]
     ev = EvalResult(workflow, test_case["id"], text)
-
-    # v19.1: Telemetrie aus dem Job-Result auf EvalResult uebernehmen
-    # und ggf. einen GENERATION_DEGRADED-Issue erzeugen. Das degraded-Flag
-    # treibt den score-Property auf 0 (siehe EvalResult.score).
-    _telemetry = job.get("generation_telemetry") or {}
-    ev.generation_telemetry = _telemetry
-    ev.retry_used = bool(_telemetry.get("retry_used"))
-    if _telemetry.get("degraded"):
-        ev.degraded = True
-        ev.issues.append(
-            f"GENERATION_DEGRADED: {_telemetry.get('degraded_reason') or 'unbekannt'}"
-        )
-    if ev.retry_used and not ev.degraded:
-        # Retry war erfolgreich - kein Issue, aber als Info-Pass notieren
-        ev.passed.append("Retry-Layer angeschlagen und erfolgreich")
-
-    # v19.2: Stage-1-Audit aus dem Job-Result uebernehmen. Bei Jobs die
-    # Stage 1 nicht beruehrt haben (Workflow nicht in Whitelist oder Verlauf
-    # zu kurz) ist das Feld None - dann bleiben die EvalResult-Felder auf
-    # den Defaults (applied=False).
-    _stage1_audit = job.get("verlauf_summary_audit") or {}
-    if _stage1_audit:
-        ev.verlauf_summary_audit       = _stage1_audit
-        ev.stage1_applied              = bool(_stage1_audit.get("applied"))
-        ev.stage1_compression_ratio    = _stage1_audit.get("compression_ratio")
-        ev.stage1_retry_used           = bool(_stage1_audit.get("retry_used"))
-        ev.stage1_degraded             = bool(_stage1_audit.get("degraded"))
-        ev.stage1_issue_count          = len(_stage1_audit.get("issues") or [])
-
-        # Stage-1-Degraded ist ein Hard-Fail-Signal, analog zu GENERATION_DEGRADED
-        if ev.stage1_degraded:
-            reason = _stage1_audit.get("fallback_reason") or "stage1_degraded"
-            ev.issues.append(
-                f"STAGE1_DEGRADED: {reason} "
-                f"(critical Halluzinations-Signale auch nach Retry)"
-            )
-
-        # Stage-1-Retry erfolgreich (kein degraded) → Info-Pass
-        if ev.stage1_retry_used and not ev.stage1_degraded:
-            ev.passed.append("Stage 1 Retry angeschlagen und erfolgreich")
-
-    # --summary-mode-Enforcement: pruefen ob das Backend-Verhalten den
-    # erwarteten Modus erfuellt. Greift NUR fuer Workflows in der
-    # Stage-1-Whitelist - andere Workflows haben sowieso kein Stage 1.
-    summary_mode = request.config.getoption("--summary-mode", default="auto")
-    if workflow in _EVAL_STAGE1_WORKFLOWS:
-        if summary_mode == "require_stage1" and not ev.stage1_applied:
-            ev.issues.append(
-                "SUMMARY_MODE_VIOLATION: --summary-mode=require_stage1, "
-                "aber Stage 1 wurde nicht angewandt "
-                f"(fallback_reason={_stage1_audit.get('fallback_reason')!r})"
-            )
-        elif summary_mode == "require_no_stage1" and ev.stage1_applied:
-            ev.issues.append(
-                "SUMMARY_MODE_VIOLATION: --summary-mode=require_no_stage1, "
-                "aber Stage 1 wurde angewandt "
-                f"(compression={ev.stage1_compression_ratio})"
-            )
 
     ev.check_no_think_blocks()
 

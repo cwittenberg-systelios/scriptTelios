@@ -1,31 +1,54 @@
 """
-conftest.py – Geteilte Fixtures und Konfiguration fuer alle Tests.
+tests/conftest.py
+─────────────────
+Minimaler Wurzel-Conftest fuer das ganze Test-Baum:
 
-Umgebung wird hier einmalig konfiguriert bevor irgendein Modul importiert wird.
+  - sys.path setzt das Backend-Wurzelverzeichnis vor, damit
+    `from app.services.X import Y` ueberall greift.
+  - Testumgebung wird gesetzt BEVOR app.core.config geladen wird.
+  - CLI-Optionen fuer das Eval-Framework werden hier registriert,
+    weil pytest_addoption nur im Top-Level-conftest greifen darf.
+
+Alles weitere (DB-Initialisierung, Ollama-Setup, gemockte LLMs etc.)
+gehoert in die jeweiligen Sub-conftest.py:
+
+  tests/unit/conftest.py        - keine autouse-DB, keine Ollama-Aufrufe
+  tests/integration/conftest.py - DB-Setup, TestClient, Mocks
+  tests/eval/conftest.py        - echtes LLM, ollama_vision_setup
 """
-import asyncio
 import os
-import pytest
+import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
 
-# ── Testumgebung konfigurieren ────────────────────────────────────────────────
-os.environ.update({
-    "OLLAMA_HOST":                      "http://localhost:11434",
-    "OLLAMA_MODEL":                     "qwen3:32b",
-    "WHISPER_MODEL":                    "medium",
-    "WHISPER_DEVICE":                   "cpu",
-    "WHISPER_COMPUTE_TYPE":             "int8",
-    "DATABASE_URL":                     "sqlite+aiosqlite:///./test_systelios.db",
-    "SECRET_KEY":                       "test-secret-key-fuer-tests",
-    "DELETE_AUDIO_AFTER_TRANSCRIPTION": "false",
-    "UPLOAD_DIR":                       "/tmp/systelios_test_uploads",
-    "OUTPUT_DIR":                       "/tmp/systelios_test_outputs",
-    "LOG_LEVEL":                        "WARNING",
-    "LOG_FILE":                         "/tmp/systelios_test.log",
-})
+# ── sys.path: Backend-Root vor allen Test-Imports ─────────────────────────────
+_BACKEND_ROOT = Path(__file__).parent.parent
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
 
-# ── Fixture-Pfade ─────────────────────────────────────────────────────────────
+
+# ── Testumgebung (greift vor jedem `from app...` Import) ──────────────────────
+# WICHTIG: app.core.config liest diese ENVs beim ersten Import. Wenn ein Test
+# vorher schon `from app.core.config import settings` macht, sind die Werte
+# bereits gefroren. Daher Sub-conftests die App-Code importieren MUESSEN
+# dies hier vorher tun.
+os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
+os.environ.setdefault("OLLAMA_MODEL", "qwen3:32b")
+os.environ.setdefault("WHISPER_MODEL", "medium")
+os.environ.setdefault("WHISPER_DEVICE", "cpu")
+os.environ.setdefault("WHISPER_COMPUTE_TYPE", "int8")
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test_systelios.db")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-fuer-tests")
+os.environ.setdefault("DELETE_AUDIO_AFTER_TRANSCRIPTION", "false")
+os.environ.setdefault("UPLOAD_DIR", "/tmp/systelios_test_uploads")
+os.environ.setdefault("OUTPUT_DIR", "/tmp/systelios_test_outputs")
+os.environ.setdefault("LOG_LEVEL", "WARNING")
+os.environ.setdefault("LOG_FILE", "/tmp/systelios_test.log")
+
+os.makedirs("/tmp/systelios_test_uploads", exist_ok=True)
+os.makedirs("/tmp/systelios_test_outputs", exist_ok=True)
+
+
+# ── Fixture-Pfade (gemeinsam fuer alle Test-Ebenen) ───────────────────────────
 FIXTURES = Path(__file__).parent / "fixtures"
 
 AUDIO_KURZ       = FIXTURES / "audio" / "gespraech_kurz.wav"
@@ -42,199 +65,34 @@ TXT_STICHPUNKTE  = FIXTURES / "txt" / "stichpunkte_verlauf.txt"
 TXT_SELBST       = FIXTURES / "txt" / "selbstauskunft_text.txt"
 TXT_VERLAUF      = FIXTURES / "txt" / "verlaufsdokumentation.txt"
 
-# Echte Dateien (optional)
+# Echte Dateien (optional, werden uebersprungen wenn nicht vorhanden)
 REAL_FILES = {
-    "audio":                      FIXTURES / "audio" / "gespraech_real.mp3",
+    "audio":                       FIXTURES / "audio" / "gespraech_real.mp3",
     "selbstauskunft_handschrift":  FIXTURES / "pdf"   / "selbstauskunft_handschrift.pdf",
     "entlassbericht_real":         FIXTURES / "docx"  / "entlassbericht_real.docx",
     "verlauf_real":                FIXTURES / "pdf"   / "verlauf_real.pdf",
 }
 
-os.makedirs("/tmp/systelios_test_uploads", exist_ok=True)
-os.makedirs("/tmp/systelios_test_outputs", exist_ok=True)
-
-
-# ── Ollama Vision Setup (session-scoped, einmalig) ────────────────────────────
-
-@pytest.fixture(scope="session", autouse=True)
-def ollama_vision_setup():
-    """
-    Zieht 'llava' einmalig pro Test-Session wenn Ollama erreichbar ist.
-    Wird automatisch vor allen Tests ausgefuehrt (autouse=True).
-    Schlaegt Ollama nicht erreichbar ist still fehl – Tests laufen trotzdem.
-    """
-    import subprocess
-    import urllib.request
-
-    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-
-    # Pruefen ob Ollama ueberhaupt laeuft
-    try:
-        urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=3)
-    except Exception:
-        # Ollama nicht erreichbar – kein Pull moeglich, Tests laufen mit Mocks
-        return
-
-    # llava laden falls nicht vorhanden
-    try:
-        result = subprocess.run(
-            ["ollama", "pull", "llava"],
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode != 0:
-            print(f"\n[WARN] ollama pull llava fehlgeschlagen: {result.stderr.strip()}")
-    except FileNotFoundError:
-        # ollama-Binary nicht im PATH
-        print("\n[WARN] ollama nicht im PATH – llava wird nicht geladen")
-    except subprocess.TimeoutExpired:
-        print("\n[WARN] ollama pull llava Timeout (>5 Min) – wird uebersprungen")
-
 
 def real_file(key: str):
-    """Gibt pytest.mark.skip zurueck wenn echte Datei nicht vorhanden."""
+    """Pytest-Marker, der Tests skippt wenn echte Testdatei fehlt."""
+    import pytest
     path = REAL_FILES.get(key)
     if path is None or not path.exists():
         return pytest.mark.skip(reason=f"Echte Testdatei nicht vorhanden: {key}")
     return pytest.mark.skipif(False, reason="")
 
 
-# ── Datenbank-Init (autouse) ──────────────────────────────────────────────────
-
-@pytest.fixture(autouse=True)
-def init_test_db():
-    """
-    Datenbank-Tabellen vor jedem Test anlegen, danach bereinigen.
-    Verwendet SQLite – kein pgvector, daher wird das Embedding-Feld ignoriert.
-    """
-    from app.core.database import engine, Base
-
-    async def setup():
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
-    async def teardown():
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(setup())
-    yield
-    loop.run_until_complete(teardown())
-    loop.close()
-
-
-# ── LLM-Mocks ────────────────────────────────────────────────────────────────
-# WICHTIG: Patch-Pfad muss dort sein wo die Funktion VERWENDET wird,
-# nicht wo sie definiert ist.
-
-@pytest.fixture
-def mock_llm():
-    """LLM-Aufruf durch fixen Beispieltext ersetzen (alle Verwendungsorte)."""
-    mock_response = {
-        "text": (
-            "VERLAUFSNOTIZ\n\n"
-            "Datum: 21.11.2025 | Gespraechsart: Einzeltherapie\n\n"
-            "1. HAUPTTHEMEN\n"
-            "Im heutigen Gespraech stand die Auseinandersetzung mit dem inneren Kritiker "
-            "im Vordergrund. Der Klient berichtete von Fortschritten.\n\n"
-            "2. INTERVENTIONEN\n"
-            "Hypnosystemische Externalisierung. Ressourcenorientierte Verstaerkung.\n\n"
-            "3. VERLAUF\n"
-            "Stimmung: 5/10. Schlaf: 6/10. Keine Suizidalitaet.\n\n"
-            "4. VEREINBARUNGEN\n"
-            "Naechster Termin: 28.11.2025"
-        ),
-        "model_used": "ollama/qwen3:32b",
-        "duration_s": 2.4,
-        "token_count": 187,
-    }
-    with patch("app.services.llm.generate_text",   new=AsyncMock(return_value=mock_response)), \
-         patch("app.api.jobs.generate_text",        new=AsyncMock(return_value=mock_response)):
-        yield
-
-
-@pytest.fixture
-def mock_llm_anamnese():
-    """LLM-Mock mit realistischer Anamnese-Ausgabe."""
-    mock_response = {
-        "text": (
-            "ANAMNESE\n\n"
-            "Vorstellungsanlass: Stationaere Aufnahme auf Zuweisung des Hausarztes.\n"
-            "Hauptbeschwerde: Erschoepfung, Schlafprobleme, depressive Verstimmung.\n\n"
-            "PSYCHOPATHOLOGISCHER BEFUND (AMDP)\n"
-            "Bewusstsein: klar | Orientierung: vollstaendig\n"
-            "Affektivitaet: subdepressiv | Antrieb: reduziert\n"
-            "Suizidalitaet: aktuell verneint\n\n"
-            "Diagnosen: F32.1 Mittelgradige depressive Episode, Z73.0 Ausgebranntsein"
-        ),
-        "model_used": "ollama/qwen3:32b",
-        "duration_s": 3.1,
-        "token_count": 221,
-    }
-    with patch("app.services.llm.generate_text",   new=AsyncMock(return_value=mock_response)), \
-         patch("app.api.jobs.generate_text",        new=AsyncMock(return_value=mock_response)):
-        yield
-
-
-@pytest.fixture
-def mock_transcribe():
-    """Whisper-Transkription durch fixes Ergebnis ersetzen."""
-    mock_result = {
-        "transcript": (
-            "Therapeut: Wie war die Woche fuer Sie? "
-            "Patient: Eigentlich besser als letzte Woche. "
-            "Ich habe versucht, die Uebung zu machen. "
-            "Das Aufschreiben was gut war hat mir geholfen."
-        ),
-        "language": "de",
-        "duration_s": 8.0,
-        "word_count": 37,
-    }
-    with patch("app.services.transcription.transcribe_audio", new=AsyncMock(return_value=mock_result)):
-        yield
-
-
-@pytest.fixture
-def mock_extract_text():
-    """PDF/DOCX-Extraktion durch realistischen Text ersetzen."""
-    text = TXT_SELBST.read_text(encoding="utf-8")
-    with patch("app.services.extraction.extract_text", new=AsyncMock(return_value=text)), \
-         patch("app.api.jobs.extract_text",             new=AsyncMock(return_value=text)), \
-         patch("app.api.style_embeddings.extract_text", new=AsyncMock(return_value=text)):
-        yield
-
-
-@pytest.fixture
-def mock_embedding():
-    """Ollama-Embedding durch Zufallsvektor ersetzen."""
-    import random
-    fake_embedding = [random.uniform(-0.1, 0.1) for _ in range(768)]
-    with patch("app.services.embeddings.get_embedding", new=AsyncMock(return_value=fake_embedding)), \
-         patch("app.api.style_embeddings.get_embedding", new=AsyncMock(return_value=fake_embedding)):
-        yield
-
-
-@pytest.fixture
-def mock_ollama_unavailable():
-    """Ollama als nicht erreichbar simulieren."""
-    with patch(
-        "app.services.llm._generate_ollama",
-        new=AsyncMock(side_effect=RuntimeError(
-            "Ollama nicht erreichbar unter http://localhost:11434."
-        )),
-    ):
-        yield
-
-
-# ── CLI-Optionen für Eval-Tests ──────────────────────────────────────────────
+# ── CLI-Optionen fuer Eval-Framework ──────────────────────────────────────────
+# pytest_addoption MUSS im Top-Level-conftest stehen, sonst greifen die
+# Optionen nicht zuverlaessig in Sub-Verzeichnissen.
 
 def pytest_addoption(parser):
-    """CLI-Optionen für das Evaluations-Framework."""
     parser.addoption(
         "--eval-output",
         action="store",
         default=None,
-        help="Verzeichnis für Evaluations-Ergebnisse (optional, nur für test_eval.py)",
+        help="Verzeichnis fuer Evaluations-Ergebnisse (nur tests/eval/test_eval.py)",
     )
     parser.addoption(
         "--eval-report",
@@ -248,8 +106,7 @@ def pytest_addoption(parser):
         default=False,
         help=(
             "Transkriptionen neu erzeugen und als <audio>.transcript.txt speichern. "
-            "Ohne diesen Flag wird ein vorhandenes .transcript.txt geladen "
-            "und Whisper nur aufgerufen wenn noch kein Cache existiert."
+            "Ohne diesen Flag wird ein vorhandenes .transcript.txt geladen."
         ),
     )
     parser.addoption(
@@ -258,105 +115,9 @@ def pytest_addoption(parser):
         default=None,
         help=(
             "Whisper-Modell nur fuer diesen Testlauf wechseln (z.B. medium). "
-            "Setzt es vor dem ersten Audio-Test via /api/admin/whisper-model und "
-            "stellt nach dem Lauf das vorherige Modell wieder her."
+            "Setzt es vor dem ersten Audio-Test via /api/admin/whisper-model."
         ),
     )
-    # ── v19.2 Schritt 8: CLI-Flag fuer Eval-Modus der Two-Stage-Pipeline ────────
-    #
-    # --summary-mode steuert die Erwartungshaltung der Eval-Tests an Stage 1
-    # (Verlauf-Verdichtung). Das Backend selbst wird nicht umkonfiguriert —
-    # Stage 1 ist ueber backend/.env (STAGE1_ENABLED) konfiguriert. Dieses Flag
-    # entscheidet nur, was die Eval-Tests vom Backend-Verhalten erwarten und wie
-    # der Report die Information ausweist.
-    #
-    # Werte:
-    #   auto            (default) — nimm was das Backend liefert; nur dokumentieren
-    #   require_stage1            — fail wenn Workflow zur Stage-1-Whitelist gehoert
-    #                                und audit.applied != True
-    #   require_no_stage1         — fail wenn audit.applied == True
-    #                                (fuer Regressions-A/B-Vergleiche gegen Pre-v19.2)
-    #
-    parser.addoption(
-        "--summary-mode",
-        action="store",
-        default="auto",
-        choices=("auto", "require_stage1", "require_no_stage1"),
-        help=(
-            "v19.2 Two-Stage-Pipeline-Eval-Modus: 'auto' (nur reporten), "
-            "'require_stage1' (Stage 1 muss fuer Whitelist-Workflows "
-            "angeschlagen sein), 'require_no_stage1' (Stage 1 darf nicht "
-            "angeschlagen sein, fuer A/B-Vergleiche)."
-        ),
-    )
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _configure_whisper_model_for_session(request):
-    """
-    Wenn --whisper-model gesetzt ist, wechselt das Backend-Modell vor den Tests
-    und stellt es nach Abschluss der Session wieder her.
-
-    Backend muss laufen und den Admin-Endpoint bereitstellen (siehe admin.py).
-    """
-    override_model = request.config.getoption("--whisper-model", default=None)
-    if not override_model:
-        yield
-        return
-
-    import httpx
-    import os as _os
-
-    backend_url = _os.environ.get("EVAL_BACKEND_URL", "http://localhost:8000")
-    shared_secret = _os.environ.get("CONFLUENCE_SHARED_SECRET", "")
-
-    headers = {"X-Admin-Token": shared_secret} if shared_secret else {}
-    previous = None
-
-    try:
-        with httpx.Client(base_url=backend_url, timeout=10.0) as client:
-            # Aktuelles Modell merken
-            r = client.get("/api/admin/whisper-model")
-            if r.status_code == 200:
-                previous = r.json().get("whisper_model")
-                print(f"\n[WHISPER] Aktuelles Modell: {previous}", flush=True)
-
-            # Wechseln
-            r = client.post(
-                "/api/admin/whisper-model",
-                params={"model": override_model},
-                headers=headers,
-            )
-            if r.status_code != 200:
-                print(
-                    f"\n[WHISPER] WARNUNG: Modellwechsel fehlgeschlagen "
-                    f"({r.status_code} {r.text}) – Tests laufen mit {previous}",
-                    flush=True,
-                )
-                previous = None  # Nicht zuruecksetzen
-            else:
-                print(
-                    f"[WHISPER] Gewechselt auf {override_model} fuer diesen Testlauf",
-                    flush=True,
-                )
-    except Exception as e:
-        print(f"\n[WHISPER] WARNUNG: Admin-Endpoint nicht erreichbar ({e})", flush=True)
-        previous = None
-
-    yield
-
-    # Nach allen Tests: zuruecksetzen
-    if previous and previous != override_model:
-        try:
-            with httpx.Client(base_url=backend_url, timeout=10.0) as client:
-                client.post(
-                    "/api/admin/whisper-model",
-                    params={"model": previous},
-                    headers=headers,
-                )
-            print(f"\n[WHISPER] Zurueck auf {previous}", flush=True)
-        except Exception as e:
-            print(f"\n[WHISPER] Zurueckstellen fehlgeschlagen: {e}", flush=True)
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -377,7 +138,6 @@ def pytest_sessionfinish(session, exitstatus):
     if not results_path.exists():
         return
 
-    # Report nur generieren wenn es eval-Ergebnisse gibt
     eval_files = list(results_path.rglob("*.eval.txt"))
     if not eval_files:
         return
@@ -402,23 +162,7 @@ def pytest_sessionfinish(session, exitstatus):
                 mod.build_report(data, report_path, charts_dir)
                 print(f"\n{'='*60}")
                 print(f"  PDF-Report erstellt: {report_path}")
-                print(f"  {total} Testfälle in {len(data['workflows'])} Workflows")
+                print(f"  {total} Testfaelle in {len(data['workflows'])} Workflows")
                 print(f"{'='*60}")
     except Exception as e:
         print(f"\nWarnung: PDF-Report konnte nicht erstellt werden: {e}")
-
-"""
-Test-Konfiguration fuer die Unit-Tests.
-
-Diese Tests laufen ohne LLM/DB/Backend — reine Python-Funktion-Tests.
-Werden mit `pytest tests/test_*_unit.py` (oder einem Subset) ausgefuehrt.
-
-Wenn die Eval-Tests (tests/test_eval.py) auch laufen sollen, kann das
-existierende conftest.py weiter verwendet werden — diese Datei hier
-ergaenzt nur die Pfad-Konfiguration fuer Unit-Tests.
-"""
-import sys
-# Backend-Root zum sys.path hinzufuegen damit `from app.services.x import ...` geht
-_BACKEND_ROOT = Path(__file__).parent.parent
-if str(_BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(_BACKEND_ROOT))
