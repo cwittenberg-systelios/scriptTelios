@@ -119,7 +119,8 @@ async def cleanup_inactive_style_embeddings() -> int:
     from app.core.database import async_session_factory
     from app.models.db import StyleEmbedding
     from sqlalchemy import delete
-    cutoff = datetime.utcnow() - timedelta(seconds=RETENTION["style_embeddings"])
+    from datetime import timezone as _tz
+    cutoff = datetime.now(tz=_tz.utc) - timedelta(seconds=RETENTION["style_embeddings"])
     count = 0
     try:
         async with async_session_factory() as db:
@@ -150,14 +151,39 @@ async def cleanup_old_logs() -> int:
             kept = []
             removed = 0
             import json as _j
+
+            def _ts_to_epoch(ts):
+                """Beide Timestamp-Formate akzeptieren:
+                   - int/float  -> unix epoch (audit.py: int(time.time()))
+                   - ISO 8601   -> ISO-String (job_queue.py: datetime.isoformat())
+                Frueher griff nur der int/float-Pfad: ISO-Strings fielen in
+                den else-Zweig der Hauptschleife und wurden unabhaengig vom
+                tatsaechlichen Alter geloescht (performance.log war faktisch
+                nicht retentiert).
+                """
+                if isinstance(ts, (int, float)):
+                    return float(ts)
+                if isinstance(ts, str) and ts:
+                    try:
+                        # fromisoformat akzeptiert auch +HH:MM Offsets ab 3.11
+                        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                    except Exception:
+                        return None
+                return None
+
             for line in lines:
                 try:
                     e = _j.loads(line)
-                    ts = e.get("ts") or e.get("timestamp") or 0
-                    if isinstance(ts, (int, float)) and ts >= cutoff_ts:
-                        kept.append(line)
-                    elif not ts:
+                    ts_raw = e.get("ts") or e.get("timestamp")
+                    if not ts_raw:
                         kept.append(line)  # Zeilen ohne Timestamp behalten
+                        continue
+                    ts_epoch = _ts_to_epoch(ts_raw)
+                    if ts_epoch is None:
+                        # unbekanntes Format -> sicherheitshalber behalten
+                        kept.append(line)
+                    elif ts_epoch >= cutoff_ts:
+                        kept.append(line)
                     else:
                         removed += 1
                 except Exception:

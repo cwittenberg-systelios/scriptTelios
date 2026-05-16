@@ -303,8 +303,17 @@ async def summarize_verlauf(
         #   raw= 6789w → target= 814w
         #   raw= 3000w → target= 800w (Floor)
 
-    # v19.2.1: Threshold ebenfalls relativ - 50% statt 40%, Floor 400.
-    min_acceptable = max(400, int(target_words * 0.5))
+    # v19.3.2: Threshold 50% → 30% gelockert.
+    # Hintergrund: Eval-Run 15.05.2026 zeigte bei 12962w-Verläufen 6 von 15
+    # Stage-1-Fails mit Outputs 543-743w (alle < 777w = 50% von target=1555w).
+    # Das Modell verdichtet bei großen Inputs deutlich stärker als 50% — typisch
+    # 4-8% des Raw-Inputs. 30% ist robust gegen das, behält aber den 400w-Floor
+    # als absolute Untergrenze für kleinere Inputs.
+    # Beispiele:
+    #   target=1555w → min=466w (vorher 777w) — fängt die 543-743w-Cases ein
+    #   target= 814w → min=400w (vorher 407w) — praktisch unverändert
+    #   target= 800w → min=400w (vorher 400w) — unverändert (Floor)
+    min_acceptable = max(400, int(target_words * 0.30))
     max_acceptable = int(target_words * 2.5)  # mehr Headroom nach oben
 
     focus_hint = _build_focus_hint(workflow)
@@ -470,8 +479,9 @@ async def _retry_stricter_summary(
         f"{i['type']}: {i['detail']}" for i in previous_issues
     )
 
-    # Akzeptanz-Range konsistent zu summarize_verlauf
-    min_acceptable = max(400, int(target_words * 0.5))
+    # v19.3.2: Threshold konsistent mit summarize_verlauf — 30% statt 50%.
+    # Siehe Hintergrund in summarize_verlauf (Eval-Run 15.05.2026).
+    min_acceptable = max(400, int(target_words * 0.30))
     max_acceptable = int(target_words * 2.5)
 
     focus_hint = _build_focus_hint(workflow)

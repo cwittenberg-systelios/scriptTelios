@@ -902,7 +902,7 @@ async def _extract_pdf(file_path: Path) -> ExtractionResult:
         warnings.append(f"Ollama Vision nicht verfuegbar (ollama pull {settings.VISION_MODEL})")
         raise RuntimeError(
             f"PDF '{file_path.name}': Alle Extraktionsstufen fehlgeschlagen. "
-            f"Details: {chr(59).join(warnings)}"
+            f"Details: {'; '.join(warnings)}"
         )
     try:
         text, pages = await _ollama_vision_extract_pdf(file_path)
@@ -916,7 +916,7 @@ async def _extract_pdf(file_path: Path) -> ExtractionResult:
 
     raise RuntimeError(
         f"PDF '{file_path.name}': Alle Extraktionsstufen fehlgeschlagen. "
-        f"Details: {chr(59).join(warnings)}"
+        f"Details: {'; '.join(warnings)}"
     )
 
 
@@ -1009,5 +1009,5 @@ async def _extract_image(file_path: Path) -> ExtractionResult:
 
     raise RuntimeError(
         f"Bild '{file_path.name}' konnte nicht extrahiert werden. "
-        f"Details: {chr(59).join(warnings)}"
+        f"Details: {'; '.join(warnings)}"
     )

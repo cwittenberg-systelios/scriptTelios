@@ -136,27 +136,29 @@ class TestPatientNameFallback:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Integration-Spec: Substitution wirkt mit Fallback
+# Integration-Spec: v16-Verhalten ohne Fallback
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestSubstitutionMitFallback:
     """
-    Spec-Test: nach dem Fallback und der Substitution in build_system_prompt
-    soll [Patient/in] nicht mehr im Prompt sein.
+    v16-Spec: Ohne Fallback bleibt patient_name None und keine Platzhalter
+    werden gegen Muell ersetzt. Der frueher kontaminierende String
+    "die Klientin/der Klient" darf NICHT mehr im finalen Prompt auftauchen.
+
+    (Der Klassenname stammt aus pre-v16-Zeiten und ist absichtlich nicht
+    umbenannt, damit Pytest-Selektoren in der CI nicht brechen.)
     """
 
-    def test_fallback_loest_substitution_aus(self):
+    def test_kein_fallback_kein_kontaminations_string(self):
         from app.services.prompts import build_system_prompt
 
-        # 1. Kein Name -> Fallback
+        # 1. Kein Name -> kein Fallback (v16)
         patient_name = apply_patient_name_fallback(None, "dokumentation")
-        assert patient_name is not None
+        assert patient_name is None
 
-        # 2. Mit Fallback in Prompt einbauen
-        prompt = build_system_prompt(workflow="dokumentation", patient_name=patient_name)
+        # 2. Prompt ohne patient_name bauen
+        prompt = build_system_prompt(workflow="dokumentation", patient_name=None)
 
-        # 3. Substitution soll [Patient/in] entfernen
-        # (es darf nicht mehr in echten Prompt-Body Stellen vorkommen,
-        # nur in Substitutions-Code-Kommentaren falls die geloggt werden)
-        assert "die Klientin/der Klient" in prompt
+        # 3. Der v15-Kontaminations-String darf nicht im Body auftauchen
+        assert "die Klientin/der Klient" not in prompt

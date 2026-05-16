@@ -1453,8 +1453,12 @@ def build_user_content(
     antragsvorlage_text: Optional[str] = None,
     vorantrag_text: Optional[str] = None,
     diagnosen: Optional[list[str]] = None,
-    custom_prompt: Optional[str] = None,
     patient_name: Optional[dict] = None,
+    # Backwards-Compat: alter Parameter custom_prompt wurde mit v18 entfernt
+    # (Workflow-Anweisungen leben jetzt im System-Prompt). Wir akzeptieren
+    # ihn weiterhin in der Signatur, ignorieren ihn aber bewusst, damit
+    # Legacy-Aufrufer nicht brechen.
+    custom_prompt: Optional[str] = None,
 ) -> str:
     """
     Baut den User-Content-Block zusammen.
@@ -1468,11 +1472,16 @@ def build_user_content(
       antragsvorlage_text: P3/P4: Aktueller Bericht (EB/VA) mit Anamnese/Diagnosen
       vorantrag_text:      Folgeverlängerung: Vorheriger Bericht mit Verlauf/Anamnese
       diagnosen:           ICD-Codes (explizit oder aus Antragsvorlage)
-      custom_prompt:       Therapeuten-Fokus (wird am Ende eingebettet)
       patient_name:        Dict {anrede, vorname, nachname, initial} – explizit uebergeben
                            oder aus Unterlagen extrahiert. Wird als expliziter Hinweis
                            am Anfang des User-Blocks eingefuegt.
+      custom_prompt:       [DEPRECATED v18] Wird ignoriert. Vor v18 enthielt der
+                           User-Block einen THERAPEUTEN-HINWEIS aus custom_prompt -
+                           in v18 wandern Workflow-Anweisungen direkt in den
+                           System-Prompt (siehe build_system_prompt).
     """
+    # custom_prompt ist absichtlich nicht in Verwendung (siehe Docstring).
+    _ = custom_prompt
     parts = []
 
     # ── Opt 4: Quelltext-Deduplikation ───────────────────────────────────────

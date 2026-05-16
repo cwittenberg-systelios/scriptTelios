@@ -122,9 +122,9 @@ class RecordingOut(BaseModel):
 async def _set_status(
     rec_id: int,
     status: str,
-    error_msg: str = None,
-    transcript: str = None,
-    duration_s: float = None,
+    error_msg: Optional[str] = None,
+    transcript: Optional[str] = None,
+    duration_s: Optional[float] = None,
 ):
     async with async_session_factory() as session:
         values = {"status": status, "error_msg": error_msg}
@@ -148,11 +148,13 @@ async def _transcribe_background(rec_id: int, audio_path: Path):
     from app.services import transcription as _transcription
     try:
         await _set_status(rec_id, "transcribing")
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: asyncio.run(_transcription.transcribe_audio(audio_path))
-        )
+        # transcribe_audio ist async und delegiert die CPU-lastige Whisper-
+        # Arbeit selbst per run_in_executor in einen Thread - kein zusaetzliches
+        # Wrapping noetig. Frueher: loop.run_in_executor(None, lambda:
+        # asyncio.run(transcribe_audio(...))). Das erzeugte einen Thread mit
+        # eigenem Event-Loop, der intern dann nochmal einen Executor-Thread
+        # spawnte - reine Verschwendung und potenzielle Loop-Konflikte.
+        result = await _transcription.transcribe_audio(audio_path)
         await _set_status(
             rec_id,
             status="ready",

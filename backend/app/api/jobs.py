@@ -47,10 +47,16 @@ _STAGE1_MIN_WORDS = 1500
 # v19.3: Transkript-Stage-1 fuer dokumentation/anamnese.
 # akutantrag/verlaengerung/folgeverlaengerung/entlassbericht bekommen in
 # Produktion kein Transkript - daher hier NICHT aktiv.
-# Schwelle 5000w liegt unter der _sample_uniformly-Schwelle (~6000-7000w),
-# damit die Verdichtung sicher davor greift.
+# Schwelle 3500w (v19.3.1, vorher 5000w):
+# - Dokumentations-Transkripte sind ~6.500-7.000w → unverändert betroffen
+# - Anamnese-Transkripte sind ~4.500-5.000w → vorher KNAPP verfehlt (4951w<5000w),
+#   jetzt zuverlässig getriggert. Eval-Run 15.05. zeigte: 0/2 Anamnese-Aktivierungen
+#   bei Threshold=5000w, an-02-schulangst FAILED mit "zu lang" + Keyword 'Ressourcen'
+#   weil Modell ungefiltertes Transkript bekam und alles unterbringen wollte.
+# - Schwelle bleibt unter der _sample_uniformly-Trigger-Schwelle (~6.000-7.000w
+#   User-Content-Total inkl. System/Stilvorlage), damit die Verdichtung davor greift.
 _TRANSCRIPT_STAGE1_WORKFLOWS = {"dokumentation", "anamnese"}
-_TRANSCRIPT_STAGE1_MIN_WORDS = 5000
+_TRANSCRIPT_STAGE1_MIN_WORDS = 3500
 
 # Separater Prompt-Logger – schreibt vollständige System/User-Prompts in prompts.log
 # Zweck: manuelle Inspektion und Prompt-Debugging ohne den Haupt-Log zu fluten.
@@ -396,7 +402,7 @@ async def create_generate_job(
         from app.services.progress_bands import compute_bands
 
         # Bands + Timing frühzeitig initialisieren (werden in allen Phasen gebraucht)
-        _has_audio = bool(audio_bytes) if 'audio_bytes' in dir() else bool(audio_bytes)
+        _has_audio = bool(audio_bytes)
         _has_docs = bool(verlaufsdoku_bytes or antragsvorlage_bytes or selbstauskunft_bytes)
         bands = compute_bands(workflow, has_audio=_has_audio, has_docs=_has_docs)
         phase_times = {}
@@ -783,14 +789,19 @@ async def create_generate_job(
         elif workflow in _TRANSCRIPT_STAGE1_WORKFLOWS and transkript_text:
             # Workflow waere passend, aber Transkript zu kurz oder Flag aus.
             # Mini-Audit-Eintrag damit man im Performance-Log sieht _warum_.
+            _tr_actual_words = len(transkript_text.split())
             reason = (
                 "transcript_stage1_disabled"
                 if not _tr_stage1_enabled
-                else f"transkript_kurz_{len(transkript_text.split())}w"
+                else f"transkript_kurz_{_tr_actual_words}w_min_{_tr_stage1_min_words}w"
+            )
+            logger.info(
+                "Transcript-Stage 1 NICHT aktiviert fuer Job %s (%s): %s",
+                job.job_id, workflow, reason,
             )
             _transcript_stage1_audit = {
                 "applied":              False,
-                "raw_word_count":       len(transkript_text.split()),
+                "raw_word_count":       _tr_actual_words,
                 "summary_word_count":   None,
                 "compression_ratio":    None,
                 "duration_s":           None,
@@ -1217,6 +1228,7 @@ async def create_generate_job(
         phase_times["llm"] = _t.time() - _t0
 
         try:
+            import json as _j
             perf_logger.info(_j.dumps({
                 "workflow": workflow,
                 "phases": phase_times,
