@@ -89,6 +89,26 @@ def _log_performance(job: "JobState", queue_size: int) -> None:
             "issue_count":        len(audit.get("issues") or []),
             "fallback_reason":    audit.get("fallback_reason"),
         }
+    # v19 Phase 1: QualityCheck-Summary (klein gehalten - kein voller Issue-Dump).
+    # Erlaubt spaetere Auswertung "wie oft hat LENGTH_TOO_SHORT getriggert".
+    qc = job.quality_check or {}
+    if qc:
+        entry["quality_check"] = {
+            "version": qc.get("version"),
+            "summary": qc.get("summary"),
+            "codes":   [i.get("code") for i in (qc.get("issues") or [])],
+        }
+    # v19 Phase C: Repair-Beziehung. Nur die ID, nicht der ganze Prompt -
+    # der steht auf repair_input_json in der DB und im audit.log.
+    if job.parent_job_id:
+        entry["repair"] = {
+            "parent_job_id": job.parent_job_id,
+            "accepted_codes": (job.repair_input or {}).get("accepted_issue_codes", []),
+            "had_user_hint": bool((job.repair_input or {}).get("user_hint")),
+            "custom_prompt": bool(
+                (job.repair_input or {}).get("custom_final_prompt_used")
+            ),
+        }
     perf_logger.info(json.dumps(entry, ensure_ascii=False))
 
 
@@ -143,6 +163,19 @@ class JobState:
         #                        compression_ratio/retry_used/degraded/...
         self.verlauf_summary_text : Optional[str]  = None
         self.verlauf_summary_audit: Optional[dict] = None
+        # v19 Phase 1: QualityCheck-Ergebnis.
+        # Wird nach DONE in run_job() ueber app.services.quality_check
+        # berechnet und persistiert. Format: serialize_issues()-Output.
+        # None = noch nicht berechnet (Job noch nicht fertig oder
+        # ohne result_text). Repair-Jobs bekommen ebenfalls einen Check.
+        self.quality_check         : Optional[dict] = None
+        # v19 Phase C: Repair-Beziehung.
+        # parent_job_id:   ID des Original-Jobs (None fuer normale Jobs).
+        # repair_input:    Snapshot der Therapeut-Eingaben fuer Audit
+        #                  {accepted_issue_codes, user_hint, final_prompt,
+        #                   custom_final_prompt_used}
+        self.parent_job_id : Optional[str]  = None
+        self.repair_input  : Optional[dict] = None
         self._cancel_requested  : bool = False
         self.input_meta         : Optional[dict] = None
 
@@ -180,6 +213,10 @@ class JobState:
             # Jobs die Stage 1 nicht beruehrt haben.
             "verlauf_summary_text":  self.verlauf_summary_text,
             "verlauf_summary_audit": self.verlauf_summary_audit,
+            # v19 Phase 1 + C:
+            "quality_check":   self.quality_check,
+            "parent_job_id":   self.parent_job_id,
+            "repair_input":    self.repair_input,
         }
 
 
@@ -213,6 +250,33 @@ class JobQueue:
         # DB-Insert asynchron (fire-and-forget) – gleicher Ansatz wie cancel_job
         asyncio.ensure_future(self._db_insert_job(job_id, workflow, description))
 
+        return state
+
+    def create_repair_job(
+        self,
+        parent_job_id: str,
+        workflow: str,
+        description: str = "",
+        repair_input: Optional[dict] = None,
+    ) -> JobState:
+        """v19 Phase C: Erstellt einen Repair-Job mit Parent-Verweis.
+
+        Im Unterschied zu create_job:
+          - parent_job_id wird im JobState gesetzt -> persistiert in
+            jobs.parent_job_id
+          - repair_input (= {accepted_issue_codes, user_hint, final_prompt,
+            custom_final_prompt_used}) wird im JobState gesetzt -> persistiert
+            in jobs.repair_input_json
+        Sonst identisch zu create_job. Der Job geht durch dieselbe Queue,
+        wird mit derselben run_job-Methode ausgefuehrt (mit eigener Coroutine).
+        """
+        state = self.create_job(workflow, description)
+        state.parent_job_id = parent_job_id
+        state.repair_input = repair_input or {}
+        logger.info(
+            "Repair-Job erstellt: %s (parent=%s, workflow=%s)",
+            state.job_id, parent_job_id, workflow,
+        )
         return state
 
     async def _db_insert_job(self, job_id: str, workflow: str, description: str) -> None:
@@ -273,6 +337,10 @@ class JobQueue:
                     # Pre-v19.2-Zeit oder Workflows die Stage 1 nicht nutzen.
                     "verlauf_summary_text":  db_job.verlauf_summary_text,
                     "verlauf_summary_audit": db_job.verlauf_summary_audit,
+                    # v19 Phase 1 + C: QualityCheck + Repair-Beziehung.
+                    "quality_check":   db_job.quality_check_json,
+                    "parent_job_id":   db_job.parent_job_id,
+                    "repair_input":    db_job.repair_input_json,
                 }
         except Exception as e:
             logger.warning("Job-DB-Lookup fehlgeschlagen: %s", e)
@@ -337,6 +405,10 @@ class JobQueue:
                         # v19.2: Stage-1-Pipeline-Felder
                         verlauf_summary_text=state.verlauf_summary_text,
                         verlauf_summary_audit=state.verlauf_summary_audit,
+                        # v19 Phase 1 + C
+                        quality_check_json=state.quality_check,
+                        parent_job_id=state.parent_job_id,
+                        repair_input_json=state.repair_input,
                     )
                 )
                 await db.commit()
@@ -405,6 +477,39 @@ class JobQueue:
                 logger.error("Job fehlgeschlagen: %s (%s) in %.1fs – %s", job.job_id, job.workflow, job.duration_s, e)
         finally:
             job.finished_at = datetime.now(timezone.utc)
+            # v19 Phase 1: QualityCheck NUR fuer erfolgreich abgeschlossene
+            # Jobs mit Text. Eigener try/except - ein QC-Bug darf einen
+            # produktiven Job nicht in den ERROR-State kippen.
+            if job.status == JobStatus.DONE.value and job.result_text:
+                try:
+                    from app.services.quality_check import (
+                        combined_result_text, run_quality_check, serialize_issues,
+                    )
+                    # Anamnese liefert Anamnese-Text + Befund-Text als zwei
+                    # getrennte Felder. Der QualityCheck braucht den verketteten
+                    # Text (mit ###BEFUND###-Separator) damit
+                    # MISSING_KEYWORD/SECTION-Checks und BEFUND_SEPARATOR_MISSING
+                    # konsistent mit dem Eval-Framework greifen.
+                    qc_text = combined_result_text(
+                        job.workflow, job.result_text, job.result_befund,
+                    )
+                    issues = run_quality_check(qc_text, job.workflow)
+                    job.quality_check = serialize_issues(issues, workflow=job.workflow)
+                    logger.info(
+                        "QualityCheck %s (%s): %d Issues (%s)",
+                        job.job_id, job.workflow,
+                        job.quality_check["summary"]["total"],
+                        ", ".join(
+                            f"{k}={v}" for k, v in job.quality_check["summary"].items()
+                            if k != "total"
+                        ),
+                    )
+                except Exception as qc_err:
+                    logger.warning(
+                        "QualityCheck fehlgeschlagen fuer Job %s: %s",
+                        job.job_id, qc_err,
+                    )
+                    job.quality_check = None
             queue_size = len([j for j in self._cache.values()
                               if j.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)])
             _log_performance(job, queue_size)

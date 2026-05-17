@@ -571,6 +571,178 @@ const S = `
   }
   .output-text.empty { color: var(--st-text-pale); font-style: italic; font-size: 13px; }
 
+  /* ── QUALITY CHECK PANEL (v19 Phase 1) ── */
+  /* Wird unterhalb von .output-card eingeblendet wenn der Backend-QC
+     Issues gefunden hat. Schwere bestimmt Rahmenfarbe (kritisch=rot,
+     warnung=orange, info=grau).
+     Sprint 2: read-only Anzeige. Sprint 4 (Phase C): wird zur Checkbox-
+     Liste erweitert, plus User-Hint-Textarea und Repair-Button. */
+  .qc-panel {
+    margin-top: 14px; background: white;
+    border: 1px solid var(--st-gray-mid);
+    border-left: 4px solid var(--st-gray-mid);
+    border-radius: 5px; overflow: hidden;
+  }
+  .qc-panel.qc-critical { border-left-color: var(--st-red, #b00); }
+  .qc-panel.qc-warning  { border-left-color: #d18722; }
+  .qc-panel.qc-info     { border-left-color: var(--st-text-soft); }
+  .qc-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px; background: var(--st-gray-light);
+    border-bottom: 1px solid var(--st-gray-mid);
+  }
+  .qc-title { font-size: 13px; font-weight: 600; color: var(--st-text-mid); }
+  .qc-counts { display: flex; gap: 6px; }
+  .qc-badge {
+    display: inline-block; padding: 2px 8px;
+    font-size: 11px; font-weight: 600; border-radius: 9px;
+    letter-spacing: 0.03em; text-transform: uppercase;
+  }
+  .qc-badge.qc-critical { background: var(--st-red, #b00); color: white; }
+  .qc-badge.qc-warning  { background: #d18722; color: white; }
+  .qc-badge.qc-info     { background: var(--st-text-soft); color: white; }
+  .qc-list { list-style: none; margin: 0; padding: 6px 0; }
+  .qc-item {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 8px 16px; font-size: 13px; line-height: 1.45;
+    border-bottom: 1px solid var(--st-gray-light);
+  }
+  .qc-item:last-child { border-bottom: none; }
+  .qc-item .qc-marker {
+    flex-shrink: 0; width: 8px; height: 8px; margin-top: 6px;
+    border-radius: 50%; background: var(--st-text-soft);
+  }
+  .qc-item.qc-critical .qc-marker { background: var(--st-red, #b00); }
+  .qc-item.qc-warning  .qc-marker { background: #d18722; }
+  .qc-item.qc-info     .qc-marker { background: var(--st-text-soft); }
+  .qc-msg   { flex: 1; color: var(--st-text-mid); }
+  .qc-code  {
+    flex-shrink: 0; font-family: ui-monospace, "SF Mono", "Cascadia Mono",
+                  Menlo, Consolas, monospace;
+    font-size: 11px; color: var(--st-text-soft);
+    background: var(--st-gray-light); border-radius: 3px;
+    padding: 1px 6px;
+  }
+
+  /* ── Sprint 4: interaktive Erweiterung des Panels ── */
+  .qc-checkbox-label {
+    display: inline-flex; align-items: center; gap: 6px;
+    flex-shrink: 0; cursor: pointer; margin-top: 2px;
+  }
+  .qc-checkbox {
+    width: 16px; height: 16px; cursor: pointer;
+    accent-color: var(--st-red, #8b1a1a);
+  }
+  .qc-checkbox:disabled { cursor: not-allowed; }
+  .qc-repair-form {
+    padding: 12px 16px; background: var(--st-gray-light);
+    border-top: 1px solid var(--st-gray-mid);
+  }
+  .qc-hint-label { display: block; position: relative; }
+  .qc-hint-label-text {
+    display: block; font-size: 12px; font-weight: 600;
+    color: var(--st-text-mid); margin-bottom: 6px;
+  }
+  .qc-hint-textarea {
+    width: 100%; min-height: 60px; padding: 8px 10px;
+    border: 1px solid var(--st-gray-mid); border-radius: 4px;
+    font-family: inherit; font-size: 13px; line-height: 1.4;
+    resize: vertical; box-sizing: border-box; background: white;
+  }
+  .qc-hint-textarea:focus {
+    outline: none; border-color: var(--st-red, #8b1a1a);
+  }
+  .qc-hint-textarea:disabled { background: var(--st-gray-light); }
+  .qc-hint-counter {
+    position: absolute; right: 6px; bottom: 6px;
+    font-size: 10px; color: var(--st-text-pale); pointer-events: none;
+  }
+  .qc-repair-error {
+    margin-top: 8px; padding: 8px 12px; background: #fef2f2;
+    border: 1px solid #fecaca; border-radius: 4px;
+    color: var(--st-red, #b00); font-size: 12px;
+  }
+  .qc-repair-actions {
+    margin-top: 10px; display: flex; justify-content: flex-end;
+  }
+  .qc-repair-btn {
+    padding: 8px 18px; background: var(--st-red, #8b1a1a); color: white;
+    border: none; border-radius: 4px; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .qc-repair-btn:hover:not(:disabled) { background: #6b0f0f; }
+  .qc-repair-btn:disabled {
+    background: var(--st-text-pale); cursor: not-allowed;
+  }
+
+  /* ── Sprint 4: RepairPreviewModal ── */
+  .qc-modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 9999; padding: 20px;
+  }
+  .qc-modal {
+    background: white; border-radius: 6px;
+    max-width: 800px; width: 100%; max-height: 90vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  }
+  .qc-modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px; border-bottom: 1px solid var(--st-gray-mid);
+  }
+  .qc-modal-title { font-size: 15px; font-weight: 600; color: var(--st-text-mid); }
+  .qc-modal-x {
+    background: none; border: none; font-size: 22px; cursor: pointer;
+    color: var(--st-text-soft); line-height: 1; padding: 0 4px;
+  }
+  .qc-modal-x:hover { color: var(--st-text-mid); }
+  .qc-modal-body {
+    padding: 16px 20px; overflow-y: auto; flex: 1;
+  }
+  .qc-modal-hint {
+    margin: 0 0 10px 0; font-size: 12px; color: var(--st-text-soft);
+    line-height: 1.4;
+  }
+  .qc-modal-hint code {
+    background: var(--st-gray-light); padding: 1px 5px; border-radius: 3px;
+    font-size: 11px;
+  }
+  .qc-modal-textarea {
+    width: 100%; min-height: 320px; padding: 10px;
+    border: 1px solid var(--st-gray-mid); border-radius: 4px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.45; resize: vertical;
+    box-sizing: border-box; background: var(--st-gray-light);
+  }
+  .qc-modal-textarea:focus {
+    outline: none; border-color: var(--st-red, #8b1a1a);
+  }
+  .qc-modal-foot {
+    display: flex; gap: 10px; justify-content: flex-end;
+    padding: 14px 20px; border-top: 1px solid var(--st-gray-mid);
+  }
+
+  /* ── Sprint 4: ResultVersionsTabs ── */
+  .qc-versions-tabs {
+    display: flex; gap: 0; margin-top: 14px; margin-bottom: -1px;
+  }
+  .qc-versions-tab {
+    background: var(--st-gray-light); border: 1px solid var(--st-gray-mid);
+    border-bottom: none; border-radius: 5px 5px 0 0;
+    padding: 7px 16px; font-size: 12px; font-weight: 600;
+    color: var(--st-text-soft); cursor: pointer; transition: all 0.15s;
+    margin-right: -1px;
+  }
+  .qc-versions-tab:hover:not(.active):not(:disabled) {
+    background: white; color: var(--st-text-mid);
+  }
+  .qc-versions-tab.active {
+    background: white; color: var(--st-red, #8b1a1a); cursor: default;
+    position: relative; z-index: 1;
+  }
+  .qc-versions-tab:disabled { cursor: not-allowed; opacity: 0.5; }
+
   /* ── SPINNER ── */
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin {
@@ -1446,6 +1618,468 @@ function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownlo
   );
 }
 
+// ── QualityCheckPanel (v19 Phase 1) ──────────────────────────────────
+// Read-only-Anzeige der QC-Issues. Wird direkt nach <Output> gerendert.
+// Sprint 4 (Phase C): wird zur interaktiven Auswahl-Komponente erweitert,
+// die Issue-Selection + User-Hint + Repair-Trigger umfasst.
+//
+// Erwartetes `data`-Shape (entspricht backend serialize_issues):
+//   { version, workflow, summary: {critical, warning, info, total},
+//     issues: [{code, severity, message, repair_hint, code_detail}, ...] }
+// `null` oder leere `issues` -> die Komponente rendert NICHTS.
+// ── QualityCheck-Helper (v19 Phase 1 + C) ─────────────────────────────
+// pickQualityCheck(obj):
+//   Liest das QC-Feld einheitlich heraus - egal ob obj aus pollJob() kommt
+//   (Backend-snake_case: quality_check) oder aus generate()/repair()
+//   (camelCase: qualityCheck). Liefert null bei Falsy-Eingaben.
+//
+// useJobResult():
+//   Hook fuer Pages. Konsolidiert ALLES was zum Generierungs-Output gehoert:
+//   - Original-Text + QC-Bundle (gesetzt von generate() oder resume)
+//   - Repair-Text + Repair-QC-Bundle (gesetzt nach repair-Submit)
+//   - activeVersion ("original" | "repair") - welcher Tab ist sichtbar
+//   - Sub-State fuer das QualityCheckPanel: Auswahl-Checkboxen + Hint
+//   - Sub-State fuer das RepairPreviewModal
+//
+//   Geliefert wird ein 2-Tupel [snapshot, ops]:
+//     snapshot:
+//       text                aktuell aktiver Text (Original oder Repair)
+//       befundText          aktiver Befund-Text (nur Anamnese, sonst "")
+//       qualityCheck        aktives QC-Bundle (Original-QC oder Repair-QC)
+//       hasRepair           true wenn schon eine Repair-Version vorliegt
+//       activeVersion       "original" | "repair"
+//       acceptedCodes       Set-aehnliches Array (lokaler Auswahl-State)
+//       userHint            Textarea-Wert
+//       showRepairModal     bool
+//       modalPrompt         der vom Backend gelieferte final_prompt
+//       repairBusy          bool, blockiert Doppel-Klicks
+//       repairError         string|null
+//     ops:
+//       applyOriginal(jobOrResult)  - generate()/resume -> Original-Version
+//       applyRepair(repairResult)   - nach erfolgreichem repair() -> Repair-Version
+//       reset()                     - alle Versionen + UI-State weg
+//       toggleCode(code)            - Issue-Code an/abwaehlen
+//       setHint(s)                  - User-Hint Textarea-Update
+//       setActiveVersion(v)         - Tab-Wechsel original<->repair
+//       openModal(prompt)           - RepairPreviewModal anzeigen
+//       closeModal()                - Modal weg, Auswahl behalten
+//       setRepairBusy(b)            - Loading-State
+//       setRepairError(e)           - Fehler-Anzeige
+
+function pickQualityCheck(obj) {
+  if (!obj) return null;
+  return obj.quality_check ?? obj.qualityCheck ?? null;
+}
+
+function useJobResult() {
+  // Original-Version (das was generate() liefert oder resume befuellt)
+  const [origText,    setOrigText]    = useState("");
+  const [origBefund,  setOrigBefund]  = useState("");
+  const [origQC,      setOrigQC]      = useState(null);
+  const [origJobId,   setOrigJobId]   = useState(null);
+
+  // Repair-Version (nach erfolgreichem repair()-Call)
+  const [repairText,    setRepairText]    = useState("");
+  const [repairBefund,  setRepairBefund]  = useState("");
+  const [repairQC,      setRepairQC]      = useState(null);
+  const [repairJobId,   setRepairJobId]   = useState(null);
+
+  // Tab-Aktivierung
+  const [activeVersion, setActiveVersion] = useState("original");
+
+  // Panel-Auswahl-State (Reset zwischen Versionen)
+  const [acceptedCodes, setAcceptedCodes] = useState([]);
+  const [userHint,      setUserHint]      = useState("");
+
+  // Repair-Modal-State
+  const [showRepairModal, setShowRepairModal] = useState(false);
+  const [modalPrompt,     setModalPrompt]     = useState("");
+  const [repairBusy,      setRepairBusy]      = useState(false);
+  const [repairError,     setRepairError]     = useState(null);
+
+  const hasRepair = !!repairJobId;
+
+  const applyOriginal = useCallback((jobOrResult) => {
+    if (!jobOrResult) {
+      setOrigText(""); setOrigBefund(""); setOrigQC(null); setOrigJobId(null);
+      return;
+    }
+    setOrigText(jobOrResult.text ?? jobOrResult.result_text ?? "");
+    setOrigBefund(jobOrResult.befundText ?? jobOrResult.befund_text ?? "");
+    setOrigQC(pickQualityCheck(jobOrResult));
+    setOrigJobId(jobOrResult.jobId ?? jobOrResult.job_id ?? null);
+    setActiveVersion("original");
+    setAcceptedCodes([]);
+    setUserHint("");
+    // Bei neuer Generierung Repair-Version verwerfen
+    setRepairText(""); setRepairBefund(""); setRepairQC(null); setRepairJobId(null);
+    setShowRepairModal(false); setModalPrompt(""); setRepairError(null);
+  }, []);
+
+  const applyRepair = useCallback((repairResult) => {
+    if (!repairResult) return;
+    setRepairText(repairResult.text ?? "");
+    setRepairBefund(repairResult.befundText ?? "");
+    setRepairQC(pickQualityCheck(repairResult));
+    setRepairJobId(repairResult.jobId ?? null);
+    setActiveVersion("repair");
+    setShowRepairModal(false);
+    setRepairError(null);
+    // Auswahl-State leeren - bei zweitem Repair startet er bei 0
+    setAcceptedCodes([]);
+    setUserHint("");
+  }, []);
+
+  const reset = useCallback(() => {
+    setOrigText(""); setOrigBefund(""); setOrigQC(null); setOrigJobId(null);
+    setRepairText(""); setRepairBefund(""); setRepairQC(null); setRepairJobId(null);
+    setActiveVersion("original");
+    setAcceptedCodes([]); setUserHint("");
+    setShowRepairModal(false); setModalPrompt("");
+    setRepairBusy(false); setRepairError(null);
+  }, []);
+
+  const toggleCode = useCallback((code) => {
+    setAcceptedCodes(prev =>
+      prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code]
+    );
+  }, []);
+
+  // Aktive Version -> auszugebender Text + QC
+  const isRepairActive = activeVersion === "repair" && hasRepair;
+  const text         = isRepairActive ? repairText   : origText;
+  const befundText   = isRepairActive ? repairBefund : origBefund;
+  const qualityCheck = isRepairActive ? repairQC     : origQC;
+  // Der Job-ID den Repair-Operationen targeten muessen: IMMER der Original.
+  // Repair-on-Repair wuerde gegen den ersten Repair-Job laufen - laut Plan
+  // Phase C: nur Original + letzte Repair-Version.
+  const repairTargetJobId = origJobId;
+
+  return [
+    {
+      // Aktiv
+      text, befundText, qualityCheck,
+      // Versionen
+      origText, origBefund, origQC, origJobId,
+      repairText, repairBefund, repairQC, repairJobId,
+      hasRepair, activeVersion, repairTargetJobId,
+      // UI-Auswahl
+      acceptedCodes, userHint,
+      // Modal
+      showRepairModal, modalPrompt, repairBusy, repairError,
+    },
+    {
+      applyOriginal, applyRepair, reset,
+      toggleCode, setUserHint,
+      setActiveVersion,
+      openModal: (prompt) => { setModalPrompt(prompt); setShowRepairModal(true); },
+      closeModal: () => { setShowRepairModal(false); },
+      setModalPrompt,
+      setRepairBusy, setRepairError,
+    },
+  ];
+}
+
+// Backwards-compat: useQualityCheck war der alte Hook-Name aus Sprint 2.
+// Pages koennen weiter useQualityCheck() nutzen, bekommen aber jetzt einen
+// reduzierten View (nur das was sie in Sprint 2 verwendet haben).
+// Sprint 4: Pages bekommen ueber das volle useJobResult() den Repair-Flow.
+function useQualityCheck() {
+  const [{ qualityCheck }, { applyOriginal, reset }] = useJobResult();
+  return [
+    qualityCheck,
+    {
+      apply: applyOriginal,
+      reset,
+      set: () => { throw new Error("set() ist deprecated - nutze apply()"); },
+    },
+  ];
+}
+
+// ── Sprint 4: interaktives QualityCheckPanel ───────────────────────
+// data:           QC-Bundle (oder null - dann rendert nichts)
+// acceptedCodes:  Array von codes die ausgewaehlt sind
+// userHint:       Textarea-Wert
+// onToggle:       fn(code) - Checkbox an/aus
+// onHintChange:   fn(string) - Textarea-Onchange
+// onRepair:       fn() - Submit-Button. Eltern-Komponente baut Preview-Call.
+// repairBusy:     blockiert Buttons
+// repairError:    Fehlermeldung
+// readOnly:       wenn true, nur Anzeige (z.B. fuer Repair-QC nach Repair-Submit)
+function QualityCheckPanel({
+  data,
+  acceptedCodes = [],
+  userHint = "",
+  onToggle = null,
+  onHintChange = null,
+  onRepair = null,
+  repairBusy = false,
+  repairError = null,
+  readOnly = false,
+}) {
+  if (!data || !Array.isArray(data.issues) || data.issues.length === 0) {
+    return null;
+  }
+  const issues  = data.issues;
+  const summary = data.summary || {};
+  const critN   = summary.critical || 0;
+  const warnN   = summary.warning  || 0;
+  const infoN   = summary.info     || 0;
+  const topSev = critN > 0 ? "critical" : warnN > 0 ? "warning" : "info";
+  const interactive = !readOnly && (onToggle || onHintChange);
+  const canSubmit = interactive && !repairBusy
+    && (acceptedCodes.length > 0 || (userHint && userHint.trim().length > 0));
+
+  return (
+    <div className={"qc-panel qc-" + topSev}>
+      <div className="qc-head">
+        <span className="qc-title">Interne Qualitätsprüfung</span>
+        <span className="qc-counts">
+          {critN > 0 && <span className="qc-badge qc-critical">{critN} kritisch</span>}
+          {warnN > 0 && <span className="qc-badge qc-warning">{warnN} Hinweis</span>}
+          {infoN > 0 && <span className="qc-badge qc-info">{infoN} Info</span>}
+        </span>
+      </div>
+      <ul className="qc-list">
+        {issues.map((iss, idx) => {
+          const checked = acceptedCodes.includes(iss.code);
+          const sev = iss.severity || "info";
+          return (
+            <li key={iss.code || idx} className={"qc-item qc-" + sev}>
+              {interactive && onToggle ? (
+                <label className="qc-checkbox-label">
+                  <input
+                    type="checkbox"
+                    className="qc-checkbox"
+                    checked={checked}
+                    disabled={repairBusy}
+                    onChange={() => onToggle(iss.code)}
+                  />
+                  <span className="qc-marker" />
+                </label>
+              ) : (
+                <span className="qc-marker" />
+              )}
+              <span className="qc-msg">{iss.message}</span>
+              <span className="qc-code" title={iss.repair_hint || ""}>{iss.code}</span>
+            </li>
+          );
+        })}
+      </ul>
+      {interactive && (
+        <div className="qc-repair-form">
+          <label className="qc-hint-label">
+            <span className="qc-hint-label-text">
+              Zusätzlicher Hinweis (optional, max. 500 Zeichen):
+            </span>
+            <textarea
+              className="qc-hint-textarea"
+              value={userHint}
+              maxLength={500}
+              onChange={(e) => onHintChange && onHintChange(e.target.value)}
+              disabled={repairBusy}
+              placeholder="z.B. „Bitte empathischer formulieren und Behandlungsverlauf um Achtsamkeitsübungen ergänzen."
+            />
+            <span className="qc-hint-counter">{userHint.length}/500</span>
+          </label>
+          {repairError && (
+            <div className="qc-repair-error">⚠️ {repairError}</div>
+          )}
+          <div className="qc-repair-actions">
+            <button
+              type="button"
+              className="qc-repair-btn"
+              disabled={!canSubmit}
+              onClick={() => onRepair && onRepair()}
+              title={
+                !canSubmit
+                  ? "Mindestens ein Hinweis auswählen oder Text eingeben"
+                  : "Preview zur Bestätigung anzeigen"
+              }
+            >
+              {repairBusy ? "Lädt..." : "Text überarbeiten lassen"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Sprint 4: RepairPreviewModal ────────────────────────────────────
+// Zeigt den final_prompt vom Backend, erlaubt Editieren.
+// onConfirm(promptOrNull): null = Original-Prompt verwenden
+// onCancel():               Modal weg, kein Repair starten
+function RepairPreviewModal({
+  prompt = "",
+  busy = false,
+  error = null,
+  onConfirm,
+  onCancel,
+}) {
+  const [editedPrompt, setEditedPrompt] = useState(prompt);
+  const [edited, setEdited] = useState(false);
+  // Wenn der Prompt neu reinkommt (z.B. zweiter Preview-Aufruf), State angleichen
+  useEffect(() => {
+    setEditedPrompt(prompt);
+    setEdited(false);
+  }, [prompt]);
+
+  const handleSubmit = () => {
+    if (busy) return;
+    onConfirm(edited ? editedPrompt : null);
+  };
+
+  return createPortal(
+    <div className="qc-modal-backdrop" onClick={!busy ? onCancel : undefined}>
+      <div className="qc-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="qc-modal-head">
+          <span className="qc-modal-title">Repair-Prompt prüfen</span>
+          <button
+            type="button"
+            className="qc-modal-x"
+            onClick={onCancel}
+            disabled={busy}
+            aria-label="Schließen"
+          >&#215;</button>
+        </div>
+        <div className="qc-modal-body">
+          <p className="qc-modal-hint">
+            Folgender Prompt wird an das Modell gesendet. Du kannst ihn vor dem
+            Versand bearbeiten – beachte dabei die Sicherheits-Marker
+            (<code>&gt;&gt;&gt;ORIGINAL-TEXT&lt;&lt;&lt;</code>, <code>&gt;&gt;&gt;NUTZERHINWEIS&lt;&lt;&lt;</code>)
+            nicht zu zerstören.
+          </p>
+          <textarea
+            className="qc-modal-textarea"
+            value={editedPrompt}
+            onChange={(e) => { setEditedPrompt(e.target.value); setEdited(true); }}
+            disabled={busy}
+            spellCheck={false}
+          />
+          {error && <div className="qc-repair-error">⚠️ {error}</div>}
+        </div>
+        <div className="qc-modal-foot">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={onCancel}
+            disabled={busy}
+          >Abbrechen</button>
+          <button
+            type="button"
+            className="qc-repair-btn"
+            onClick={handleSubmit}
+            disabled={busy}
+          >
+            {busy ? "Generiere Überarbeitung..." : (edited ? "Eigenen Prompt senden" : "Bestätigen & Überarbeiten")}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ── Sprint 4: ResultVersionsTabs ────────────────────────────────────
+// Schmaler Tab-Switch zwischen Original und letzter Überarbeitung.
+// Wird ueber <Output> gerendert; bei nicht-Repair-Jobs nicht angezeigt.
+function ResultVersionsTabs({ hasRepair, active, onChange, disabled = false }) {
+  if (!hasRepair) return null;
+  return (
+    <div className="qc-versions-tabs">
+      <button
+        type="button"
+        className={"qc-versions-tab" + (active === "original" ? " active" : "")}
+        onClick={() => !disabled && onChange("original")}
+        disabled={disabled}
+      >Original</button>
+      <button
+        type="button"
+        className={"qc-versions-tab" + (active === "repair" ? " active" : "")}
+        onClick={() => !disabled && onChange("repair")}
+        disabled={disabled}
+      >Überarbeitet</button>
+    </div>
+  );
+}
+
+// ── Sprint 4: RepairBundle ──────────────────────────────────────────
+// Kapselt die komplette Repair-UX (Panel + Modal + API-Handler).
+// Pages rendern darunter eine einzige Zeile <RepairBundle job ops toast />.
+function RepairBundle({ job, ops, toast }) {
+  // Repair-Button im QC-Panel: erst Preview anfordern, dann Modal oeffnen
+  async function handleTrigger() {
+    if (!job.repairTargetJobId) {
+      ops.setRepairError("Kein Original-Job - Repair nicht moeglich");
+      return;
+    }
+    ops.setRepairBusy(true);
+    ops.setRepairError(null);
+    try {
+      const preview = await repairPreview(
+        job.repairTargetJobId, job.acceptedCodes, job.userHint,
+      );
+      ops.openModal(preview.final_prompt);
+    } catch (e) {
+      ops.setRepairError(friendlyError(e));
+    } finally {
+      ops.setRepairBusy(false);
+    }
+  }
+
+  // Modal-Bestaetigung: optional customPrompt (wenn Therapeut Preview editiert hat)
+  async function handleConfirm(customPrompt) {
+    ops.setRepairBusy(true);
+    ops.setRepairError(null);
+    try {
+      const result = await repair(
+        job.repairTargetJobId, job.acceptedCodes, job.userHint, customPrompt,
+      );
+      if (!result) {
+        // Polling cancelled (z.B. Job abgebrochen)
+        ops.closeModal();
+        toast && toast("Repair abgebrochen");
+        return;
+      }
+      ops.applyRepair(result);
+      toast && toast("Überarbeitung erstellt");
+    } catch (e) {
+      ops.setRepairError(friendlyError(e));
+    } finally {
+      ops.setRepairBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <QualityCheckPanel
+        data={job.qualityCheck}
+        acceptedCodes={job.acceptedCodes}
+        userHint={job.userHint}
+        onToggle={ops.toggleCode}
+        onHintChange={ops.setUserHint}
+        onRepair={handleTrigger}
+        repairBusy={job.repairBusy}
+        repairError={job.repairError}
+        // Wenn der User gerade die Repair-Version anschaut, wird das Panel
+        // read-only - sonst koennte er ein zweites Repair auf die Repair-Version
+        // triggern, was Plan-Phase-C ausschliesst.
+        readOnly={job.activeVersion === "repair"}
+      />
+      {job.showRepairModal && (
+        <RepairPreviewModal
+          prompt={job.modalPrompt}
+          busy={job.repairBusy}
+          error={job.repairError}
+          onConfirm={handleConfirm}
+          onCancel={ops.closeModal}
+        />
+      )}
+    </>
+  );
+}
+
 function Tags({ list, onChange }) {
   const [val, setVal] = useState("");
   function add() {
@@ -1594,6 +2228,8 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
       akutText:    job.akut_text     || "",
       jobId,
       hasTranscript: job.has_transcript || false,
+      // v19 Phase 1: QC-Bundle vom Backend. Null bei Pre-v19-Jobs oder QC-Fail.
+      qualityCheck: job.quality_check || null,
     };
   } catch (e) {
     clearActiveJob();
@@ -1613,6 +2249,62 @@ async function downloadTranscript(jobId, filename = "transkript.txt") {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// v19 Phase C: Repair-API-Aufrufe (Production-Pfad mit apiFetch).
+// Test-Pendants in utils/api.js (mit _fetch-Parameter).
+
+async function repairPreview(jobId, acceptedCodes, userHint) {
+  const r = await apiFetch(`${getApiBase()}/jobs/${encodeURIComponent(jobId)}/repair/preview`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({
+      accepted_issue_codes: acceptedCodes || [],
+      user_hint:            userHint || "",
+    }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const detail = d.detail;
+    if (detail && typeof detail === "object") throw new Error(detail.msg || JSON.stringify(detail));
+    throw new Error(detail || r.statusText);
+  }
+  return d;  // { final_prompt, accepted_issues, user_hint_sanitized }
+}
+
+// Triggert den Repair-Job. Pollt anschliessend bis fertig und gibt das volle
+// Repair-Job-Objekt zurueck (inklusive eigenem quality_check). Caller bekommt
+// also denselben Shape wie pollJob() - kann den Repair als "neue Version"
+// einfach in den State stecken.
+async function repair(jobId, acceptedCodes, userHint, customFinalPrompt = null) {
+  const body = {
+    accepted_issue_codes: acceptedCodes || [],
+    user_hint:            userHint || "",
+  };
+  if (customFinalPrompt) body.custom_final_prompt = customFinalPrompt;
+  const r = await apiFetch(`${getApiBase()}/jobs/${encodeURIComponent(jobId)}/repair`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(body),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const detail = d.detail;
+    if (detail && typeof detail === "object") throw new Error(detail.msg || JSON.stringify(detail));
+    throw new Error(detail || r.statusText);
+  }
+  const repairJobId = d.repair_job_id;
+  // Polling exakt wie generate(). Repair-Jobs landen in derselben Queue.
+  const repairJob = await pollJob(repairJobId, 600);
+  if (!repairJob) return null;  // cancelled
+  return {
+    text:         repairJob.result_text   || "",
+    befundText:   repairJob.befund_text   || "",
+    akutText:     repairJob.akut_text     || "",
+    jobId:        repairJobId,
+    parentJobId:  d.parent_job_id,
+    qualityCheck: repairJob.quality_check || null,
+  };
 }
 
 // ── Pages ────────────────────────────────────────────────────────
@@ -1968,6 +2660,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
   const [prompt, setPrompt] = useState(P_DOKU);
   const [out, setOut]           = useState("");
   const [outWarn, setOutWarn]       = useState(null);
+  const [job, jobOps]               = useJobResult();
   const [lastJobId, setLastJobId] = useState(null);
   const [hasTranscript, setHasTranscript] = useState(false);
   const [busy, setBusy]         = useState(false);
@@ -1985,6 +2678,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
+        jobOps.applyOriginal(job);
         setLastJobId(resumeJob.jobId);
         setHasTranscript(job.has_transcript || false);
         onResumed();
@@ -2010,6 +2704,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
     setBusy(true);
     setLastJobId(null);
     setHasTranscript(false);
+    jobOps.reset();
     const k = kuerzel.trim().replace(/\.?$/, "."); // sicherstellen dass Punkt am Ende
     // v15 Bug F2: Keine Beispieltexte wie "die Klientin/Klient" mehr - das LLM
     // hat das frueher als Patientenbezeichnung uebernommen statt der Initialen.
@@ -2051,6 +2746,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
+      jobOps.applyOriginal(result);
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
       idbClearAudio().catch(() => {}); // Aufnahme nach Job-Start nicht mehr benötigt
@@ -2185,11 +2881,19 @@ function P1({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("In Zwischenablage kopiert"); }}
+          <ResultVersionsTabs
+            hasRepair={job.hasRepair}
+            active={job.activeVersion}
+            onChange={jobOps.setActiveVersion}
+            disabled={job.repairBusy}
+          />
+          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("In Zwischenablage kopiert"); }}
             extraButtons={hasTranscript ? [
               { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
             ] : []} />
+
+          <RepairBundle job={job} ops={jobOps} toast={toast} />
 
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
@@ -2197,6 +2901,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
                 setAudio(null); idbClearAudio().catch(() => {});
                 setTxtFile(null); setText(""); setBullets("");
                 setStyle(null); setStyleText(""); setOut(""); setOutWarn(null);
+                jobOps.reset();
                 setLastJobId(null); setHasTranscript(false);
                 toast("Formular zurückgesetzt");
               }}>+ Neue Verlaufsnotiz</button>
@@ -2223,6 +2928,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
   const [out, setOut]             = useState("");
   const [outWarn, setOutWarn]       = useState(null);
   const [befundOut, setBefundOut] = useState("");
+  const [job, jobOps]               = useJobResult();
   const [tab, setTab]             = useState("Anamnese");
   const [lastJobId, setLastJobId] = useState(null);
   const [hasTranscript, setHasTranscript] = useState(false);
@@ -2242,6 +2948,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
         setBefundOut(job.befund_text || "");
+        jobOps.applyOriginal(job);
         setLastJobId(resumeJob.jobId);
         setHasTranscript(job.has_transcript || false);
         onResumed();
@@ -2268,6 +2975,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
     setLastJobId(null);
     setHasTranscript(false);
     setBefundOut("");
+    jobOps.reset();
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
 
     const k = kuerzel.trim().replace(/\.?$/, ".");
@@ -2312,6 +3020,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
       setBefundOut(result.befundText || "");
+      jobOps.applyOriginal(result);
       setLastJobId(result.jobId);
       setHasTranscript(result.hasTranscript || false);
       idbClearAudio().catch(() => {}); // Aufnahme nach Job-Start nicht mehr benötigt
@@ -2439,18 +3148,34 @@ function P2({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={tab === "Anamnese" ? out : befundOut} loading={busy} jobId={currentJobId}
+          <ResultVersionsTabs
+            hasRepair={job.hasRepair}
+            active={job.activeVersion}
+            onChange={jobOps.setActiveVersion}
+            disabled={job.repairBusy}
+          />
+          <Output
+            text={
+              job.hasRepair
+                ? (tab === "Anamnese" ? job.text : job.befundText)
+                : (tab === "Anamnese" ? out : befundOut)
+            }
+            loading={busy} jobId={currentJobId}
             warn={tab === "Anamnese" ? outWarn : (befundOut ? null : outWarn)}
             tabs={["Anamnese", "Psych. Befund"]}
             activeTab={tab} onTab={setTab}
             onCopy={() => {
-              const t = tab === "Anamnese" ? out : befundOut;
+              const t = job.hasRepair
+                ? (tab === "Anamnese" ? job.text : job.befundText)
+                : (tab === "Anamnese" ? out : befundOut);
               navigator.clipboard.writeText(t);
               toast("Kopiert");
             }}
             extraButtons={hasTranscript ? [
               { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
             ] : []} />
+
+          <RepairBundle job={job} ops={jobOps} toast={toast} />
 
           {(out || befundOut) && (
             <div style={{marginTop:12, textAlign:"right"}}>
@@ -2459,6 +3184,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
                 setTxtFile(null);
                 setText(""); setDx([]); setStyle(null); setStyleText("");
                 setOut(""); setBefundOut(""); setOutWarn(null);
+                jobOps.reset();
                 setLastJobId(null); setHasTranscript(false);
                 toast("Formular zurückgesetzt");
               }}>+ Neue Anamnese</button>
@@ -2485,6 +3211,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
   const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
   const [outWarn, setOutWarn]       = useState(null);
+  const [job, jobOps]               = useJobResult();
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -2498,6 +3225,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; }
         setOut(job.result_text || "");
+        jobOps.applyOriginal(job);
         setLastJobId(resumeJob.jobId);
         onResumed();
       })
@@ -2521,6 +3249,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
     abortRef.current = ac;
     setBusy(true);
     setOut(""); setOutWarn(null);
+    jobOps.reset();
     setLastJobId(null);
     try {
       let patientNameExplicit = null;
@@ -2543,6 +3272,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
+      jobOps.applyOriginal(result);
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -2638,14 +3368,23 @@ function P2b({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
+          <ResultVersionsTabs
+            hasRepair={job.hasRepair}
+            active={job.activeVersion}
+            onChange={jobOps.setActiveVersion}
+            disabled={job.repairBusy}
+          />
+          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+
+          <RepairBundle job={job} ops={jobOps} toast={toast} />
 
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setAntrag(null); setStyle(null); setStyleText("");
                 setFokus(""); setPrompt(P_AKUT); setOut(""); setOutWarn(null); setLastJobId(null);
+                jobOps.reset();
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Akutantrag</button>
             </div>
@@ -2670,6 +3409,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
   const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
   const [outWarn, setOutWarn]       = useState(null);
+  const [job, jobOps]               = useJobResult();
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -2684,6 +3424,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
+        jobOps.applyOriginal(job);
         setLastJobId(resumeJob.jobId);
         onResumed();
       })
@@ -2707,6 +3448,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
     abortRef.current = ac;
     setBusy(true);
     setOut(""); setOutWarn(null);
+    jobOps.reset();
     setLastJobId(null);
     try {
       // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
@@ -2732,6 +3474,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
+      jobOps.applyOriginal(result);
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -2806,14 +3549,23 @@ function P3({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
+          <ResultVersionsTabs
+            hasRepair={job.hasRepair}
+            active={job.activeVersion}
+            onChange={jobOps.setActiveVersion}
+            disabled={job.repairBusy}
+          />
+          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+
+          <RepairBundle job={job} ops={jobOps} toast={toast} />
 
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setAntrag(null); setStyle(null); setStyleText("");
                 setFokus(""); setPrompt(P_VERL); setOut(""); setOutWarn(null); setLastJobId(null);
+                jobOps.reset();
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Verlängerungsantrag</button>
             </div>
@@ -2844,6 +3596,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
   const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
   const [outWarn, setOutWarn]       = useState(null);
+  const [job, jobOps]               = useJobResult();
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -2857,6 +3610,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; }
         setOut(job.result_text || "");
+        jobOps.applyOriginal(job);
         setLastJobId(resumeJob.jobId);
         onResumed();
       })
@@ -2880,6 +3634,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
     abortRef.current = ac;
     setBusy(true);
     setOut(""); setOutWarn(null);
+    jobOps.reset();
     setLastJobId(null);
     try {
       let patientNameExplicit = null;
@@ -2904,6 +3659,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
+      jobOps.applyOriginal(result);
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -3009,8 +3765,16 @@ function P3b({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
+          <ResultVersionsTabs
+            hasRepair={job.hasRepair}
+            active={job.activeVersion}
+            onChange={jobOps.setActiveVersion}
+            disabled={job.repairBusy}
+          />
+          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+
+          <RepairBundle job={job} ops={jobOps} toast={toast} />
 
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
@@ -3018,6 +3782,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
                 setVerlauf(null); setAntrag(null); setVorantrag(null);
                 setStyle(null); setStyleText("");
                 setFokus(""); setPrompt(P_VERL_FOLGE); setOut(""); setOutWarn(null); setLastJobId(null);
+                jobOps.reset();
                 toast("Formular zurückgesetzt");
               }}>+ Neue Folgeverlängerung</button>
             </div>
@@ -3042,6 +3807,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
   const [kuerzel, setKuerzel]       = useState("");
   const [out, setOut]             = useState("");
   const [outWarn, setOutWarn]       = useState(null);
+  const [job, jobOps]               = useJobResult();
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
@@ -3056,6 +3822,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
       .then(job => {
         if (!job) { setBusy(false); onResumed(); return; } // cancelled
         setOut(job.result_text || "");
+        jobOps.applyOriginal(job);
         setLastJobId(resumeJob.jobId);
         onResumed();
       })
@@ -3079,6 +3846,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
     abortRef.current = ac;
     setBusy(true);
     setOut(""); setOutWarn(null);
+    jobOps.reset();
     setLastJobId(null);
     try {
       // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
@@ -3103,6 +3871,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
       if (!result) { setBusy(false); setCurrentJobId(null); return; }
       setOut(result.text || "");
       setOutWarn(getEmptyWarning(result.text));
+      jobOps.applyOriginal(result);
       setLastJobId(result.jobId);
     }
     catch (e) { setOut("Fehler: " + friendlyError(e)); }
@@ -3177,14 +3946,23 @@ function P4({ toast, resumeJob, onResumed, model }) {
             }
           </div>
 
-          <Output text={out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(out); toast("Kopiert"); }} />
+          <ResultVersionsTabs
+            hasRepair={job.hasRepair}
+            active={job.activeVersion}
+            onChange={jobOps.setActiveVersion}
+            disabled={job.repairBusy}
+          />
+          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+
+          <RepairBundle job={job} ops={jobOps} toast={toast} />
 
           {out && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setBericht(null); setStyle(null); setStyleText("");
                 setFokus(""); setPrompt(P_ENTL); setOut(""); setOutWarn(null); setLastJobId(null);
+                jobOps.reset();
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Entlassbericht</button>
             </div>

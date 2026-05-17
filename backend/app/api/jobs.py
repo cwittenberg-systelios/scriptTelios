@@ -28,6 +28,14 @@ from app.services.llm import (
 from app.services.verlauf_summary import summarize_verlauf
 from app.services.transcript_summary import summarize_transcript
 from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
+from app.services.quality_check import (
+    QualityIssue,
+    SEVERITY_CRITICAL,
+    SEVERITY_WARNING,
+    build_repair_prompt,
+    deserialize_issues,
+    sanitize_for_repair_prompt,
+)
 from app.services.staging import (
     STAGE1_VERLAUF_WORKFLOWS,
     STAGE1_VERLAUF_MIN_WORDS,
@@ -284,6 +292,262 @@ async def stream_job(job_id: str):
 async def list_jobs():
     """Listet alle Jobs auf (neueste zuerst)."""
     return [j.to_dict() for j in job_queue.get_all_jobs()[:50]]
+
+
+# ── v19 Phase C: Therapeut-in-the-Loop Repair ──────────────────────────────────
+#
+# Zwei Endpoints + ein schlanker Coroutine-Builder:
+#   POST /jobs/{id}/repair/preview - baut den final_prompt, gibt ihn ans UI
+#   POST /jobs/{id}/repair         - startet den Repair-Job (Background-Task)
+#   _run_repair_coroutine          - der eigentliche LLM-Call (eine Phase, kein
+#                                    Transcribing, kein PDF-Extract, kein
+#                                    Stage 1 - alle Inputs stehen schon im
+#                                    final_prompt)
+#
+# Datenmodell-Recap (siehe app/models/db.py + scripts/schema.sql):
+#   - Repair-Job ist ein vollwertiger Eintrag in der jobs-Tabelle.
+#   - jobs.parent_job_id    -> direkter Vorgaenger (FK ohne CASCADE)
+#   - jobs.repair_input_json -> Audit-Snapshot der Therapeut-Eingaben
+
+from app.models.schemas import (
+    QualityIssueResponse,
+    RepairPreviewRequest,
+    RepairPreviewResponse,
+    RepairRequest,
+    RepairResponse,
+)
+from app.services.quality_check import combined_result_text
+from app.services.prompts import ROLE_PREAMBLE
+from app.core.workflows import max_tokens_for
+
+
+def _split_anamnese_concat(workflow: str, full_text: str) -> tuple[str, Optional[str]]:
+    """Spiegelbild zu combined_result_text: trennt einen verketteten Anamnese-
+    Output am ###BEFUND###-Marker. Fuer andere Workflows: kein Splitting.
+
+    Returns (anamnese_or_full_text, befund_text_or_None).
+    """
+    if workflow != "anamnese" or "###BEFUND###" not in (full_text or ""):
+        return (full_text or "", None)
+    parts = full_text.split("###BEFUND###", 1)
+    anamnese_part = parts[0].strip()
+    befund_part = parts[1].strip() if len(parts) > 1 else ""
+    return (anamnese_part, befund_part or None)
+
+
+async def _resolve_parent_job(job_id: str) -> dict:
+    """Laedt einen Job aus Cache oder DB. Wirft 404 bei Fehlen.
+
+    Bewusst NICHT current_user-scoped - der Memory-Store ist global, und das
+    Backend hat keinen multi-tenant-Filter. Das passt zum bisherigen Verhalten
+    von get_job/cancel_job. Falls Multi-Tenancy spaeter kommt, hier ist die
+    Stelle wo der Check rein muss."""
+    cached = job_queue.get_job(job_id)
+    if cached:
+        return cached.to_dict()
+    from_db = await job_queue.get_job_from_db(job_id)
+    if from_db:
+        return from_db
+    raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
+
+
+def _build_repair_context(parent: dict, req_codes: list[str], req_hint: str):
+    """Geteilte Logik von preview + execute:
+      - validiert dass parent.status=done und result_text vorhanden
+      - liest QC, filtert akzeptierte Issues, validiert dass alle Codes existieren
+      - baut den verketteten Original-Text (Anamnese Two-Stage-Case)
+      - baut den final_prompt
+    Returns: (workflow, original_text, accepted_issues, final_prompt)
+    Wirft HTTPException(400|422) bei Validierungsfehlern.
+    """
+    if parent.get("status") != "done":
+        raise HTTPException(
+            status_code=400,
+            detail="Repair nur fuer abgeschlossene Jobs (status=done)",
+        )
+    workflow = parent.get("workflow")
+    result_text = parent.get("result_text") or ""
+    befund_text = parent.get("befund_text") or ""
+    if not result_text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Original-Job hat keinen result_text - Repair nicht moeglich",
+        )
+
+    qc_data = parent.get("quality_check") or {}
+    all_issues = deserialize_issues(qc_data)
+    known_codes = {i.code for i in all_issues}
+
+    accepted_codes_set = set(req_codes)
+    unknown = sorted(accepted_codes_set - known_codes)
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "msg": "Unbekannte Issue-Codes (nicht im QC des Parent-Jobs)",
+                "unknown_codes": unknown,
+                "known_codes": sorted(known_codes),
+            },
+        )
+
+    accepted_issues = [i for i in all_issues if i.code in accepted_codes_set]
+    original_for_prompt = combined_result_text(workflow, result_text, befund_text)
+    final_prompt = build_repair_prompt(
+        workflow, original_for_prompt, accepted_issues, req_hint or "",
+    )
+    return workflow, original_for_prompt, accepted_issues, final_prompt
+
+
+@router.post("/jobs/{job_id}/repair/preview", response_model=RepairPreviewResponse)
+async def repair_preview(
+    job_id: str,
+    req: RepairPreviewRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """Baut den final_prompt fuer den Repair-Job, sendet ihn ans UI.
+
+    Kein Side-Effect: erzeugt keinen Job, schreibt nicht in DB. Reine
+    Vorschau-Funktion, damit der Therapeut den Prompt vor Versand pruefen
+    kann."""
+    parent = await _resolve_parent_job(job_id)
+    workflow, _original, accepted_issues, final_prompt = _build_repair_context(
+        parent, req.accepted_issue_codes, req.user_hint,
+    )
+    return RepairPreviewResponse(
+        final_prompt=final_prompt,
+        accepted_issues=[
+            QualityIssueResponse(
+                code=i.code, severity=i.severity, message=i.message,
+                repair_hint=i.repair_hint, code_detail=i.code_detail or {},
+            ) for i in accepted_issues
+        ],
+        user_hint_sanitized=sanitize_for_repair_prompt(req.user_hint),
+    )
+
+
+async def _run_repair_coroutine(
+    job,            # JobState - Forward-Reference (kein circular import)
+    workflow: str,
+    final_prompt: str,
+    model_override: Optional[str] = None,
+) -> dict:
+    """Schlanker Repair-Run: ein einziger LLM-Call, kein Transcribing,
+    kein PDF-Extract, kein Stage 1.
+
+    Returns ein dict mit den gleichen Keys wie der normale _run-Output:
+      text, befund_text (None ausser anamnese), model_used,
+      generation_telemetry, verlauf_summary_audit (immer None).
+    """
+    job.set_progress(15, "Repair", "Modell denkt")
+    max_tok = max_tokens_for(workflow)
+
+    def _on_tok(p):
+        try:
+            ratio = float(p.get("ratio") or 0)
+            job.set_progress(
+                min(95, int(15 + ratio * 80)),
+                "Repair",
+                f"{p.get('count', 0)} Tokens",
+            )
+        except Exception:
+            pass
+
+    result = await generate_text(
+        ROLE_PREAMBLE,
+        final_prompt,
+        max_tokens=max_tok,
+        model=model_override,
+        workflow=workflow,
+        on_progress=_on_tok,
+    )
+
+    raw = (result.get("text") or "").strip()
+
+    # Wenn Anamnese-Workflow und der Output enthaelt ###BEFUND###:
+    # in zwei Felder splitten (analog zur normalen Pipeline). Frontend zeigt
+    # dann Tabs Anamnese/Befund - genauso wie beim originalen Job.
+    anamnese_part, befund_part = _split_anamnese_concat(workflow, raw)
+
+    tel = result.get("telemetry") or {}
+    return {
+        "text":        anamnese_part,
+        "befund_text": befund_part,
+        "akut_text":   None,
+        "model_used":  result.get("model_used"),
+        "generation_telemetry": {
+            **tel,
+            "retry_used":      result.get("retry_used", False),
+            "degraded":        result.get("degraded", False),
+            "degraded_reason": result.get("degraded_reason"),
+            "repair_run":      True,  # Marker fuer perf_log
+        },
+        # Stage 1 laeuft beim Repair definitiv nicht:
+        "verlauf_summary_text":  None,
+        "verlauf_summary_audit": None,
+    }
+
+
+@router.post("/jobs/{job_id}/repair", response_model=RepairResponse)
+async def repair_execute(
+    job_id: str,
+    req: RepairRequest,
+    background_tasks: BackgroundTasks,
+    current_user: str = Depends(get_current_user),
+):
+    """Startet einen Repair-Job. Synchroner Response: Job-ID, dann normal
+    via /jobs/{repair_id} pollen."""
+    parent = await _resolve_parent_job(job_id)
+
+    # custom_final_prompt erlaubt dem UI, den Preview-Prompt zu editieren
+    # bevor er ans Modell geht. Wenn gesetzt: damit den Re-Build ueberspringen
+    # und exakt diesen Prompt verwenden.
+    if req.custom_final_prompt:
+        # accepted_issue_codes + user_hint trotzdem validieren (Audit),
+        # aber den Prompt selbst nicht neu bauen.
+        workflow = parent.get("workflow")
+        if not workflow:
+            raise HTTPException(400, "Parent-Job hat keinen Workflow")
+        if parent.get("status") != "done":
+            raise HTTPException(
+                400, "Repair nur fuer abgeschlossene Jobs (status=done)",
+            )
+        final_prompt = req.custom_final_prompt
+        custom_used = True
+    else:
+        workflow, _original, _accepted, final_prompt = _build_repair_context(
+            parent, req.accepted_issue_codes, req.user_hint,
+        )
+        custom_used = False
+
+    repair_input = {
+        "accepted_issue_codes":     list(req.accepted_issue_codes),
+        "user_hint":                sanitize_for_repair_prompt(req.user_hint or ""),
+        "final_prompt":             final_prompt,
+        "custom_final_prompt_used": custom_used,
+    }
+    job = job_queue.create_repair_job(
+        parent_job_id=job_id,
+        workflow=workflow,
+        description=f"Repair von {job_id[:8]}",
+        repair_input=repair_input,
+    )
+
+    # Modell: vererben aus Parent (Konsistenz: Repair laeuft mit demselben
+    # Modell wie das Original). Kann durch Settings ueberschrieben werden.
+    model_override = parent.get("model_used")
+
+    async def _coro():
+        return await _run_repair_coroutine(
+            job, workflow, final_prompt, model_override=model_override,
+        )
+
+    background_tasks.add_task(job_queue.run_job, job, _coro())
+
+    return RepairResponse(
+        repair_job_id=job.job_id,
+        parent_job_id=job_id,
+        workflow=workflow,
+    )
 
 
 # ── Asynchrone Generierung ────────────────────────────────────────────────────

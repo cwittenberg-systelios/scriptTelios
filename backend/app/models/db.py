@@ -82,14 +82,35 @@ class Job(Base):
     verlauf_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     verlauf_summary_audit: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=True)
 
+    # v19 Phase 1: QualityCheck-Ergebnis fuer den finalen result_text.
+    # Format siehe app/services/quality_check.py::serialize_issues:
+    #   {"version": 1, "workflow": ..., "issues": [...], "summary": {...}}
+    # NULL = Job aus Pre-v19-Zeit oder Job ohne fertigen result_text.
+    quality_check_json: Mapped[dict | None] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+
+    # v19 Phase C: Repair-Beziehung. Ein Repair-Job ist ein vollwertiger
+    # Eintrag in der Queue, hat aber einen Verweis auf den Original-Job.
+    #   - parent_job_id:    FK auf jobs.id (indiziert, nullable). Bei mehreren
+    #                       Repair-Runden zeigt es auf den DIREKTEN Vorgaenger.
+    #   - repair_input_json: Snapshot des Therapeuten-Inputs zum Audit:
+    #                       {accepted_issue_codes, user_hint, final_prompt}
+    parent_job_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    repair_input_json: Mapped[dict | None] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=True
+    )
+
 
 class Recording(Base):
     """
     P0-Aufnahme: Audiodatei + Transkript, persistent auf /workspace/recordings.
     Löschung läuft über externe Datenschutz-Prozesse (deleted_at Soft-Delete).
 
-    v18: therapeut_id hinzugefügt (Migration läuft automatisch via init_db_migrations
-    in database.py beim Server-Start). Jeder Therapeut sieht nur eigene Aufnahmen.
+    v18: therapeut_id hinzugefügt (Migration läuft automatisch beim
+    Server-Start via scripts/schema.sql). Jeder Therapeut sieht nur eigene Aufnahmen.
     Audio-Datei wird nach 24h gelöscht (retention.py), Transkript bleibt in DB.
     """
 

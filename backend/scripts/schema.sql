@@ -134,9 +134,34 @@ ALTER TABLE jobs
 ALTER TABLE jobs
     ADD COLUMN IF NOT EXISTS verlauf_summary_audit JSONB;
 
+-- v19 Phase 1: QualityCheck-Ergebnis fuer den finalen result_text.
+-- Format siehe app/services/quality_check.py::serialize_issues:
+--   {"version": 1, "workflow": ..., "issues": [...], "summary": {...}}
+-- NULL fuer Pre-v19-Jobs oder Jobs die keinen Text generiert haben.
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS quality_check_json JSONB;
+
+-- v19 Phase C: Therapeut-in-the-Loop Repair.
+-- parent_job_id:     FK auf jobs.id (DIREKTER Vorgaenger bei mehreren Runden).
+--                    Bewusst KEIN harter FK-Constraint - Repair-Jobs sollen
+--                    auch erhalten bleiben wenn Parent geretained/geloescht
+--                    wurde. Cascade-Verhalten regelt retention.py.
+-- repair_input_json: Snapshot des Therapeuten-Inputs fuer Audit:
+--                    {accepted_issue_codes, user_hint, final_prompt,
+--                     custom_final_prompt_used (bool)}
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS parent_job_id VARCHAR(36);
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS repair_input_json JSONB;
+
 -- ── D. Indizes ─────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS ix_jobs_workflow         ON jobs (workflow);
 CREATE INDEX IF NOT EXISTS ix_jobs_status           ON jobs (status);
+
+-- v19 Phase C: Drill-down "alle Repairs zu Job X". Partieller Index spart
+-- Platz, weil >95% der Jobs keinen Parent haben.
+CREATE INDEX IF NOT EXISTS ix_jobs_parent_job_id
+    ON jobs (parent_job_id) WHERE parent_job_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ix_recordings_status     ON recordings (status);
 CREATE INDEX IF NOT EXISTS ix_recordings_therapeut_id

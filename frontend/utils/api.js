@@ -90,7 +90,15 @@ export async function generate(workflow, prompt, userContent, files = {}, page =
   try {
     const job = await pollJob(jobId, 1200, _fetch);
     clearActiveJob();
-    return { text: job.result_text || "", jobId, hasTranscript: job.has_transcript || false };
+    return {
+      text:          job.result_text || "",
+      jobId,
+      hasTranscript: job.has_transcript || false,
+      // v19 Phase 1: QualityCheck-Bundle (kann null sein bei Pre-v19-Jobs
+      // oder wenn der Hook im Backend versagt hat - in beiden Faellen zeigt
+      // das Frontend einfach kein Panel an).
+      qualityCheck:  job.quality_check || null,
+    };
   } catch (e) {
     clearActiveJob();
     throw e;
@@ -110,6 +118,62 @@ export async function downloadTranscript(jobId, filename = "transkript.txt", _fe
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── Repair (v19 Phase C) ─────────────────────────────────────────────────────
+//
+// Konsistent zum generate()-Pattern: nur fuer Test-Symmetrie hier - das
+// Production-UI nutzt inline-Varianten in klinische-dokumentation.jsx
+// (mit window.signedFetch). Diese hier sind direkt-fetch-basiert und somit
+// einfach mit Mocks testbar.
+
+export async function repairPreview(jobId, acceptedCodes, userHint, _fetch = fetch) {
+  const r = await _fetch(
+    `${getApiBase()}/jobs/${encodeURIComponent(jobId)}/repair/preview`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accepted_issue_codes: acceptedCodes || [],
+        user_hint:            userHint || "",
+      }),
+    },
+  );
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    // Backend liefert 422 mit unknown_codes / 400 / 404 - alle informativ.
+    const detail = d.detail;
+    if (typeof detail === "object" && detail) {
+      throw new Error(detail.msg || JSON.stringify(detail));
+    }
+    throw new Error(detail || r.statusText);
+  }
+  return d;  // { final_prompt, accepted_issues, user_hint_sanitized }
+}
+
+export async function repair(jobId, acceptedCodes, userHint, customFinalPrompt = null, _fetch = fetch) {
+  const body = {
+    accepted_issue_codes: acceptedCodes || [],
+    user_hint:            userHint || "",
+  };
+  if (customFinalPrompt) body.custom_final_prompt = customFinalPrompt;
+  const r = await _fetch(
+    `${getApiBase()}/jobs/${encodeURIComponent(jobId)}/repair`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const detail = d.detail;
+    if (typeof detail === "object" && detail) {
+      throw new Error(detail.msg || JSON.stringify(detail));
+    }
+    throw new Error(detail || r.statusText);
+  }
+  return d;  // { repair_job_id, parent_job_id, workflow }
 }
 
 // ── Geschlecht-Hinweis ────────────────────────────────────────────────────────

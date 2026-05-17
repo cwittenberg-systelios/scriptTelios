@@ -20,7 +20,7 @@ Re-Exports:
 """
 from datetime import datetime
 from typing import Literal, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 # v13: WorkflowLiteral kommt jetzt aus dem zentralen Workflow-Modul.
 # Wir re-exportieren ihn hier, damit der bisherige Import-Pfad
@@ -79,3 +79,114 @@ class StyleEmbeddingListResponse(BaseModel):
     therapeut_id: str
     total: int
     embeddings: list[StyleEmbeddingInfo]
+
+
+# ── Repair (v19 Phase C) ──────────────────────────────────────────
+#
+# Drei Schemas:
+#   RepairPreviewRequest  - was das UI sendet, um den final_prompt zu bauen
+#   RepairPreviewResponse - der gebaute final_prompt + akzeptierte Issues
+#   RepairRequest         - Trigger fuer den Repair-Job; kann custom_final_prompt
+#                           setzen falls der Therapeut den Preview editiert hat.
+#
+# Validierungs-Pflichten (Plan-Anforderung):
+#   - user_hint:            max 500 Zeichen, keine Control-Chars ausser \n
+#   - accepted_issue_codes: max 20 Codes, jeder matched ^[A-Z_]+$
+#   - custom_final_prompt:  max 8000 Zeichen
+
+_ISSUE_CODE_RE = __import__("re").compile(r"^[A-Z_]+$")
+# Erlaubte Whitespace-Klassen im user_hint: nur Tab/Newline/Space.
+# Alle anderen Control-Chars werden rejected (Defense gegen Prompt-Injection
+# via U+200B Zero-Width-Spaces, NUL-Bytes, ANSI-Escape-Sequenzen etc.).
+_USER_HINT_CONTROL_RE = __import__("re").compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+
+
+def _validate_issue_codes(codes: list[str]) -> list[str]:
+    """Codes muessen ^[A-Z_]+$ matchen. Wirft ValueError mit Liste aller
+    invaliden Codes - damit das UI eine praezise Fehlermeldung zeigen kann."""
+    bad = [c for c in codes if not _ISSUE_CODE_RE.match(c or "")]
+    if bad:
+        raise ValueError(
+            f"Issue-Codes muessen ^[A-Z_]+$ matchen, ungueltig: {bad}"
+        )
+    return codes
+
+
+def _sanitize_user_hint(hint: str) -> str:
+    """Strippt Whitespace + entfernt Control-Chars (ausser \\n, \\t).
+
+    Tatsaechliche Marker-Strip (>>>, [INST], <|im_start|> etc.) passiert
+    spaeter in quality_check.build_repair_prompt() - dort liegt die
+    Anti-Injection-Verantwortung. Hier nur Basis-Saeuberung."""
+    if not hint:
+        return ""
+    stripped = hint.strip()
+    if _USER_HINT_CONTROL_RE.search(stripped):
+        raise ValueError("user_hint enthaelt unerlaubte Steuerzeichen")
+    return stripped
+
+
+class RepairPreviewRequest(BaseModel):
+    """POST /api/jobs/{job_id}/repair/preview - Body."""
+    accepted_issue_codes: list[str] = Field(default_factory=list, max_length=20)
+    user_hint:            str       = Field(default="", max_length=500)
+
+    @field_validator("accepted_issue_codes")
+    @classmethod
+    def _check_codes(cls, v: list[str]) -> list[str]:
+        return _validate_issue_codes(v)
+
+    @field_validator("user_hint")
+    @classmethod
+    def _check_hint(cls, v: str) -> str:
+        return _sanitize_user_hint(v)
+
+
+class QualityIssueResponse(BaseModel):
+    """Issue-Form wie im RepairPreviewResponse zurueckgegeben."""
+    code:        str
+    severity:    Literal["critical", "warning", "info"]
+    message:     str
+    repair_hint: str = ""
+    code_detail: dict = Field(default_factory=dict)
+
+
+class RepairPreviewResponse(BaseModel):
+    """POST /api/jobs/{job_id}/repair/preview - Response."""
+    final_prompt:       str
+    accepted_issues:    list[QualityIssueResponse]
+    user_hint_sanitized: str
+
+
+class RepairRequest(BaseModel):
+    """POST /api/jobs/{job_id}/repair - Body.
+
+    Wenn custom_final_prompt gesetzt:
+      Der Therapeut hat den Preview-Prompt im UI manuell editiert. Backend
+      verwendet exakt diesen Prompt statt selbst neu zu bauen. accepted_issue_codes
+      + user_hint werden trotzdem mitgesendet (fuer Audit-Log).
+
+    Wenn custom_final_prompt NULL:
+      Backend baut den Prompt frisch aus issue_codes + user_hint zusammen
+      (identisch zur Preview).
+    """
+    accepted_issue_codes: list[str] = Field(default_factory=list, max_length=20)
+    user_hint:            str       = Field(default="", max_length=500)
+    custom_final_prompt:  Optional[str] = Field(default=None, max_length=8000)
+
+    @field_validator("accepted_issue_codes")
+    @classmethod
+    def _check_codes(cls, v: list[str]) -> list[str]:
+        return _validate_issue_codes(v)
+
+    @field_validator("user_hint")
+    @classmethod
+    def _check_hint(cls, v: str) -> str:
+        return _sanitize_user_hint(v)
+
+
+class RepairResponse(BaseModel):
+    """POST /api/jobs/{job_id}/repair - Response (synchron, Job ist async)."""
+    repair_job_id:  str
+    parent_job_id:  str
+    workflow:       str

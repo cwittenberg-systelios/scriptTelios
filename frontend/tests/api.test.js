@@ -15,6 +15,8 @@ import {
   pollJob,
   generate,
   buildGeschlechtHinweis,
+  repairPreview,
+  repair,
   JOB_STORAGE_KEY,
 } from "../utils/api.js";
 
@@ -302,6 +304,45 @@ describe("generate()", () => {
     expect(result.hasTranscript).toBe(true);
   });
 
+  test("reicht quality_check aus Backend-Job-Response als qualityCheck durch", async () => {
+    // v19 Phase 1: Backend liefert quality_check (snake_case), generate()
+    // exponiert es als qualityCheck (camelCase, konsistent mit hasTranscript/jobId).
+    const qc = {
+      version: 1,
+      workflow: "anamnese",
+      issues: [
+        { code: "LENGTH_TOO_SHORT", severity: "warning",
+          message: "zu kurz", repair_hint: "erweitern" },
+      ],
+      summary: { critical: 0, warning: 1, info: 0, total: 1 },
+    };
+    const mockFetch = mockFetchSequence(
+      jsonResponse({ job_id: "job-qc-1" }),
+      jsonResponse({
+        status: "done",
+        result_text: "kurzer Text",
+        has_transcript: false,
+        quality_check: qc,
+      })
+    );
+    const p = generate("anamnese", "p", "t", {}, null, mockFetch);
+    await jest.runAllTimersAsync();
+    const result = await p;
+    expect(result.qualityCheck).toEqual(qc);
+  });
+
+  test("liefert qualityCheck=null wenn Backend kein quality_check hat", async () => {
+    // Defensive: Pre-v19-Jobs oder QC-Hook-Fehler liefern kein Feld.
+    const mockFetch = mockFetchSequence(
+      jsonResponse({ job_id: "job-qc-2" }),
+      jsonResponse({ status: "done", result_text: "X", has_transcript: false })
+    );
+    const p = generate("dokumentation", "p", "t", {}, null, mockFetch);
+    await jest.runAllTimersAsync();
+    const result = await p;
+    expect(result.qualityCheck).toBeNull();
+  });
+
   test("speichert Job-ID in localStorage während Polling läuft", async () => {
     let resolveJob;
     const jobDone = new Promise(res => { resolveJob = res; });
@@ -356,5 +397,175 @@ describe("generate()", () => {
     const p = generate("dokumentation", "p", "t", {}, null, mockFetch);
     await jest.runAllTimersAsync();
     await expect(p).rejects.toThrow("Service Unavailable");
+  });
+});
+
+// ── repairPreview() (v19 Phase C) ─────────────────────────────────────────────
+
+describe("repairPreview()", () => {
+  test("POSTet codes + hint, gibt final_prompt zurueck", async () => {
+    const mockFetch = jest.fn(() => Promise.resolve(jsonResponse({
+      final_prompt: "Repair Prompt Body",
+      accepted_issues: [
+        { code: "LENGTH_TOO_SHORT", severity: "warning",
+          message: "zu kurz", repair_hint: "erweitern" },
+      ],
+      user_hint_sanitized: "Bitte besser.",
+    })));
+    const r = await repairPreview(
+      "parent-1", ["LENGTH_TOO_SHORT"], "Bitte besser.", mockFetch,
+    );
+    expect(r.final_prompt).toBe("Repair Prompt Body");
+    expect(r.accepted_issues).toHaveLength(1);
+
+    // Body wurde korrekt gebaut
+    const call = mockFetch.mock.calls[0];
+    expect(call[0]).toMatch(/\/jobs\/parent-1\/repair\/preview$/);
+    expect(call[1].method).toBe("POST");
+    const body = JSON.parse(call[1].body);
+    expect(body.accepted_issue_codes).toEqual(["LENGTH_TOO_SHORT"]);
+    expect(body.user_hint).toBe("Bitte besser.");
+  });
+
+  test("wirft Fehler bei 404", async () => {
+    const mockFetch = jest.fn(() => Promise.resolve({
+      ok: false, status: 404, statusText: "Not Found",
+      json: () => Promise.resolve({ detail: "Job 'x' nicht gefunden" }),
+    }));
+    await expect(
+      repairPreview("missing", [], "", mockFetch)
+    ).rejects.toThrow("Job 'x' nicht gefunden");
+  });
+
+  test("wirft Fehler bei 422 mit unknown_codes", async () => {
+    const mockFetch = jest.fn(() => Promise.resolve({
+      ok: false, status: 422, statusText: "Unprocessable Entity",
+      json: () => Promise.resolve({
+        detail: {
+          msg: "Unbekannte Issue-Codes",
+          unknown_codes: ["FOO_BAR"],
+          known_codes: ["LENGTH_TOO_SHORT"],
+        },
+      }),
+    }));
+    await expect(
+      repairPreview("p", ["FOO_BAR"], "", mockFetch)
+    ).rejects.toThrow("Unbekannte Issue-Codes");
+  });
+
+  test("URL-encodet die jobId", async () => {
+    const mockFetch = jest.fn(() => Promise.resolve(jsonResponse({
+      final_prompt: "p", accepted_issues: [], user_hint_sanitized: "",
+    })));
+    await repairPreview("with/slash", [], "", mockFetch);
+    const url = mockFetch.mock.calls[0][0];
+    expect(url).toContain("/jobs/with%2Fslash/repair/preview");
+  });
+
+  test("Defaults: leere codes + leerer hint", async () => {
+    const mockFetch = jest.fn(() => Promise.resolve(jsonResponse({
+      final_prompt: "p", accepted_issues: [], user_hint_sanitized: "",
+    })));
+    await repairPreview("p", null, null, mockFetch);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.accepted_issue_codes).toEqual([]);
+    expect(body.user_hint).toBe("");
+  });
+});
+
+
+// ── repair() (v19 Phase C) ────────────────────────────────────────────────────
+
+describe("repair()", () => {
+  test("happy path: triggert Job + pollt bis done", async () => {
+    const mockFetch = mockFetchSequence(
+      jsonResponse({
+        repair_job_id: "repair-1",
+        parent_job_id: "parent-x",
+        workflow: "anamnese",
+      }),
+      jsonResponse({
+        status: "done",
+        result_text: "Repariert.",
+        befund_text: "Befund repariert.",
+        quality_check: {
+          version: 1, issues: [],
+          summary: { critical: 0, warning: 0, info: 0, total: 0 },
+        },
+      })
+    );
+    const p = repair("parent-x", ["LENGTH_TOO_SHORT"], "", null, mockFetch);
+    await jest.runAllTimersAsync();
+    const r = await p;
+    expect(r.text).toBe("Repariert.");
+    expect(r.befundText).toBe("Befund repariert.");
+    expect(r.jobId).toBe("repair-1");
+    expect(r.parentJobId).toBe("parent-x");
+    expect(r.qualityCheck.summary.total).toBe(0);
+  });
+
+  test("sendet custom_final_prompt wenn gesetzt", async () => {
+    const mockFetch = mockFetchSequence(
+      jsonResponse({
+        repair_job_id: "r-1", parent_job_id: "p-1", workflow: "anamnese",
+      }),
+      jsonResponse({ status: "done", result_text: "x" })
+    );
+    const p = repair("p-1", [], "", "MEIN EIGENER PROMPT", mockFetch);
+    await jest.runAllTimersAsync();
+    await p;
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.custom_final_prompt).toBe("MEIN EIGENER PROMPT");
+  });
+
+  test("OHNE custom_final_prompt wird Feld weggelassen", async () => {
+    const mockFetch = mockFetchSequence(
+      jsonResponse({
+        repair_job_id: "r-1", parent_job_id: "p-1", workflow: "anamnese",
+      }),
+      jsonResponse({ status: "done", result_text: "x" })
+    );
+    const p = repair("p-1", ["X_CODE"], "h", null, mockFetch);
+    await jest.runAllTimersAsync();
+    await p;
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.custom_final_prompt).toBeUndefined();
+    expect(body.accepted_issue_codes).toEqual(["X_CODE"]);
+    expect(body.user_hint).toBe("h");
+  });
+
+  test("liefert null wenn polling 'cancelled' meldet", async () => {
+    const mockFetch = mockFetchSequence(
+      jsonResponse({
+        repair_job_id: "r-1", parent_job_id: "p-1", workflow: "anamnese",
+      }),
+      jsonResponse({ status: "cancelled" })
+    );
+    const p = repair("p-1", [], "", null, mockFetch);
+    await jest.runAllTimersAsync();
+    const r = await p;
+    expect(r).toBeNull();
+  });
+
+  test("propagiert Job-Error im polling", async () => {
+    const mockFetch = mockFetchSequence(
+      jsonResponse({
+        repair_job_id: "r-1", parent_job_id: "p-1", workflow: "anamnese",
+      }),
+      jsonResponse({ status: "error", error_msg: "LLM hat versagt" })
+    );
+    const p = repair("p-1", [], "", null, mockFetch);
+    await jest.runAllTimersAsync();
+    await expect(p).rejects.toThrow("LLM hat versagt");
+  });
+
+  test("wirft Fehler bei 400 vom Repair-Endpoint", async () => {
+    const mockFetch = jest.fn(() => Promise.resolve({
+      ok: false, status: 400, statusText: "Bad Request",
+      json: () => Promise.resolve({ detail: "Repair nur fuer abgeschlossene Jobs" }),
+    }));
+    await expect(
+      repair("p", [], "", null, mockFetch)
+    ).rejects.toThrow("Repair nur fuer abgeschlossene Jobs");
   });
 });
