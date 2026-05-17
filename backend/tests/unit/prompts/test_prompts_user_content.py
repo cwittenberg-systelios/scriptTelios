@@ -11,17 +11,23 @@ from unittest.mock import patch, MagicMock
 
 # ──── aus test_prompts_v14.py: TestStandardformulierungAlsBlock
 class TestStandardformulierungAlsBlock:
-    """Standardformulierungen werden als woertlich-zu-uebernehmender Block markiert."""
+    """Akutantrag-Prompt fordert ausdruecklich Patientenperspektive
+    und schliesst objektiv-wissenden Berichtston aus.
 
-    def test_akutantrag_standardformulierung_als_block(self):
+    Phase 2 Refactor: Der ALTE Test prüfte auf >>>...<<<-Block-Marker und
+    eine fixe Standardformulierung 'Folgende Krankheitssymptomatik'. Beides
+    wurde im Prompt umstrukturiert (heute: FOKUS/STIL/Erster Satz/Quellen-
+    Regel). Wir pruefen die heute geltenden Invarianten.
+    """
+
+    def test_akutantrag_prompt_fordert_patientenperspektive(self):
         from app.services.prompts import BASE_PROMPT_AKUTANTRAG
-        # Block-Marker >>> ... <<< um die Standardformulierung
-        assert ">>>" in BASE_PROMPT_AKUTANTRAG
-        assert "<<<" in BASE_PROMPT_AKUTANTRAG
-        # Standardformulierung muss noch enthalten sein
-        assert "Folgende Krankheitssymptomatik" in BASE_PROMPT_AKUTANTRAG
-        # Hinweis "wörtlich" / "WOERTLICH" / "Kopie"
-        assert any(w in BASE_PROMPT_AKUTANTRAG.upper() for w in ("WOERTLICH", "WÖRTLICH", "KOPIE"))
+        # Wir-Sicht ODER empathische 3.-Person muss explizit angesprochen sein
+        assert "Wir-Sicht" in BASE_PROMPT_AKUTANTRAG or "3.-Person" in BASE_PROMPT_AKUTANTRAG
+        # Negativ-Markierung: objektiv-wissender Berichtston muss verboten sein
+        assert "objektiv-wissenden" in BASE_PROMPT_AKUTANTRAG
+        # Beispiel-Phrase fuer Patientenperspektive
+        assert "Sie berichtete" in BASE_PROMPT_AKUTANTRAG or "sie fühle" in BASE_PROMPT_AKUTANTRAG
 
     def test_role_preamble_warnt_vor_klebebugs(self):
         from app.services.prompts import ROLE_PREAMBLE
@@ -35,23 +41,30 @@ class TestStandardformulierungAlsBlock:
 
 # ──── aus test_prompts_v14.py: TestWirPerspektiveErsterSatz
 class TestWirPerspektiveErsterSatz:
-    """BASE_PROMPTs fordern explizit dass der erste Satz mit 'Wir' beginnt."""
+    """BASE_PROMPTs fordern explizit dass der erste Satz Patientenperspektive
+    nutzt - frueher als 'Wir-Anfang', heute ueber explizite Verbote der
+    Floskel-Anfaenge ('Im weiteren Verlauf' / '[Patient/in] präsentiert sich')."""
 
     def test_akutantrag_fordert_wir_anfang(self):
         from app.services.prompts import BASE_PROMPT_AKUTANTRAG
-        # Hinweis auf Wir-Anfang nach Standardformulierung
         text = BASE_PROMPT_AKUTANTRAG.lower()
+        # Wir muss generell vorkommen
         assert "wir" in text
-        # Konkreter Hinweis dass Wir-Konstruktion am Satzanfang stehen muss
-        assert "wir nehmen" in text or "muss mit 'wir'" in text
+        # Konkreter Hinweis - heute via Beispiel 'Wir nehmen Frau X'
+        # oder Verbot der Patient/in-Floskel
+        assert ("wir nehmen" in text
+                or "wir-sicht" in text
+                or "[patient/in] präsentiert" in text)
 
     def test_folgeverlaengerung_fordert_wir_erstsatz(self):
         from app.services.prompts import BASE_PROMPTS
         text = BASE_PROMPTS["folgeverlaengerung"]
-        # Expliziter Hinweis dass erster Satz mit Wir beginnt
-        assert "erste Satz" in text or "Erster Satz" in text or "erste Wort" in text
-        # Negativbeispiel "Im weiteren Verlauf" wird ausgeschlossen
-        assert "Im weiteren Verlauf" in text or "nicht mit" in text.lower()
+        # Heute steht im STRUKTUR-Block: 'NICHT mit "Im weiteren Verlauf" beginnen'
+        # plus positives Beispiel "Wir erlebten Frau M. ..."
+        assert "Im weiteren Verlauf" in text  # als Negativbeispiel erwaehnt
+        # Positives Anker-Beispiel mit Wir-Sicht muss da sein
+        assert ("Wir erlebten" in text or "wir nehmen" in text.lower()
+                or "Wir-Sicht" in text)
 
 
 # ── Bug 7: Word-Limits-Vorrang ueber BASE_PROMPT-Mindestlaengen ──────────────

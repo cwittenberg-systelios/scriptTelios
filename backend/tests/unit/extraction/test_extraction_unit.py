@@ -326,7 +326,9 @@ class TestPatientNameContract:
         assert set(result.keys()) == self.REQUIRED_KEYS
 
     def test_parse_explicit_dict_schema(self):
-        result = parse_explicit_patient_name("Frau Test Patient")
+        # 'Test Patient' wird (korrekt!) von der Blacklist abgelehnt -
+        # 'Patient' ist ein generischer Platzhalter. Realistischer Name:
+        result = parse_explicit_patient_name("Frau Maria Schmidt")
         assert result is not None
         assert set(result.keys()) == self.REQUIRED_KEYS
 

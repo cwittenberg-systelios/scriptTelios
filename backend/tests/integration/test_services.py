@@ -20,6 +20,25 @@ import pytest
 # ══════════════════════════════════════════════════════════════════
 
 class TestLLMService:
+    """Tests fuer llm.generate_text mit gemocktem Ollama-Client.
+
+    Phase 2 Refactor (Stale-Test-Fix): frueher wurde `httpx.AsyncClient`
+    gepatcht und ueber `__aenter__` der gemockte Client geliefert. Das
+    passte zum alten `async with httpx.AsyncClient()` Pattern. Mit dem
+    persistenten Singleton-Client `_get_ollama_client()` greift dieser
+    Mock NICHT (kein async-context-manager-Aufruf). Stattdessen patchen
+    wir jetzt direkt `_get_ollama_client` und liefern einen Mock-Client.
+    """
+
+    def _mock_client_with_post(self, post_side_effect=None, post_return=None):
+        """Helper: Mock-Client mit gemockter .post-Methode."""
+        client = MagicMock()
+        client.is_closed = False
+        if post_side_effect is not None:
+            client.post = AsyncMock(side_effect=post_side_effect)
+        else:
+            client.post = AsyncMock(return_value=post_return)
+        return client
 
     @pytest.mark.asyncio
     async def test_generate_text_erfolgreich(self):
@@ -31,10 +50,8 @@ class TestLLMService:
         }
         mock_response.raise_for_status = MagicMock()
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=mock_response
-            )
+        mock_client = self._mock_client_with_post(post_return=mock_response)
+        with patch("app.services.llm._get_ollama_client", return_value=mock_client):
             from app.services.llm import generate_text
             result = await generate_text("System", "User")
 
@@ -46,10 +63,10 @@ class TestLLMService:
     @pytest.mark.asyncio
     async def test_generate_text_connect_error_wirft_runtime(self):
         """ConnectError wird als RuntimeError mit sprechender Meldung weitergegeben."""
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                side_effect=httpx.ConnectError("refused")
-            )
+        mock_client = self._mock_client_with_post(
+            post_side_effect=httpx.ConnectError("refused")
+        )
+        with patch("app.services.llm._get_ollama_client", return_value=mock_client):
             from app.services.llm import generate_text
             with pytest.raises(RuntimeError, match="Ollama nicht erreichbar"):
                 await generate_text("System", "User")
@@ -61,12 +78,12 @@ class TestLLMService:
         mock_response.status_code = 500
         mock_response.text = "Internal Server Error"
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                side_effect=httpx.HTTPStatusError(
-                    "500", request=MagicMock(), response=mock_response
-                )
+        mock_client = self._mock_client_with_post(
+            post_side_effect=httpx.HTTPStatusError(
+                "500", request=MagicMock(), response=mock_response
             )
+        )
+        with patch("app.services.llm._get_ollama_client", return_value=mock_client):
             from app.services.llm import generate_text
             with pytest.raises(RuntimeError, match="Ollama Fehler 500"):
                 await generate_text("System", "User")
@@ -78,10 +95,8 @@ class TestLLMService:
         mock_response.json.return_value = {"response": ""}
         mock_response.raise_for_status = MagicMock()
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=mock_response
-            )
+        mock_client = self._mock_client_with_post(post_return=mock_response)
+        with patch("app.services.llm._get_ollama_client", return_value=mock_client):
             from app.services.llm import generate_text
             result = await generate_text("System", "User")
 
@@ -112,12 +127,10 @@ class TestLLMService:
             # Dritter Aufruf: Retry mit reduziertem Kontext → Erfolg
             return ok_response
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(side_effect=mock_post)
-            from app.services import llm as llm_module
-            import importlib
-            importlib.reload(llm_module)
-            result = await llm_module.generate_text("System", "User")
+        mock_client = self._mock_client_with_post(post_side_effect=mock_post)
+        with patch("app.services.llm._get_ollama_client", return_value=mock_client):
+            from app.services.llm import generate_text
+            result = await generate_text("System", "User")
 
         assert result["text"] == "Text mit kleinem Kontext."
 
@@ -133,13 +146,11 @@ class TestLLMService:
                 return MagicMock(raise_for_status=MagicMock())  # Unload gelingt
             raise httpx.HTTPStatusError("500", request=MagicMock(), response=oom_response)
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(side_effect=mock_post)
-            from app.services import llm as llm_module
-            import importlib
-            importlib.reload(llm_module)
+        mock_client = self._mock_client_with_post(post_side_effect=mock_post)
+        with patch("app.services.llm._get_ollama_client", return_value=mock_client):
+            from app.services.llm import generate_text
             with pytest.raises(RuntimeError, match="WHISPER_FREE_OLLAMA_VRAM"):
-                await llm_module.generate_text("System", "User")
+                await generate_text("System", "User")
 
     def test_deduplicate_paragraphs_entfernt_wiederholungen(self):
         """Doppelte Absätze werden aus dem LLM-Output entfernt."""
@@ -207,10 +218,8 @@ class TestLLMService:
         mock_response.json.return_value = {"response": wiederholter_output, "eval_count": 50}
         mock_response.raise_for_status = MagicMock()
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=mock_response
-            )
+        mock_client = self._mock_client_with_post(post_return=mock_response)
+        with patch("app.services.llm._get_ollama_client", return_value=mock_client):
             from app.services.llm import generate_text
             result = await generate_text("System", "User")
 
@@ -283,20 +292,24 @@ class TestJobQueueService:
         assert job.finished_at is not None
 
     def test_cleanup_entfernt_alte_jobs(self):
-        """Cleanup entfernt abgeschlossene Jobs wenn Limit ueberschritten."""
+        """Cleanup entfernt abgeschlossene Jobs wenn Limit ueberschritten.
+
+        Phase 2: Attribut heisst _cache/_max_cache (frueher _jobs/_max_jobs).
+        status wird als str gespeichert (JobStatus(str,Enum)).
+        """
         from app.services.job_queue import JobQueue, JobStatus
         q = JobQueue()
-        q._max_jobs = 5
+        q._max_cache = 5
 
         # 6 Jobs erstellen und alle auf DONE setzen
         for i in range(6):
             job = q.create_job("dokumentation", f"Job {i}")
-            job.status = JobStatus.DONE
+            job.status = JobStatus.DONE.value  # str, nicht Enum-Instance
 
         # 7. Job triggert Cleanup
         q.create_job("dokumentation", "Trigger")
 
-        assert len(q._jobs) <= 6
+        assert len(q._cache) <= 6
 
     def test_get_all_jobs_neueste_zuerst(self):
         """get_all_jobs gibt Jobs in absteigender Reihenfolge zurueck."""
@@ -385,14 +398,19 @@ class TestDocxFillService:
         template_path = tmp_path / "vorlage.docx"
         doc.save(str(template_path))
 
+        generated_text = "# Befund\nPatient stabil."
         result_path = await fill_docx_template(
-            template_path, "Verlauf", "# Befund\nPatient stabil.", tmp_path, "test"
+            template_path, "Verlauf", generated_text, tmp_path, "test"
         )
 
         assert result_path.exists()
         result_doc = Document(str(result_path))
         full_text = " ".join(p.text for p in result_doc.paragraphs)
-        assert "Generierter Inhalt" in full_text
+        # Phase 2: Bestehender Inhalt bleibt erhalten, generierter Text wird
+        # angehaengt. Frueher pruefte der Test auf einen Literal-String
+        # 'Generierter Inhalt' der nie im Input stand.
+        assert "Bestehender Inhalt" in full_text
+        assert "Patient stabil" in full_text
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -400,6 +418,18 @@ class TestDocxFillService:
 # ══════════════════════════════════════════════════════════════════
 
 class TestEmbeddingsService:
+    """Embeddings testet wie LLM gegen den Singleton-Client.
+    Phase 2 Stale-Test-Fix: httpx.AsyncClient-Mocks greifen am Singleton
+    vorbei (kein async-with-Use). Stattdessen _get_ollama_client patchen."""
+
+    def _mock_client_with_post(self, post_side_effect=None, post_return=None):
+        client = MagicMock()
+        client.is_closed = False
+        if post_side_effect is not None:
+            client.post = AsyncMock(side_effect=post_side_effect)
+        else:
+            client.post = AsyncMock(return_value=post_return)
+        return client
 
     @pytest.mark.asyncio
     async def test_get_embedding_erfolgreich(self):
@@ -409,10 +439,8 @@ class TestEmbeddingsService:
         mock_response.json.return_value = {"embedding": fake_vec}
         mock_response.raise_for_status = MagicMock()
 
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                return_value=mock_response
-            )
+        mock_client = self._mock_client_with_post(post_return=mock_response)
+        with patch("app.services.llm._get_ollama_client", return_value=mock_client):
             from app.services.embeddings import get_embedding
             result = await get_embedding("Testtext")
 
@@ -422,10 +450,10 @@ class TestEmbeddingsService:
     @pytest.mark.asyncio
     async def test_get_embedding_connect_error_gibt_none(self):
         """ConnectError gibt None zurueck (kein Absturz)."""
-        with patch("httpx.AsyncClient") as mock_client:
-            mock_client.return_value.__aenter__.return_value.post = AsyncMock(
-                side_effect=httpx.ConnectError("refused")
-            )
+        mock_client = self._mock_client_with_post(
+            post_side_effect=httpx.ConnectError("refused")
+        )
+        with patch("app.services.llm._get_ollama_client", return_value=mock_client):
             from app.services.embeddings import get_embedding
             result = await get_embedding("Testtext")
 

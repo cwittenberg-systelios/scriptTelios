@@ -166,10 +166,12 @@ async def cancel_job(job_id: str, current_user: str = Depends(get_current_user))
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
     cancelled = job_queue.cancel_job(job_id)
+    # job.status ist bereits str (JobStatus(str,Enum) wird beim Set per .value
+    # gespeichert, siehe job_queue.py:119 + alle Mutationen). Kein .value-Aufruf.
     return {
         "job_id":    job_id,
         "cancelled": cancelled,
-        "status":    job.status.value,
+        "status":    job.status,
     }
 
 
