@@ -118,6 +118,47 @@ def pytest_addoption(parser):
             "Setzt es vor dem ersten Audio-Test via /api/admin/whisper-model."
         ),
     )
+    # ── v19.2: Stage-1-Pipeline-Validierung ────────────────────────────────────
+    # War in README seit v19.2 dokumentiert, aber im Code nie registriert
+    # (pre-existing Bug, jetzt nachgereicht).
+    parser.addoption(
+        "--summary-mode",
+        action="store",
+        default="auto",
+        choices=("auto", "require_stage1", "require_no_stage1"),
+        help=(
+            "Validierung der Stage-1-Verdichtung in Eval-Tests:\n"
+            "  auto              - reporten, keine Pruefung (Default)\n"
+            "  require_stage1    - Stage 1 MUSS bei Whitelist-Workflows greifen,\n"
+            "                      sonst failt der Test\n"
+            "  require_no_stage1 - Stage 1 darf NIE greifen (Pre-v19.2-Baseline)"
+        ),
+    )
+    # ── v19 Phase 1: QA-Mode fuer QualityCheck-Auswertung im Eval ──────────────
+    # --qa aktiviert QualityCheck-Reporting in den Eval-Outputs.
+    # --qa-mode steuert Issue-Filter (analog zur Therapeut-Auswahl in Phase C).
+    parser.addoption(
+        "--qa",
+        action="store_true",
+        default=False,
+        help=(
+            "QualityCheck-Reporting im Eval-Output aktivieren. "
+            "Schreibt <id>.qa.json pro Fixture mit dem quality_check-Bundle, "
+            "gefiltert nach --qa-mode."
+        ),
+    )
+    parser.addoption(
+        "--qa-mode",
+        action="store",
+        default="auto",
+        choices=("auto", "critical_only", "all_issues"),
+        help=(
+            "Filter fuer das QC-Reporting (impliziert --qa):\n"
+            "  auto          - alle Issues (Default)\n"
+            "  critical_only - nur Severity=critical\n"
+            "  all_issues    - alle (=auto, Alias)"
+        ),
+    )
 
 
 def pytest_sessionfinish(session, exitstatus):

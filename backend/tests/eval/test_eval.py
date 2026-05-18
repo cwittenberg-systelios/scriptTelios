@@ -638,6 +638,128 @@ async def _async_sleep(seconds: float):
     await asyncio.sleep(seconds)
 
 
+# ── v19 Phase C: Repair-Lauf via API fuer A/B-Vergleich im Eval ───────────────
+#
+# Wird vom --qa-mode={critical_only,all_issues} aufgerufen. Nutzt EXAKT
+# dieselben HTTP-Endpoints wie das Frontend (kein Direct-Function-Call) -
+# damit ist sichergestellt dass der Repair-Lauf im Eval identisch zur
+# Produktion verhaeltlich ist.
+
+async def _run_repair_via_api(
+    parent_job_id: str,
+    accepted_codes: list[str],
+    user_hint: str = "",
+    timeout: float = 180.0,
+) -> dict | None:
+    """Triggert einen Repair-Lauf via API und pollt das Ergebnis.
+
+    Returns:
+        Job-dict mit result_text/befund_text/quality_check, oder None bei
+        leerer Auswahl (kein Repair sinnvoll).
+
+    Raises:
+        RuntimeError bei Repair-Fail, TimeoutError beim Polling.
+    """
+    if not accepted_codes:
+        # Bei leeren codes wuerde der Repair-Prompt nur "richte dich nach Hint"
+        # enthalten. Wenn auch kein Hint vorhanden ist: sinnlos.
+        if not user_hint or not user_hint.strip():
+            return None
+
+    async with httpx.AsyncClient(base_url=BACKEND_URL, timeout=120.0) as client:
+        # 1. Repair-Job starten (kein /preview noetig - das ist nur fuer UI)
+        r = await client.post(
+            f"/api/jobs/{parent_job_id}/repair",
+            json={
+                "accepted_issue_codes": accepted_codes,
+                "user_hint":            user_hint or "",
+            },
+        )
+        if r.status_code == 422:
+            # 422 = unbekannte Issue-Codes. Bei einem internen Eval sollte das
+            # nie passieren (wir filtern ja aus dem QC-Bundle des Parent
+            # selbst); falls doch, klare Fehlermeldung.
+            detail = r.json().get("detail") or {}
+            raise RuntimeError(
+                f"Repair-API hat unknown_codes: {detail.get('unknown_codes')}. "
+                f"Known: {detail.get('known_codes')}"
+            )
+        r.raise_for_status()
+        repair_job_id = r.json()["repair_job_id"]
+
+        # 2. Pollen bis fertig (analog zu _generate)
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            r = await client.get(f"/api/jobs/{repair_job_id}")
+            r.raise_for_status()
+            job = r.json()
+            if job["status"] == "done":
+                return job
+            if job["status"] == "error":
+                raise RuntimeError(
+                    f"Repair-Job fehlgeschlagen: {job.get('error_msg', '?')}"
+                )
+            if job["status"] == "cancelled":
+                raise RuntimeError("Repair-Job wurde abgebrochen")
+            await _async_sleep(3)
+
+        raise TimeoutError(f"Repair-Job {repair_job_id} nicht in {timeout}s fertig")
+
+
+def _filter_issues_by_mode(issues: list[dict], qa_mode: str) -> list[dict]:
+    """Filtert Issues nach QA-Mode (gleiche Semantik wie im Plan)."""
+    if qa_mode == "critical_only":
+        return [i for i in issues if i.get("severity") == "critical"]
+    # 'auto' und 'all_issues' geben alle Issues unveraendert zurueck
+    return list(issues)
+
+
+def _delta_qc(original_qc: dict | None, repair_qc: dict | None) -> dict:
+    """Vergleicht zwei QualityCheck-Bundles und liefert Verbesserungs-Metriken.
+
+    Felder:
+      original_count:   Issue-Total im Original-QC
+      repair_count:     Issue-Total nach Repair
+      resolved:         Codes die im Original waren und im Repair nicht mehr
+      introduced:       Codes die der Repair NEU eingefuehrt hat
+      persisting:       Codes die im Repair noch da sind
+      delta_total:      original_count - repair_count (negativ = schlechter)
+      severity_delta:   pro Severity: original_count - repair_count
+    """
+    def _codes(qc):
+        if not qc:
+            return set()
+        return set(i.get("code", "") for i in (qc.get("issues") or []))
+
+    def _counts(qc):
+        if not qc:
+            return {"critical": 0, "warning": 0, "info": 0, "total": 0}
+        s = qc.get("summary") or {}
+        return {
+            "critical": s.get("critical", 0),
+            "warning":  s.get("warning", 0),
+            "info":     s.get("info", 0),
+            "total":    s.get("total", 0),
+        }
+
+    orig_codes = _codes(original_qc)
+    rep_codes  = _codes(repair_qc)
+    orig_counts = _counts(original_qc)
+    rep_counts  = _counts(repair_qc)
+    return {
+        "original_count":   orig_counts["total"],
+        "repair_count":     rep_counts["total"],
+        "delta_total":      orig_counts["total"] - rep_counts["total"],
+        "resolved":         sorted(orig_codes - rep_codes),
+        "introduced":       sorted(rep_codes - orig_codes),
+        "persisting":       sorted(orig_codes & rep_codes),
+        "severity_delta": {
+            sev: orig_counts[sev] - rep_counts[sev]
+            for sev in ("critical", "warning", "info")
+        },
+    }
+
+
 # ── Stil-Analyse ─────────────────────────────────────────────────────────────
 
 # IFS/systemische Fachbegriffe für Dichte-Messung
@@ -1146,6 +1268,38 @@ async def test_eval_workflow(workflow, test_case, request):
     if not text:
         pytest.fail("Leerer Output")
 
+    # ── v19.2: --summary-mode validiert Stage-1-Verhalten ──────────────────
+    # Bei Whitelist-Workflows (verlaengerung/folgeverlaengerung/entlassbericht
+    # fuer Verlaufs-Stage-1; dokumentation/anamnese fuer Transcript-Stage-1)
+    # ist applied=True erwartet wenn die Schwelle ueberschritten wurde.
+    _summary_mode = request.config.getoption("--summary-mode", default="auto")
+    if _summary_mode != "auto":
+        from app.services.staging import (
+            STAGE1_VERLAUF_WORKFLOWS,
+            STAGE1_TRANSCRIPT_WORKFLOWS,
+        )
+        # Backend liefert Stage-1-Audit unter "verlauf_summary_audit"; das
+        # Feld ist None wenn Stage 1 nicht beruehrt wurde (Pre-v19.2 oder
+        # Workflow ausserhalb Whitelist oder Input zu klein).
+        _audit = job.get("verlauf_summary_audit") or {}
+        _applied = bool(_audit.get("applied"))
+        _whitelisted = (
+            workflow in STAGE1_VERLAUF_WORKFLOWS
+            or workflow in STAGE1_TRANSCRIPT_WORKFLOWS
+        )
+        if _summary_mode == "require_stage1":
+            if _whitelisted and not _applied:
+                pytest.fail(
+                    f"--summary-mode=require_stage1: Stage 1 nicht angewandt "
+                    f"({workflow}/{test_case['id']}). Audit: {_audit}"
+                )
+        elif _summary_mode == "require_no_stage1":
+            if _applied:
+                pytest.fail(
+                    f"--summary-mode=require_no_stage1: Stage 1 unerwartet "
+                    f"angewandt ({workflow}/{test_case['id']}). Audit: {_audit}"
+                )
+
     # Evaluieren
     expected = test_case["expected"]
     ev = EvalResult(workflow, test_case["id"], text)
@@ -1313,6 +1467,105 @@ async def test_eval_workflow(workflow, test_case, request):
             json.dumps(ev.style_metrics, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    # ── v19 Phase 1: --qa schreibt zusaetzlich <id>.qa.json ────────────────
+    # Reports das vom Backend mitgelieferte quality_check-Bundle, gefiltert
+    # nach --qa-mode. Erlaubt A/B-Vergleich "wie viele Issues haette Repair
+    # nach unterschiedlichen Filterstrategien zu reparieren".
+    # Implizit aktiv wenn --qa-mode != auto.
+    #
+    # ── v19 Phase C-Erweiterung: A/B-Vergleich mit echtem Repair-Lauf ──────
+    # Bei --qa-mode in {critical_only, all_issues} wird zusaetzlich ein
+    # Repair-Lauf via /api/jobs/{id}/repair gestartet (echte HTTP-Calls,
+    # identisch zur Produktion). Repair-Output + Delta-Metriken landen
+    # ebenfalls in <id>.qa.json. So messbar: "Bringt critical_only ein
+    # vergleichbares Improvement wie all_issues?"
+    _qa = request.config.getoption("--qa", default=False)
+    _qa_mode = request.config.getoption("--qa-mode", default="auto")
+    if _qa or _qa_mode != "auto":
+        qc_bundle = job.get("quality_check")
+        if qc_bundle:
+            all_issues = list(qc_bundle.get("issues") or [])
+            filtered_issues = _filter_issues_by_mode(all_issues, _qa_mode)
+            qa_report = {
+                "workflow":       workflow,
+                "test_case_id":   test_case["id"],
+                "qa_mode":        _qa_mode,
+                "summary":        qc_bundle.get("summary"),
+                "issue_count":    len(filtered_issues),
+                "issue_codes":    [i.get("code") for i in filtered_issues],
+                "issues":         filtered_issues,
+                "stage1_applied": bool(
+                    (job.get("verlauf_summary_audit") or {}).get("applied")
+                ),
+            }
+
+            # Repair-Lauf NUR bei critical_only/all_issues UND wenn es
+            # ueberhaupt etwas zu reparieren gibt. 'auto' bleibt reines
+            # Reporting (Default).
+            if _qa_mode in ("critical_only", "all_issues") and filtered_issues:
+                accepted_codes = [
+                    i["code"] for i in filtered_issues if i.get("code")
+                ]
+                parent_job_id = job.get("job_id")
+                try:
+                    logger.info(
+                        "[%s/%s] Repair-Lauf via API (mode=%s, %d Codes)",
+                        workflow, test_case["id"], _qa_mode, len(accepted_codes),
+                    )
+                    repair_job = await _run_repair_via_api(
+                        parent_job_id, accepted_codes, user_hint="",
+                    )
+                except (RuntimeError, TimeoutError) as e:
+                    logger.warning(
+                        "[%s/%s] Repair-Lauf fehlgeschlagen: %s",
+                        workflow, test_case["id"], e,
+                    )
+                    qa_report["repair_error"] = str(e)
+                    repair_job = None
+
+                if repair_job:
+                    # Repair-Text in QC-Form bringen (Anamnese: verketten)
+                    if workflow == "anamnese":
+                        rt_anamnese = (repair_job.get("result_text") or "").strip()
+                        rt_befund   = (repair_job.get("befund_text") or "").strip()
+                        repair_text = (
+                            rt_anamnese + "\n\n###BEFUND###\n\n" + rt_befund
+                            if rt_befund else rt_anamnese
+                        )
+                    else:
+                        repair_text = repair_job.get("result_text") or ""
+                    repair_qc = repair_job.get("quality_check")
+                    qa_report["repair"] = {
+                        "repair_job_id": repair_job.get("job_id"),
+                        "qc":            repair_qc,
+                        "delta":         _delta_qc(qc_bundle, repair_qc),
+                        "word_count":    len(repair_text.split()),
+                    }
+                    # Repair-Text als eigenes File ablegen
+                    repair_file = out_path / f"{test_case['id']}.repair.txt"
+                    repair_file.write_text(repair_text, encoding="utf-8")
+                    delta = qa_report["repair"]["delta"]
+                    logger.info(
+                        "[%s/%s] Delta: %d->%d Issues (resolved=%s, introduced=%s)",
+                        workflow, test_case["id"],
+                        delta["original_count"], delta["repair_count"],
+                        delta["resolved"], delta["introduced"],
+                    )
+
+            qa_file = out_path / f"{test_case['id']}.qa.json"
+            qa_file.write_text(
+                json.dumps(qa_report, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        else:
+            # Kein QC-Bundle vom Backend (Pre-v19-Setup oder QC-Hook hat versagt).
+            # Wir loggen das damit klar wird: kein Fixture stillschweigend
+            # ausgelassen.
+            logger.warning(
+                "--qa aktiv, aber kein quality_check im Job-Result fuer %s/%s",
+                workflow, test_case["id"],
+            )
 
     # Test failt wenn es kritische Issues gibt
     critical = [i for i in ev.issues if "DATENSCHUTZ" in i or "HALLUZINATION" in i]
