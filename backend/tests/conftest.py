@@ -1,168 +1,257 @@
 """
-tests/conftest.py
-─────────────────
-Minimaler Wurzel-Conftest fuer das ganze Test-Baum:
+tests/integration/conftest.py
+─────────────────────────────
+Conftest fuer Integration-Tests (FastAPI TestClient, gemockte LLMs/Whisper).
 
-  - sys.path setzt das Backend-Wurzelverzeichnis vor, damit
-    `from app.services.X import Y` ueberall greift.
-  - Testumgebung wird gesetzt BEVOR app.core.config geladen wird.
-  - CLI-Optionen fuer das Eval-Framework werden hier registriert,
-    weil pytest_addoption nur im Top-Level-conftest greifen darf.
-
-Alles weitere (DB-Initialisierung, Ollama-Setup, gemockte LLMs etc.)
-gehoert in die jeweiligen Sub-conftest.py:
-
-  tests/unit/conftest.py        - keine autouse-DB, keine Ollama-Aufrufe
-  tests/integration/conftest.py - DB-Setup, TestClient, Mocks
-  tests/eval/conftest.py        - echtes LLM, ollama_vision_setup
+Im Gegensatz zu tests/unit/conftest.py wird hier eine SQLite-DB pro Test
+neu angelegt und am Ende gedropt. Die meisten Endpunkte brauchen den
+DB-Layer auch wenn keine echten Daten persistiert werden (FK-Validation,
+Status-Updates etc.).
 """
-import os
-import sys
-from pathlib import Path
+import asyncio
+from unittest.mock import AsyncMock, patch
 
-# ── sys.path: Backend-Root vor allen Test-Imports ─────────────────────────────
-_BACKEND_ROOT = Path(__file__).parent.parent
-if str(_BACKEND_ROOT) not in sys.path:
-    sys.path.insert(0, str(_BACKEND_ROOT))
+import pytest
 
-
-# ── Testumgebung (greift vor jedem `from app...` Import) ──────────────────────
-# WICHTIG: app.core.config liest diese ENVs beim ersten Import. Wenn ein Test
-# vorher schon `from app.core.config import settings` macht, sind die Werte
-# bereits gefroren. Daher Sub-conftests die App-Code importieren MUESSEN
-# dies hier vorher tun.
-os.environ.setdefault("OLLAMA_HOST", "http://localhost:11434")
-os.environ.setdefault("OLLAMA_MODEL", "qwen3:32b")
-os.environ.setdefault("WHISPER_MODEL", "medium")
-os.environ.setdefault("WHISPER_DEVICE", "cpu")
-os.environ.setdefault("WHISPER_COMPUTE_TYPE", "int8")
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test_systelios.db")
-os.environ.setdefault("SECRET_KEY", "test-secret-key-fuer-tests")
-os.environ.setdefault("DELETE_AUDIO_AFTER_TRANSCRIPTION", "false")
-os.environ.setdefault("UPLOAD_DIR", "/tmp/systelios_test_uploads")
-os.environ.setdefault("OUTPUT_DIR", "/tmp/systelios_test_outputs")
-os.environ.setdefault("LOG_LEVEL", "WARNING")
-os.environ.setdefault("LOG_FILE", "/tmp/systelios_test.log")
-
-os.makedirs("/tmp/systelios_test_uploads", exist_ok=True)
-os.makedirs("/tmp/systelios_test_outputs", exist_ok=True)
+# Pfade aus root conftest (Backend-Root ist bereits in sys.path)
+from tests.conftest import TXT_SELBST  # noqa: E402
 
 
-# ── Fixture-Pfade (gemeinsam fuer alle Test-Ebenen) ───────────────────────────
-FIXTURES = Path(__file__).parent / "fixtures"
+@pytest.fixture(autouse=True)
+def init_test_db():
+    """
+    DB-Tabellen vor jedem Test anlegen, danach bereinigen.
 
-AUDIO_KURZ       = FIXTURES / "audio" / "gespraech_kurz.wav"
-AUDIO_LANG       = FIXTURES / "audio" / "gespraech_lang.wav"
-PDF_VERLAUF      = FIXTURES / "pdf" / "verlaufsbericht.pdf"
-PDF_SELBST_DIG   = FIXTURES / "pdf" / "selbstauskunft_digital.pdf"
-PDF_SELBST_LEER  = FIXTURES / "pdf" / "selbstauskunft_leer.pdf"
-DOCX_ENTLASS_V   = FIXTURES / "docx" / "entlassbericht_vorlage.docx"
-DOCX_ENTLASS_B   = FIXTURES / "docx" / "entlassbericht_beispiel.docx"
-DOCX_VERL_V      = FIXTURES / "docx" / "verlaengerungsantrag_vorlage.docx"
-DOCX_STILPROFIL  = FIXTURES / "docx" / "stilprofil_verlaufsnotiz.docx"
-TXT_TRANSKRIPT   = FIXTURES / "txt" / "transkript_einzelgespraech.txt"
-TXT_STICHPUNKTE  = FIXTURES / "txt" / "stichpunkte_verlauf.txt"
-TXT_SELBST       = FIXTURES / "txt" / "selbstauskunft_text.txt"
-TXT_VERLAUF      = FIXTURES / "txt" / "verlaufsdokumentation.txt"
+    SQLite-Backend ohne pgvector. Drei Probleme die hier gelöst werden:
 
-# Echte Dateien (optional, werden uebersprungen wenn nicht vorhanden)
-REAL_FILES = {
-    "audio":                       FIXTURES / "audio" / "gespraech_real.mp3",
-    "selbstauskunft_handschrift":  FIXTURES / "pdf"   / "selbstauskunft_handschrift.pdf",
-    "entlassbericht_real":         FIXTURES / "docx"  / "entlassbericht_real.docx",
-    "verlauf_real":                FIXTURES / "pdf"   / "verlauf_real.pdf",
+    1. SQLite + `database is locked`: jobs.py startet Hintergrund-Tasks per
+       `asyncio.ensure_future(self._db_insert_job(...))`. Diese halten
+       Connections auf dem alten Event-Loop. Wenn der nächste Test den Loop
+       schliesst, sind die Locks noch da. Lösung: nach jedem Test sowohl
+       `engine.dispose()` aufrufen (schliesst alle gepoolten Connections)
+       als auch eine kurze `asyncio.sleep`-Drain-Phase, damit pending
+       Background-Tasks zu Ende laufen können.
+
+    2. Mehrere Tests teilen einen Engine: SQLAlchemy cacht den AsyncEngine
+       modulweit. Ein neuer Event-Loop pro Test triggert
+       'Future attached to a different loop'. Loesung: jeder Test bekommt
+       einen FRESH Engine durch reload des database-Moduls (oder Cleanup).
+
+    3. Loop-Konflikte: pytest-asyncio + new_event_loop kollidieren. Wir
+       benutzen pytest-asyncio's eigenen Loop wo verfuegbar.
+    """
+    from app.core.database import engine, Base
+
+    async def setup():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def teardown():
+        # Pending Background-Tasks (z.B. fire-and-forget job_queue._db_*)
+        # 50ms drainen, sonst halten sie Connections und DROP TABLE blockiert.
+        await asyncio.sleep(0.05)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        # Pool leeren -> alle gepoolten Connections schliessen.
+        # Verhindert "database is locked" beim naechsten Test.
+        await engine.dispose()
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(setup())
+        yield
+        try:
+            loop.run_until_complete(teardown())
+        except Exception:
+            # Falls teardown crasht (z.B. weil bereits gedroppte Tabelle):
+            # mindestens dispose nachholen damit der naechste Test sauber
+            # startet.
+            try:
+                loop.run_until_complete(engine.dispose())
+            except Exception:
+                pass
+    finally:
+        loop.close()
+
+
+# ── pgvector-Isolation ────────────────────────────────────────────────────────
+# Production benutzt pgvector mit `embedding <=> CAST(? AS vector)`. SQLite
+# kennt diesen Operator nicht — jeder Test der einen kompletten Job-Run
+# triggert (also durch jobs.py + style_embeddings) wuerde mit
+# 'near ">": syntax error' sterben.
+#
+# Loesung: globaler Stub fuer retrieve_style_examples. Tests die explizit
+# das Retrieval-Verhalten testen (siehe TestStyleInfo::test_style_library_*)
+# overriden den Stub lokal via `patch(..., new=AsyncMock(return_value=...))`
+# in ihrem with-Block. Der hier installierte Stub greift nur als Default.
+
+@pytest.fixture(autouse=True)
+def _disable_pgvector_for_sqlite(request, monkeypatch):
+    """Verhindert pgvector-SQL gegen SQLite-Tests.
+
+    retrieve_style_examples gibt per Default leeren String zurueck (= kein
+    Stil gefunden). Das passt zu allen Tests die NICHT explizit das
+    Style-Library-Retrieval pruefen wollen.
+
+    Opt-out: Tests die das echte retrieve_style_examples brauchen (z.B.
+    Unit-Tests fuer das Embedding-Retrieval selbst), markieren sich mit::
+
+        @pytest.mark.real_embeddings
+        def test_xyz(self): ...
+
+    Dann greift dieser Stub nicht und die Original-Funktion wird verwendet.
+    Solche Tests muessen entweder kein pgvector verwenden (siehe
+    StyleEmbedding-Tests die direkt mit SQLAlchemy arbeiten) oder die
+    pgvector-Query selbst mocken.
+    """
+    if request.node.get_closest_marker("real_embeddings"):
+        # Tests die das echte retrieve_style_examples brauchen:
+        # Stub nicht aktivieren.
+        yield
+        return
+
+    from unittest.mock import AsyncMock
+
+    async def _stub_retrieve(*args, **kwargs):
+        return ""
+
+    try:
+        monkeypatch.setattr(
+            "app.services.embeddings.retrieve_style_examples",
+            AsyncMock(side_effect=_stub_retrieve),
+            raising=False,
+        )
+    except (ImportError, AttributeError):
+        pass
+    try:
+        monkeypatch.setattr(
+            "app.api.jobs.retrieve_style_examples",
+            AsyncMock(side_effect=_stub_retrieve),
+            raising=False,
+        )
+    except (ImportError, AttributeError):
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_ollama_client(monkeypatch):
+    """Wie in unit/conftest.py: Singleton-Cache vor jedem Test leeren."""
+    try:
+        import app.services.llm as _llm
+        monkeypatch.setattr(_llm, "_ollama_client", None, raising=False)
+    except ImportError:
+        pass
+
+
+# ── LLM-Mocks (opt-in via Argument) ───────────────────────────────────────────
+# WICHTIG: Patch-Pfad muss dort sein wo die Funktion VERWENDET wird,
+# nicht wo sie definiert ist. Wegen `from app.services.llm import generate_text`
+# in mehreren Konsumenten muss jeder Konsumpfad separat gepatcht werden.
+
+_MOCK_LLM_RESPONSE = {
+    "text": (
+        "VERLAUFSNOTIZ\n\n"
+        "Datum: 21.11.2025 | Gespraechsart: Einzeltherapie\n\n"
+        "1. HAUPTTHEMEN\n"
+        "Im heutigen Gespraech stand die Auseinandersetzung mit dem inneren Kritiker "
+        "im Vordergrund. Der Klient berichtete von Fortschritten.\n\n"
+        "2. INTERVENTIONEN\n"
+        "Hypnosystemische Externalisierung. Ressourcenorientierte Verstaerkung.\n\n"
+        "3. VERLAUF\n"
+        "Stimmung: 5/10. Schlaf: 6/10. Keine Suizidalitaet.\n\n"
+        "4. VEREINBARUNGEN\n"
+        "Naechster Termin: 28.11.2025"
+    ),
+    "model_used": "ollama/qwen3:32b",
+    "duration_s": 2.4,
+    "token_count": 187,
 }
 
 
-def real_file(key: str):
-    """Pytest-Marker, der Tests skippt wenn echte Testdatei fehlt."""
-    import pytest
-    path = REAL_FILES.get(key)
-    if path is None or not path.exists():
-        return pytest.mark.skip(reason=f"Echte Testdatei nicht vorhanden: {key}")
-    return pytest.mark.skipif(False, reason="")
+@pytest.fixture
+def mock_llm():
+    """LLM-Aufruf durch fixen Beispieltext ersetzen (alle Verwendungsorte)."""
+    with patch("app.services.llm.generate_text",
+               new=AsyncMock(return_value=_MOCK_LLM_RESPONSE)), \
+         patch("app.api.jobs.generate_text",
+               new=AsyncMock(return_value=_MOCK_LLM_RESPONSE)):
+        yield
 
 
-# ── CLI-Optionen fuer Eval-Framework ──────────────────────────────────────────
-# pytest_addoption MUSS im Top-Level-conftest stehen, sonst greifen die
-# Optionen nicht zuverlaessig in Sub-Verzeichnissen.
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--eval-output",
-        action="store",
-        default=None,
-        help="Verzeichnis fuer Evaluations-Ergebnisse (nur tests/eval/test_eval.py)",
-    )
-    parser.addoption(
-        "--eval-report",
-        action="store_true",
-        default=False,
-        help="PDF-Report nach eval-Tests generieren",
-    )
-    parser.addoption(
-        "--transcribe",
-        action="store_true",
-        default=False,
-        help=(
-            "Transkriptionen neu erzeugen und als <audio>.transcript.txt speichern. "
-            "Ohne diesen Flag wird ein vorhandenes .transcript.txt geladen."
+@pytest.fixture
+def mock_llm_anamnese():
+    """LLM-Mock mit realistischer Anamnese-Ausgabe."""
+    mock_response = {
+        "text": (
+            "ANAMNESE\n\n"
+            "Vorstellungsanlass: Stationaere Aufnahme auf Zuweisung des Hausarztes.\n"
+            "Hauptbeschwerde: Erschoepfung, Schlafprobleme, depressive Verstimmung.\n\n"
+            "PSYCHOPATHOLOGISCHER BEFUND (AMDP)\n"
+            "Bewusstsein: klar | Orientierung: vollstaendig\n"
+            "Affektivitaet: subdepressiv | Antrieb: reduziert\n"
+            "Suizidalitaet: aktuell verneint\n\n"
+            "Diagnosen: F32.1 Mittelgradige depressive Episode, Z73.0 Ausgebranntsein"
         ),
-    )
-    parser.addoption(
-        "--whisper-model",
-        action="store",
-        default=None,
-        help=(
-            "Whisper-Modell nur fuer diesen Testlauf wechseln (z.B. medium). "
-            "Setzt es vor dem ersten Audio-Test via /api/admin/whisper-model."
+        "model_used": "ollama/qwen3:32b",
+        "duration_s": 3.1,
+        "token_count": 221,
+    }
+    with patch("app.services.llm.generate_text",
+               new=AsyncMock(return_value=mock_response)), \
+         patch("app.api.jobs.generate_text",
+               new=AsyncMock(return_value=mock_response)):
+        yield
+
+
+@pytest.fixture
+def mock_transcribe():
+    """Whisper-Transkription durch fixes Ergebnis ersetzen."""
+    mock_result = {
+        "transcript": (
+            "Therapeut: Wie war die Woche fuer Sie? "
+            "Patient: Eigentlich besser als letzte Woche. "
+            "Ich habe versucht, die Uebung zu machen. "
+            "Das Aufschreiben was gut war hat mir geholfen."
         ),
-    )
+        "language": "de",
+        "duration_s": 8.0,
+        "word_count": 37,
+    }
+    with patch("app.services.transcription.transcribe_audio",
+               new=AsyncMock(return_value=mock_result)):
+        yield
 
 
-def pytest_sessionfinish(session, exitstatus):
-    """Nach dem Test-Run: PDF-Report generieren wenn eval-Tests liefen."""
-    try:
-        generate_report = session.config.getoption("--eval-report", default=False)
-    except (ValueError, AttributeError):
-        return
+@pytest.fixture
+def mock_extract_text():
+    """PDF/DOCX-Extraktion durch realistischen Text ersetzen."""
+    text = TXT_SELBST.read_text(encoding="utf-8") if TXT_SELBST.exists() else "Beispieltext."
+    with patch("app.services.extraction.extract_text", new=AsyncMock(return_value=text)), \
+         patch("app.api.jobs.extract_text",            new=AsyncMock(return_value=text)), \
+         patch("app.api.style_embeddings.extract_text", new=AsyncMock(return_value=text)):
+        yield
 
-    if not generate_report:
-        return
 
-    results_dir = session.config.getoption("--eval-output", default=None)
-    if not results_dir:
-        results_dir = os.environ.get("EVAL_RESULTS_DIR", "/workspace/eval_results")
+@pytest.fixture
+def mock_embedding():
+    """Ollama-Embedding durch Zufallsvektor ersetzen."""
+    import random
+    fake_embedding = [random.uniform(-0.1, 0.1) for _ in range(768)]
+    with patch("app.services.embeddings.get_embedding",
+               new=AsyncMock(return_value=fake_embedding)), \
+         patch("app.api.style_embeddings.get_embedding",
+               new=AsyncMock(return_value=fake_embedding)):
+        yield
 
-    results_path = Path(results_dir)
-    if not results_path.exists():
-        return
 
-    eval_files = list(results_path.rglob("*.eval.txt"))
-    if not eval_files:
-        return
-
-    try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "eval_report",
-            Path(__file__).parent.parent / "scripts" / "eval_report.py",
-        )
-        if spec and spec.loader:
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-
-            charts_dir = results_path / ".charts"
-            charts_dir.mkdir(exist_ok=True)
-
-            data = mod.load_eval_results(results_path)
-            total = sum(len(v) for v in data["workflows"].values())
-            if total > 0:
-                report_path = results_path / "eval_report.pdf"
-                mod.build_report(data, report_path, charts_dir)
-                print(f"\n{'='*60}")
-                print(f"  PDF-Report erstellt: {report_path}")
-                print(f"  {total} Testfaelle in {len(data['workflows'])} Workflows")
-                print(f"{'='*60}")
-    except Exception as e:
-        print(f"\nWarnung: PDF-Report konnte nicht erstellt werden: {e}")
+@pytest.fixture
+def mock_ollama_unavailable():
+    """Ollama als nicht erreichbar simulieren."""
+    with patch(
+        "app.services.llm._generate_ollama",
+        new=AsyncMock(side_effect=RuntimeError(
+            "Ollama nicht erreichbar unter http://localhost:11434."
+        )),
+    ):
+        yield
