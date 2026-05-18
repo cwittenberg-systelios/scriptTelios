@@ -508,6 +508,7 @@ class TestEmbeddingsService:
 
         assert result == ""
 
+    @pytest.mark.real_embeddings
     @pytest.mark.asyncio
     async def test_retrieve_style_examples_fallback_ohne_embedding(self, init_test_db):
         """Wenn get_embedding None zurueckgibt, wird Fallback (neueste) verwendet."""
@@ -539,6 +540,7 @@ class TestEmbeddingsService:
 
         assert "Beispieltext" in result
 
+    @pytest.mark.real_embeddings
     @pytest.mark.asyncio
     async def test_retrieve_style_examples_statische_anker_immer_dabei(self, init_test_db):
         """Statische Anker-Beispiele werden immer eingeschlossen."""
