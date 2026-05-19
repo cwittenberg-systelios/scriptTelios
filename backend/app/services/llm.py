@@ -111,6 +111,27 @@ def truncate_style_context(text: str) -> str:
     return truncated
 
 
+def _normalize_model_id(model: Optional[str]) -> Optional[str]:
+    """
+    Strippt das 'ollama/'-Display-Praefix aus Modell-IDs.
+
+    Hintergrund: generate_text/result-Dicts setzen 'model_used' auf
+    "ollama/qwen3:32b" als Display-Label fuer Audit/UI (durch
+    test_generate_text_erfolgreich abgesichert). Wenn dieses Label
+    spaeter (z.B. im Repair-Flow ueber parent.model_used) als Input-Modell
+    an einen neuen Call weitergereicht wird, schickt Ollama 404
+    ("model 'ollama/qwen3:32b' not found"), weil Ollama nur die nackte
+    ID kennt. Defensive Wache am API-Call.
+
+    Robust gegen None und doppelte Praefixe.
+    """
+    if not model:
+        return model
+    while model.startswith("ollama/"):
+        model = model[len("ollama/"):]
+    return model
+
+
 def deduplicate_paragraphs(text: str, *, strict_mode: bool = False) -> str:
     """
     Entfernt wiederholte Absätze aus dem LLM-Output.
@@ -1103,7 +1124,7 @@ async def _retry_without_thinking(
 
     Returns dict mit text, model_used, token_count, telemetry, retry_used=True.
     """
-    effective_model = model or settings.OLLAMA_MODEL
+    effective_model = _normalize_model_id(model) or settings.OLLAMA_MODEL
 
     # /no_think doppelt - bestehende /no_think am Ende erst entfernen,
     # dann am Anfang UND Ende neu setzen
@@ -1212,7 +1233,7 @@ async def _generate_ollama(
     Temperatur. Wird von Stage-1 (verlauf_summary) genutzt fuer maximal
     quellentreue Verdichtung (0.2, beim Retry 0.1).
     """
-    effective_model = model or settings.OLLAMA_MODEL
+    effective_model = _normalize_model_id(model) or settings.OLLAMA_MODEL
 
     profile = _get_model_profile(effective_model)
     effective_temperature = (

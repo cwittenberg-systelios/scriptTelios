@@ -534,7 +534,16 @@ async def repair_execute(
 
     # Modell: vererben aus Parent (Konsistenz: Repair laeuft mit demselben
     # Modell wie das Original). Kann durch Settings ueberschrieben werden.
-    model_override = parent.get("model_used")
+    # v19.2.2: parent.model_used speichert den Display-String "ollama/qwen3:32b"
+    # (siehe llm.py - bewusstes Format fuer UI/Audit, durch
+    # test_generate_text_erfolgreich abgesichert). Beim Weiterreichen an
+    # generate_text() muss das "ollama/"-Praefix gestrippt werden, sonst
+    # antwortet Ollama mit 404 ("model 'ollama/qwen3:32b' not found").
+    raw_parent_model = parent.get("model_used")
+    if raw_parent_model and raw_parent_model.startswith("ollama/"):
+        model_override = raw_parent_model[len("ollama/"):]
+    else:
+        model_override = raw_parent_model
 
     async def _coro():
         return await _run_repair_coroutine(
