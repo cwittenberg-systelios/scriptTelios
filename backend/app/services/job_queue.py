@@ -163,6 +163,17 @@ class JobState:
         #                        compression_ratio/retry_used/degraded/...
         self.verlauf_summary_text : Optional[str]  = None
         self.verlauf_summary_audit: Optional[dict] = None
+        # v19.3: Repair-Kontext-Persistierung.
+        # source_verlauf_text:        Roh-Verlaufsdoku nach clean_verlauf_text.
+        # transcript_summary_text:    Verdichtetes Transkript nach Stage-1.
+        # source_antragsvorlage_text: Antragsvorlage nach extract_text (wichtig
+        #                             fuer Akutantrag/Verlaengerung/Entlassbericht).
+        # source_vorantrag_text:      Vorantrag bei Folgeverlaengerung.
+        # (Roh-Transkript steckt in self.result_transcript - schon vorhanden.)
+        self.source_verlauf_text         : Optional[str] = None
+        self.transcript_summary_text     : Optional[str] = None
+        self.source_antragsvorlage_text  : Optional[str] = None
+        self.source_vorantrag_text       : Optional[str] = None
         # v19 Phase 1: QualityCheck-Ergebnis.
         # Wird nach DONE in run_job() ueber app.services.quality_check
         # berechnet und persistiert. Format: serialize_issues()-Output.
@@ -213,6 +224,12 @@ class JobState:
             # Jobs die Stage 1 nicht beruehrt haben.
             "verlauf_summary_text":  self.verlauf_summary_text,
             "verlauf_summary_audit": self.verlauf_summary_audit,
+            # v19.3: Repair-Kontext-Felder. Default None bei Jobs ohne
+            # passende Quellen.
+            "source_verlauf_text":         self.source_verlauf_text,
+            "transcript_summary_text":     self.transcript_summary_text,
+            "source_antragsvorlage_text":  self.source_antragsvorlage_text,
+            "source_vorantrag_text":       self.source_vorantrag_text,
             # v19 Phase 1 + C:
             "quality_check":   self.quality_check,
             "parent_job_id":   self.parent_job_id,
@@ -337,6 +354,15 @@ class JobQueue:
                     # Pre-v19.2-Zeit oder Workflows die Stage 1 nicht nutzen.
                     "verlauf_summary_text":  db_job.verlauf_summary_text,
                     "verlauf_summary_audit": db_job.verlauf_summary_audit,
+                    # v19.3: Repair-Kontext-Felder. None bei Pre-v19.3-Jobs
+                    # oder Workflows ohne entsprechende Quelle.
+                    # ACHTUNG: result_transcript ist hier bewusst NICHT
+                    # enthalten (Datenschutz - kein Transkript ueber API).
+                    # Fuer Repair-Coroutinen siehe get_repair_context().
+                    "source_verlauf_text":         db_job.source_verlauf_text,
+                    "transcript_summary_text":     db_job.transcript_summary_text,
+                    "source_antragsvorlage_text":  db_job.source_antragsvorlage_text,
+                    "source_vorantrag_text":       db_job.source_vorantrag_text,
                     # v19 Phase 1 + C: QualityCheck + Repair-Beziehung.
                     "quality_check":   db_job.quality_check_json,
                     "parent_job_id":   db_job.parent_job_id,
@@ -344,6 +370,73 @@ class JobQueue:
                 }
         except Exception as e:
             logger.warning("Job-DB-Lookup fehlgeschlagen: %s", e)
+            return None
+
+    async def get_repair_context(self, job_id: str) -> Optional[dict]:
+        """v19.3: Laedt die Quelldaten fuer einen Repair-Call.
+
+        Im Gegensatz zu to_dict()/get_job_from_db() enthaelt das Result
+        ABSICHTLICH das Roh-Transkript (result_transcript) - das wird vom
+        Repair-Coroutine als Kontext gebraucht. Diese Funktion darf NICHT
+        ueber die API exposed werden (Datenschutz: Transkripte gehen nie
+        ueber die externe API raus).
+
+        Hierarchie (bevorzugt: Synthese, fallback: Roh-Version):
+          1. verlauf_summary_text  → bei groesseren Verlaeufen (>1500w)
+          2. source_verlauf_text   → Roh-Verlauf wenn Stage-1 nicht lief
+          3. transcript_summary_text → bei groesseren Transkripten (>3500w)
+          4. result_transcript     → Roh-Transkript wenn Stage-1 nicht lief
+          5. source_antragsvorlage_text → Anamnese/Diagnosen aus Vorlage
+          6. source_vorantrag_text → Bei Folgeverlaengerung
+
+        Returns dict mit den Quellen (auch alle keys vorhanden bei NULL):
+          {
+            "verlauf_summary_text":        str | None,
+            "source_verlauf_text":         str | None,
+            "transcript_summary_text":     str | None,
+            "result_transcript":           str | None,
+            "source_antragsvorlage_text":  str | None,
+            "source_vorantrag_text":       str | None,
+            "result_text":                 str | None,  # Original-Bericht
+            "workflow":                    str,
+          }
+        Returns None wenn Job nicht existiert.
+        """
+        # Zuerst Cache (laeuft gerade) - hat alle Quellen in JobState
+        cached = self._cache.get(job_id)
+        if cached:
+            return {
+                "verlauf_summary_text":        cached.verlauf_summary_text,
+                "source_verlauf_text":         cached.source_verlauf_text,
+                "transcript_summary_text":     cached.transcript_summary_text,
+                "result_transcript":           cached.result_transcript,
+                "source_antragsvorlage_text":  cached.source_antragsvorlage_text,
+                "source_vorantrag_text":       cached.source_vorantrag_text,
+                "result_text":                 cached.result_text,
+                "workflow":                    cached.workflow,
+            }
+        # Sonst DB-Load mit allen Feldern
+        try:
+            from app.core.database import async_session_factory
+            from app.models.db import Job as JobModel
+            from sqlalchemy import select
+            async with async_session_factory() as db:
+                result = await db.execute(select(JobModel).where(JobModel.id == job_id))
+                db_job = result.scalar_one_or_none()
+                if not db_job:
+                    return None
+                return {
+                    "verlauf_summary_text":        db_job.verlauf_summary_text,
+                    "source_verlauf_text":         db_job.source_verlauf_text,
+                    "transcript_summary_text":     db_job.transcript_summary_text,
+                    "result_transcript":           db_job.result_transcript,
+                    "source_antragsvorlage_text":  db_job.source_antragsvorlage_text,
+                    "source_vorantrag_text":       db_job.source_vorantrag_text,
+                    "result_text":                 db_job.result_text,
+                    "workflow":                    db_job.workflow,
+                }
+        except Exception as e:
+            logger.warning("Repair-Kontext-Lookup fehlgeschlagen: %s", e)
             return None
 
     def get_all_jobs(self) -> list[JobState]:
@@ -405,6 +498,11 @@ class JobQueue:
                         # v19.2: Stage-1-Pipeline-Felder
                         verlauf_summary_text=state.verlauf_summary_text,
                         verlauf_summary_audit=state.verlauf_summary_audit,
+                        # v19.3: Repair-Kontext
+                        source_verlauf_text=state.source_verlauf_text,
+                        transcript_summary_text=state.transcript_summary_text,
+                        source_antragsvorlage_text=state.source_antragsvorlage_text,
+                        source_vorantrag_text=state.source_vorantrag_text,
                         # v19 Phase 1 + C
                         quality_check_json=state.quality_check,
                         parent_job_id=state.parent_job_id,
@@ -455,6 +553,11 @@ class JobQueue:
             # an result["verlauf_summary_text"] gehaengt (kann None bleiben).
             job.verlauf_summary_audit = result.get("verlauf_summary_audit")
             job.verlauf_summary_text  = result.get("verlauf_summary_text")
+            # v19.3: Repair-Kontext-Felder
+            job.source_verlauf_text         = result.get("source_verlauf_text")
+            job.transcript_summary_text     = result.get("transcript_summary_text")
+            job.source_antragsvorlage_text  = result.get("source_antragsvorlage_text")
+            job.source_vorantrag_text       = result.get("source_vorantrag_text")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
 
             if job._cancel_requested:

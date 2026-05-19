@@ -743,6 +743,44 @@ const S = `
   }
   .qc-versions-tab:disabled { cursor: not-allowed; opacity: 0.5; }
 
+  /* ── v19.3: DiffView (Vergleich Original/Ueberarbeitet) ── */
+  .diff-view {
+    border: 1px solid var(--st-gray-mid); border-radius: 5px;
+    background: white; margin-top: 0;
+  }
+  .diff-head {
+    display: flex; gap: 16px; align-items: center;
+    padding: 8px 14px; font-size: 12px; font-weight: 600;
+    border-bottom: 1px solid var(--st-gray-mid);
+    background: var(--st-gray-light); color: var(--st-text-soft);
+  }
+  .diff-stat-add { color: #1a7f37; }
+  .diff-stat-rem { color: #8b1a1a; }
+  .diff-stat-note { color: var(--st-text-soft); font-weight: 400; }
+  .diff-body {
+    font-size: 12px; line-height: 1.5; max-height: 600px; overflow: auto;
+    white-space: pre-wrap;
+  }
+  .diff-line {
+    display: flex; padding: 0 12px;
+  }
+  .diff-prefix {
+    flex: 0 0 18px; color: var(--st-text-soft); user-select: none;
+  }
+  .diff-text { flex: 1 1 auto; word-break: break-word; white-space: pre-wrap; }
+  .diff-add  { background: #e6ffec; border-left: 3px solid #1a7f37; }
+  .diff-add .diff-prefix { color: #1a7f37; font-weight: bold; }
+  .diff-rem  { background: #ffebe9; border-left: 3px solid #8b1a1a; }
+  .diff-rem .diff-prefix { color: #8b1a1a; font-weight: bold; }
+  .diff-ctx  { background: white; }
+  .diff-skip {
+    background: var(--st-gray-light); color: var(--st-text-soft);
+    font-style: italic; text-align: center; padding: 4px 12px;
+    border-top: 1px dashed var(--st-gray-mid);
+    border-bottom: 1px dashed var(--st-gray-mid);
+  }
+  .diff-skip .diff-prefix { display: none; }
+
   /* ── SPINNER ── */
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin {
@@ -1684,20 +1722,23 @@ function useJobResult() {
   const [repairQC,      setRepairQC]      = useState(null);
   const [repairJobId,   setRepairJobId]   = useState(null);
 
-  // Tab-Aktivierung
+  // v19.3: Pending-State waehrend Repair laeuft. Tab wird angezeigt
+  // bevor das Ergebnis da ist, sodass der User die Progress-Bar sieht.
+  const [pendingRepairJobId, setPendingRepairJobId] = useState(null);
+
+  // Tab-Aktivierung: "original" | "repair" | "diff"
   const [activeVersion, setActiveVersion] = useState("original");
 
   // Panel-Auswahl-State (Reset zwischen Versionen)
   const [acceptedCodes, setAcceptedCodes] = useState([]);
   const [userHint,      setUserHint]      = useState("");
 
-  // Repair-Modal-State
-  const [showRepairModal, setShowRepairModal] = useState(false);
-  const [modalPrompt,     setModalPrompt]     = useState("");
+  // Repair-State
   const [repairBusy,      setRepairBusy]      = useState(false);
   const [repairError,     setRepairError]     = useState(null);
 
   const hasRepair = !!repairJobId;
+  const hasPendingRepair = !!pendingRepairJobId && !hasRepair;
 
   const applyOriginal = useCallback((jobOrResult) => {
     if (!jobOrResult) {
@@ -1713,7 +1754,23 @@ function useJobResult() {
     setUserHint("");
     // Bei neuer Generierung Repair-Version verwerfen
     setRepairText(""); setRepairBefund(""); setRepairQC(null); setRepairJobId(null);
-    setShowRepairModal(false); setModalPrompt(""); setRepairError(null);
+    setPendingRepairJobId(null);
+    setRepairError(null);
+  }, []);
+
+  const beginRepairPending = useCallback((pendingJobId) => {
+    // v19.3: sobald der Repair-Job am Backend erstellt wurde, Tab schon
+    // anzeigen und auf den noch-leeren "Ueberarbeitet"-Tab umschalten.
+    // Dort rendert Output dann eine JobProgressBar statt Text.
+    setPendingRepairJobId(pendingJobId);
+    setRepairError(null);
+    setActiveVersion("repair");
+  }, []);
+
+  const clearRepairPending = useCallback(() => {
+    setPendingRepairJobId(null);
+    // Tab zurueck zum Original wenn der Repair abgebrochen/fehlgeschlagen ist
+    setActiveVersion("original");
   }, []);
 
   const applyRepair = useCallback((repairResult) => {
@@ -1722,8 +1779,8 @@ function useJobResult() {
     setRepairBefund(repairResult.befundText ?? "");
     setRepairQC(pickQualityCheck(repairResult));
     setRepairJobId(repairResult.jobId ?? null);
+    setPendingRepairJobId(null);
     setActiveVersion("repair");
-    setShowRepairModal(false);
     setRepairError(null);
     // Auswahl-State leeren - bei zweitem Repair startet er bei 0
     setAcceptedCodes([]);
@@ -1733,9 +1790,9 @@ function useJobResult() {
   const reset = useCallback(() => {
     setOrigText(""); setOrigBefund(""); setOrigQC(null); setOrigJobId(null);
     setRepairText(""); setRepairBefund(""); setRepairQC(null); setRepairJobId(null);
+    setPendingRepairJobId(null);
     setActiveVersion("original");
     setAcceptedCodes([]); setUserHint("");
-    setShowRepairModal(false); setModalPrompt("");
     setRepairBusy(false); setRepairError(null);
   }, []);
 
@@ -1746,10 +1803,14 @@ function useJobResult() {
   }, []);
 
   // Aktive Version -> auszugebender Text + QC
-  const isRepairActive = activeVersion === "repair" && hasRepair;
-  const text         = isRepairActive ? repairText   : origText;
-  const befundText   = isRepairActive ? repairBefund : origBefund;
-  const qualityCheck = isRepairActive ? repairQC     : origQC;
+  // - "original": Original-Text + Original-QC
+  // - "repair":   Repair-Text + Repair-QC (waehrend Pending: leerer Text, Progress)
+  // - "diff":     special-case (kein Text, eigener Renderer); QC = Repair-QC
+  const isRepairActive = activeVersion === "repair" && (hasRepair || hasPendingRepair);
+  const isDiffActive   = activeVersion === "diff" && hasRepair;
+  const text         = isRepairActive ? repairText   : (isDiffActive ? "" : origText);
+  const befundText   = isRepairActive ? repairBefund : (isDiffActive ? "" : origBefund);
+  const qualityCheck = (isRepairActive || isDiffActive) ? repairQC : origQC;
   // Der Job-ID den Repair-Operationen targeten muessen: IMMER der Original.
   // Repair-on-Repair wuerde gegen den ersten Repair-Job laufen - laut Plan
   // Phase C: nur Original + letzte Repair-Version.
@@ -1762,19 +1823,19 @@ function useJobResult() {
       // Versionen
       origText, origBefund, origQC, origJobId,
       repairText, repairBefund, repairQC, repairJobId,
-      hasRepair, activeVersion, repairTargetJobId,
+      hasRepair, hasPendingRepair, pendingRepairJobId,
+      activeVersion, repairTargetJobId,
+      isDiffActive,
       // UI-Auswahl
       acceptedCodes, userHint,
-      // Modal
-      showRepairModal, modalPrompt, repairBusy, repairError,
+      // Status
+      repairBusy, repairError,
     },
     {
       applyOriginal, applyRepair, reset,
       toggleCode, setUserHint,
       setActiveVersion,
-      openModal: (prompt) => { setModalPrompt(prompt); setShowRepairModal(true); },
-      closeModal: () => { setShowRepairModal(false); },
-      setModalPrompt,
+      beginRepairPending, clearRepairPending,
       setRepairBusy, setRepairError,
     },
   ];
@@ -1906,86 +1967,57 @@ function QualityCheckPanel({
   );
 }
 
-// ── Sprint 4: RepairPreviewModal ────────────────────────────────────
-// Zeigt den final_prompt vom Backend, erlaubt Editieren.
-// onConfirm(promptOrNull): null = Original-Prompt verwenden
-// onCancel():               Modal weg, kein Repair starten
-function RepairPreviewModal({
-  prompt = "",
-  busy = false,
-  error = null,
-  onConfirm,
-  onCancel,
-}) {
-  const [editedPrompt, setEditedPrompt] = useState(prompt);
-  const [edited, setEdited] = useState(false);
-  // Wenn der Prompt neu reinkommt (z.B. zweiter Preview-Aufruf), State angleichen
-  useEffect(() => {
-    setEditedPrompt(prompt);
-    setEdited(false);
-  }, [prompt]);
-
-  const handleSubmit = () => {
-    if (busy) return;
-    onConfirm(edited ? editedPrompt : null);
-  };
-
-  return createPortal(
-    <div className="qc-modal-backdrop" onClick={!busy ? onCancel : undefined}>
-      <div className="qc-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="qc-modal-head">
-          <span className="qc-modal-title">Repair-Prompt prüfen</span>
-          <button
-            type="button"
-            className="qc-modal-x"
-            onClick={onCancel}
-            disabled={busy}
-            aria-label="Schließen"
-          >&#215;</button>
+// ── v19.3: ResultPane ──────────────────────────────────────────────
+// Wrapper um <Output>, der je nach activeVersion entscheidet:
+//   - "diff":            <DiffView original vs. repaired>
+//   - "repair" + pending: <JobProgressBar> (Repair laeuft noch)
+//   - sonst:             children (typischerweise <Output>) - rendert Text
+// Verwendung:
+//   <ResultPane job={job} original={out} repairBefund={null}>
+//     <Output text={...} ... />   {/* Standard-Pfad */}
+//   </ResultPane>
+function ResultPane({ job, original, repaired, children }) {
+  if (job.activeVersion === "diff" && job.hasRepair) {
+    // Vergleich-Tab: Diff statt Text. Bei Anamnese (mit Befund) zeigen
+    // wir den Anamnese-Teil — Befund-Diff ist separat im Anamnese-Sub-Tab.
+    return <DiffView original={original} repaired={repaired} />;
+  }
+  if (job.activeVersion === "repair" && job.hasPendingRepair && !job.hasRepair) {
+    // Repair laeuft noch: Progress-Bar statt leerem Text
+    return (
+      <div className="output-pending">
+        <div style={{padding:"20px 0", textAlign:"center", color:"var(--st-text-soft)"}}>
+          <strong>Überarbeitung wird erstellt …</strong>
         </div>
-        <div className="qc-modal-body">
-          <p className="qc-modal-hint">
-            Folgender Prompt wird an das Modell gesendet. Du kannst ihn vor dem
-            Versand bearbeiten – beachte dabei die Sicherheits-Marker
-            (<code>&gt;&gt;&gt;ORIGINAL-TEXT&lt;&lt;&lt;</code>, <code>&gt;&gt;&gt;NUTZERHINWEIS&lt;&lt;&lt;</code>)
-            nicht zu zerstören.
-          </p>
-          <textarea
-            className="qc-modal-textarea"
-            value={editedPrompt}
-            onChange={(e) => { setEditedPrompt(e.target.value); setEdited(true); }}
-            disabled={busy}
-            spellCheck={false}
-          />
-          {error && <div className="qc-repair-error">⚠️ {error}</div>}
-        </div>
-        <div className="qc-modal-foot">
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={onCancel}
-            disabled={busy}
-          >Abbrechen</button>
-          <button
-            type="button"
-            className="qc-repair-btn"
-            onClick={handleSubmit}
-            disabled={busy}
-          >
-            {busy ? "Generiere Überarbeitung..." : (edited ? "Eigenen Prompt senden" : "Bestätigen & Überarbeiten")}
-          </button>
-        </div>
+        <JobProgressBar jobId={job.pendingRepairJobId} />
       </div>
-    </div>,
-    document.body,
-  );
+    );
+  }
+  return children;
 }
 
+// ── Sprint 4: RepairPreviewModal ────────────────────────────────────
+// v19.3: ENTFERNT - Repair startet ohne Bestaetigungs-Dialog direkt.
+//        Der Preview-Endpoint /repair/preview existiert backendseitig
+//        weiterhin (fuer eventuelle Debug-Zwecke), wird aber vom Frontend
+//        nicht mehr aufgerufen.
+
 // ── Sprint 4: ResultVersionsTabs ────────────────────────────────────
-// Schmaler Tab-Switch zwischen Original und letzter Überarbeitung.
+// Schmaler Tab-Switch zwischen Original / Ueberarbeitet / Vergleich.
 // Wird ueber <Output> gerendert; bei nicht-Repair-Jobs nicht angezeigt.
-function ResultVersionsTabs({ hasRepair, active, onChange, disabled = false }) {
-  if (!hasRepair) return null;
+// v19.3: dritter Tab "Vergleich" mit git-style Line-Diff.
+//        "Ueberarbeitet"-Tab erscheint auch waehrend der Repair noch laeuft
+//        (hasPendingRepair) - dann zeigt der Output-Tab eine Progress-Bar.
+function ResultVersionsTabs({
+  hasRepair,
+  hasPendingRepair = false,
+  active,
+  onChange,
+  disabled = false,
+}) {
+  const showRepairTab = hasRepair || hasPendingRepair;
+  const showDiffTab   = hasRepair;
+  if (!showRepairTab) return null;
   return (
     <div className="qc-versions-tabs">
       <button
@@ -1999,16 +2031,132 @@ function ResultVersionsTabs({ hasRepair, active, onChange, disabled = false }) {
         className={"qc-versions-tab" + (active === "repair" ? " active" : "")}
         onClick={() => !disabled && onChange("repair")}
         disabled={disabled}
-      >Überarbeitet</button>
+      >Überarbeitet{hasPendingRepair && !hasRepair ? " …" : ""}</button>
+      {showDiffTab && (
+        <button
+          type="button"
+          className={"qc-versions-tab" + (active === "diff" ? " active" : "")}
+          onClick={() => !disabled && onChange("diff")}
+          disabled={disabled}
+        >Vergleich</button>
+      )}
+    </div>
+  );
+}
+
+// ── v19.3: LCS-basierter Line-Diff fuer Vergleich-Tab ───────────────────
+// Eigene Implementation statt npm-Lib - reicht fuer git-style Anzeige.
+// O(n*m) Memory, fuer Antrags-Texte (typischerweise <2000 Zeilen) okay.
+function _diffLines(aLines, bLines) {
+  const n = aLines.length, m = bLines.length;
+  // Edge: leerer Eingang
+  if (n === 0) return bLines.map(line => ({ op: "+", text: line }));
+  if (m === 0) return aLines.map(line => ({ op: "-", text: line }));
+  // DP-Tabelle fuer LCS-Laengen
+  const dp = Array(n + 1);
+  for (let i = 0; i <= n; i++) dp[i] = new Int32Array(m + 1);
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (aLines[i-1] === bLines[j-1]) dp[i][j] = dp[i-1][j-1] + 1;
+      else dp[i][j] = dp[i-1][j] >= dp[i][j-1] ? dp[i-1][j] : dp[i][j-1];
+    }
+  }
+  // Backtrack
+  const out = [];
+  let i = n, j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && aLines[i-1] === bLines[j-1]) {
+      out.push({ op: " ", text: aLines[i-1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) {
+      out.push({ op: "+", text: bLines[j-1] });
+      j--;
+    } else {
+      out.push({ op: "-", text: aLines[i-1] });
+      i--;
+    }
+  }
+  out.reverse();
+  return out;
+}
+
+// ── v19.3: DiffView ─────────────────────────────────────────────────────
+// Zeigt git-style Line-Diff zwischen Original- und Repair-Text.
+// Unveraenderte Zeilen werden zu "..." kollabiert wenn mehr als 3 in Folge.
+function DiffView({ original, repaired }) {
+  const stats = useMemo(() => {
+    const aLines = (original || "").split("\n");
+    const bLines = (repaired || "").split("\n");
+    const ops = _diffLines(aLines, bLines);
+    let added = 0, removed = 0;
+    for (const o of ops) {
+      if (o.op === "+") added++;
+      else if (o.op === "-") removed++;
+    }
+    // Sliding window: 3 Kontext-Zeilen vor/nach jeder Aenderung,
+    // dazwischen kollabieren
+    const changedIdx = new Set();
+    ops.forEach((o, idx) => { if (o.op !== " ") changedIdx.add(idx); });
+    const visible = new Set();
+    const CTX = 3;
+    for (const idx of changedIdx) {
+      for (let k = Math.max(0, idx - CTX); k <= Math.min(ops.length - 1, idx + CTX); k++) {
+        visible.add(k);
+      }
+    }
+    // Render-Liste mit "..."-Trennern
+    const rendered = [];
+    let lastVisible = -2;
+    ops.forEach((o, idx) => {
+      if (!visible.has(idx)) return;
+      if (idx > lastVisible + 1 && lastVisible >= 0) {
+        rendered.push({ op: "…", text: `… ${idx - lastVisible - 1} unveränderte Zeilen …` });
+      }
+      rendered.push(o);
+      lastVisible = idx;
+    });
+    return { ops: rendered, added, removed, total: ops.length };
+  }, [original, repaired]);
+
+  return (
+    <div className="diff-view">
+      <div className="diff-head">
+        <span className="diff-stat-add">+{stats.added}</span>
+        <span className="diff-stat-rem">−{stats.removed}</span>
+        <span className="diff-stat-note">
+          Original ({(original || "").split("\n").length} Z.) → Überarbeitet ({(repaired || "").split("\n").length} Z.)
+        </span>
+      </div>
+      <pre className="diff-body">
+        {stats.ops.map((o, idx) => {
+          const cls =
+            o.op === "+" ? "diff-add" :
+            o.op === "-" ? "diff-rem" :
+            o.op === "…" ? "diff-skip" : "diff-ctx";
+          const prefix = o.op === "…" ? "" : o.op + " ";
+          return (
+            <div key={idx} className={"diff-line " + cls}>
+              <span className="diff-prefix">{prefix}</span>
+              <span className="diff-text">{o.text || "\u00A0"}</span>
+            </div>
+          );
+        })}
+      </pre>
     </div>
   );
 }
 
 // ── Sprint 4: RepairBundle ──────────────────────────────────────────
-// Kapselt die komplette Repair-UX (Panel + Modal + API-Handler).
+// Kapselt die komplette Repair-UX (Panel + API-Handler).
 // Pages rendern darunter eine einzige Zeile <RepairBundle job ops toast />.
+//
+// v19.3: Sofortiger Repair-Start ohne Bestaetigungs-Modal.
+//   - Klick auf "Text ueberarbeiten lassen" startet den Repair direkt
+//   - Repair-Job-ID wird sofort in den State gesetzt, der "Ueberarbeitet"-Tab
+//     erscheint und zeigt die JobProgressBar
+//   - Nach Fertigstellung wird der Text in den Repair-Tab uebernommen
 function RepairBundle({ job, ops, toast }) {
-  // Repair-Button im QC-Panel: erst Preview anfordern, dann Modal oeffnen
+  // Repair-Button im QC-Panel: sofort starten, kein Preview-Roundtrip
   async function handleTrigger() {
     if (!job.repairTargetJobId) {
       ops.setRepairError("Kein Original-Job - Repair nicht moeglich");
@@ -2017,66 +2165,51 @@ function RepairBundle({ job, ops, toast }) {
     ops.setRepairBusy(true);
     ops.setRepairError(null);
     try {
-      const preview = await repairPreview(
-        job.repairTargetJobId, job.acceptedCodes, job.userHint,
-      );
-      ops.openModal(preview.final_prompt);
-    } catch (e) {
-      ops.setRepairError(friendlyError(e));
-    } finally {
-      ops.setRepairBusy(false);
-    }
-  }
-
-  // Modal-Bestaetigung: optional customPrompt (wenn Therapeut Preview editiert hat)
-  async function handleConfirm(customPrompt) {
-    ops.setRepairBusy(true);
-    ops.setRepairError(null);
-    try {
+      // repair() startet den Job am Backend (synchroner Response mit
+      // repair_job_id) und pollt dann bis fertig. Wir reichen den
+      // Pending-State-Setter rein, damit der Tab sofort beim Start
+      // (und nicht erst am Ende) auftaucht.
       const result = await repair(
-        job.repairTargetJobId, job.acceptedCodes, job.userHint, customPrompt,
+        job.repairTargetJobId,
+        job.acceptedCodes,
+        job.userHint,
+        null,                           // kein custom_final_prompt
+        (pendingJobId) => {
+          // Wird einmal aufgerufen, sobald die Backend-Response da ist
+          // (also kurz nach Job-Start, bevor Polling losgeht).
+          ops.beginRepairPending(pendingJobId);
+        },
       );
       if (!result) {
-        // Polling cancelled (z.B. Job abgebrochen)
-        ops.closeModal();
         toast && toast("Repair abgebrochen");
+        ops.clearRepairPending();
         return;
       }
       ops.applyRepair(result);
       toast && toast("Überarbeitung erstellt");
     } catch (e) {
       ops.setRepairError(friendlyError(e));
+      ops.clearRepairPending();
     } finally {
       ops.setRepairBusy(false);
     }
   }
 
   return (
-    <>
-      <QualityCheckPanel
-        data={job.qualityCheck}
-        acceptedCodes={job.acceptedCodes}
-        userHint={job.userHint}
-        onToggle={ops.toggleCode}
-        onHintChange={ops.setUserHint}
-        onRepair={handleTrigger}
-        repairBusy={job.repairBusy}
-        repairError={job.repairError}
-        // Wenn der User gerade die Repair-Version anschaut, wird das Panel
-        // read-only - sonst koennte er ein zweites Repair auf die Repair-Version
-        // triggern, was Plan-Phase-C ausschliesst.
-        readOnly={job.activeVersion === "repair"}
-      />
-      {job.showRepairModal && (
-        <RepairPreviewModal
-          prompt={job.modalPrompt}
-          busy={job.repairBusy}
-          error={job.repairError}
-          onConfirm={handleConfirm}
-          onCancel={ops.closeModal}
-        />
-      )}
-    </>
+    <QualityCheckPanel
+      data={job.qualityCheck}
+      acceptedCodes={job.acceptedCodes}
+      userHint={job.userHint}
+      onToggle={ops.toggleCode}
+      onHintChange={ops.setUserHint}
+      onRepair={handleTrigger}
+      repairBusy={job.repairBusy}
+      repairError={job.repairError}
+      // Wenn der User gerade die Repair-Version anschaut, wird das Panel
+      // read-only - sonst koennte er ein zweites Repair auf die Repair-Version
+      // triggern, was Plan-Phase-C ausschliesst.
+      readOnly={job.activeVersion === "repair"}
+    />
   );
 }
 
@@ -2276,7 +2409,7 @@ async function repairPreview(jobId, acceptedCodes, userHint) {
 // Repair-Job-Objekt zurueck (inklusive eigenem quality_check). Caller bekommt
 // also denselben Shape wie pollJob() - kann den Repair als "neue Version"
 // einfach in den State stecken.
-async function repair(jobId, acceptedCodes, userHint, customFinalPrompt = null) {
+async function repair(jobId, acceptedCodes, userHint, customFinalPrompt = null, onStarted = null) {
   const body = {
     accepted_issue_codes: acceptedCodes || [],
     user_hint:            userHint || "",
@@ -2294,6 +2427,11 @@ async function repair(jobId, acceptedCodes, userHint, customFinalPrompt = null) 
     throw new Error(detail || r.statusText);
   }
   const repairJobId = d.repair_job_id;
+  // v19.3: sofort beim Start ueber den Pending-Job-ID informieren, damit
+  // der "Ueberarbeitet"-Tab sofort erscheint (mit Progress-Bar)
+  if (onStarted) {
+    try { onStarted(repairJobId); } catch (_) {}
+  }
   // Polling exakt wie generate(). Repair-Jobs landen in derselben Queue.
   const repairJob = await pollJob(repairJobId, 600);
   if (!repairJob) return null;  // cancelled
@@ -2883,15 +3021,18 @@ function P1({ toast, resumeJob, onResumed, model }) {
 
           <ResultVersionsTabs
             hasRepair={job.hasRepair}
+            hasPendingRepair={job.hasPendingRepair}
             active={job.activeVersion}
             onChange={jobOps.setActiveVersion}
             disabled={job.repairBusy}
           />
-          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("In Zwischenablage kopiert"); }}
-            extraButtons={hasTranscript ? [
-              { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
-            ] : []} />
+          <ResultPane job={job} original={out} repaired={job.repairText}>
+            <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+              onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("In Zwischenablage kopiert"); }}
+              extraButtons={hasTranscript ? [
+                { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
+              ] : []} />
+          </ResultPane>
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 
@@ -3150,30 +3291,33 @@ function P2({ toast, resumeJob, onResumed, model }) {
 
           <ResultVersionsTabs
             hasRepair={job.hasRepair}
+            hasPendingRepair={job.hasPendingRepair}
             active={job.activeVersion}
             onChange={jobOps.setActiveVersion}
             disabled={job.repairBusy}
           />
-          <Output
-            text={
-              job.hasRepair
-                ? (tab === "Anamnese" ? job.text : job.befundText)
-                : (tab === "Anamnese" ? out : befundOut)
-            }
-            loading={busy} jobId={currentJobId}
-            warn={tab === "Anamnese" ? outWarn : (befundOut ? null : outWarn)}
-            tabs={["Anamnese", "Psych. Befund"]}
-            activeTab={tab} onTab={setTab}
-            onCopy={() => {
-              const t = job.hasRepair
-                ? (tab === "Anamnese" ? job.text : job.befundText)
-                : (tab === "Anamnese" ? out : befundOut);
-              navigator.clipboard.writeText(t);
-              toast("Kopiert");
-            }}
-            extraButtons={hasTranscript ? [
-              { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
-            ] : []} />
+          <ResultPane job={job} original={out} repaired={job.repairText}>
+            <Output
+              text={
+                job.hasRepair
+                  ? (tab === "Anamnese" ? job.text : job.befundText)
+                  : (tab === "Anamnese" ? out : befundOut)
+              }
+              loading={busy} jobId={currentJobId}
+              warn={tab === "Anamnese" ? outWarn : (befundOut ? null : outWarn)}
+              tabs={["Anamnese", "Psych. Befund"]}
+              activeTab={tab} onTab={setTab}
+              onCopy={() => {
+                const t = job.hasRepair
+                  ? (tab === "Anamnese" ? job.text : job.befundText)
+                  : (tab === "Anamnese" ? out : befundOut);
+                navigator.clipboard.writeText(t);
+                toast("Kopiert");
+              }}
+              extraButtons={hasTranscript ? [
+                { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
+              ] : []} />
+          </ResultPane>
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 
@@ -3370,12 +3514,15 @@ function P2b({ toast, resumeJob, onResumed, model }) {
 
           <ResultVersionsTabs
             hasRepair={job.hasRepair}
+            hasPendingRepair={job.hasPendingRepair}
             active={job.activeVersion}
             onChange={jobOps.setActiveVersion}
             disabled={job.repairBusy}
           />
-          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          <ResultPane job={job} original={out} repaired={job.repairText}>
+            <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+              onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          </ResultPane>
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 
@@ -3551,12 +3698,15 @@ function P3({ toast, resumeJob, onResumed, model }) {
 
           <ResultVersionsTabs
             hasRepair={job.hasRepair}
+            hasPendingRepair={job.hasPendingRepair}
             active={job.activeVersion}
             onChange={jobOps.setActiveVersion}
             disabled={job.repairBusy}
           />
-          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          <ResultPane job={job} original={out} repaired={job.repairText}>
+            <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+              onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          </ResultPane>
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 
@@ -3767,12 +3917,15 @@ function P3b({ toast, resumeJob, onResumed, model }) {
 
           <ResultVersionsTabs
             hasRepair={job.hasRepair}
+            hasPendingRepair={job.hasPendingRepair}
             active={job.activeVersion}
             onChange={jobOps.setActiveVersion}
             disabled={job.repairBusy}
           />
-          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          <ResultPane job={job} original={out} repaired={job.repairText}>
+            <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+              onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          </ResultPane>
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 
@@ -3948,12 +4101,15 @@ function P4({ toast, resumeJob, onResumed, model }) {
 
           <ResultVersionsTabs
             hasRepair={job.hasRepair}
+            hasPendingRepair={job.hasPendingRepair}
             active={job.activeVersion}
             onChange={jobOps.setActiveVersion}
             disabled={job.repairBusy}
           />
-          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          <ResultPane job={job} original={out} repaired={job.repairText}>
+            <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
+              onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          </ResultPane>
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 

@@ -82,6 +82,28 @@ class Job(Base):
     verlauf_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     verlauf_summary_audit: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=True)
 
+    # v19.3: Repair-Kontext-Persistierung.
+    # source_verlauf_text:        Roh-Verlauf nach clean_verlauf_text (NULL wenn
+    #                             Workflow keine Verlaufsdoku nutzt). Wird beim
+    #                             Repair als Fallback genutzt wenn keine
+    #                             verlauf_summary_text vorliegt (z.B. weil
+    #                             Verlauf < STAGE1_VERLAUF_MIN_WORDS).
+    # transcript_summary_text:    Synthese des Transkripts nach Stage 1 (NULL
+    #                             wenn nicht relevant oder nicht gelaufen).
+    #                             Analog zu verlauf_summary_text.
+    # source_antragsvorlage_text: Antragsvorlage nach extract_text. Wichtig
+    #                             fuer akutantrag/verlaengerung/entlassbericht -
+    #                             enthaelt Diagnosen, Anamnese, Status.
+    # source_vorantrag_text:      Vorheriger Antrag bei folgeverlaengerung.
+    #                             Enthaelt Verlauf der Vorphase + Anamnese
+    #                             + Diagnosen aus der vorigen Antragstellung.
+    # Hinweis: das Roh-Transkript steckt schon in result_transcript
+    # (historisches Naming - bewusst nicht umbenannt um Migration klein zu halten).
+    source_verlauf_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcript_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_antragsvorlage_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_vorantrag_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # v19 Phase 1: QualityCheck-Ergebnis fuer den finalen result_text.
     # Format siehe app/services/quality_check.py::serialize_issues:
     #   {"version": 1, "workflow": ..., "issues": [...], "summary": {...}}

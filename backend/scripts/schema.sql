@@ -134,6 +134,53 @@ ALTER TABLE jobs
 ALTER TABLE jobs
     ADD COLUMN IF NOT EXISTS verlauf_summary_audit JSONB;
 
+-- v19.3: Repair-Kontext-Persistierung.
+-- Repair-Calls brauchen die Original-Quellen, um inhaltliche Therapeuten-
+-- Hinweise (z.B. "schreibe noch einen Absatz zum Paargespraech") sinnvoll
+-- umsetzen zu koennen. Daher persistieren wir Roh- und Synthese-Versionen
+-- von Verlauf und Transkript am Job. Plus die Antragsvorlage/Vorantrag,
+-- die beim Akutantrag, Verlaengerung, Folgeverlaengerung und Entlassbericht
+-- als Anamnese-/Diagnose-Quelle dienen.
+--
+-- Naming-Konvention:
+--   source_*_text:    Roh-Version nach Preprocessing (clean_verlauf_text /
+--                     Whisper / extract_text). Klein genug fuer direkten
+--                     Kontext-Einbau wenn Stage-1 nicht lief (Stage-1 greift
+--                     erst ab STAGE1_VERLAUF_MIN_WORDS=1500 bzw.
+--                     STAGE1_TRANSCRIPT_MIN_WORDS=3500 Woertern).
+--   *_summary_text:   Stage-1-Synthese. Wird beim Repair bevorzugt
+--                     verwendet, falls vorhanden (klein und schon
+--                     verdichtet → optimal als Kontext).
+--
+-- Bestehende Felder (Backwards-Compat):
+--   verlauf_summary_text: bereits da (s.o.), wird unveraendert genutzt
+--   result_transcript:    bereits da, ist faktisch das "source_transcript_text"
+--                         (Naming-Inkonsistenz aus historischen Gruenden)
+--
+-- Neue Felder:
+--   source_verlauf_text:         Roh-Verlauf nach clean_verlauf_text (war
+--                                bisher in jeder Generierung neu extrahiert
+--                                und nach Stage 1 verworfen). NULL wenn
+--                                Workflow keine Verlaufsdoku nutzt.
+--   transcript_summary_text:     Synthese des Transkripts nach Stage 1
+--                                (analog zu verlauf_summary_text). NULL wenn
+--                                Transkript-Stage-1 nicht lief.
+--   source_antragsvorlage_text:  Antragsvorlage nach extract_text (NULL wenn
+--                                Workflow keine nutzt). Enthaelt typisch
+--                                Anamnese + Diagnosen + Status - bei Akutantrag
+--                                die WICHTIGSTE Datenquelle.
+--   source_vorantrag_text:       Vorantrag (vorheriger Bericht) bei
+--                                Folgeverlaengerung. Enthaelt Verlauf der
+--                                Vorphase. NULL fuer andere Workflows.
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS source_verlauf_text TEXT;
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS transcript_summary_text TEXT;
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS source_antragsvorlage_text TEXT;
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS source_vorantrag_text TEXT;
+
 -- v19 Phase 1: QualityCheck-Ergebnis fuer den finalen result_text.
 -- Format siehe app/services/quality_check.py::serialize_issues:
 --   {"version": 1, "workflow": ..., "issues": [...], "summary": {...}}

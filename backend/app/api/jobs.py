@@ -351,14 +351,79 @@ async def _resolve_parent_job(job_id: str) -> dict:
     raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
 
 
-def _build_repair_context(parent: dict, req_codes: list[str], req_hint: str):
+def _resolve_repair_sources(parent_context: dict) -> tuple[str, str, str]:
+    """v19.3: Loest aus dem Parent-Job-Kontext die drei Quell-Texte
+    fuer den Repair-Prompt auf.
+
+    Hierarchie:
+      Verlauf:        verlauf_summary_text (Synthese) → source_verlauf_text (Roh)
+      Transkript:     transcript_summary_text (Synthese) → result_transcript (Roh)
+      Patientendaten: source_antragsvorlage_text + source_vorantrag_text (beide
+                      wenn vorhanden - relevant bei Folgeverlaengerung; sonst nur
+                      eines davon).
+
+    Synthese wird bevorzugt weil:
+      - klein (~800-2500w), kontextfreundlich
+      - schon verdichtet, optimal als Faktengrundlage
+    Roh-Version greift wenn keine Synthese vorhanden — was bedeutet, dass
+    Stage 1 nicht lief, was bedeutet dass die Roh-Version unter dem
+    Threshold liegt (<1500w fuer Verlauf, <3500w fuer Transkript) und
+    damit auch klein genug fuer direkten Kontext-Einbau ist.
+
+    Antragsvorlage UND Vorantrag werden zusammengefuegt wenn beide da sind
+    (relevant bei Folgeverlaengerung). Bei Akutantrag/Verlaengerung/
+    Entlassbericht typisch nur die Antragsvorlage. Bei Anamnese/
+    Dokumentation typisch keines.
+
+    Returns: (verlauf_context, transcript_context, patientendaten_context).
+    Alle drei Strings, ggf. "".
+    """
+    verlauf_context = (
+        parent_context.get("verlauf_summary_text")
+        or parent_context.get("source_verlauf_text")
+        or ""
+    )
+    transcript_context = (
+        parent_context.get("transcript_summary_text")
+        or parent_context.get("result_transcript")
+        or ""
+    )
+    # Patientendaten: ggf. beide Quellen zusammenfuegen mit klarem Separator
+    antragsvorlage = (parent_context.get("source_antragsvorlage_text") or "").strip()
+    vorantrag      = (parent_context.get("source_vorantrag_text") or "").strip()
+    parts = []
+    if antragsvorlage:
+        parts.append("ANTRAGSVORLAGE (Anamnese, Diagnosen, Status):\n" + antragsvorlage)
+    if vorantrag:
+        parts.append("VORANTRAG (vorheriger Bericht mit Verlauf, Diagnosen):\n" + vorantrag)
+    patientendaten_context = "\n\n".join(parts)
+
+    return verlauf_context, transcript_context, patientendaten_context
+
+
+def _build_repair_context(
+    parent: dict,
+    req_codes: list[str],
+    req_hint: str,
+    *,
+    repair_sources: Optional[dict] = None,
+):
     """Geteilte Logik von preview + execute:
       - validiert dass parent.status=done und result_text vorhanden
       - liest QC, filtert akzeptierte Issues, validiert dass alle Codes existieren
       - baut den verketteten Original-Text (Anamnese Two-Stage-Case)
+      - v19.3: extrahiert Verlauf/Transkript-Kontext aus repair_sources
       - baut den final_prompt
     Returns: (workflow, original_text, accepted_issues, final_prompt)
     Wirft HTTPException(400|422) bei Validierungsfehlern.
+
+    v19.3 Argument:
+      repair_sources: Output von job_queue.get_repair_context(). Enthaelt
+                      verlauf_summary_text, source_verlauf_text,
+                      transcript_summary_text, result_transcript. Wenn None,
+                      laeuft Repair ohne Kontext (Backwards-Compat fuer alte
+                      Tests oder Edge-Cases). Caller sollte das normalerweise
+                      mitliefern.
     """
     if parent.get("status") != "done":
         raise HTTPException(
@@ -392,8 +457,28 @@ def _build_repair_context(parent: dict, req_codes: list[str], req_hint: str):
 
     accepted_issues = [i for i in all_issues if i.code in accepted_codes_set]
     original_for_prompt = combined_result_text(workflow, result_text, befund_text)
+
+    # v19.3: Quellen aus repair_sources extrahieren (Synthese bevorzugt,
+    # Roh-Version als Fallback). Bei repair_sources=None laeuft der Prompt
+    # ohne Kontext - dann verhaelt sich Repair wie pre-v19.3.
+    if repair_sources:
+        verlauf_context, transcript_context, patientendaten_context = _resolve_repair_sources(repair_sources)
+        logger.info(
+            "Repair-Kontext: Verlauf=%dw, Transkript=%dw, Patientendaten=%dw",
+            len(verlauf_context.split()) if verlauf_context else 0,
+            len(transcript_context.split()) if transcript_context else 0,
+            len(patientendaten_context.split()) if patientendaten_context else 0,
+        )
+    else:
+        verlauf_context = ""
+        transcript_context = ""
+        patientendaten_context = ""
+
     final_prompt = build_repair_prompt(
         workflow, original_for_prompt, accepted_issues, req_hint or "",
+        verlauf_context=verlauf_context,
+        transcript_context=transcript_context,
+        patientendaten_context=patientendaten_context,
     )
     return workflow, original_for_prompt, accepted_issues, final_prompt
 
@@ -410,8 +495,13 @@ async def repair_preview(
     Vorschau-Funktion, damit der Therapeut den Prompt vor Versand pruefen
     kann."""
     parent = await _resolve_parent_job(job_id)
+    # v19.3: Kontext-Quellen laden (Verlauf + Transkript). Diese gehen NICHT
+    # ueber die normale Job-API raus (Datenschutz), aber der Repair-Prompt
+    # bekommt sie eingebaut.
+    repair_sources = await job_queue.get_repair_context(job_id)
     workflow, _original, accepted_issues, final_prompt = _build_repair_context(
         parent, req.accepted_issue_codes, req.user_hint,
+        repair_sources=repair_sources,
     )
     return RepairPreviewResponse(
         final_prompt=final_prompt,
@@ -498,6 +588,12 @@ async def repair_execute(
     via /jobs/{repair_id} pollen."""
     parent = await _resolve_parent_job(job_id)
 
+    # v19.3: Repair-Kontext-Quellen laden. Beide Pfade (custom + nicht-custom)
+    # nutzen den Kontext - bei custom_final_prompt zwar nicht fuer den Prompt
+    # selbst (User hat eigenen geschrieben), aber wir validieren trotzdem dass
+    # parent_job auflesbar ist.
+    repair_sources = await job_queue.get_repair_context(job_id)
+
     # custom_final_prompt erlaubt dem UI, den Preview-Prompt zu editieren
     # bevor er ans Modell geht. Wenn gesetzt: damit den Re-Build ueberspringen
     # und exakt diesen Prompt verwenden.
@@ -516,6 +612,7 @@ async def repair_execute(
     else:
         workflow, _original, _accepted, final_prompt = _build_repair_context(
             parent, req.accepted_issue_codes, req.user_hint,
+            repair_sources=repair_sources,
         )
         custom_used = False
 
@@ -812,6 +909,10 @@ async def create_generate_job(
                 verlaufsdoku_text = clean_verlauf_text(verlaufsdoku_text)
                 verlaufsdoku_text = _check_ocr_garbage(
                     verlaufsdoku_text, "Verlaufsdokumentation", verlaufsdoku_name)
+                # v19.3: Roh-Verlauf SOFORT snapshotten, unabhaengig von Stage-1.
+                # Damit ist der Repair-Kontext auch bei kurzen Verlaeufen
+                # (< STAGE1_VERLAUF_MIN_WORDS) verfuegbar.
+                verlaufsdoku_raw_text = verlaufsdoku_text
             except Exception as e:
                 logger.warning("Verlaufsdoku-Extraktion fehlgeschlagen: %s", e)
 
@@ -962,6 +1063,8 @@ async def create_generate_job(
         # P2-Befund) mit der Verdichtung weiterarbeitet.
         _transkript_raw_for_result = transkript_text
         _transcript_stage1_audit: Optional[dict] = None
+        # v19.3: Transcript-Synthese persistieren wenn Stage 1 erfolgreich
+        _transcript_summary_text: Optional[str] = None
         _tr_stage1_enabled = getattr(settings, "TRANSCRIPT_STAGE1_ENABLED", True)
         _tr_stage1_min_words = getattr(
             settings, "TRANSCRIPT_STAGE1_MIN_WORDS", _TRANSCRIPT_STAGE1_MIN_WORDS,
@@ -1003,6 +1106,7 @@ async def create_generate_job(
 
                 effective_target = tr_result.get("target_words", tr_target_override)
                 transkript_text = tr_result["summary"]   # ÜBERSCHREIBEN
+                _transcript_summary_text = tr_result["summary"]  # v19.3: fuer Repair-Kontext persistieren
                 _transcript_stage1_audit = {
                     "applied":              True,
                     "raw_word_count":       tr_result["raw_word_count"],
@@ -1569,11 +1673,20 @@ async def create_generate_job(
                 if (_stage1_audit and _stage1_audit.get("applied"))
                 else None
             ),
+            # v19.3: Repair-Kontext-Quellen.
+            # source_verlauf_text:         Roh-Verlauf nach clean_verlauf_text,
+            #                              UNABHAENGIG von Stage 1.
+            # transcript_summary_text:     Synthese des Transkripts wenn
+            #                              Transcript-Stage-1 lief.
+            # source_antragsvorlage_text:  Antragsvorlage nach extract_text
+            #                              (Akutantrag/Verlaengerung/Entlassb.).
+            # source_vorantrag_text:       Vorantrag bei Folgeverlaengerung.
+            "source_verlauf_text":        verlaufsdoku_raw_text or None,
+            "transcript_summary_text":    _transcript_summary_text,
+            "source_antragsvorlage_text": antragsvorlage_text or None,
+            "source_vorantrag_text":      vorantrag_text or None,
             # v19.3: Transkript-Stage-1-Audit (None wenn nicht relevant oder
-            # Workflow nicht in _TRANSCRIPT_STAGE1_WORKFLOWS). Aktuell nur
-            # im Result-Dict — keine eigene DB-Spalte/JobState-Spiegelung,
-            # weil job_queue.run_job das Feld nicht kennt. Folge-PR
-            # falls Persistenz/Telemetrie-Aggregation gewuenscht.
+            # Workflow nicht in _TRANSCRIPT_STAGE1_WORKFLOWS).
             "transcript_summary_audit": _transcript_stage1_audit,
         }
 
