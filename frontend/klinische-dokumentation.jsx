@@ -758,6 +758,7 @@ const S = `
   .diff-stat-rem { color: #8b1a1a; }
   .diff-stat-note { color: var(--st-text-soft); font-weight: 400; }
   .diff-body {
+    margin: 0; padding: 6px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 12px; line-height: 1.5; max-height: 600px; overflow: auto;
     white-space: pre-wrap;
   }
