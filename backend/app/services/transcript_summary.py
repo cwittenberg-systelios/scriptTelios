@@ -213,6 +213,10 @@ async def summarize_transcript(
         # in Verdichtungen strukturell legitim sind (selbes Thema in
         # Section 1+2). deduplicate_paragraphs wird intern aufgerufen.
         skip_aggressive_dedup=True,
+        # v19.2.2: harter Anti-Think-Pfad direkt beim ersten Call.
+        # Konsistent mit verlauf_summary - Verdichtungs-Tasks triggern bei
+        # Qwen3 lange Think-Bloecke trotz "think":False+/no_think.
+        force_hard_no_think=True,
     )
 
     summary = (result.get("text") or "").strip()
@@ -305,6 +309,7 @@ async def summarize_transcript(
                 # nicht zu niedrig (sonst greift Anti-Think nicht mehr).
                 temperature_override=0.3,
                 skip_aggressive_dedup=True,
+                force_hard_no_think=True,  # v19.2.2: konsistent zum Hauptcall
             )
         except Exception as e:
             logger.error("Transcript-Stage 1 Retry-Call fehlgeschlagen: %s", e)

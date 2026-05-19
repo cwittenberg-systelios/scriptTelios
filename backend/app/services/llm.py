@@ -594,6 +594,7 @@ async def generate_text(
     expected_keywords: Optional[list[str]] = None,
     temperature_override: Optional[float] = None,
     skip_aggressive_dedup: bool = False,
+    force_hard_no_think: bool = False,
 ) -> dict:
     """
     Generiert Text ausschliesslich via lokalem Ollama-Modell.
@@ -625,6 +626,17 @@ async def generate_text(
                          strukturell vorkommen (eine Sitzung kann zu mehreren
                          Themen-Buckets gehoeren). Default False = bisheriges
                          Verhalten (case-insensitive Dedup).
+
+    v19.2.2-Parameter:
+      force_hard_no_think: Wenn True, wird der harte Anti-Think-Pfad direkt
+                         beim ERSTEN Call genutzt statt nur als Retry-Fallback.
+                         Aktiviert: /no_think doppelt, System-Prompt-Append,
+                         Temperatur +0.2, prefilled '<think>\\n\\n</think>\\n\\n'.
+                         Fuer Stage-1-Calls bei grossen Inputs (>10000w), wo
+                         Qwen3 sonst 50-67% der Tokens im internen Reasoning
+                         verbraucht trotz "think":False und einmaligem /no_think
+                         am Ende (bekanntes Ollama/Qwen3-Verhalten, siehe
+                         ollama/12907, ollama/14798).
     """
     if len(user_content) > MAX_USER_CONTENT_CHARS:
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
@@ -706,11 +718,30 @@ async def generate_text(
     assistant_primer = PRIMERS.get(workflow or "", "")
 
     t0 = time.time()
-    result = await _generate_ollama(
-        system_prompt, user_content, max_tokens,
-        model=model, assistant_primer=assistant_primer,
-        temperature_override=temperature_override,
-    )
+    if force_hard_no_think:
+        # v19.2.2: Direkt den harten Anti-Think-Pfad nutzen statt erst auf
+        # Retry zu warten. Bei grossen Inputs (>10000w) verbraucht Qwen3
+        # sonst 50-67% der Tokens im Reasoning trotz "think":False + /no_think.
+        # Sichert /no_think doppelt + System-Append + Temp+0.2 + prefilled
+        # think-Block beim ERSTEN Versuch.
+        logger.info(
+            "force_hard_no_think aktiviert - nutze _retry_without_thinking "
+            "direkt fuer Anti-Think-Schutz beim ersten Call"
+        )
+        result = await _retry_without_thinking(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            max_tokens=max_tokens,
+            model=model,
+            assistant_primer=assistant_primer,
+            original_telemetry={},
+        )
+    else:
+        result = await _generate_ollama(
+            system_prompt, user_content, max_tokens,
+            model=model, assistant_primer=assistant_primer,
+            temperature_override=temperature_override,
+        )
 
     # ── Postprocessing (v19.1: ausgelagert in _postprocess_text, damit
     # ein etwaiger Retry den exakt gleichen Pfad durchlaeuft) ──────────────
@@ -1146,6 +1177,19 @@ async def _retry_without_thinking(
     num_ctx = _estimate_num_ctx(hard_system, hard_no_think, max_tokens)
     num_ctx = max(num_ctx, profile.get("min_ctx", 2048))
 
+    # v19.2.2: Prefill leeren Think-Block im assistant_primer.
+    # Wenn das Modell sieht "<think>\n\n</think>\n\n" als Beginn der eigenen
+    # Antwort, kann es den Think-Block nicht mehr fuellen — er ist schon
+    # geschlossen. Workaround aus ollama/14798 fuer Qwen3-Familie, wo
+    # "think":False im API allein nicht zuverlaessig greift.
+    # Bei Workflows mit normalem Primer: prefill VOR den Primer setzen.
+    # Das Postprocessing strippt <think>...</think> spaeter eh raus.
+    effective_primer = assistant_primer or ""
+    if effective_model.lower().startswith("qwen3"):
+        prefilled_primer = "<think>\n\n</think>\n\n" + effective_primer
+    else:
+        prefilled_primer = effective_primer
+
     payload = {
         "model":      effective_model,
         "stream":     False,
@@ -1160,7 +1204,7 @@ async def _retry_without_thinking(
         "messages": [
             {"role": "system",    "content": hard_system},
             {"role": "user",      "content": hard_no_think},
-            *([{"role": "assistant", "content": assistant_primer}] if assistant_primer else []),
+            *([{"role": "assistant", "content": prefilled_primer}] if prefilled_primer else []),
         ],
     }
 

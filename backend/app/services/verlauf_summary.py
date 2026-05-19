@@ -351,6 +351,16 @@ async def summarize_verlauf(
     # v19.2.2: Temperatur 0.4 statt 0.2 — bricht deterministische Reasoning-Loops
     # bei Qwen3. Niedrige Temperatur (0.0-0.2) provoziert lange Think-Bloecke
     # weil das Modell deterministisch in den "vorsichtig denken"-Pfad geht.
+    # v19.2.2: force_hard_no_think=True - Stage-1 nutzt direkt den harten
+    # Anti-Think-Pfad statt erst auf Retry zu warten. Bei 12962w-Inputs zeigte
+    # das Eval-Log think_ratio von 50-67% trotz "think":False + /no_think am
+    # Ende. Defense in Depth:
+    #   - /no_think doppelt (Anfang + Ende)
+    #   - System-Prompt-Append mit expliziter Anti-Think-Anweisung
+    #   - Temperatur +0.2 (auf 0.6 effektiv fuer Stage-1)
+    #   - prefilled "<think>\n\n</think>\n\n" als assistant_primer
+    # Siehe ollama/12907, ollama/14798 — "think":False allein ist bei Qwen3
+    # nicht zuverlaessig.
     import time as _t
     t0 = _t.time()
     result = await generate_text(
@@ -360,6 +370,7 @@ async def summarize_verlauf(
         workflow=None,
         temperature_override=0.4,
         skip_aggressive_dedup=True,
+        force_hard_no_think=True,
     )
 
     summary = (result.get("text") or "").strip()
@@ -520,6 +531,7 @@ async def _retry_stricter_summary(
             # nicht zu deterministisch, sonst greift Anti-Think-Schutz nicht
             temperature_override=0.3,
             skip_aggressive_dedup=True,  # v19.2.1: konsistent zu summarize_verlauf
+            force_hard_no_think=True,    # v19.2.2: konsistent zu summarize_verlauf
         )
     except Exception as e:
         logger.error("Stage 1 Retry-Call fehlgeschlagen: %s", e)
