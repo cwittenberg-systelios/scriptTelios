@@ -949,7 +949,7 @@ async def create_generate_job(
                     eb = bands["extraction"]
                     # 70% des Extraktions-Bandes ist die Stage-1-Phase
                     stage1_progress = eb[0] + int((eb[1] - eb[0]) * 0.7)
-                    job.set_progress(stage1_progress, "Verlauf-Verdichtung (Stage 1)")
+                    job.set_progress(stage1_progress, "Sammeln und Zusammenfassen von Informationen.")
             except Exception:
                 pass
 
