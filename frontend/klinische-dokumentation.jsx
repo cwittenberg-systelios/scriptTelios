@@ -2576,6 +2576,23 @@ function P0({ toast }) {
     }
   }
 
+  async function retryRecording(id) {
+    // Status sofort optimistisch setzen damit der Button verschwindet
+    setRecordings(prev => prev.map(r => r.id === id ? { ...r, status: "uploading", error_msg: null } : r));
+    try {
+      const res = await apiFetch(`${getApiBase()}/recordings/${id}/retry`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      toast("Transkription wird erneut gestartet");
+    } catch (e) {
+      // Bei Fehler den vorherigen Status zurueckholen
+      toast("Erneuter Versuch fehlgeschlagen: " + e.message);
+      setRecordings(prev => prev.map(r => r.id === id ? { ...r, status: "error" } : r));
+    }
+  }
+
   const STATUS = {
     uploading:    { text: "Wird hochgeladen…",    color: "#c07000" },
     transcribing: { text: "Transkription läuft…", color: "#0060c0" },
@@ -2685,6 +2702,12 @@ function P0({ toast }) {
                       )}
                       style={{padding:"4px 10px",fontSize:12,border:"1px solid var(--border)",borderRadius:4,background:"transparent",cursor:"pointer",textDecoration:"none",color:"var(--fg)"}}
                       title="Transkript als .txt herunterladen">⬇ Transkript</button>
+                  )}
+                  {!isTemp && r.status === "error" && r.has_audio !== false && (
+                    <button type="button"
+                      onClick={() => retryRecording(r.id)}
+                      style={{padding:"4px 10px",fontSize:12,border:"1px solid var(--st-blue, #0060c0)",borderRadius:4,background:"transparent",cursor:"pointer",color:"var(--st-blue, #0060c0)",fontWeight:600}}
+                      title="Transkription erneut versuchen">↻ Erneut versuchen</button>
                   )}
                   {!isTemp && (
                     <button onClick={() => deleteRecording(r.id)}

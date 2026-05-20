@@ -78,6 +78,50 @@ async def _active_job_running() -> bool:
         return (result.scalar() or 0) > 0
 
 
+async def _wait_for_ollama_ready(timeout_s: float = 180.0) -> bool:
+    """Wartet bis Ollama warm ist (Modell resident im VRAM).
+
+    Hintergrund: Beim Server-Cold-Start laedt Ollama Qwen3:32b (~20 GB) im
+    Hintergrund in den VRAM. Waehrend dieses Ladens ist die VRAM-Allokation
+    transient instabil. Wenn pyannote + Whisper in diesem Fenster parallel
+    allokieren, gibt es CUDA-OOM - auch wenn Steady-State (26/32 GB) passt.
+
+    Ein 1-Token-Ping antwortet bei warmem Modell in <1s, bei kaltem in 60-90s.
+    Wir pollen mit kurzem Timeout pro Versuch.
+    """
+    import time
+    import httpx
+    deadline = time.monotonic() + timeout_s
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        t0 = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                r = await client.post(
+                    f"{settings.OLLAMA_HOST}/api/generate",
+                    json={
+                        "model":      settings.OLLAMA_MODEL,
+                        "prompt":     "/no_think",
+                        "stream":     False,
+                        "keep_alive": -1,
+                        "options":    {"num_predict": 1},
+                    },
+                )
+            if r.status_code == 200:
+                elapsed = time.monotonic() - t0
+                if attempt > 1:
+                    logger.info("Ollama warm nach %d Versuchen (%.1fs)", attempt, elapsed)
+                return True
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            logger.info("Ollama Cold-Start (Versuch %d, %s) - warte 3s", attempt, type(e).__name__)
+        except Exception as e:
+            logger.warning("Ollama-Ping unerwarteter Fehler (%s) - warte 3s", e)
+        await asyncio.sleep(3)
+    logger.warning("Ollama nicht innerhalb %.0fs warm geworden - fahre trotzdem fort", timeout_s)
+    return False
+
+
 async def p0_worker():
     logger.info("P0-Worker gestartet")
     while True:
@@ -148,6 +192,11 @@ async def _transcribe_background(rec_id: int, audio_path: Path):
     from app.services import transcription as _transcription
     try:
         await _set_status(rec_id, "transcribing")
+        # Cold-Start-Schutz: warten bis Ollama warm ist. Verhindert CUDA-OOM
+        # wenn Whisper+pyannote VRAM allokieren waehrend Qwen3:32b noch laedt.
+        # Bei warmem Ollama (Normalfall) kostet das ~0.3s, beim Cold-Start nach
+        # Server-Boot bis zu 90s. Siehe _wait_for_ollama_ready() fuer Details.
+        await _wait_for_ollama_ready()
         # transcribe_audio ist async und delegiert die CPU-lastige Whisper-
         # Arbeit selbst per run_in_executor in einen Thread - kein zusaetzliches
         # Wrapping noetig. Frueher: loop.run_in_executor(None, lambda:
@@ -362,6 +411,59 @@ async def download_recording(
         filename=f"{label}{suffix}",
         media_type="audio/webm",
     )
+
+
+@router.post("/{rec_id}/retry", response_model=RecordingOut)
+async def retry_recording(
+    rec_id: int,
+    current_user: str = Depends(get_current_user),
+):
+    """Stellt eine gescheiterte Aufnahme erneut in die Transkriptions-Queue.
+
+    Voraussetzungen:
+    - Recording im Status "error"
+    - Audio-Datei noch auf Disk (24h-Retention nicht abgelaufen)
+
+    Wird typischerweise nach Cold-Start-OOM aufgerufen wenn die GPU
+    inzwischen wieder Kapazitaet hat.
+    """
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(Recording)
+            .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
+        )
+        rec = result.scalar_one_or_none()
+        if not rec:
+            raise HTTPException(status_code=404, detail="Recording nicht gefunden")
+        _assert_owner(rec, current_user)
+
+        if rec.status != "error":
+            raise HTTPException(
+                status_code=409,
+                detail=f"Retry nur bei status=error moeglich (aktuell: {rec.status})",
+            )
+
+        audio_path = recordings_dir() / rec.filename
+        if not audio_path.exists():
+            raise HTTPException(
+                status_code=410,
+                detail="Audiodatei nicht mehr vorhanden (nach 24h gelöscht). "
+                       "Retry nicht möglich.",
+            )
+
+        # Status zuruecksetzen, error_msg loeschen
+        rec.status = "uploading"
+        rec.error_msg = None
+        await session.commit()
+        await session.refresh(rec)
+        out = _rec_to_out(rec)
+
+    # Mit hoeherer Prioritaet einreihen damit der Therapeut die Retry-Wirkung
+    # schnell sieht (statt hinter eventuellen Neu-Uploads zu warten)
+    await p0_queue.put((_PRIO_URGENT, rec_id, audio_path))
+    logger.info("Recording %d (Therapeut: %s) RETRY in P0-Queue (Größe: %d)",
+                rec_id, current_user, p0_queue.qsize())
+    return out
 
 
 @router.get("/{rec_id}/transcript")

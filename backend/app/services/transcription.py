@@ -1079,10 +1079,17 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
         timed_lines.sort(key=lambda t: t[0])
         all_lines = [line for _, line in timed_lines]
 
-        if not all_lines:
+        # WICHTIG: all_segments pruefen, NICHT all_lines!
+        # all_lines enthaelt bereits die "[--- AUDIO LUECKE ---]"-Marker fuer
+        # gescheiterte Chunks. Wenn alle Chunks scheitern besteht all_lines
+        # nur aus Skip-Markern (76 "Woerter" Muelltext). Nur all_segments
+        # enthaelt echte transkribierte Audio-Inhalte.
+        if not all_segments:
+            total_skipped_sec = sum(s["abs_end"] - s["abs_start"] for s in skipped_chunks)
             raise RuntimeError(
-                "Alle Chunks fehlgeschlagen oder leer – Transkription nicht moeglich. "
-                "Prüfe CUDA-Speicher und Audioqualität."
+                f"Transkription fehlgeschlagen: alle {len(chunks)} Chunks "
+                f"({total_skipped_sec/60:.1f} Min Audio) gescheitert. "
+                "Pruefe CUDA-Speicher (nvidia-smi) und Server-Log."
             )
 
         if skipped_chunks:
