@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 
 // sysTelios CI – angepasst an Confluence-Intranet-Screenshot:
@@ -2281,6 +2281,53 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   }
 }
 
+// Sprint B (Multi-Job-Liste P1): non-blocking Variante von generate().
+// Sendet nur den POST und liefert die job_id sofort zurueck, OHNE auf
+// Abschluss zu warten. Polling/SSE fuer Status uebernimmt die aufrufende
+// Komponente (P1 ueber selectedJobId-useEffect). Bewusst nicht ueber
+// generate() refaktoriert, weil P2/P3/P4 weiterhin den blockierenden
+// Flow nutzen und buildJobFormData()-Extraktion ein eigener Sprint ist.
+async function startJob(workflow, prompt, userContent, files = {}) {
+  const therapeutId = getConfluenceUser();
+  const fd = new FormData();
+  fd.append("workflow",   workflow);
+  fd.append("workflow_instructions", prompt);
+  if (files.befundVorlage) fd.append("befund_vorlage", files.befundVorlage);
+  if (therapeutId)       fd.append("therapeut_id",    therapeutId);
+  if (files.patientName) fd.append("patientenname",   files.patientName);
+
+  if (files.audio && files.audio.__p0recording) {
+    fd.append("p0_recording_id", String(files.audio.id));
+    fd.append("priority", "high");
+    if (files.audio.transcript) fd.append("transcript", files.audio.transcript);
+  } else if (files.audio) {
+    fd.append("transcript", userContent);
+    fd.append("audio", files.audio);
+  } else if (files.txtFile) {
+    fd.append("transcript_file", files.txtFile);
+    if (userContent) fd.append("transcript", userContent);
+  } else {
+    fd.append("transcript", userContent);
+  }
+
+  if (files.selbst)         fd.append("selbstauskunft",  files.selbst);
+  if (files.vorbef)         fd.append("vorbefunde",      files.vorbef);
+  if (files.verlauf)        fd.append("verlaufsdoku",    files.verlauf);
+  if (files.antragsvorlage) fd.append("antragsvorlage",  files.antragsvorlage);
+  if (files.vorantrag)      fd.append("vorantrag",       files.vorantrag);
+  if (files.style)          fd.append("style_file",      files.style);
+  if (files.diagnosen)      fd.append("diagnosen",       files.diagnosen);
+  if (files.bullets)        fd.append("bullets",         files.bullets);
+  if (files.styleText)      fd.append("style_text",      files.styleText);
+  if (files.model)          fd.append("model",            files.model);
+
+  const r = await apiFetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.detail || r.statusText);
+  return d.job_id;
+}
+
+
 // Laedt das Transkript eines Jobs vom Backend und speichert es als .txt
 async function downloadTranscript(jobId, filename = "transkript.txt") {
   const r = await apiFetch(`${getApiBase()}/jobs/${jobId}/transcript`);
@@ -2725,110 +2772,761 @@ function P0({ toast }) {
   );
 }
 
-function P1({ toast, resumeJob, onResumed, model }) {
-  const [audio, setAudio]   = useState(null);
-  const [txtFile, setTxtFile] = useState(null);
-  const [text, setText]     = useState("");
-  const [bullets, setBullets] = useState("");
-  const [style, setStyle]     = useState(null);
-  const [styleText, setStyleText] = useState("");
-  const [prompt, setPrompt] = useState(P_DOKU);
-  const [out, setOut]           = useState("");
-  const [outWarn, setOutWarn]       = useState(null);
-  const [job, jobOps]               = useJobResult();
-  const [lastJobId, setLastJobId] = useState(null);
-  const [hasTranscript, setHasTranscript] = useState(false);
-  const [busy, setBusy]         = useState(false);
-  const [currentJobId, setCurrentJobId] = useState(null);
-  const abortRef = useRef(null);
-  const [geschlecht, setGeschlecht] = useState("auto");
-  const [kuerzel, setKuerzel]         = useState("");
+// ══════════════════════════════════════════════════════════════════════════
+// Sprint B (Multi-Job-Liste P1): Job-Liste und Detail-Pane
+// ══════════════════════════════════════════════════════════════════════════
 
-  // Resume: laufenden Job nach Reload wieder aufnehmen
-  useEffect(() => {
-    if (!resumeJob || resumeJob.page !== "p1") return;
-    setBusy(true);
-    setCurrentJobId(resumeJob.jobId);
-    pollJob(resumeJob.jobId, 1200)
-      .then(job => {
-        if (!job) { setBusy(false); onResumed(); return; } // cancelled
-        setOut(job.result_text || "");
-        jobOps.applyOriginal(job);
-        setLastJobId(resumeJob.jobId);
-        setHasTranscript(job.has_transcript || false);
-        onResumed();
-      })
-      .catch(e => { setOut("Fehler: " + friendlyError(e)); onResumed(); })
-      .finally(() => setBusy(false));
-  }, [resumeJob]);
+// Status-Farben fuer Listen-Indikatoren. Gleicher Look wie Recording-Stati,
+// aber mit Job-spezifischen Stati (pending/running statt uploading/transcribing).
+const JOB_STATUS_STYLE = {
+  pending:   { dot: "#999",     label: "Wartet",   sub: "var(--st-text-soft)" },
+  running:   { dot: "#185FA5",  label: "Läuft",    sub: "#185FA5"             },
+  done:      { dot: "#2d7a3a",  label: "Fertig",   sub: "var(--st-text-soft)" },
+  cancelled: { dot: "#999",     label: "Abgebrochen", sub: "var(--st-text-soft)" },
+  error:     { dot: "#c02020",  label: "Fehler",   sub: "#c02020"             },
+};
 
-  function cancelRun() {
-    if (abortRef.current) abortRef.current.abort();
-    const jobId = currentJobId || loadActiveJob()?.jobId;
-    if (jobId) {
-      apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+// Sectioning analog zur Aufzeichnungs-Pattern: Aktiv / Heute / Gestern / Älter.
+function _sectionForJob(j, todayStart, yesterdayStart) {
+  if (j.status === "pending" || j.status === "running") return "Aktiv";
+  const t = j.created_at ? new Date(j.created_at).getTime() : 0;
+  if (t >= todayStart) return "Heute";
+  if (t >= yesterdayStart) return "Gestern";
+  return "Älter";
+}
+
+function _fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const today = new Date(); today.setHours(0,0,0,0);
+  // Heute: HH:MM, sonst TT.MM.
+  if (d.getTime() >= today.getTime()) {
+    return d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  }
+  return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" });
+}
+
+function JobListPane({
+  jobs, drafts, selected, onSelect, onNew, onDelete, onCancel, onDeleteDraft,
+  loading, error,
+}) {
+  const [olderExpanded, setOlderExpanded] = useState(false);
+
+  // Heute = lokale Mitternacht; Gestern = 24h davor
+  const todayStart = useMemo(() => {
+    const d = new Date(); d.setHours(0,0,0,0); return d.getTime();
+  }, [jobs]);
+  const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
+
+  const grouped = useMemo(() => {
+    const g = { Aktiv: [], Heute: [], Gestern: [], Älter: [] };
+    for (const j of jobs) {
+      const s = _sectionForJob(j, todayStart, yesterdayStart);
+      g[s].push(j);
     }
-    clearActiveJob();
-    setBusy(false);
-    setCurrentJobId(null);
+    return g;
+  }, [jobs, todayStart, yesterdayStart]);
+
+  function isSelectedJob(j) {
+    return selected && selected.type === "job" && selected.id === j.job_id;
+  }
+  function isSelectedDraft(d) {
+    return selected && selected.type === "draft" && selected.id === d.id;
   }
 
+  function renderItem(j) {
+    const sel = isSelectedJob(j);
+    const ss = JOB_STATUS_STYLE[j.status] || JOB_STATUS_STYLE.pending;
+    const isTerminal = j.status === "done" || j.status === "error" || j.status === "cancelled";
+    const isLive     = j.status === "pending" || j.status === "running";
+    const subStatus  = isLive
+      ? (j.progress_phase || ss.label) + (j.progress > 0 ? ` · ${j.progress}%` : "")
+      : ss.label;
+    const label      = j.patient_kuerzel || `Gespräch ${_fmtTime(j.created_at)}`;
+    return (
+      <div key={j.job_id}
+           onClick={() => onSelect({ type: "job", id: j.job_id })}
+           style={{
+             display:"flex", flexDirection:"column", gap:2,
+             padding:"8px 10px", borderRadius:4, cursor:"pointer",
+             background: sel ? "var(--st-red-pale)" : "transparent",
+             borderLeft: sel ? "3px solid var(--st-red)" : "3px solid transparent",
+             marginBottom: 2,
+           }}>
+        <div style={{display:"flex", alignItems:"center", gap:6}}>
+          <span style={{width:6, height:6, borderRadius:"50%", background: ss.dot, flexShrink:0}} />
+          <span style={{fontSize:13, fontWeight: sel ? 600 : 500,
+                        color:"var(--st-text)", overflow:"hidden",
+                        textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+            {label}
+          </span>
+          <span style={{fontSize:11, color:"var(--st-text-pale)", marginLeft:"auto", flexShrink:0}}>
+            {_fmtTime(j.created_at)}
+          </span>
+        </div>
+        <div style={{display:"flex", alignItems:"center", gap:6, paddingLeft:12}}>
+          <span style={{fontSize:11, color: ss.sub, flex:1,
+                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+            {subStatus}
+          </span>
+          {isTerminal && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDelete(j.job_id, label); }}
+              title="Gespräch endgültig löschen"
+              style={{
+                padding:"0 4px", fontSize:11, border:"none", background:"transparent",
+                color:"var(--st-text-pale)", cursor:"pointer", flexShrink:0,
+              }}>✕</button>
+          )}
+          {isLive && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onCancel(j.job_id); }}
+              title="Job abbrechen"
+              style={{
+                padding:"0 4px", fontSize:11, border:"none", background:"transparent",
+                color:"var(--st-red)", cursor:"pointer", flexShrink:0,
+              }}>✕</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Entwurfs-Item — eigenes Look (Stift-Icon, kein Status-Dot).
+  function renderDraft(d) {
+    const sel = isSelectedDraft(d);
+    const k = (d.kuerzel || "").trim();
+    let label = "Neuer Entwurf";
+    if (k) {
+      const kn = k.replace(/\.?$/, ".");
+      if (d.geschlecht === "w")      label = `Frau ${kn}`;
+      else if (d.geschlecht === "m") label = `Herr ${kn}`;
+      else                            label = kn;
+    }
+    const hasContent = !!(d.audio || d.txtFile || d.text || d.bullets || k);
+    return (
+      <div key={d.id}
+           onClick={() => onSelect({ type: "draft", id: d.id })}
+           style={{
+             display:"flex", flexDirection:"column", gap:2,
+             padding:"8px 10px", borderRadius:4, cursor:"pointer",
+             background: sel ? "var(--st-red-pale)" : "transparent",
+             borderLeft: sel ? "3px solid var(--st-red)" : "3px solid transparent",
+             marginBottom: 2,
+           }}>
+        <div style={{display:"flex", alignItems:"center", gap:6}}>
+          <span style={{width:14, fontSize:11, color:"var(--st-text-pale)", flexShrink:0, lineHeight:1}}>✎</span>
+          <span style={{fontSize:13, fontWeight: sel ? 600 : 500,
+                        fontStyle: hasContent ? "normal" : "italic",
+                        color: hasContent ? "var(--st-text)" : "var(--st-text-pale)",
+                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1}}>
+            {label}
+          </span>
+          {drafts.length > 1 && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDeleteDraft(d.id); }}
+              title="Entwurf verwerfen"
+              style={{padding:"0 4px", fontSize:11, border:"none", background:"transparent",
+                      color:"var(--st-text-pale)", cursor:"pointer", flexShrink:0}}>✕</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function renderSection(name, items, expandable = false, itemRenderer = renderItem) {
+    if (items.length === 0) return null;
+    if (expandable && !olderExpanded) {
+      return (
+        <div style={{margin:"8px 0 2px"}}>
+          <button onClick={() => setOlderExpanded(true)}
+                  style={{width:"100%", textAlign:"left", padding:"4px 10px", fontSize:10,
+                          fontWeight:600, letterSpacing:"0.08em", textTransform:"uppercase",
+                          color:"var(--st-text-soft)", background:"transparent",
+                          border:"none", cursor:"pointer"}}>
+            {name} ({items.length}) ▸
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div>
+        <div style={{padding:"8px 4px 2px", fontSize:10, fontWeight:600,
+                     letterSpacing:"0.08em", textTransform:"uppercase",
+                     color:"var(--st-text-soft)"}}>
+          {name}
+        </div>
+        {items.map(itemRenderer)}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      background:"var(--st-white)", border:"1px solid var(--st-gray-mid)",
+      borderRadius:5, padding:10, display:"flex", flexDirection:"column",
+      gap:2, minHeight:300,
+    }}>
+      <button onClick={onNew}
+              style={{
+                display:"flex", alignItems:"center", justifyContent:"center", gap:6,
+                padding:"8px 10px", fontSize:13, fontWeight:600,
+                background:"var(--st-red)", color:"white", border:"none",
+                borderRadius:4, cursor:"pointer", marginBottom:4,
+              }}>
+        + Neues Gespräch
+      </button>
+
+      {loading && jobs.length === 0 && drafts.length === 0 && (
+        <div style={{padding:"12px 8px", fontSize:12, color:"var(--st-text-pale)", textAlign:"center"}}>
+          Lade…
+        </div>
+      )}
+      {error && (
+        <div style={{padding:"6px 8px", fontSize:12, color:"#c02020"}}>
+          {error}
+        </div>
+      )}
+
+      {renderSection("Entwürfe", drafts, false, renderDraft)}
+      {renderSection("Aktiv",    grouped.Aktiv)}
+      {renderSection("Heute",    grouped.Heute)}
+      {renderSection("Gestern",  grouped.Gestern)}
+      {renderSection("Älter",    grouped.Älter, true)}
+    </div>
+  );
+}
+
+
+// Detail-Pane fuer einen ausgewaehlten (laufenden oder fertigen) Job.
+// Wenn der Job laeuft, wird der Inline-Progress vom Output-Component
+// uebernommen (loading=true + jobId fuer SSE). Bei terminaler Job-Anzeige
+// wird der finale Text statisch angezeigt; RepairBundle bleibt funktional.
+function JobDetailPane({ job, jobOps, jobState, toast, onCancel, onDelete, onBack }) {
+  // Output erwartet `text`, `loading`, `jobId`. Bei laufendem Job: loading=true
+  // damit der SSE-Progress greift; bei terminalem Job: loading=false.
+  const isLive    = job && (job.status === "pending" || job.status === "running");
+  const isError   = job && job.status === "error";
+  const cancelled = job && job.status === "cancelled";
+  const showText  = jobState.hasRepair ? jobState.text : (job?.result_text || "");
+  const label     = job?.patient_kuerzel || `Gespräch ${_fmtTime(job?.created_at)}`;
+
+  return (
+    <div className="workflow">
+      <div style={{
+        display:"flex", alignItems:"center", gap:10, padding:"10px 14px",
+        background:"var(--st-cream)", border:"1px solid var(--st-gray-mid)",
+        borderRadius:5,
+      }}>
+        <button onClick={onBack}
+                style={{padding:"4px 10px", fontSize:12, border:"1px solid var(--st-gray-border)",
+                        borderRadius:3, background:"transparent", cursor:"pointer",
+                        color:"var(--st-text-soft)"}}>
+          ← Zurück
+        </button>
+        <div style={{fontSize:13, fontWeight:600}}>{label}</div>
+        <span style={{
+          marginLeft:6, fontSize:11, padding:"2px 6px", borderRadius:3,
+          background: (JOB_STATUS_STYLE[job?.status] || JOB_STATUS_STYLE.pending).dot + "22",
+          color:      (JOB_STATUS_STYLE[job?.status] || JOB_STATUS_STYLE.pending).dot,
+          fontWeight:600,
+        }}>
+          {(JOB_STATUS_STYLE[job?.status] || {}).label || job?.status}
+        </span>
+        <div style={{marginLeft:"auto", display:"flex", gap:6}}>
+          {isLive && (
+            <button onClick={onCancel}
+                    style={{padding:"4px 10px", fontSize:12, border:"1px solid var(--st-red)",
+                            borderRadius:3, background:"transparent", color:"var(--st-red)",
+                            cursor:"pointer", fontWeight:600}}>
+              ✕ Abbrechen
+            </button>
+          )}
+          {!isLive && (
+            <button onClick={onDelete}
+                    style={{padding:"4px 10px", fontSize:12, border:"1px solid var(--st-gray-border)",
+                            borderRadius:3, background:"transparent", color:"var(--st-text-soft)",
+                            cursor:"pointer"}}>
+              ✕ Löschen
+            </button>
+          )}
+        </div>
+      </div>
+
+      {isError && job.error_msg && (
+        <div style={{padding:"10px 14px", background:"#fdecec", border:"1px solid #f0b0b0",
+                     borderRadius:5, fontSize:13, color:"#c02020"}}>
+          <strong>Fehler:</strong> {job.error_msg}
+        </div>
+      )}
+      {cancelled && (
+        <div style={{padding:"10px 14px", background:"var(--st-gray-light)",
+                     border:"1px solid var(--st-gray-border)", borderRadius:5,
+                     fontSize:13, color:"var(--st-text-soft)"}}>
+          Abgebrochen{showText ? " – generierter Text bis zum Abbruch:" : "."}
+        </div>
+      )}
+
+      <ResultVersionsTabs
+        hasRepair={jobState.hasRepair}
+        active={jobState.activeVersion}
+        onChange={jobOps.setActiveVersion}
+        disabled={jobState.repairBusy}
+      />
+      <Output text={showText} loading={isLive} jobId={job?.job_id}
+        onCopy={() => { navigator.clipboard.writeText(showText); toast("In Zwischenablage kopiert"); }}
+        extraButtons={job?.has_transcript ? [
+          { label: "Transkript ↓", onClick: () => downloadTranscript(job.job_id) }
+        ] : []} />
+
+      <RepairBundle job={jobState} ops={jobOps} toast={toast} />
+    </div>
+  );
+}
+
+
+// Hilfsfunktion: leerer Entwurf mit eindeutiger ID.
+// Die ID-Praefix "draft-" macht die Unterscheidung Entwurf vs Job in der
+// Selection-State eindeutig, ohne tuple-Logik.
+function _emptyDraft() {
+  const id = `draft-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+  return {
+    id,
+    audio: null,
+    txtFile: null,
+    text: "",
+    bullets: "",
+    style: null,
+    styleText: "",
+    prompt: P_DOKU,
+    geschlecht: "auto",
+    kuerzel: "",
+    starting: false,
+    createdAt: Date.now(),
+  };
+}
+
+function P1({ toast, resumeJob, onResumed, model }) {
+  // Multi-Draft-State (NEU, Sprint B Part 2)
+  // drafts: lokale Entwuerfe (nicht persistiert, leben nur im Component-State)
+  // jobs:   Jobs vom Backend (laufend, fertig, fehlgeschlagen)
+  // selected: { type: "draft"|"job", id: string } - was ist gerade im Detail-/Form-Pane?
+  const initialDraft = useMemo(() => _emptyDraft(), []);
+  const [drafts, setDrafts]               = useState([initialDraft]);
+  const [jobs, setJobs]                   = useState([]);
+  const [selected, setSelected]           = useState({ type: "draft", id: initialDraft.id });
+  const [detail, setDetail]               = useState(null); // voller Job-Dict (nur bei type=job)
+  const [listLoading, setListLoading]     = useState(true);
+  const [listError, setListError]         = useState(null);
+
+  // useJobResult-Bundle (fuer RepairBundle/Output); befuellt beim Selektieren
+  // eines fertigen Jobs via applyOriginal.
+  const [jobState, jobOps] = useJobResult();
+
+  // Aktueller Draft (falls type=draft), sonst null
+  const currentDraft = selected?.type === "draft"
+    ? drafts.find(d => d.id === selected.id)
+    : null;
+
+  // Patch-Helfer fuer einen einzelnen Draft-Eintrag.
+  // updateDraft(id, {text: "..."}) - merget patch ins Draft-Objekt.
+  const updateDraft = useCallback((id, patch) => {
+    setDrafts(prev => prev.map(d => d.id === id ? { ...d, ...patch } : d));
+  }, []);
+
+  // ── Liste laden + Polling alle 5s ───────────────────────────────────
+  const reloadJobs = useCallback(async () => {
+    try {
+      const r = await apiFetch(`${getApiBase()}/jobs?workflow=dokumentation`);
+      if (r.ok) {
+        const data = await r.json();
+        setJobs(data);
+        setListError(null);
+      } else {
+        setListError("Liste konnte nicht geladen werden (" + r.status + ")");
+      }
+    } catch (e) {
+      setListError(friendlyError(e));
+    } finally {
+      setListLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    reloadJobs();
+    const id = setInterval(reloadJobs, 5000);
+    return () => clearInterval(id);
+  }, [reloadJobs]);
+
+  // ── Resume: Banner verbrauchen, Job direkt selektieren ──────────────
+  // Mit Multi-Job-P1 brauchen wir den Resume-Mechanismus nicht mehr fuer
+  // Polling - der Job ist in der Liste sichtbar. Den Banner-State verbrauchen
+  // wir trotzdem damit der Parent ihn deaktiviert.
+  useEffect(() => {
+    if (resumeJob && resumeJob.page === "p1") {
+      setSelected({ type: "job", id: resumeJob.jobId });
+      clearActiveJob();
+      onResumed();
+    }
+  }, [resumeJob, onResumed]);
+
+  // ── Detail-Load + SSE fuer den selektierten Job ─────────────────────
+  // Strategie: Initial-Fetch (immer), dann SSE NUR wenn Job pending/running.
+  // SSE-Events: progress (ignorieren - JobProgressBar zeichnet sie selbst),
+  //             done/error/cancelled (-> Re-Fetch des Detail-Dicts).
+  // EventSource schliesst sich selbst nach Terminal-Event; bei Fehler fallback
+  // auf einmaliges Polling nach 5s.
+  useEffect(() => {
+    if (selected?.type !== "job") { setDetail(null); jobOps.reset(); return; }
+    const jobId = selected.id;
+    let cancelled = false;
+    let es = null;
+    let fallbackTimeout = null;
+
+    async function fetchDetail() {
+      try {
+        const r = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
+        if (cancelled) return null;
+        if (r.status === 404) {
+          // Job wurde von woanders geloescht
+          setSelected(null);
+          return null;
+        }
+        if (!r.ok) return null;
+        const j = await r.json();
+        if (cancelled) return null;
+        setDetail(j);
+        if (j.status === "done" || j.status === "cancelled") {
+          jobOps.applyOriginal(j);
+        }
+        return j;
+      } catch (_) { return null; }
+    }
+
+    (async () => {
+      const j = await fetchDetail();
+      if (cancelled || !j) return;
+      // SSE nur fuer laufende Jobs eroeffnen
+      if (j.status !== "pending" && j.status !== "running") return;
+      try {
+        es = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`);
+        es.onmessage = (e) => {
+          if (cancelled) return;
+          try {
+            const d = JSON.parse(e.data);
+            if (d.type === "done" || d.type === "error" || d.type === "cancelled") {
+              // Detail-Dict neu laden, dann SSE schliessen
+              fetchDetail();
+              if (es) try { es.close(); } catch (_) {}
+            }
+            // progress-Events absichtlich ignorieren - JobProgressBar im Output
+            // hoert dieselbe URL und zeichnet den Live-Progress eigenstaendig
+          } catch (_) {}
+        };
+        es.onerror = () => {
+          // SSE down -> einmal nach 5s nachfetchen falls der Job inzwischen fertig ist
+          if (es) try { es.close(); } catch (_) {}
+          if (!cancelled) fallbackTimeout = setTimeout(fetchDetail, 5000);
+        };
+      } catch (_) {
+        // EventSource nicht verfuegbar (alter Browser) -> nach 5s nachfetchen
+        fallbackTimeout = setTimeout(fetchDetail, 5000);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (es) try { es.close(); } catch (_) {}
+      if (fallbackTimeout) clearTimeout(fallbackTimeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+
+  // ── Draft-Aktionen ──────────────────────────────────────────────────
+  function newDraft() {
+    const d = _emptyDraft();
+    setDrafts(prev => [...prev, d]);
+    setSelected({ type: "draft", id: d.id });
+  }
+
+  function deleteDraft(id) {
+    setDrafts(prev => {
+      const remaining = prev.filter(d => d.id !== id);
+      // Wenn das der letzte Entwurf war: einen neuen leeren anlegen damit
+      // das Formular nie ganz weg ist (saubere "leeres Formular"-Position).
+      if (remaining.length === 0) {
+        const fresh = _emptyDraft();
+        // Selection muss in einem separaten setState passieren (sind in
+        // unterschiedlichen State-Updates, batching durch React)
+        setSelected({ type: "draft", id: fresh.id });
+        return [fresh];
+      }
+      // Wenn der geloeschte Entwurf gerade ausgewaehlt war, einen anderen
+      // Entwurf selektieren - oder gar nichts (User waehlt neu).
+      if (selected?.type === "draft" && selected.id === id) {
+        setSelected({ type: "draft", id: remaining[0].id });
+      }
+      return remaining;
+    });
+  }
+
+  // ── Generieren (non-blocking, draft -> job) ─────────────────────────
   async function run() {
-    const ac = new AbortController();
-    abortRef.current = ac;
-    setBusy(true);
-    setLastJobId(null);
-    setHasTranscript(false);
-    jobOps.reset();
-    const k = kuerzel.trim().replace(/\.?$/, "."); // sicherstellen dass Punkt am Ende
-    // v15 Bug F2: Keine Beispieltexte wie "die Klientin/Klient" mehr - das LLM
-    // hat das frueher als Patientenbezeichnung uebernommen statt der Initialen.
-    // Auch "Klient ${k}" als Beispiel weglassen - das suggeriert dem Modell dass
-    // es "Klient K." anstelle von "Frau K."/"Herr K." schreiben darf.
-    const nameHinweis = kuerzel.trim()
+    const d = currentDraft;
+    if (!d) return;
+    updateDraft(d.id, { starting: true });
+
+    const k = d.kuerzel.trim().replace(/\.?$/, ".");
+    // v15 Bug F2: Keine Beispieltexte wie "die Klientin/Klient" mehr
+    const nameHinweis = d.kuerzel.trim()
       ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}" oder "Herr ${k}").`
       : "";
     const geschlechtHinweis = {
       "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende konsequent weibliche Pronomen und Endungen.${nameHinweis}`,
       "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende konsequent männliche Pronomen und Endungen.${nameHinweis}`,
       "auto": `\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus dem Transkript ab (Namen, Pronomen, Anreden). Falls nicht erkennbar, verwende neutrale Formen.${nameHinweis}`,
-    }[geschlecht];
+    }[d.geschlecht];
 
-    const promptMitGeschlecht = prompt + geschlechtHinweis;
+    const promptMitGeschlecht = d.prompt + geschlechtHinweis;
 
-    // Expliziten Patientennamen fuer Backend zusammensetzen (P1)
-    // Format: "Frau M." / "Herr S." oder leer wenn kein Kuerzel
     let patientNameExplicit = null;
-    if (kuerzel.trim()) {
-      const kurz = k;  // bereits normalisiert mit Punkt
-      if (geschlecht === "w")      patientNameExplicit = `Frau ${kurz}`;
-      else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
-      else                          patientNameExplicit = kurz;  // nur Kuerzel wenn auto
+    if (d.kuerzel.trim()) {
+      const kurz = k;
+      if (d.geschlecht === "w")      patientNameExplicit = `Frau ${kurz}`;
+      else if (d.geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
+      else                            patientNameExplicit = kurz;
     }
 
     try {
-      const result = await generate("dokumentation", promptMitGeschlecht, text || "", {
-        audio: audio,
-        txtFile: txtFile || null,
-        style: style,
-        styleText: styleText || null,
-        bullets: bullets || null,
-        model: model || null,
-        patientName: patientNameExplicit,
-        onJobId: setCurrentJobId,
-        signal: ac.signal,
-      }, "p1");
-      if (!result) { setBusy(false); setCurrentJobId(null); return; }
-      setOut(result.text || "");
-      setOutWarn(getEmptyWarning(result.text));
-      jobOps.applyOriginal(result);
-      setLastJobId(result.jobId);
-      setHasTranscript(result.hasTranscript || false);
-      idbClearAudio().catch(() => {}); // Aufnahme nach Job-Start nicht mehr benötigt
+      const jobId = await startJob("dokumentation", promptMitGeschlecht, d.text || "", {
+        audio:        d.audio,
+        txtFile:      d.txtFile || null,
+        style:        d.style,
+        styleText:    d.styleText || null,
+        bullets:      d.bullets || null,
+        model:        model || null,
+        patientName:  patientNameExplicit,
+      });
+      // Draft loeschen (ist jetzt ein Job), neuen Job selektieren
+      setDrafts(prev => prev.filter(x => x.id !== d.id));
+      setSelected({ type: "job", id: jobId });
+      reloadJobs();
+      // Wenn keine weiteren Drafts existieren: einen neuen anlegen (im Hintergrund),
+      // damit "+ Neues Gespräch" immer eine konsistente Liste hat.
+      // Nicht selektiert - User soll den neuen Job sehen, nicht zurueck zum Form.
+      setDrafts(prev => prev.length === 0 ? [_emptyDraft()] : prev);
+    } catch (e) {
+      toast("Fehler: " + friendlyError(e));
+      updateDraft(d.id, { starting: false });
     }
-    catch (e) { setOut("Fehler: " + friendlyError(e)); }
-    setBusy(false);
-    setCurrentJobId(null);
+  }
+
+  // ── Job-Aktionen ────────────────────────────────────────────────────
+  async function onDeleteJob(jobId, label) {
+    if (!confirm(`Gespräch "${label}" endgültig löschen?`)) return;
+    try {
+      const r = await apiFetch(`${getApiBase()}/jobs/${jobId}/permanent`, { method: "DELETE" });
+      if (!r.ok) {
+        if (r.status === 409) toast("Job läuft noch – erst abbrechen.");
+        else toast("Löschen fehlgeschlagen: " + r.statusText);
+        return;
+      }
+      if (selected?.type === "job" && selected.id === jobId) {
+        // Auf den ersten Entwurf zurueckfallen (oder einen neuen anlegen)
+        if (drafts.length > 0) setSelected({ type: "draft", id: drafts[0].id });
+        else {
+          const fresh = _emptyDraft();
+          setDrafts([fresh]);
+          setSelected({ type: "draft", id: fresh.id });
+        }
+      }
+      reloadJobs();
+    } catch (e) {
+      toast(friendlyError(e));
+    }
+  }
+
+  async function onCancelJob(jobId) {
+    try {
+      await apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" });
+      reloadJobs();
+    } catch (e) {
+      toast(friendlyError(e));
+    }
+  }
+
+  // ── Form-JSX (bound to currentDraft) ────────────────────────────────
+  // currentDraft ist garantiert non-null wenn dieser Zweig gerendert wird
+  // (deleteDraft sorgt dafuer dass immer mindestens ein Draft existiert).
+  const formCanGenerate = currentDraft &&
+    (currentDraft.audio || currentDraft.txtFile || currentDraft.text) &&
+    currentDraft.kuerzel.trim();
+
+  const formPane = currentDraft ? (
+    <div className="workflow">
+      <Card num="A" title="Gesprächsmaterial" badge="req" open={true}>
+        <InputTabs
+          tabs={[
+            { id:"audio", icon:"🎙", label:"Aufnahme" },
+            { id:"file",  icon:"📄", label:"Datei"    },
+            { id:"text",  icon:"✏️", label:"Text"     },
+          ]}
+        >
+          {(activeTab) => (<>
+            {activeTab === "audio" && (
+              <AudioInput file={currentDraft.audio} onFile={(f) => updateDraft(currentDraft.id, { audio: f })} />
+            )}
+            {activeTab === "file" && (
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                <div>
+                  <div style={{fontSize:11,fontWeight:600,color:"var(--st-text-soft)",marginBottom:4}}>Transkript-Datei</div>
+                  <Dropzone label="Transkript hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={currentDraft.txtFile} onFile={(f) => updateDraft(currentDraft.id, { txtFile: f })} />
+                </div>
+                <div>
+                  <div style={{fontSize:11,fontWeight:600,color:"var(--st-text-soft)",marginBottom:4}}>oder Audiodatei</div>
+                  <Dropzone label="Audiodatei hochladen" hint=".mp3 · .m4a · .wav · .ogg · .webm · .flac" accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*" icon="&#128266;"
+                    file={currentDraft.audio && !currentDraft.audio.__p0recording ? currentDraft.audio : null}
+                    onFile={(f) => updateDraft(currentDraft.id, { audio: f })} />
+                </div>
+              </div>
+            )}
+            {activeTab === "text" && (
+              <textarea rows={6} placeholder="Gesprächsinhalt direkt hier einfügen ..."
+                value={currentDraft.text}
+                onChange={(e) => updateDraft(currentDraft.id, { text: e.target.value })}
+                style={{marginTop:0}} />
+            )}
+          </>)}
+        </InputTabs>
+      </Card>
+
+      <Card num="B" title="Stichpunkte" badge="opt" open={false}>
+        <label className="field-label">Relevante Themen und Beobachtungen</label>
+        <textarea rows={4}
+          placeholder={"- Bericht ueber das Wochenende\n- Schlafprobleme anhaltend\n- Fortschritt bei Expositionsuebung ..."}
+          value={currentDraft.bullets}
+          onChange={(e) => updateDraft(currentDraft.id, { bullets: e.target.value })} />
+        <div className="field-note">Ergaenzt oder ersetzt das Transkript bei Bedarf</div>
+      </Card>
+
+      <Card num="C" title="Stilvorlage" badge="opt" open={false}>
+        <InputTabs
+          tabs={[
+            { id:"file", icon:"📎", label:"Datei"  },
+            { id:"text", icon:"✏️", label:"Text C&P" },
+          ]}
+        >
+          {(activeTab) => (<>
+            {activeTab === "file" && (<>
+              <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;"
+                file={currentDraft.style}
+                onFile={(f) => updateDraft(currentDraft.id, { style: f })} />
+              <div className="info-note" style={{marginTop:8}}>Der Schreibstil des hochgeladenen Textes wird bei der Generierung berücksichtigt.</div>
+            </>)}
+            {activeTab === "text" && (<>
+              <textarea rows={6} placeholder="Beispieldokumentation hier einfügen – der Schreibstil wird übernommen ..."
+                value={currentDraft.styleText}
+                onChange={(e) => updateDraft(currentDraft.id, { styleText: e.target.value })}
+                style={{marginTop:0}} />
+              <div className="field-note">Direkt eingefügter Beispieltext als Stilvorlage</div>
+            </>)}
+          </>)}
+        </InputTabs>
+      </Card>
+
+      <Card num="D" title="Prompt anpassen" open={false}>
+        <PromptEditor value={currentDraft.prompt}
+          onChange={(v) => updateDraft(currentDraft.id, { prompt: v })}
+          def={P_DOKU} />
+      </Card>
+
+      <div className="action-bar">
+        <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto", flexWrap:"wrap"}}>
+          <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
+          {[
+            { val:"w", label:"♀ weiblich" },
+            { val:"m", label:"♂ männlich" },
+            { val:"auto", label:"Auto"    },
+          ].map(({ val, label }) => (
+            <button key={val} onClick={() => updateDraft(currentDraft.id, { geschlecht: val })} style={{
+              padding:"4px 10px", borderRadius:3, cursor:"pointer",
+              fontSize:12, fontWeight: currentDraft.geschlecht === val ? 700 : 400,
+              background: currentDraft.geschlecht === val ? "var(--st-red)" : "var(--st-gray-light)",
+              color: currentDraft.geschlecht === val ? "white" : "var(--st-text-soft)",
+              border: currentDraft.geschlecht === val ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+              transition:"all 0.12s",
+            }}>{label}</button>
+          ))}
+          <div style={{display:"flex", alignItems:"center", gap:4, marginLeft:4}}>
+            <span style={{fontSize:11, color:"var(--st-text-soft)"}}>
+              Kürzel <span style={{color:"#c0392b", fontWeight:700}}>*</span>
+            </span>
+            <input
+              type="text"
+              value={currentDraft.kuerzel}
+              onChange={e => updateDraft(currentDraft.id, { kuerzel: e.target.value })}
+              placeholder="K."
+              maxLength={8}
+              required
+              style={{
+                width:48, padding:"3px 6px", fontSize:12, borderRadius:3,
+                border: currentDraft.kuerzel.trim() ? "1px solid var(--st-gray-border)" : "1px solid #c0392b",
+                background:"var(--st-bg)",
+                color:"var(--st-text)", fontFamily:"inherit",
+              }}
+            />
+          </div>
+        </div>
+        {currentDraft.starting
+          ? <button className="btn-secondary" disabled>Wird gestartet…</button>
+          : <button
+              className="btn-primary"
+              onClick={run}
+              disabled={!formCanGenerate}
+              title={
+                (!currentDraft.audio && !currentDraft.txtFile && !currentDraft.text)
+                  ? "Gespraechsmaterial erforderlich (Audio, Transkript oder Text)"
+                  : !currentDraft.kuerzel.trim()
+                    ? "Patientenkuerzel ist erforderlich"
+                    : ""
+              }
+            >Verlaufsnotiz generieren</button>
+        }
+      </div>
+    </div>
+  ) : null;
+
+  // Was rechts dargestellt wird haengt vom Selection-Type ab
+  let rightPane;
+  if (selected?.type === "job" && detail) {
+    rightPane = (
+      <JobDetailPane
+        job={detail}
+        jobState={jobState}
+        jobOps={jobOps}
+        toast={toast}
+        onCancel={() => onCancelJob(detail.job_id)}
+        onDelete={() => onDeleteJob(detail.job_id, detail.patient_kuerzel || "Gespräch")}
+        onBack={() => {
+          // Zurueck auf ersten Draft oder neuen anlegen
+          if (drafts.length > 0) setSelected({ type: "draft", id: drafts[0].id });
+          else {
+            const fresh = _emptyDraft();
+            setDrafts([fresh]);
+            setSelected({ type: "draft", id: fresh.id });
+          }
+        }}
+      />
+    );
+  } else if (selected?.type === "job" && !detail) {
+    rightPane = (
+      <div className="workflow">
+        <div style={{padding:"20px 14px", fontSize:13, color:"var(--st-text-pale)"}}>Lade Job-Details…</div>
+      </div>
+    );
+  } else {
+    // type === "draft" oder null -> Formular zeigen
+    rightPane = formPane;
   }
 
   return (
@@ -2838,150 +3536,21 @@ function P1({ toast, resumeJob, onResumed, model }) {
         <h2>Gespr&auml;chsdokumentation</h2>
         <p>Strukturierte Verlaufsnotizen aus Aufnahmen oder Transkripten</p>
       </div>
-      <div className="page-body">
-        <div className="workflow">
-          <Card num="A" title="Gesprächsmaterial" badge="req" open={true}>
-            <InputTabs
-              tabs={[
-                { id:"audio", icon:"🎙", label:"Aufnahme" },
-                { id:"file",  icon:"📄", label:"Datei"    },
-                { id:"text",  icon:"✏️", label:"Text"     },
-              ]}
-            >
-              {(activeTab) => (<>
-                {activeTab === "audio" && (
-                  <AudioInput file={audio} onFile={setAudio} />
-                )}
-                {activeTab === "file" && (
-                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                    <div>
-                      <div style={{fontSize:11,fontWeight:600,color:"var(--st-text-soft)",marginBottom:4}}>Transkript-Datei</div>
-                      <Dropzone label="Transkript hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={txtFile} onFile={setTxtFile} />
-                    </div>
-                    <div>
-                      <div style={{fontSize:11,fontWeight:600,color:"var(--st-text-soft)",marginBottom:4}}>oder Audiodatei</div>
-                      <Dropzone label="Audiodatei hochladen" hint=".mp3 · .m4a · .wav · .ogg · .webm · .flac" accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*" icon="&#128266;" file={audio && !audio.__p0recording ? audio : null} onFile={(f) => setAudio(f)} />
-                    </div>
-                  </div>
-                )}
-                {activeTab === "text" && (
-                  <textarea rows={6} placeholder="Gesprächsinhalt direkt hier einfügen ..." value={text} onChange={(e) => setText(e.target.value)} style={{marginTop:0}} />
-                )}
-              </>)}
-            </InputTabs>
-          </Card>
-
-          <Card num="B" title="Stichpunkte" badge="opt" open={false}>
-            <label className="field-label">Relevante Themen und Beobachtungen</label>
-            <textarea rows={4} placeholder={"- Bericht ueber das Wochenende\n- Schlafprobleme anhaltend\n- Fortschritt bei Expositionsuebung ..."} value={bullets} onChange={(e) => setBullets(e.target.value)} />
-            <div className="field-note">Ergaenzt oder ersetzt das Transkript bei Bedarf</div>
-          </Card>
-
-          <Card num="C" title="Stilvorlage" badge="opt" open={false}>
-            <InputTabs
-              tabs={[
-                { id:"file", icon:"📎", label:"Datei"  },
-                { id:"text", icon:"✏️", label:"Text C&P" },
-              ]}
-            >
-              {(activeTab) => (<>
-                {activeTab === "file" && (<>
-                  <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
-                  <div className="info-note" style={{marginTop:8}}>Der Schreibstil des hochgeladenen Textes wird bei der Generierung berücksichtigt.</div>
-                </>)}
-                {activeTab === "text" && (<>
-                  <textarea rows={6} placeholder="Beispieldokumentation hier einfügen – der Schreibstil wird übernommen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
-                  <div className="field-note">Direkt eingefügter Beispieltext als Stilvorlage</div>
-                </>)}
-              </>)}
-            </InputTabs>
-          </Card>
-
-          <Card num="D" title="Prompt anpassen" open={false}>
-            <PromptEditor value={prompt} onChange={setPrompt} def={P_DOKU} />
-          </Card>
-
-          <div className="action-bar">
-            {/* Geschlecht-Toggle + Kürzel */}
-            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto", flexWrap:"wrap"}}>
-              <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
-              {[
-                { val:"w", label:"♀ weiblich" },
-                { val:"m", label:"♂ männlich" },
-                { val:"auto", label:"Auto"    },
-              ].map(({ val, label }) => (
-                <button key={val} onClick={() => setGeschlecht(val)} style={{
-                  padding:"4px 10px", borderRadius:3, cursor:"pointer",
-                  fontSize:12, fontWeight: geschlecht === val ? 700 : 400,
-                  background: geschlecht === val ? "var(--st-red)" : "var(--st-gray-light)",
-                  color: geschlecht === val ? "white" : "var(--st-text-soft)",
-                  border: geschlecht === val ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
-                  transition:"all 0.12s",
-                }}>{label}</button>
-              ))}
-              <div style={{display:"flex", alignItems:"center", gap:4, marginLeft:4}}>
-                <span style={{fontSize:11, color:"var(--st-text-soft)"}}>
-                  Kürzel <span style={{color:"#c0392b", fontWeight:700}}>*</span>
-                </span>
-                <input
-                  type="text"
-                  value={kuerzel}
-                  onChange={e => setKuerzel(e.target.value)}
-                  placeholder="K."
-                  maxLength={8}
-                  required
-                  style={{
-                    width:48, padding:"3px 6px", fontSize:12, borderRadius:3,
-                    border: kuerzel.trim() ? "1px solid var(--st-gray-border)" : "1px solid #c0392b",
-                    background:"var(--st-bg)",
-                    color:"var(--st-text)", fontFamily:"inherit",
-                  }}
-                />
-              </div>
-            </div>
-            {busy
-              ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button
-                  className="btn-primary"
-                  onClick={run}
-                  disabled={(!audio && !txtFile && !text) || !kuerzel.trim()}
-                  title={
-                    (!audio && !txtFile && !text)
-                      ? "Gespraechsmaterial erforderlich (Audio, Transkript oder Text)"
-                      : !kuerzel.trim()
-                        ? "Patientenkuerzel ist erforderlich"
-                        : ""
-                  }
-                >Verlaufsnotiz generieren</button>
-            }
-          </div>
-
-          <ResultVersionsTabs
-            hasRepair={job.hasRepair}
-            active={job.activeVersion}
-            onChange={jobOps.setActiveVersion}
-            disabled={job.repairBusy}
+      <div className="page-body" style={{maxWidth:"none", paddingRight:24}}>
+        <div style={{display:"grid", gridTemplateColumns:"240px minmax(0, 1fr)", gap:14, alignItems:"start"}}>
+          <JobListPane
+            jobs={jobs}
+            drafts={drafts}
+            selected={selected}
+            onSelect={setSelected}
+            onNew={newDraft}
+            onDelete={onDeleteJob}
+            onCancel={onCancelJob}
+            onDeleteDraft={deleteDraft}
+            loading={listLoading}
+            error={listError}
           />
-          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("In Zwischenablage kopiert"); }}
-            extraButtons={hasTranscript ? [
-              { label: "Transkript ↓", onClick: () => downloadTranscript(lastJobId) }
-            ] : []} />
-
-          <RepairBundle job={job} ops={jobOps} toast={toast} />
-
-          {out && (
-            <div style={{marginTop:12, textAlign:"right"}}>
-              <button className="btn-secondary" onClick={() => {
-                setAudio(null); idbClearAudio().catch(() => {});
-                setTxtFile(null); setText(""); setBullets("");
-                setStyle(null); setStyleText(""); setOut(""); setOutWarn(null);
-                jobOps.reset();
-                setLastJobId(null); setHasTranscript(false);
-                toast("Formular zurückgesetzt");
-              }}>+ Neue Verlaufsnotiz</button>
-            </div>
-          )}
+          {rightPane}
         </div>
       </div>
     </div>

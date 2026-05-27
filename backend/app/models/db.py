@@ -56,6 +56,11 @@ class Job(Base):
 
     # Metadaten
     therapeut_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Sprint B (Multi-Job-Liste P1): kompakte Patientenkennung fuer die
+    # Job-Liste. Format wie aus dem Frontend uebergeben ("Frau M.", "Herr S.",
+    # oder nur "M." ohne Anrede). NULL fuer Jobs ohne uebergebenen Namen
+    # oder Jobs aus der Zeit vor diesem Feld.
+    patient_kuerzel: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model_used: Mapped[str | None] = mapped_column(String(128), nullable=True)
     duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     style_info_json: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-serialisiert

@@ -132,10 +132,23 @@ class JobState:
     zu teuer fuer DB-Writes. Stattdessen halten wir den State im RAM
     und persistieren bei Abschluss in PostgreSQL.
     """
-    def __init__(self, job_id: str, workflow: str, description: str = ""):
+    def __init__(
+        self,
+        job_id: str,
+        workflow: str,
+        description: str = "",
+        therapeut_id: Optional[str] = None,
+        patient_kuerzel: Optional[str] = None,
+    ):
         self.job_id             = job_id
         self.workflow           = workflow
         self.description        = description
+        # Sprint B: Therapeut-Owner und Patientenkennung als eigene Felder
+        # (vorher nur in description bzw. nirgends). Werden vom API-Layer
+        # gesetzt (jobs.py::create_generate_job) und ueber list_filtered()
+        # fuer die Job-Liste pro Therapeut gefiltert.
+        self.therapeut_id       : Optional[str] = therapeut_id
+        self.patient_kuerzel    : Optional[str] = patient_kuerzel
         self.status             = JobStatus.PENDING.value
         self.result_text        : Optional[str] = None
         self.progress           : int = 0
@@ -202,6 +215,8 @@ class JobState:
             "job_id":          self.job_id,
             "workflow":        self.workflow,
             "description":     self.description,
+            "therapeut_id":    self.therapeut_id,
+            "patient_kuerzel": self.patient_kuerzel,
             "status":          self.status,
             "cancelled":       self._cancel_requested,
             "result_text":     self.result_text or "",
@@ -253,10 +268,22 @@ class JobQueue:
         self._cache: dict[str, JobState] = {}
         self._max_cache = 500
 
-    def create_job(self, workflow: str, description: str = "") -> JobState:
-        """Erstellt einen neuen Job im Cache und persistiert ihn asynchron in der DB."""
+    def create_job(
+        self,
+        workflow: str,
+        description: str = "",
+        therapeut_id: Optional[str] = None,
+        patient_kuerzel: Optional[str] = None,
+    ) -> JobState:
+        """Erstellt einen neuen Job im Cache und persistiert ihn asynchron in der DB.
+
+        Sprint B: therapeut_id und patient_kuerzel werden NEU mit persistiert
+        damit list_filtered() pro Therapeut filtern und das Frontend die
+        Patientenkennung in der Job-Liste anzeigen kann. Beide optional fuer
+        Backwards-Compat (alte Aufrufer ohne diese Felder).
+        """
         job_id = uuid.uuid4().hex
-        state = JobState(job_id, workflow, description)
+        state = JobState(job_id, workflow, description, therapeut_id, patient_kuerzel)
         self._cache[job_id] = state
         self._cleanup_cache()
 
@@ -265,7 +292,9 @@ class JobQueue:
         logger.info("Job erstellt: %s (%s) | Warteschlange: %d", job_id, workflow, queue_size)
 
         # DB-Insert asynchron (fire-and-forget) – gleicher Ansatz wie cancel_job
-        asyncio.ensure_future(self._db_insert_job(job_id, workflow, description))
+        asyncio.ensure_future(self._db_insert_job(
+            job_id, workflow, description, therapeut_id, patient_kuerzel,
+        ))
 
         return state
 
@@ -296,7 +325,14 @@ class JobQueue:
         )
         return state
 
-    async def _db_insert_job(self, job_id: str, workflow: str, description: str) -> None:
+    async def _db_insert_job(
+        self,
+        job_id: str,
+        workflow: str,
+        description: str,
+        therapeut_id: Optional[str] = None,
+        patient_kuerzel: Optional[str] = None,
+    ) -> None:
         """Persistiert einen neuen Job in der DB (wird als Task gestartet)."""
         try:
             from app.core.database import async_session_factory
@@ -307,6 +343,8 @@ class JobQueue:
                     workflow=workflow,
                     description=description,
                     status="pending",
+                    therapeut_id=therapeut_id,
+                    patient_kuerzel=patient_kuerzel,
                 )
                 db.add(db_job)
                 await db.commit()
@@ -332,6 +370,8 @@ class JobQueue:
                     "job_id":          db_job.id,
                     "workflow":        db_job.workflow,
                     "description":     db_job.description or "",
+                    "therapeut_id":    db_job.therapeut_id,
+                    "patient_kuerzel": db_job.patient_kuerzel,
                     "status":          db_job.status,
                     "cancelled":       db_job.cancel_requested or False,
                     "result_text":     db_job.result_text or "",
@@ -442,6 +482,102 @@ class JobQueue:
     def get_all_jobs(self) -> list[JobState]:
         return sorted(self._cache.values(), key=lambda j: j.created_at, reverse=True)
 
+    async def list_filtered(
+        self,
+        workflow: Optional[str] = None,
+        therapeut_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Sprint B (Multi-Job-Liste P1): Job-Liste aus der DB, optional gefiltert.
+
+        Quelle ist die DB, NICHT der Cache - damit auch aus dem Cache evictete
+        oder nach Restart neu hochgefahrene Jobs sichtbar bleiben.
+
+        Fuer Jobs die zusaetzlich noch im Cache liegen (laufend/kuerzlich
+        fertig) wird der Cache-Wert bevorzugt - der hat Live-Progress, der DB-
+        Wert ist immer ein Schnappschuss vom letzten _persist_job().
+
+        Bei DB-Fehler: Fallback auf reinen Cache-Inhalt mit denselben Filtern.
+        """
+        try:
+            from app.core.database import async_session_factory
+            from app.models.db import Job as JobModel
+            from sqlalchemy import select, desc
+            async with async_session_factory() as db:
+                q = (
+                    select(JobModel)
+                    .order_by(desc(JobModel.created_at))
+                    .limit(limit)
+                )
+                if workflow:
+                    q = q.where(JobModel.workflow == workflow)
+                if therapeut_id:
+                    q = q.where(JobModel.therapeut_id == therapeut_id)
+                result = await db.execute(q)
+                db_jobs = result.scalars().all()
+
+            out: list[dict] = []
+            for db_job in db_jobs:
+                cached = self._cache.get(db_job.id)
+                if cached is not None:
+                    out.append(cached.to_dict())
+                else:
+                    out.append(self._db_job_to_dict(db_job))
+            return out
+        except Exception as e:
+            logger.warning(
+                "Job-Liste aus DB fehlgeschlagen: %s - Fallback auf Cache", e,
+            )
+            jobs = self.get_all_jobs()
+            if workflow:
+                jobs = [j for j in jobs if j.workflow == workflow]
+            if therapeut_id:
+                jobs = [j for j in jobs if j.therapeut_id == therapeut_id]
+            return [j.to_dict() for j in jobs[:limit]]
+
+    @staticmethod
+    def _db_job_to_dict(db_job) -> dict:
+        """Sprint B: zentraler Konverter SQLAlchemy-Job -> API-Dict.
+
+        Bewusste Duplikation der Felder aus get_job_from_db (gleiches Schema).
+        Wenn dort ein Feld dazukommt, hier auch ergaenzen - sonst sieht das
+        Frontend in list_filtered() weniger als in get_job().
+        """
+        return {
+            "job_id":          db_job.id,
+            "workflow":        db_job.workflow,
+            "description":     db_job.description or "",
+            "therapeut_id":    db_job.therapeut_id,
+            "patient_kuerzel": db_job.patient_kuerzel,
+            "status":          db_job.status,
+            "cancelled":       db_job.cancel_requested or False,
+            "result_text":     db_job.result_text or "",
+            "has_transcript":  db_job.result_transcript is not None,
+            "progress":        db_job.progress or 0,
+            "progress_phase":  db_job.progress_phase or "",
+            "progress_detail": db_job.progress_detail or "",
+            "befund_text":     db_job.result_befund or "",
+            "akut_text":       db_job.result_akut or "",
+            "result_file":     db_job.result_file,
+            "error_msg":       db_job.error_msg,
+            "created_at":      db_job.created_at.isoformat() if db_job.created_at else None,
+            "started_at":      db_job.started_at.isoformat() if db_job.started_at else None,
+            "finished_at":     db_job.finished_at.isoformat() if db_job.finished_at else None,
+            "model_used":      db_job.model_used,
+            "duration_s":      db_job.duration_s,
+            "style_info":      json.loads(db_job.style_info_json) if db_job.style_info_json else None,
+            "generation_telemetry":        db_job.generation_telemetry,
+            "verlauf_summary_text":        db_job.verlauf_summary_text,
+            "verlauf_summary_audit":       db_job.verlauf_summary_audit,
+            "source_verlauf_text":         db_job.source_verlauf_text,
+            "transcript_summary_text":     db_job.transcript_summary_text,
+            "source_antragsvorlage_text":  db_job.source_antragsvorlage_text,
+            "source_vorantrag_text":       db_job.source_vorantrag_text,
+            "quality_check":   db_job.quality_check_json,
+            "parent_job_id":   db_job.parent_job_id,
+            "repair_input":    db_job.repair_input_json,
+        }
+
     def cancel_job(self, job_id: str) -> bool:
         """Markiert einen Job als abzubrechen (Cache + DB)."""
         state = self._cache.get(job_id)
@@ -468,6 +604,68 @@ class JobQueue:
                 await db.commit()
         except Exception as e:
             logger.warning("Cancel-DB-Update fehlgeschlagen: %s", e)
+
+    async def delete_job_permanent(self, job_id: str) -> dict:
+        """Sprint B (Multi-Job-Liste P1): endgueltiges Loeschen aus Cache + DB.
+
+        Nur erlaubt fuer terminale Stati (done, error, cancelled). Pending/running
+        Jobs muessen zuerst per cancel_job() abgebrochen werden.
+
+        Anders als Recording (das deleted_at-Soft-Delete fuer Audit nutzt) ist
+        Job-Permanent-Delete eine harte DELETE-Operation, weil der Nutzer
+        bewusst seine alten Jobs aufraeumen koennen will. Wenn das spaeter
+        problematisch ist, kann hier auf Soft-Delete umgestellt werden.
+
+        Rueckgabe:
+          {"job_id": ..., "deleted": True,  "reason": None}        - Erfolg
+          {"job_id": ..., "deleted": False, "reason": "..."}       - blockiert
+        Wirft KeyError wenn Job weder im Cache noch in der DB ist.
+        """
+        terminal = (
+            JobStatus.DONE.value,
+            JobStatus.ERROR.value,
+            JobStatus.CANCELLED.value,
+        )
+
+        # 1. Status ermitteln - Cache zuerst (frischer), dann DB
+        status: Optional[str] = None
+        cached = self._cache.get(job_id)
+        if cached is not None:
+            status = cached.status
+        else:
+            db_dict = await self.get_job_from_db(job_id)
+            if db_dict is not None:
+                status = db_dict["status"]
+
+        if status is None:
+            raise KeyError(job_id)
+
+        if status not in terminal:
+            return {
+                "job_id":  job_id,
+                "deleted": False,
+                "reason":  (
+                    f"Job hat Status '{status}' - bitte erst per "
+                    f"DELETE /api/jobs/{job_id} abbrechen."
+                ),
+            }
+
+        # 2. Aus DB loeschen
+        try:
+            from app.core.database import async_session_factory
+            from app.models.db import Job as JobModel
+            from sqlalchemy import delete
+            async with async_session_factory() as db:
+                await db.execute(delete(JobModel).where(JobModel.id == job_id))
+                await db.commit()
+        except Exception as e:
+            logger.warning("Job-DB-Delete fehlgeschlagen: %s", e)
+
+        # 3. Aus Cache entfernen
+        self._cache.pop(job_id, None)
+
+        logger.info("Job dauerhaft geloescht: %s", job_id)
+        return {"job_id": job_id, "deleted": True, "reason": None}
 
     async def _persist_job(self, state: JobState):
         """Persistiert den finalen Job-Zustand in der DB."""

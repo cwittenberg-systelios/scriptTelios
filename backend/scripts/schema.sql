@@ -201,6 +201,13 @@ ALTER TABLE jobs
 ALTER TABLE jobs
     ADD COLUMN IF NOT EXISTS repair_input_json JSONB;
 
+-- Sprint B (Multi-Job-Liste P1): kompakte Patientenkennung fuer die
+-- Job-Liste im Frontend. Format: wie aus dem Frontend uebergeben
+-- ("Frau M.", "Herr S." oder nur "M." ohne Anrede). NULL fuer Jobs
+-- ohne uebergebenen Namen oder Jobs aus der Zeit vor diesem Feld.
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS patient_kuerzel VARCHAR(64);
+
 -- ── D. Indizes ─────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS ix_jobs_workflow         ON jobs (workflow);
 CREATE INDEX IF NOT EXISTS ix_jobs_status           ON jobs (status);
@@ -209,6 +216,15 @@ CREATE INDEX IF NOT EXISTS ix_jobs_status           ON jobs (status);
 -- Platz, weil >95% der Jobs keinen Parent haben.
 CREATE INDEX IF NOT EXISTS ix_jobs_parent_job_id
     ON jobs (parent_job_id) WHERE parent_job_id IS NOT NULL;
+
+-- Sprint B (Multi-Job-Liste P1): list_filtered() filtert nach therapeut_id +
+-- workflow und sortiert nach created_at DESC. Composite-Index deckt die Liste-
+-- Abfrage idealerweise (Index-only-Scan), zumindest aber den haeufigsten
+-- Filter-Pfad. Partieller Index spart Platz fuer Jobs ohne therapeut_id
+-- (Legacy aus Pre-Auth-Zeit).
+CREATE INDEX IF NOT EXISTS ix_jobs_therapeut_workflow_created
+    ON jobs (therapeut_id, workflow, created_at DESC)
+    WHERE therapeut_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ix_recordings_status     ON recordings (status);
 CREATE INDEX IF NOT EXISTS ix_recordings_therapeut_id

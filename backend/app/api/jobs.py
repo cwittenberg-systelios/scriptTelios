@@ -4,7 +4,7 @@ GET  /api/jobs            – Alle Jobs auflisten (optional)
 """
 import logging
 import time as _t
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, Depends
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile, Depends
 from typing import Annotated, Optional
 
 from app.core.config import settings
@@ -183,6 +183,32 @@ async def cancel_job(job_id: str, current_user: str = Depends(get_current_user))
     }
 
 
+@router.delete("/jobs/{job_id}/permanent")
+async def delete_job_permanent(
+    job_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Sprint B (Multi-Job-Liste P1): endgueltiges Loeschen aus Cache + DB.
+
+    Nur erlaubt fuer terminale Stati (done, error, cancelled). Pending/running
+    Jobs muessen zuerst per DELETE /api/jobs/{id} abgebrochen werden.
+
+    Antworten:
+      200 + {"job_id", "deleted": True, "reason": None}  - Erfolg
+      404                                                - Job nicht gefunden
+      409                                                - Job laeuft noch
+    """
+    try:
+        result = await job_queue.delete_job_permanent(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
+
+    if not result["deleted"]:
+        raise HTTPException(status_code=409, detail=result["reason"])
+
+    return result
+
+
 @router.get("/jobs/{job_id}/transcript")
 async def get_job_transcript(job_id: str):
     """
@@ -289,9 +315,30 @@ async def stream_job(job_id: str):
 
 
 @router.get("/jobs")
-async def list_jobs():
-    """Listet alle Jobs auf (neueste zuerst)."""
-    return [j.to_dict() for j in job_queue.get_all_jobs()[:50]]
+async def list_jobs(
+    current_user: str = Depends(get_current_user),
+    workflow: Optional[WorkflowLiteral] = Query(
+        None, description="Optional: nur Jobs eines Workflow-Typs zurueckgeben."
+    ),
+    limit: int = Query(
+        50, ge=1, le=500,
+        description="Maximale Anzahl zurueckgegebener Jobs (1-500, Default 50).",
+    ),
+):
+    """Listet Jobs des authentifizierten Therapeuten auf, neueste zuerst.
+
+    Sprint B (Multi-Job-Liste P1):
+      - Quelle ist die DB (damit auch aus dem Cache evictete Jobs sichtbar
+        bleiben, z.B. nach uvicorn-Restart oder bei >500 alten Jobs)
+      - Filter therapeut_id implizit aus dem validierten Auth-Header
+      - Filter workflow optional als Query-Param
+      - Cache wird fuer Jobs die parallel laufen bevorzugt (Live-Progress)
+    """
+    return await job_queue.list_filtered(
+        workflow=workflow,
+        therapeut_id=current_user,
+        limit=limit,
+    )
 
 
 # ── v19 Phase C: Therapeut-in-the-Loop Repair ──────────────────────────────────
@@ -739,10 +786,18 @@ async def create_generate_job(
 
     dx_list = [d.strip() for d in diagnosen.split(",") if d.strip()] if diagnosen else []
 
+    # Sprint B (Multi-Job-Liste P1): kompakte Patientenkennung fuer die Liste.
+    # Der String kommt vom Frontend so wie er angezeigt werden soll ("Frau M.",
+    # "Herr S." oder nur "M." ohne Anrede). Die LLM-Pipeline parst die Form
+    # spaeter separat via parse_explicit_patient_name().
+    patient_kuerzel = patientenname.strip() if patientenname and patientenname.strip() else None
+
     # Job anlegen
     job = job_queue.create_job(
         workflow=workflow,
         description=f"Workflow: {workflow}" + (f" | Audio: {audio_name}" if audio_name else ""),
+        therapeut_id=therapeut_id,
+        patient_kuerzel=patient_kuerzel,
     )
 
     # Performance-Tracking: welche Inputs hat dieser Job?
