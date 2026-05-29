@@ -56,8 +56,14 @@ async function downloadViaApi(url, fallbackName) {
   setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
 }
 
-function JobProgressBar({ jobId }) {
+function JobProgressBar({ jobId, onTerminal }) {
   const [p, setP] = useState({ progress: 0, progress_phase: "Starte...", progress_detail: "" });
+  // Sprint Draft-Persistence Bugfix: onTerminal in ref ablegen, damit der
+  // useEffect nicht bei jedem neuen Callback-Identitaet neu laeuft (sonst
+  // wuerde die SSE bei jeder Parent-Rerender neu aufgebaut).
+  const onTerminalRef = useRef(onTerminal);
+  useEffect(() => { onTerminalRef.current = onTerminal; }, [onTerminal]);
+
   useEffect(() => {
     if (!jobId) return;
     let cancelled = false;
@@ -76,6 +82,8 @@ function JobProgressBar({ jobId }) {
           } else if (d.type === "done" || d.type === "error" || d.type === "cancelled") {
             setP(prev => ({ ...prev, progress: d.type === "done" ? 100 : prev.progress, progress_phase: d.type === "done" ? "Fertig" : d.type === "error" ? "Fehler" : "Abgebrochen" }));
             es.close();
+            // Parent benachrichtigen (z.B. P1: Detail-Dict neu laden)
+            if (onTerminalRef.current) onTerminalRef.current(d.type);
           }
         } catch (_) {}
       };
@@ -97,7 +105,11 @@ function JobProgressBar({ jobId }) {
           const j = await r.json();
           if (cancelled) return;
           setP({ progress: j.progress || 0, progress_phase: j.progress_phase || "", progress_detail: j.progress_detail || "" });
-          if (j.status === "done" || j.status === "error" || j.status === "cancelled") return;
+          if (j.status === "done" || j.status === "error" || j.status === "cancelled") {
+            // Auch im Polling-Fallback Parent benachrichtigen
+            if (onTerminalRef.current) onTerminalRef.current(j.status);
+            return;
+          }
           setTimeout(tick, 3000);
         } catch { if (!cancelled) setTimeout(tick, 5000); }
       };
@@ -352,6 +364,11 @@ const S = `
   }
   .audio-mode-btn:hover:not(.active) { background: var(--st-gray-light); }
   .p0-picker { margin-top: 8px; }
+  .p0-picker-list {
+    max-height: 220px;  /* ~5 Items à ~40px sichtbar, Rest per Scrollbar */
+    overflow-y: auto;
+    padding-right: 4px;  /* etwas Platz für Scrollbar */
+  }
   .p0-hint { padding: 12px; color: var(--fg-muted); font-size: 13px; text-align: center; }
   .p0-picker-item {
     display: flex; justify-content: space-between; align-items: center;
@@ -930,21 +947,22 @@ function fmtMB(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1);
 }
 
-// ── Audio-IndexedDB-Persistenz ────────────────────────────────────────────────
-// Browser-Aufnahmen überleben Reloads – Upload-Dateien nicht (können neu gewählt werden).
-const AUDIO_IDB_NAME  = "scriptTelios";
-const AUDIO_IDB_STORE = "audio_draft";
-const AUDIO_IDB_KEY   = "current";
+// ── Browser-IndexedDB ─────────────────────────────────────────────────────
+// Eine DB ("scriptTelios") mit einem Object-Store:
+//   offline_queue: P0-Aufnahmen die wegen Server-Ausfall lokal warten.
+//                  Wird nach erfolgreichem Reload-Upload sofort wieder geleert.
+// Frueher gab es einen zweiten Store "audio_draft" als Reload-Persistenz fuer
+// einzelne Aufnahmen - der war nie vollstaendig (Save-Pfad ohne Load-Pfad)
+// und wurde mit Sprint-B-Refactoring entfernt. Bestehende Browser haben
+// den Store evtl. noch in v2 - das stoert nicht, er bleibt einfach ungenutzt.
+const IDB_NAME          = "scriptTelios";
 const OFFLINE_IDB_STORE = "offline_queue";
 
 function idbOpen() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(AUDIO_IDB_NAME, 2);
+    const req = indexedDB.open(IDB_NAME, 2);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
-      if (!db.objectStoreNames.contains(AUDIO_IDB_STORE)) {
-        db.createObjectStore(AUDIO_IDB_STORE);
-      }
       if (!db.objectStoreNames.contains(OFFLINE_IDB_STORE)) {
         db.createObjectStore(OFFLINE_IDB_STORE, { keyPath: "id" });
       }
@@ -952,44 +970,6 @@ function idbOpen() {
     req.onsuccess = (e) => resolve(e.target.result);
     req.onerror   = (e) => reject(e.target.error);
   });
-}
-
-async function idbSaveAudio(file) {
-  try {
-    const db    = await idbOpen();
-    const tx    = db.transaction(AUDIO_IDB_STORE, "readwrite");
-    tx.objectStore(AUDIO_IDB_STORE).put(
-      { blob: file, name: file.name, type: file.type, size: file.size },
-      AUDIO_IDB_KEY
-    );
-    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
-    db.close();
-  } catch (e) { console.warn("[idb] Speichern fehlgeschlagen:", e); }
-}
-
-async function idbLoadAudio() {
-  try {
-    const db    = await idbOpen();
-    const tx    = db.transaction(AUDIO_IDB_STORE, "readonly");
-    const data  = await new Promise((res, rej) => {
-      const req = tx.objectStore(AUDIO_IDB_STORE).get(AUDIO_IDB_KEY);
-      req.onsuccess = (e) => res(e.target.result);
-      req.onerror   = (e) => rej(e.target.error);
-    });
-    db.close();
-    if (!data) return null;
-    return new File([data.blob], data.name, { type: data.type });
-  } catch (e) { console.warn("[idb] Laden fehlgeschlagen:", e); return null; }
-}
-
-async function idbClearAudio() {
-  try {
-    const db = await idbOpen();
-    const tx = db.transaction(AUDIO_IDB_STORE, "readwrite");
-    tx.objectStore(AUDIO_IDB_STORE).delete(AUDIO_IDB_KEY);
-    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
-    db.close();
-  } catch (e) { console.warn("[idb] Löschen fehlgeschlagen:", e); }
 }
 
 async function offlineQueueAdd(file, label) {
@@ -1162,7 +1142,6 @@ function AudioRecorder({ onRecorded, onError }) {
         const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
         const file = new File([blob], `aufnahme-${stamp}.${ext}`, { type: blob.type });
         chunksRef.current = [];
-        idbSaveAudio(file).catch(() => {});
         onRecorded(file);
       };
 
@@ -1332,7 +1311,7 @@ function AudioInput({ file, onFile }) {
 
   function handleFile(f) {
     setRecError(null);
-    if (!f) { setSizeWarn(null); idbClearAudio().catch(() => {}); onFile(null); return; }
+    if (!f) { setSizeWarn(null); onFile(null); return; }
     const sizeMB = f.size / (1024 * 1024);
     if (sizeMB > MAX_UPLOAD_MB) {
       setSizeWarn(`Datei ist ${fmtMB(f.size)} MB groß. Upload-Limit liegt bei ${MAX_UPLOAD_MB} MB.`);
@@ -1433,30 +1412,34 @@ function AudioInput({ file, onFile }) {
             </button>
           </div>
         )}
-        {p0List.map(r => {
-          const isPending = r.status === "uploading" || r.status === "transcribing";
-          const isError   = r.status === "error";
-          const statusLabel = isPending
-            ? (r.status === "transcribing" ? "⏳ Transkription läuft…" : "⏳ Wird hochgeladen…")
-            : isError ? "⚠️ Fehler" : null;
-          return (
-            <div key={r.id} className="p0-picker-item"
-              onClick={() => !isError && pickP0(r)}
-              style={isError ? {opacity:0.5,cursor:"default"} : {}}
-              title={isPending ? "Transkription läuft – wird beim Generieren priorisiert" : isError ? (r.error_msg || "Fehler") : "Aufnahme auswählen"}>
-              <span className="p0-picker-label">{r.label || <em>Ohne Beschriftung</em>}</span>
-              <span className="p0-picker-meta">
-                {statusLabel
-                  ? <span style={{color:isPending?"#0060c0":"#c02020",fontWeight:600}}>{statusLabel}</span>
-                  : <>
-                      {r.created_at ? new Date(r.created_at).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit",year:"2-digit"}) : ""}
-                      {r.duration_s ? ` · ${Math.floor(r.duration_s/60)}:${String(Math.floor(r.duration_s%60)).padStart(2,"0")}` : ""}
-                    </>
-                }
-              </span>
-            </div>
-          );
-        })}
+        {p0List.length > 0 && (
+          <div className="p0-picker-list">
+            {p0List.map(r => {
+              const isPending = r.status === "uploading" || r.status === "transcribing";
+              const isError   = r.status === "error";
+              const statusLabel = isPending
+                ? (r.status === "transcribing" ? "⏳ Transkription läuft…" : "⏳ Wird hochgeladen…")
+                : isError ? "⚠️ Fehler" : null;
+              return (
+                <div key={r.id} className="p0-picker-item"
+                  onClick={() => !isError && pickP0(r)}
+                  style={isError ? {opacity:0.5,cursor:"default"} : {}}
+                  title={isPending ? "Transkription läuft – wird beim Generieren priorisiert" : isError ? (r.error_msg || "Fehler") : "Aufnahme auswählen"}>
+                  <span className="p0-picker-label">{r.label || <em>Ohne Beschriftung</em>}</span>
+                  <span className="p0-picker-meta">
+                    {statusLabel
+                      ? <span style={{color:isPending?"#0060c0":"#c02020",fontWeight:600}}>{statusLabel}</span>
+                      : <>
+                          {r.created_at ? new Date(r.created_at).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit",year:"2-digit"}) : ""}
+                          {r.duration_s ? ` · ${Math.floor(r.duration_s/60)}:${String(Math.floor(r.duration_s%60)).padStart(2,"0")}` : ""}
+                        </>
+                    }
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
         {p0List.length > 0 && (
           <div style={{marginTop:6,textAlign:"right"}}>
             <button className="btn-secondary" style={{fontSize:11,padding:"2px 8px"}}
@@ -1628,7 +1611,7 @@ function PromptEditor({ value, onChange, def }) {
   );
 }
 
-function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownload, extraButtons = [], warn = null }) {
+function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownload, extraButtons = [], warn = null, onTerminal = null }) {
   const empty = !text && !loading;
   return (
     <div className="output-card">
@@ -1651,7 +1634,7 @@ function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownlo
       )}
       <div className={"output-text" + (empty ? " empty" : "")}>
         {loading
-          ? (jobId ? <JobProgressBar jobId={jobId} /> : "Wird generiert ...")
+          ? (jobId ? <JobProgressBar jobId={jobId} onTerminal={onTerminal} /> : "Wird generiert ...")
           : text
             ? text
             : warn
@@ -1714,6 +1697,134 @@ function pickQualityCheck(obj) {
   if (!obj) return null;
   return obj.quality_check ?? obj.qualityCheck ?? null;
 }
+
+// ── useDraftCache (Sprint Draft-Persistence B0) ─────────────────────────────
+// Persistiert Form-Felder in localStorage, sodass halbausgefuellte Eingaben
+// Tab-Wechsel und Page-Reload ueberleben.
+//
+// Was persistiert wird:
+//   - Strings, Zahlen, Booleans, Arrays, Plain Objects
+//
+// Was NICHT persistiert wird (bewusst gefiltert):
+//   - File-Instanzen   (localStorage-Quota ~5-10MB, Files ggf. >10MB)
+//   - Blob-Instanzen   (gleicher Grund)
+//   - Funktionen       (nicht serialisierbar)
+//   - Werte die identisch zum Default sind (Option-3-Strategie fuer Prompts:
+//     wenn ein Prompt-Update im Code passiert, sehen User keinen alten
+//     Cache-Wert sondern den neuen Default. Erst wenn der User aktiv
+//     editiert, wird gecached.)
+//
+// Signatur:
+//   const [draft, updateDraft, clearDraft] = useDraftCache(key, defaultDraft);
+//
+// Beispiel:
+//   const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p2", {
+//     text: "", kuerzel: "", prompt: P_ANAMNESE,
+//   });
+//   <input value={draft.text} onChange={(e) => updateDraft({ text: e.target.value })} />
+//   <button onClick={clearDraft}>Reset</button>
+function useDraftCache(localStorageKey, defaultDraft) {
+  // Lade-Logik beim ersten Render: aus localStorage parsen, ueber default mergen.
+  // Falls localStorage nicht verfuegbar (Inkognito mit deaktiviertem Storage,
+  // Quota-Ueberschreitung beim Lesen): silent fallback auf Default.
+  const [draft, setDraft] = useState(() => {
+    try {
+      const raw = localStorage.getItem(localStorageKey);
+      if (!raw) return { ...defaultDraft };
+      const cached = JSON.parse(raw);
+      return { ...defaultDraft, ...cached };
+    } catch (_) {
+      return { ...defaultDraft };
+    }
+  });
+
+  // Persist-Logik: schreibt bei jeder draft-Aenderung. Filterung wie oben.
+  // useEffect ist asynchron - kein UI-Block bei groesseren Drafts.
+  useEffect(() => {
+    try {
+      const persistable = {};
+      for (const [k, v] of Object.entries(draft)) {
+        // Hard-Skip: nicht-serialisierbare Typen
+        if (typeof v === "function") continue;
+        if (typeof File !== "undefined" && v instanceof File) continue;
+        if (typeof Blob !== "undefined" && v instanceof Blob) continue;
+        // Soft-Skip: identisch zum Default (Option-3 fuer Prompt-Felder)
+        if (v === defaultDraft[k]) continue;
+        // Bei Arrays/Objects: einfacher JSON-String-Compare als Default-Check.
+        // Akzeptabler Overhead fuer typische Draft-Felder.
+        if (typeof v === "object" && v !== null && defaultDraft[k] !== undefined) {
+          try {
+            if (JSON.stringify(v) === JSON.stringify(defaultDraft[k])) continue;
+          } catch (_) { /* zyklische Objekte etc. - sicherheitshalber persistieren */ }
+        }
+        persistable[k] = v;
+      }
+      // Wenn ALLES default ist: Eintrag komplett entfernen (kein leeres {} liegen lassen)
+      if (Object.keys(persistable).length === 0) {
+        localStorage.removeItem(localStorageKey);
+      } else {
+        localStorage.setItem(localStorageKey, JSON.stringify(persistable));
+      }
+    } catch (_) {
+      // Quota voll oder Storage disabled - Fail-Silent. Der Draft lebt
+      // weiter im React-State; nur F5-Persistenz geht verloren.
+    }
+  }, [draft, localStorageKey]);
+
+  const updateDraft = useCallback((patch) => {
+    setDraft(prev => ({ ...prev, ...patch }));
+  }, []);
+
+  const clearDraft = useCallback(() => {
+    setDraft({ ...defaultDraft });
+    try { localStorage.removeItem(localStorageKey); } catch (_) {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localStorageKey]);
+
+  return [draft, updateDraft, clearDraft];
+}
+
+
+// ── useResumeWorkflowJob (Sprint Draft-Persistence B1) ──────────────────────
+// Beim Mount einer P-Komponente: sucht in den letzten Jobs des angegebenen
+// Workflows nach einem noch laufenden Job (pending/running). Wenn einer
+// gefunden wird, ruft die `attach`-Callback - die Komponente kann sich dann
+// transparent wieder an den Job heften und Progress/Output anzeigen.
+//
+// Use Case: Therapeut startet in P3 einen Antrag, wechselt zu P1, kommt
+// zurueck zu P3. Die Komponente wurde unmounted, der Job laeuft im Backend
+// weiter. useResumeWorkflowJob findet ihn und re-attached automatisch.
+//
+// `enabled`-Parameter: false ausschalten falls der bestehende Resume-Banner-
+// Mechanismus (resumeJob-Prop aus dem App-Root) bereits aktiv ist - sonst
+// wuerden BEIDE attach() aufrufen.
+//
+// Signatur:
+//   useResumeWorkflowJob(workflow, attach, enabled = true)
+//
+// Beispiel in einer P-Komponente:
+//   function attach(jobId) { ... pollJob + setState ... }
+//   useResumeWorkflowJob("anamnese", attach, !resumeJob);
+function useResumeWorkflowJob(workflow, attach, enabled = true) {
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    apiFetch(`${getApiBase()}/jobs?workflow=${workflow}&limit=10`)
+      .then(r => r.ok ? r.json() : [])
+      .then(list => {
+        if (cancelled) return;
+        // Bewusst nur laufende Jobs - keine alten done/error/cancelled. Sonst
+        // wuerde der User unerwartet einen alten Output sehen statt eines
+        // leeren Formulars.
+        const running = list.find(j => j.status === "pending" || j.status === "running");
+        if (running) attach(running.job_id);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflow, enabled]);
+}
+
 
 function useJobResult() {
   // Original-Version (das was generate() liefert oder resume befuellt)
@@ -2807,7 +2918,7 @@ function _fmtTime(iso) {
 }
 
 function JobListPane({
-  jobs, drafts, selected, onSelect, onNew, onDelete, onCancel, onDeleteDraft,
+  jobs, drafts, selected, onSelect, onDelete, onCancel, onDeleteDraft,
   loading, error,
 }) {
   const [olderExpanded, setOlderExpanded] = useState(false);
@@ -2892,10 +3003,36 @@ function JobListPane({
     );
   }
 
-  // Entwurfs-Item — eigenes Look (Stift-Icon, kein Status-Dot).
+  // Entwurfs-Item — zwei Darstellungen:
+  //  - leer:    grosser primaerer Button (rot, weiss, "+ Neues Gespräch")
+  //             Ersetzt den frueheren Top-Button: ein Entwurf IST der Button.
+  //  - gefuellt: normaler Listen-Eintrag mit Kuerzel-Label und ×-Verwerfen
   function renderDraft(d) {
     const sel = isSelectedDraft(d);
     const k = (d.kuerzel || "").trim();
+    const hasContent = !!(d.audio || d.txtFile || d.text || d.bullets || k);
+
+    if (!hasContent) {
+      // Button-Modus: leerer Entwurf = primaerer Action-Button
+      return (
+        <button key={d.id}
+                onClick={() => onSelect({ type: "draft", id: d.id })}
+                style={{
+                  display:"flex", alignItems:"center", justifyContent:"center", gap:6,
+                  padding:"10px 12px", fontSize:13, fontWeight:600,
+                  background: sel ? "var(--st-red)" : "var(--st-red)",
+                  color:"white", border:"none", borderRadius:4,
+                  cursor:"pointer", marginBottom:6,
+                  outline: sel ? "2px solid rgba(255,255,255,0.4)" : "none",
+                  outlineOffset: sel ? "-4px" : 0,
+                }}
+                title={sel ? "Aktuell ausgewählt" : "Neues Gespräch starten"}>
+          + Neues Gespräch
+        </button>
+      );
+    }
+
+    // Gefuellter Entwurf: Label aus Kuerzel + Geschlecht
     let label = "Neuer Entwurf";
     if (k) {
       const kn = k.replace(/\.?$/, ".");
@@ -2903,7 +3040,6 @@ function JobListPane({
       else if (d.geschlecht === "m") label = `Herr ${kn}`;
       else                            label = kn;
     }
-    const hasContent = !!(d.audio || d.txtFile || d.text || d.bullets || k);
     return (
       <div key={d.id}
            onClick={() => onSelect({ type: "draft", id: d.id })}
@@ -2917,18 +3053,15 @@ function JobListPane({
         <div style={{display:"flex", alignItems:"center", gap:6}}>
           <span style={{width:14, fontSize:11, color:"var(--st-text-pale)", flexShrink:0, lineHeight:1}}>✎</span>
           <span style={{fontSize:13, fontWeight: sel ? 600 : 500,
-                        fontStyle: hasContent ? "normal" : "italic",
-                        color: hasContent ? "var(--st-text)" : "var(--st-text-pale)",
-                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1}}>
+                        color:"var(--st-text)", overflow:"hidden",
+                        textOverflow:"ellipsis", whiteSpace:"nowrap", flex:1}}>
             {label}
           </span>
-          {drafts.length > 1 && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onDeleteDraft(d.id); }}
-              title="Entwurf verwerfen"
-              style={{padding:"0 4px", fontSize:11, border:"none", background:"transparent",
-                      color:"var(--st-text-pale)", cursor:"pointer", flexShrink:0}}>✕</button>
-          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); onDeleteDraft(d.id); }}
+            title="Entwurf verwerfen (Felder zurücksetzen)"
+            style={{padding:"0 4px", fontSize:11, border:"none", background:"transparent",
+                    color:"var(--st-text-pale)", cursor:"pointer", flexShrink:0}}>✕</button>
         </div>
       </div>
     );
@@ -2967,15 +3100,10 @@ function JobListPane({
       borderRadius:5, padding:10, display:"flex", flexDirection:"column",
       gap:2, minHeight:300,
     }}>
-      <button onClick={onNew}
-              style={{
-                display:"flex", alignItems:"center", justifyContent:"center", gap:6,
-                padding:"8px 10px", fontSize:13, fontWeight:600,
-                background:"var(--st-red)", color:"white", border:"none",
-                borderRadius:4, cursor:"pointer", marginBottom:4,
-              }}>
-        + Neues Gespräch
-      </button>
+      {/* Sprint B v2: kein Top-"+ Neues Gespräch"-Button mehr.
+          Stattdessen ist der leere Entwurf in der Entwürfe-Sektion selbst
+          als Button gestylt - siehe renderDraft(). Vorteil: kein redundanter
+          UI-Pfad ("Button anlegen UND leeren Entwurf in der Liste sehen"). */}
 
       {loading && jobs.length === 0 && drafts.length === 0 && (
         <div style={{padding:"12px 8px", fontSize:12, color:"var(--st-text-pale)", textAlign:"center"}}>
@@ -3002,7 +3130,7 @@ function JobListPane({
 // Wenn der Job laeuft, wird der Inline-Progress vom Output-Component
 // uebernommen (loading=true + jobId fuer SSE). Bei terminaler Job-Anzeige
 // wird der finale Text statisch angezeigt; RepairBundle bleibt funktional.
-function JobDetailPane({ job, jobOps, jobState, toast, onCancel, onDelete, onBack }) {
+function JobDetailPane({ job, jobOps, jobState, toast, onCancel, onDelete, onBack, onTerminal }) {
   // Output erwartet `text`, `loading`, `jobId`. Bei laufendem Job: loading=true
   // damit der SSE-Progress greift; bei terminalem Job: loading=false.
   const isLive    = job && (job.status === "pending" || job.status === "running");
@@ -3074,6 +3202,7 @@ function JobDetailPane({ job, jobOps, jobState, toast, onCancel, onDelete, onBac
         disabled={jobState.repairBusy}
       />
       <Output text={showText} loading={isLive} jobId={job?.job_id}
+        onTerminal={onTerminal}
         onCopy={() => { navigator.clipboard.writeText(showText); toast("In Zwischenablage kopiert"); }}
         extraButtons={job?.has_transcript ? [
           { label: "Transkript ↓", onClick: () => downloadTranscript(job.job_id) }
@@ -3106,12 +3235,38 @@ function _emptyDraft() {
   };
 }
 
+// Sprint Draft-Persistence B3: text-only Felder eines Drafts. Wird vom
+// useDraftCache-Hook persistiert. Whitelist-Filter im updateDraft sorgt
+// dafuer, dass File-Felder (audio, txtFile, style) und transiente Flags
+// (id, starting, createdAt) NICHT ins localStorage gelangen.
+const P1_DRAFT_TEXT_DEFAULT = {
+  text: "", bullets: "", kuerzel: "", geschlecht: "auto",
+  prompt: P_DOKU, styleText: "",
+};
+const P1_TEXT_FIELDS = Object.keys(P1_DRAFT_TEXT_DEFAULT);
+
 function P1({ toast, resumeJob, onResumed, model }) {
   // Multi-Draft-State (NEU, Sprint B Part 2)
-  // drafts: lokale Entwuerfe (nicht persistiert, leben nur im Component-State)
+  // drafts: lokale Entwuerfe (Text-Felder ueberleben Reload via useDraftCache,
+  //         File-Felder sind in-memory-only)
   // jobs:   Jobs vom Backend (laufend, fertig, fehlgeschlagen)
   // selected: { type: "draft"|"job", id: string } - was ist gerade im Detail-/Form-Pane?
-  const initialDraft = useMemo(() => _emptyDraft(), []);
+
+  // Sprint Draft-Persistence B3: Cache fuer Text-Felder.
+  // Liefert die letzten gespeicherten Werte (oder Defaults) - wird beim Initial-
+  // Draft-Bau eingemerget, sodass halbausgefuellte Formulare F5 ueberleben.
+  const [textCache, updateTextCache, clearTextCache] =
+    useDraftCache("st_draft_p1", P1_DRAFT_TEXT_DEFAULT);
+
+  // initialDraft wird einmalig beim Mount aus _emptyDraft() + textCache gebaut.
+  // Wichtig: useMemo mit [] - textCache wird nur beim ersten Render konsumiert,
+  // spaetere Cache-Aenderungen schreiben direkt ueber updateTextCache und sind
+  // bereits im drafts-State sichtbar.
+  const initialDraft = useMemo(
+    () => ({ ..._emptyDraft(), ...textCache }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
   const [drafts, setDrafts]               = useState([initialDraft]);
   const [jobs, setJobs]                   = useState([]);
   const [selected, setSelected]           = useState({ type: "draft", id: initialDraft.id });
@@ -3130,9 +3285,17 @@ function P1({ toast, resumeJob, onResumed, model }) {
 
   // Patch-Helfer fuer einen einzelnen Draft-Eintrag.
   // updateDraft(id, {text: "..."}) - merget patch ins Draft-Objekt.
+  // B3: Text-Felder werden zusaetzlich in den useDraftCache geschrieben.
+  // File-Felder (audio, txtFile, style) und transiente Flags (starting)
+  // werden bewusst NICHT gecached - sie ueberleben Reload nicht.
   const updateDraft = useCallback((id, patch) => {
     setDrafts(prev => prev.map(d => d.id === id ? { ...d, ...patch } : d));
-  }, []);
+    const textPatch = {};
+    for (const k of P1_TEXT_FIELDS) {
+      if (k in patch) textPatch[k] = patch[k];
+    }
+    if (Object.keys(textPatch).length > 0) updateTextCache(textPatch);
+  }, [updateTextCache]);
 
   // ── Liste laden + Polling alle 5s ───────────────────────────────────
   const reloadJobs = useCallback(async () => {
@@ -3170,104 +3333,68 @@ function P1({ toast, resumeJob, onResumed, model }) {
     }
   }, [resumeJob, onResumed]);
 
-  // ── Detail-Load + SSE fuer den selektierten Job ─────────────────────
-  // Strategie: Initial-Fetch (immer), dann SSE NUR wenn Job pending/running.
-  // SSE-Events: progress (ignorieren - JobProgressBar zeichnet sie selbst),
-  //             done/error/cancelled (-> Re-Fetch des Detail-Dicts).
-  // EventSource schliesst sich selbst nach Terminal-Event; bei Fehler fallback
-  // auf einmaliges Polling nach 5s.
+  // ── Detail-Load fuer den selektierten Job (kein Polling) ────────────
+  // Strategie: einmal beim Selektieren fetchen. Wenn der Job dann noch
+  // laeuft, mountet <Output> den <JobProgressBar> mit SSE - dessen
+  // onTerminal-Callback triggert ein erneutes fetchDetail wenn der Job
+  // fertig wird. So gibt es genau EINE SSE-Verbindung pro Job, keinen
+  // Doppel-Subscribe und keinen unnoetigen Polling-Verkehr.
+  //
+  // Edge Cases werden vom JobProgressBar-internen Polling-Fallback
+  // abgedeckt: wenn die SSE bricht (Cloudflare-Timeout, HTTP/2-Quirk),
+  // pollt JobProgressBar selber und ruft onTerminal beim done-Status.
+  const refetchDetail = useCallback(async (jobId) => {
+    try {
+      const r = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
+      if (r.status === 404) {
+        // Job wurde von woanders geloescht
+        setSelected(prev => (prev?.type === "job" && prev.id === jobId) ? null : prev);
+        return;
+      }
+      if (!r.ok) return;
+      const j = await r.json();
+      // Race-Guard: User koennte inzwischen einen anderen Job ausgewaehlt haben
+      setDetail(prev => {
+        // setSelected ist async; wir vergleichen ueber den uebergebenen jobId
+        // und vertrauen darauf dass setDetail vom nachfolgenden useEffect-Run
+        // ueberschrieben wird falls selected wechselt
+        return j.job_id === jobId ? j : prev;
+      });
+      if (j.status === "done" || j.status === "cancelled") {
+        jobOps.applyOriginal(j);
+      }
+    } catch (_) { /* still bleiben, JobProgressBar-Polling-Fallback laeuft eh */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobOps]);
+
   useEffect(() => {
     if (selected?.type !== "job") { setDetail(null); jobOps.reset(); return; }
-    const jobId = selected.id;
-    let cancelled = false;
-    let es = null;
-    let fallbackTimeout = null;
-
-    async function fetchDetail() {
-      try {
-        const r = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
-        if (cancelled) return null;
-        if (r.status === 404) {
-          // Job wurde von woanders geloescht
-          setSelected(null);
-          return null;
-        }
-        if (!r.ok) return null;
-        const j = await r.json();
-        if (cancelled) return null;
-        setDetail(j);
-        if (j.status === "done" || j.status === "cancelled") {
-          jobOps.applyOriginal(j);
-        }
-        return j;
-      } catch (_) { return null; }
-    }
-
-    (async () => {
-      const j = await fetchDetail();
-      if (cancelled || !j) return;
-      // SSE nur fuer laufende Jobs eroeffnen
-      if (j.status !== "pending" && j.status !== "running") return;
-      try {
-        es = new EventSource(`${getApiBase()}/jobs/${jobId}/stream`);
-        es.onmessage = (e) => {
-          if (cancelled) return;
-          try {
-            const d = JSON.parse(e.data);
-            if (d.type === "done" || d.type === "error" || d.type === "cancelled") {
-              // Detail-Dict neu laden, dann SSE schliessen
-              fetchDetail();
-              if (es) try { es.close(); } catch (_) {}
-            }
-            // progress-Events absichtlich ignorieren - JobProgressBar im Output
-            // hoert dieselbe URL und zeichnet den Live-Progress eigenstaendig
-          } catch (_) {}
-        };
-        es.onerror = () => {
-          // SSE down -> einmal nach 5s nachfetchen falls der Job inzwischen fertig ist
-          if (es) try { es.close(); } catch (_) {}
-          if (!cancelled) fallbackTimeout = setTimeout(fetchDetail, 5000);
-        };
-      } catch (_) {
-        // EventSource nicht verfuegbar (alter Browser) -> nach 5s nachfetchen
-        fallbackTimeout = setTimeout(fetchDetail, 5000);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (es) try { es.close(); } catch (_) {}
-      if (fallbackTimeout) clearTimeout(fallbackTimeout);
-    };
+    refetchDetail(selected.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
-  // ── Draft-Aktionen ──────────────────────────────────────────────────
-  function newDraft() {
-    const d = _emptyDraft();
-    setDrafts(prev => [...prev, d]);
-    setSelected({ type: "draft", id: d.id });
-  }
+  // onTerminal-Callback fuer <JobProgressBar> via <Output> via <JobDetailPane>:
+  // wird gefeuert sobald der selektierte Job durch die SSE oder den Polling-
+  // Fallback einen terminalen Status erreicht. Triggert ein einmaliges
+  // refetchDetail, das das Detail-Dict mit result_text/befund/etc. fuellt
+  // und jobOps.applyOriginal() ruft (damit RepairBundle den Job kennt).
+  const onJobTerminal = useCallback(() => {
+    if (selected?.type === "job") refetchDetail(selected.id);
+  }, [selected, refetchDetail]);
 
-  function deleteDraft(id) {
-    setDrafts(prev => {
-      const remaining = prev.filter(d => d.id !== id);
-      // Wenn das der letzte Entwurf war: einen neuen leeren anlegen damit
-      // das Formular nie ganz weg ist (saubere "leeres Formular"-Position).
-      if (remaining.length === 0) {
-        const fresh = _emptyDraft();
-        // Selection muss in einem separaten setState passieren (sind in
-        // unterschiedlichen State-Updates, batching durch React)
-        setSelected({ type: "draft", id: fresh.id });
-        return [fresh];
-      }
-      // Wenn der geloeschte Entwurf gerade ausgewaehlt war, einen anderen
-      // Entwurf selektieren - oder gar nichts (User waehlt neu).
-      if (selected?.type === "draft" && selected.id === id) {
-        setSelected({ type: "draft", id: remaining[0].id });
-      }
-      return remaining;
-    });
+  // ── Draft-Aktionen ──────────────────────────────────────────────────
+  // Sprint B v2: kein newDraft() mehr - es gibt immer GENAU EINEN Entwurf,
+  // der entweder leer ist (= "+ Neues Gespräch"-Button-Look in der Liste)
+  // oder gefuellt (= aktuelle Arbeit). Wenn der User die aktuelle Arbeit
+  // verwerfen will, ersetzt discardDraft den Entwurf durch einen frischen
+  // leeren - der dann wieder als Button erscheint.
+  function discardDraft(id) {
+    const fresh = _emptyDraft();
+    setDrafts(prev => prev.map(d => d.id === id ? fresh : d));
+    if (selected?.type === "draft" && selected.id === id) {
+      setSelected({ type: "draft", id: fresh.id });
+    }
+    clearTextCache();  // B3: localStorage-Eintrag aufraeumen
   }
 
   // ── Generieren (non-blocking, draft -> job) ─────────────────────────
@@ -3307,14 +3434,13 @@ function P1({ toast, resumeJob, onResumed, model }) {
         model:        model || null,
         patientName:  patientNameExplicit,
       });
-      // Draft loeschen (ist jetzt ein Job), neuen Job selektieren
-      setDrafts(prev => prev.filter(x => x.id !== d.id));
+      // Submit erfolgreich. Den verbrauchten Draft durch einen frischen leeren
+      // ersetzen - die Liste behaelt GENAU EINEN Entwurf (Invariante).
+      // Der leere Draft erscheint dann automatisch als "+ Neues Gespräch"-Button.
+      setDrafts(prev => prev.map(x => x.id === d.id ? _emptyDraft() : x));
       setSelected({ type: "job", id: jobId });
       reloadJobs();
-      // Wenn keine weiteren Drafts existieren: einen neuen anlegen (im Hintergrund),
-      // damit "+ Neues Gespräch" immer eine konsistente Liste hat.
-      // Nicht selektiert - User soll den neuen Job sehen, nicht zurueck zum Form.
-      setDrafts(prev => prev.length === 0 ? [_emptyDraft()] : prev);
+      clearTextCache();  // B3: Form ist abgesendet - localStorage-Eintrag weg
     } catch (e) {
       toast("Fehler: " + friendlyError(e));
       updateDraft(d.id, { starting: false });
@@ -3357,7 +3483,8 @@ function P1({ toast, resumeJob, onResumed, model }) {
 
   // ── Form-JSX (bound to currentDraft) ────────────────────────────────
   // currentDraft ist garantiert non-null wenn dieser Zweig gerendert wird
-  // (deleteDraft sorgt dafuer dass immer mindestens ein Draft existiert).
+  // (run() und discardDraft() ersetzen den Entwurf, sie loeschen ihn nie -
+  // damit existiert immer genau ein Entwurf).
   const formCanGenerate = currentDraft &&
     (currentDraft.audio || currentDraft.txtFile || currentDraft.text) &&
     currentDraft.kuerzel.trim();
@@ -3505,6 +3632,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
         jobState={jobState}
         jobOps={jobOps}
         toast={toast}
+        onTerminal={onJobTerminal}
         onCancel={() => onCancelJob(detail.job_id)}
         onDelete={() => onDeleteJob(detail.job_id, detail.patient_kuerzel || "Gespräch")}
         onBack={() => {
@@ -3543,10 +3671,9 @@ function P1({ toast, resumeJob, onResumed, model }) {
             drafts={drafts}
             selected={selected}
             onSelect={setSelected}
-            onNew={newDraft}
             onDelete={onDeleteJob}
             onCancel={onCancelJob}
-            onDeleteDraft={deleteDraft}
+            onDeleteDraft={discardDraft}
             loading={listLoading}
             error={listError}
           />
@@ -3557,18 +3684,37 @@ function P1({ toast, resumeJob, onResumed, model }) {
   );
 }
 
+// Sprint Draft-Persistence B1: P2 Text-Felder die in localStorage persistiert
+// werden. Files (selbst, befunde, audio, txtFile, style) bleiben aussen vor.
+const P2_DRAFT_DEFAULT = {
+  text: "", dx: [], styleText: "",
+  prompt: P_ANAMNESE,
+  befundVorlage: P_BEFUND_VORLAGE,
+  geschlecht: "auto", kuerzel: "",
+};
+
 function P2({ toast, resumeJob, onResumed, model }) {
+  // File-Felder bleiben in-memory only (ueberleben weder Tab-Wechsel noch F5)
   const [selbst, setSelbst]       = useState(null);
   const [befunde, setBefunde]     = useState(null);
   const [audio, setAudio]         = useState(null);
   const [txtFile, setTxtFile]     = useState(null);
-  const [text, setText]           = useState("");
-  const [dx, setDx]               = useState([]);
   const [style, setStyle]         = useState(null);
-  const [styleText, setStyleText] = useState("");
-  const [prompt, setPrompt]       = useState(P_ANAMNESE);
-  // v18: Befund-Vorlage als separates editierbares Feld
-  const [befundVorlage, setBefundVorlage] = useState(P_BEFUND_VORLAGE);
+
+  // B1: Text-Felder ueber useDraftCache - ueberleben Tab-Wechsel + F5.
+  // Adapter-Setter unten halten die JSX-Aufrufseite kompatibel
+  // (value={text}/onChange={setText} bleibt unveraendert).
+  const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p2", P2_DRAFT_DEFAULT);
+  const { text, dx, styleText, prompt, befundVorlage, geschlecht, kuerzel } = draft;
+  const setText          = useCallback(v => updateDraft({ text: v }),          [updateDraft]);
+  const setDx            = useCallback(v => updateDraft({ dx: v }),            [updateDraft]);
+  const setStyleText     = useCallback(v => updateDraft({ styleText: v }),     [updateDraft]);
+  const setPrompt        = useCallback(v => updateDraft({ prompt: v }),        [updateDraft]);
+  const setBefundVorlage = useCallback(v => updateDraft({ befundVorlage: v }), [updateDraft]);
+  const setGeschlecht    = useCallback(v => updateDraft({ geschlecht: v }),    [updateDraft]);
+  const setKuerzel       = useCallback(v => updateDraft({ kuerzel: v }),       [updateDraft]);
+
+  // Job-Output-State (nicht persistiert - kommt vom Backend bei Bedarf)
   const [out, setOut]             = useState("");
   const [outWarn, setOutWarn]       = useState(null);
   const [befundOut, setBefundOut] = useState("");
@@ -3579,27 +3725,41 @@ function P2({ toast, resumeJob, onResumed, model }) {
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
   const abortRef = useRef(null);
-  const [geschlecht, setGeschlecht] = useState("auto");
-  const [kuerzel, setKuerzel]     = useState("");
 
-  // Resume: laufenden Job nach Reload wieder aufnehmen
+  // B1: zentrale `attach`-Funktion - kapselt die "ab jetzt zeigt P2 diesen Job"
+  // Logik. Wird von 3 Aufrufern getriggert (Resume-Banner, Auto-Resume, run()),
+  // und ist V1-ready als zukuenftiger Callback fuer eine JobListPane-Klick.
+  function attach(jobId) {
+    setBusy(true);
+    setCurrentJobId(jobId);
+    pollJob(jobId, 1200)
+      .then(j => {
+        if (!j) { setBusy(false); setCurrentJobId(null); return; }  // cancelled
+        setOut(j.result_text || "");
+        setOutWarn(getEmptyWarning(j.result_text));
+        setBefundOut(j.befund_text || "");
+        jobOps.applyOriginal(j);
+        setLastJobId(jobId);
+        setHasTranscript(j.has_transcript || false);
+      })
+      .catch(e => { setOut("Fehler: " + friendlyError(e)); })
+      .finally(() => { setBusy(false); setCurrentJobId(null); });
+  }
+
+  // Resume-Banner-Prop (gesetzt vom App-Root nach F5 wenn ein Job lief).
+  // Hoehere Prioritaet als Auto-Resume (siehe `!resumeJob` unten).
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p2") return;
-    setBusy(true);
-    setCurrentJobId(resumeJob.jobId);
-    pollJob(resumeJob.jobId, 1200)
-      .then(job => {
-        if (!job) { setBusy(false); onResumed(); return; } // cancelled
-        setOut(job.result_text || "");
-        setBefundOut(job.befund_text || "");
-        jobOps.applyOriginal(job);
-        setLastJobId(resumeJob.jobId);
-        setHasTranscript(job.has_transcript || false);
-        onResumed();
-      })
-      .catch(e => { setOut("Fehler: " + friendlyError(e)); onResumed(); })
-      .finally(() => setBusy(false));
+    attach(resumeJob.jobId);
+    onResumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumeJob]);
+
+  // Auto-Resume beim Mount: nur wenn kein Resume-Banner aktiv ist (sonst
+  // wuerde attach() doppelt laufen - der Banner-useEffect oben hat Vorrang).
+  // Greift beim Szenario: Therapeut startet Job, wechselt zu anderem P,
+  // kommt zurueck - der Job laeuft im Backend weiter und wird hier sichtbar.
+  useResumeWorkflowJob("anamnese", attach, !resumeJob);
 
   function cancelRun() {
     if (abortRef.current) abortRef.current.abort();
@@ -3613,12 +3773,17 @@ function P2({ toast, resumeJob, onResumed, model }) {
   }
 
   async function run() {
+    // B1: nicht-blockierender Pfad (startJob -> attach). AbortController wird
+    // weiterhin gehalten, weil cancelRun() einen abort() versuchen kann -
+    // praktisch erreicht der abort den fetch nur in den ersten ms vor dem
+    // Backend-Response, danach uebernimmt der Backend-Cancel-Endpoint.
     const ac = new AbortController();
     abortRef.current = ac;
-    setBusy(true);
     setLastJobId(null);
     setHasTranscript(false);
     setBefundOut("");
+    setOut("");
+    setOutWarn(null);
     jobOps.reset();
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
 
@@ -3645,7 +3810,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
     }
 
     try {
-      const result = await generate("anamnese", sys, "", {
+      const jobId = await startJob("anamnese", sys, "", {
         selbst:    selbst,
         vorbef:    befunde,
         audio:     audio,
@@ -3657,21 +3822,17 @@ function P2({ toast, resumeJob, onResumed, model }) {
         patientName: patientNameExplicit,
         // v18: editierbare Befund-Vorlage fuer den separaten Befund-Call
         befundVorlage: befundVorlage || null,
-        onJobId:   setCurrentJobId,
-        signal:    ac.signal,
-      }, "p2");
-      if (!result) { setBusy(false); setCurrentJobId(null); return; }
-      setOut(result.text || "");
-      setOutWarn(getEmptyWarning(result.text));
-      setBefundOut(result.befundText || "");
-      jobOps.applyOriginal(result);
-      setLastJobId(result.jobId);
-      setHasTranscript(result.hasTranscript || false);
-      idbClearAudio().catch(() => {}); // Aufnahme nach Job-Start nicht mehr benötigt
+      });
+      // B1: Form-Cache aufraeumen, dann an den frisch erstellten Job heften.
+      // attach() setzt busy=true und startet pollJob - User sieht den Progress.
+      clearDraft();
+      attach(jobId);
     }
-    catch (e) { setOut("Fehler: " + friendlyError(e)); }
-    setBusy(false);
-    setCurrentJobId(null);
+    catch (e) {
+      setOut("Fehler: " + friendlyError(e));
+      setBusy(false);
+      setCurrentJobId(null);
+    }
   }
 
   return (
@@ -3824,9 +3985,13 @@ function P2({ toast, resumeJob, onResumed, model }) {
           {(out || befundOut) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
-                setSelbst(null); setBefunde(null); setAudio(null); idbClearAudio().catch(() => {});
-                setTxtFile(null);
-                setText(""); setDx([]); setStyle(null); setStyleText("");
+                setSelbst(null); setBefunde(null); setAudio(null);
+                setTxtFile(null); setStyle(null);
+                // B1: setText/setDx/setStyleText geht jetzt durch updateDraft
+                // - aber clearDraft() ist sauberer (setzt ALLE Text-Felder
+                // inkl. prompt/befundVorlage auf Defaults zurueck und entfernt
+                // den localStorage-Eintrag).
+                clearDraft();
                 setOut(""); setBefundOut(""); setOutWarn(null);
                 jobOps.reset();
                 setLastJobId(null); setHasTranscript(false);
@@ -4630,10 +4795,6 @@ const DOKUMENTTYPEN_FALLBACK = [
   { value: "akutantrag",         label: "Akutantrag" },
   { value: "entlassbericht",     label: "Entlassbericht" },
 ];
-
-// Fuer Komponenten die das Manifest nur synchron brauchen (z.B. Initial-State).
-// Wird durch useWorkflowManifest() ueberschrieben sobald das Backend antwortet.
-const DOKUMENTTYPEN = DOKUMENTTYPEN_FALLBACK;
 
 // Strukturelle Workflows aus Backend-Manifest. Wird in P5 fuer den
 // "hatAbschnitte"-Hinweis benutzt - aktuell zeigen wir den Hinweis fuer
