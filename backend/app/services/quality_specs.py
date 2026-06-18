@@ -60,15 +60,21 @@ KEYWORD_SYNONYMS: dict[str, list[str]] = {
 # Ein Workflow-Output muss MINDESTENS EINEN Indikator pro Keyword enthalten.
 # Liste ist bewusst klein - das ist der harte Minimumkern. Stilistische
 # Vorgaben werden NICHT als Issue gemeldet.
+# v19.4: Keyword-Checks entschlackt. Jedes bisher geforderte Keyword
+# (behandlungsverlauf, vorstellungsanlass, anamnese, empfehlung) ist
+# gleichzeitig eine Pflicht-SEKTION (REQUIRED_SECTIONS) und damit durch die
+# verbindliche Ueberschrift ohnehin erfuellt — der Keyword-Check feuerte nie
+# und erzeugte nur Rauschen (-> unnoetige Repair-Prompts). Daher alle leer.
+# Der Mechanismus bleibt: nicht-redundante INHALTS-Keywords (die NICHT durch
+# eine Ueberschrift garantiert sind) koennen hier spaeter ergaenzt werden.
+# Die strukturelle Absicherung leistet jetzt allein REQUIRED_SECTIONS.
 REQUIRED_KEYWORDS: dict[str, list[str]] = {
-    # dokumentation: kein verpflichtender Keyword-Kanon - eine
-    # Gespraechsdokumentation ist im Stil zu variabel.
     "dokumentation": [],
-    "anamnese": ["vorstellungsanlass", "anamnese"],
-    "verlaengerung": ["behandlungsverlauf"],
-    "folgeverlaengerung": ["behandlungsverlauf"],
-    "akutantrag": [],  # Akut hat eigene Strukturanforderung, kein Keyword-Zwang
-    "entlassbericht": ["behandlungsverlauf", "empfehlung"],
+    "anamnese": [],
+    "verlaengerung": [],
+    "folgeverlaengerung": [],
+    "akutantrag": [],
+    "entlassbericht": [],
 }
 
 

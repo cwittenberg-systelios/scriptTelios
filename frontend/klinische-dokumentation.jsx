@@ -695,6 +695,13 @@ const S = `
     accent-color: var(--st-red, #8b1a1a);
   }
   .qc-checkbox:disabled { cursor: not-allowed; }
+  .qc-repair-progress {
+    padding: 12px 16px; background: var(--st-gray-light);
+    border-top: 1px solid var(--st-gray-mid);
+  }
+  .qc-repair-progress-label {
+    font-size: 12px; font-weight: 600; color: var(--st-text-mid);
+  }
   .qc-repair-form {
     padding: 12px 16px; background: var(--st-gray-light);
     border-top: 1px solid var(--st-gray-mid);
@@ -1851,6 +1858,8 @@ function useJobResult() {
   const [modalPrompt,     setModalPrompt]     = useState("");
   const [repairBusy,      setRepairBusy]      = useState(false);
   const [repairError,     setRepairError]     = useState(null);
+  // v19.4 C-1: laufender Repair-Job (treibt das JobProgressBar nach Modal-Close).
+  const [repairProgressJobId, setRepairProgressJobId] = useState(null);
 
   const hasRepair = !!repairJobId;
 
@@ -1869,6 +1878,7 @@ function useJobResult() {
     // Bei neuer Generierung Repair-Version verwerfen
     setRepairText(""); setRepairBefund(""); setRepairQC(null); setRepairJobId(null);
     setShowRepairModal(false); setModalPrompt(""); setRepairError(null);
+    setRepairProgressJobId(null);
   }, []);
 
   const applyRepair = useCallback((repairResult) => {
@@ -1880,6 +1890,7 @@ function useJobResult() {
     setActiveVersion("repair");
     setShowRepairModal(false);
     setRepairError(null);
+    setRepairProgressJobId(null);
     // Auswahl-State leeren - bei zweitem Repair startet er bei 0
     setAcceptedCodes([]);
     setUserHint("");
@@ -1892,6 +1903,7 @@ function useJobResult() {
     setAcceptedCodes([]); setUserHint("");
     setShowRepairModal(false); setModalPrompt("");
     setRepairBusy(false); setRepairError(null);
+    setRepairProgressJobId(null);
   }, []);
 
   const toggleCode = useCallback((code) => {
@@ -1922,6 +1934,7 @@ function useJobResult() {
       acceptedCodes, userHint,
       // Modal
       showRepairModal, modalPrompt, repairBusy, repairError,
+      repairProgressJobId,
     },
     {
       applyOriginal, applyRepair, reset,
@@ -1931,6 +1944,7 @@ function useJobResult() {
       closeModal: () => { setShowRepairModal(false); },
       setModalPrompt,
       setRepairBusy, setRepairError,
+      setRepairProgressJobId,
     },
   ];
 }
@@ -2184,25 +2198,46 @@ function RepairBundle({ job, ops, toast }) {
   }
 
   // Modal-Bestaetigung: optional customPrompt (wenn Therapeut Preview editiert hat)
+  // v19.4 C-1: NICHT mehr blockierend pollen. Job nur starten, Modal sofort
+  // schliessen, ein JobProgressBar uebernimmt den Fortschritt (analog zur
+  // normalen Generierung). Das Ergebnis wird im Terminal-Handler geholt.
   async function handleConfirm(customPrompt) {
     ops.setRepairBusy(true);
     ops.setRepairError(null);
     try {
-      const result = await repair(
+      const { repairJobId } = await repairStart(
         job.repairTargetJobId, job.acceptedCodes, job.userHint, customPrompt,
       );
-      if (!result) {
-        // Polling cancelled (z.B. Job abgebrochen)
-        ops.closeModal();
-        toast && toast("Repair abgebrochen");
-        return;
-      }
-      ops.applyRepair(result);
-      toast && toast("Überarbeitung erstellt");
+      ops.setRepairProgressJobId(repairJobId);
+      ops.closeModal();
     } catch (e) {
       ops.setRepairError(friendlyError(e));
     } finally {
       ops.setRepairBusy(false);
+    }
+  }
+
+  // Terminal-Event des laufenden Repair-Jobs (vom JobProgressBar geliefert).
+  async function handleRepairTerminal(type) {
+    const repairJobId = job.repairProgressJobId;
+    if (type !== "done") {
+      ops.setRepairProgressJobId(null);
+      if (type === "error") ops.setRepairError("Überarbeitung fehlgeschlagen");
+      else                  toast && toast("Überarbeitung abgebrochen");
+      return;
+    }
+    try {
+      const result = await fetchRepairResult(repairJobId, job.repairTargetJobId);
+      if (!result) {                      // cancelled zwischen done-Event und GET
+        ops.setRepairProgressJobId(null);
+        toast && toast("Überarbeitung abgebrochen");
+        return;
+      }
+      ops.applyRepair(result);            // setzt repairProgressJobId selbst auf null
+      toast && toast("Überarbeitung erstellt");
+    } catch (e) {
+      ops.setRepairProgressJobId(null);
+      ops.setRepairError(friendlyError(e));
     }
   }
 
@@ -2222,6 +2257,17 @@ function RepairBundle({ job, ops, toast }) {
         // triggern, was Plan-Phase-C ausschliesst.
         readOnly={job.activeVersion === "repair"}
       />
+      {/* v19.4 C-1: laeuft nach Modal-Close — Fortschritt der Ueberarbeitung
+          via SSE/Polling, analog zur normalen Generierung. */}
+      {job.repairProgressJobId && (
+        <div className="qc-repair-progress">
+          <div className="qc-repair-progress-label">Überarbeitung läuft …</div>
+          <JobProgressBar
+            jobId={job.repairProgressJobId}
+            onTerminal={handleRepairTerminal}
+          />
+        </div>
+      )}
       {job.showRepairModal && (
         <RepairPreviewModal
           prompt={job.modalPrompt}
@@ -2474,11 +2520,12 @@ async function repairPreview(jobId, acceptedCodes, userHint) {
   return d;  // { final_prompt, accepted_issues, user_hint_sanitized }
 }
 
-// Triggert den Repair-Job. Pollt anschliessend bis fertig und gibt das volle
-// Repair-Job-Objekt zurueck (inklusive eigenem quality_check). Caller bekommt
-// also denselben Shape wie pollJob() - kann den Repair als "neue Version"
-// einfach in den State stecken.
-async function repair(jobId, acceptedCodes, userHint, customFinalPrompt = null) {
+// v19.4 C-1: Repair NICHT mehr blockierend pollen. repairStart() triggert nur
+// den Job und gibt sofort die repair_job_id zurueck — das Modal kann sich
+// schliessen und ein JobProgressBar uebernimmt die Fortschrittsanzeige (analog
+// zur normalen Generierung). fetchRepairResult() holt nach Terminal das
+// fertige Repair-Job-Objekt.
+async function repairStart(jobId, acceptedCodes, userHint, customFinalPrompt = null) {
   const body = {
     accepted_issue_codes: acceptedCodes || [],
     user_hint:            userHint || "",
@@ -2495,17 +2542,24 @@ async function repair(jobId, acceptedCodes, userHint, customFinalPrompt = null) 
     if (detail && typeof detail === "object") throw new Error(detail.msg || JSON.stringify(detail));
     throw new Error(detail || r.statusText);
   }
-  const repairJobId = d.repair_job_id;
-  // Polling exakt wie generate(). Repair-Jobs landen in derselben Queue.
-  const repairJob = await pollJob(repairJobId, 600);
-  if (!repairJob) return null;  // cancelled
+  return { repairJobId: d.repair_job_id, parentJobId: d.parent_job_id };
+}
+
+// Holt das fertige Repair-Job-Objekt (einmaliger GET, kein Polling) und mappt
+// es auf den Shape den applyRepair() erwartet.
+async function fetchRepairResult(repairJobId, parentJobId = null) {
+  const r = await apiFetch(`${getApiBase()}/jobs/${encodeURIComponent(repairJobId)}`);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  if (j.status === "error") throw new Error(j.error_msg || "Überarbeitung fehlgeschlagen");
+  if (j.status === "cancelled") return null;
   return {
-    text:         repairJob.result_text   || "",
-    befundText:   repairJob.befund_text   || "",
-    akutText:     repairJob.akut_text     || "",
+    text:         j.result_text   || "",
+    befundText:   j.befund_text   || "",
+    akutText:     j.akut_text     || "",
     jobId:        repairJobId,
-    parentJobId:  d.parent_job_id,
-    qualityCheck: repairJob.quality_check || null,
+    parentJobId:  parentJobId,
+    qualityCheck: j.quality_check || null,
   };
 }
 
@@ -3823,9 +3877,12 @@ function P2({ toast, resumeJob, onResumed, model }) {
         // v18: editierbare Befund-Vorlage fuer den separaten Befund-Call
         befundVorlage: befundVorlage || null,
       });
-      // B1: Form-Cache aufraeumen, dann an den frisch erstellten Job heften.
+      // v19.4 Bugfix: NICHT clearDraft() beim Generieren — das setzte den Draft
+      // (inkl. Diagnosen-Tags dx) sofort auf Default zurueck, sodass die
+      // Diagnose im Formfeld direkt nach "Generieren" verschwand. Die Eingaben
+      // bleiben jetzt stehen (Re-Generierung/Tweak moeglich); geleert wird nur
+      // ueber den expliziten "Neu/Reset"-Button.
       // attach() setzt busy=true und startet pollJob - User sieht den Progress.
-      clearDraft();
       attach(jobId);
     }
     catch (e) {

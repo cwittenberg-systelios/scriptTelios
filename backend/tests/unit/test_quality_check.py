@@ -188,16 +188,19 @@ class TestLengthCheck:
 
 class TestKeywordCheck:
 
-    def test_missing_keyword_anamnese(self):
-        # Anamnese braucht 'Vorstellungsanlass' (siehe quality_specs).
-        # Wir reichen einen Text ohne diese Indikatoren ein.
+    def test_anamnese_keyword_check_removed(self):
+        # v19.4: Keyword-Checks fuer anamnese entfernt (redundant mit den
+        # Pflicht-Sektionen). Ein Text ohne Vorstellungsanlass-Indikatoren darf
+        # KEIN MISSING_KEYWORD mehr erzeugen — die strukturelle Luecke wird
+        # stattdessen ueber MISSING_SECTION_VORSTELLUNGSANLASS abgedeckt.
+        assert required_keywords_for("anamnese") == []
         text = _make_text(400, prefix="Patient X traegt seine Geschichte vor.")
         issues = run_quality_check(text, "anamnese")
         codes = {i.code for i in issues}
-        # Es muss MISSING_KEYWORD_VORSTELLUNGSANLASS dabei sein.
-        assert any(c.startswith(ISSUE_CODE_PREFIX_MISSING_KEYWORD) for c in codes)
-        target = f"{ISSUE_CODE_PREFIX_MISSING_KEYWORD}VORSTELLUNGSANLASS"
-        assert target in codes
+        # Kein Keyword-Issue mehr ...
+        assert not any(c.startswith(ISSUE_CODE_PREFIX_MISSING_KEYWORD) for c in codes)
+        # ... aber die Sektions-Absicherung greift weiterhin.
+        assert f"{ISSUE_CODE_PREFIX_MISSING_SECTION}VORSTELLUNGSANLASS" in codes
 
     def test_synonym_satisfies_keyword(self):
         # 'stellt sich vor' ist ein Synonym fuer Vorstellungsanlass.

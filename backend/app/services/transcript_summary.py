@@ -57,8 +57,10 @@ ABSOLUTE REGELN — JEDE VERLETZUNG IST EIN FEHLER:
    "tiefgreifend" wenn sie nicht im Transkript stehen. Bleib an den
    Quell-Adjektiven.
 
-4. PATIENTENNAME ALS INITIALE. Verwende "Frau S." / "Herr R." statt
-   vollstaendiger Namen.
+4. PATIENTENBEZEICHNUNG. Falls oben ein "AKTUELLER PATIENT" angegeben ist,
+   verwende GENAU diese Bezeichnung. Andernfalls neutral "die Patientin/der
+   Patient" — ERFINDE KEINEN Namen und KEINE Initiale (kein "Frau S."/"Herr R."
+   o.ae.).
 
 5. WOERTLICHE ZITATE NUR WENN DIAGNOSTISCH RELEVANT (z.B. Suizidalitaet,
    konkrete Symptom-Schilderung). Sonst paraphrasieren.
@@ -88,14 +90,24 @@ Konkrete Aufgaben/Uebungen/Vereinbarungen die der/die Therapeut/in mit
 dem/der Patient/in getroffen hat. AMDP-relevante Beobachtungen (Stimmung,
 Antrieb, Konzentration, Suizidalitaets-Erwaehnung). Aus den letzten ~20%
 des Transkripts. 3-6 Saetze.
+
+EINLADUNGEN — STRIKT QUELLENTREU: Uebernimm NUR Einladungen/Vorschlaege, die
+der/die Therapeut/in im Transkript TATSAECHLICH und EXPLIZIT ausspricht.
+Erkennbar an Wendungen wie "Ich lade Sie ein ...", "Ich schlage vor ...",
+"Ein Angebot waere ...", "In der naechsten Woche / den naechsten Tagen
+koennten Sie ...", "Vielleicht moegen Sie ...". Gib die Einladung moeglichst
+NAH AM ORIGINAL-WORTLAUT wieder (das ist die Audit-Spur fuer den spaeteren
+Doku-Abschnitt). Wenn der/die Therapeut/in KEINE solche Einladung ausspricht:
+schreibe ausdruecklich "Keine explizite Einladung im Transkript" — ERFINDE
+KEINE Aufgaben, Uebungen oder Impulse.
 """
 
 
 def _wir_hint(workflow: Optional[str]) -> str:
     """Stil-Hinweis: Wir-Form fuer Antrags-Workflows, sonst neutral-deskriptiv."""
     if workflow and workflow in WIR_WORKFLOWS:
-        return 'Schreibe im Wir-Stil ("Wir nehmen Frau S. wahr...").'
-    return 'Schreibe im neutral-deskriptiven Stil ("Frau S. berichtet...").'
+        return 'Schreibe im Wir-Stil ("Wir nehmen die Patientin/den Patienten wahr...").'
+    return 'Schreibe im neutral-deskriptiven Stil ("Die Patientin/Der Patient berichtet...").'
 
 
 async def summarize_transcript(

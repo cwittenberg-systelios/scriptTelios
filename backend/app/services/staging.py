@@ -32,9 +32,10 @@ STAGE1_TRANSCRIPT_WORKFLOWS: frozenset[str] = frozenset({
 })
 
 # Schwelle ab der Transkript-Verdichtung lohnt.
-# Liegt bewusst UNTER der _sample_uniformly-Schwelle in llm.py (~5000-6000w
-# nach Stilvorlage+System), damit die Verdichtung VORHER greift.
-STAGE1_TRANSCRIPT_MIN_WORDS = 3500
+# v19.4: 3500 -> 2800, deckungsgleich mit config.TRANSCRIPT_STAGE1_MIN_WORDS
+# (das den effektiven Wert ueber settings setzt). Liegt unter der
+# _sample_uniformly-Schwelle in llm.py, damit die Verdichtung VORHER greift.
+STAGE1_TRANSCRIPT_MIN_WORDS = 2800
 
 
 def _word_count(text: Optional[str]) -> int:
@@ -200,3 +201,121 @@ def compute_transcript_min_acceptable(
     unstrukturiert sind und der Kompressionsgrad pro Sitzung stark variiert.
     """
     return max(floor, int(target_words * ratio))
+
+
+# ── v19.4: Kombiniertes Input-Budget ──────────────────────────────────────────
+# Reine Planungs-Helfer fuer den Input-Budget-Guard in jobs.py. KEINE LLM-Calls.
+#
+# Hintergrund: Bis v19.3 wurde jede Quelle isoliert gegen ihre eigene Rohgroesse
+# verdichtet (transcript_summary / verlauf_summary). Die SUMME aller Quellen
+# wurde nie geprueft. Bei Anamnese (Transkript + Selbstauskunft + Vorbefunde)
+# oder Folgeverlaengerung (langer Verlauf + Vorantrag) sprengte der kombinierte
+# Input MAX_SAFE_CTX, worauf _sample_uniformly in llm.py das gesamte
+# User-Content verlustbehaftet zerhackte UND das Output-Budget kollabierte
+# (-> "kein Output" / "abgeschnitten").
+#
+# Diese Helfer berechnen ein Wort-Budget fuer den Input (Output zuerst
+# reserviert) und planen pro Quelle ein budget-bewusstes Verdichtungsziel.
+
+# Spiegelt MAX_SAFE_CTX aus llm.generate_text. Bewusst hier dupliziert statt
+# importiert, weil llm.py den Wert lokal in der Funktion haelt; bei Aenderung
+# beide Stellen angleichen (Sync-Test test_staging deckt den Default ab).
+MAX_SAFE_CTX = 20480
+
+# Token<->Zeichen wie in llm._estimate_num_ctx (len/3.5).
+CHARS_PER_TOKEN = 3.5
+# Deutsche Klinik-Texte: ~6 Zeichen/Wort + Space -> ~2 Token/Wort. Konservativ.
+TOKENS_PER_WORD = 2.0
+
+
+def compute_input_word_budget(
+    workflow: str,
+    *,
+    system_prompt_chars: int,
+    max_safe_ctx: int = MAX_SAFE_CTX,
+    safety_tokens: int = 512,
+) -> int:
+    """
+    Maximale Wortzahl die der GESAMTE User-Content (alle Quellen zusammen)
+    haben darf, damit nach Output-Reservierung + System-Prompt noch alles
+    sicher in MAX_SAFE_CTX passt.
+
+    Reserviert das volle max_tokens_for(workflow) als Output (konservativ —
+    deckt auch den Anamnese-Befund-Zweitcall mit ab, der den Anamnese-Text
+    als Zusatz-Input fuehrt).
+
+    Untergrenze 1500 Woerter, damit der Guard bei riesigem System-Prompt nicht
+    absurd klein wird (dann greift im Zweifel _sample_uniformly als Notbremse).
+    """
+    from app.core.workflows import max_tokens_for
+
+    reserved_output = max_tokens_for(workflow)
+    system_tokens = int(system_prompt_chars / CHARS_PER_TOKEN)
+    input_token_budget = max_safe_ctx - reserved_output - system_tokens - safety_tokens
+    input_word_budget = int(input_token_budget / TOKENS_PER_WORD)
+    return max(1500, input_word_budget)
+
+
+def plan_source_compression(
+    sources: list[dict],
+    budget_words: int,
+    *,
+    raw_floor_ratio: float = 0.25,
+    raw_floor_min: int = 300,
+    compressed_floor_ratio: float = 0.45,
+) -> dict[str, int]:
+    """
+    Plant, welche Quellen auf welches Wortziel verdichtet werden muessen, damit
+    die Summe aller Quellen <= budget_words liegt.
+
+    sources: Liste von dicts mit:
+        label        str   — eindeutiger Quellen-Name (z.B. "selbstauskunft")
+        words        int   — aktuelle Wortzahl
+        compressed   bool  — wurde schon per Stage-1 verdichtet?
+        compressible bool  — darf ueberhaupt verdichtet werden?
+
+    Strategie:
+      1. Noch nicht verdichtete, verdichtbare Quellen zuerst — groesste zuerst.
+         Floor: nie unter raw_floor_ratio (bzw. raw_floor_min) der Rohgroesse.
+      2. Reicht das nicht, als letzte Reserve schon verdichtete Quellen
+         nochmals straffen — Floor compressed_floor_ratio.
+
+    Returns: {label: target_words} nur fuer Quellen die verdichtet werden
+    sollen. Leeres Dict = alles passt bereits.
+    """
+    total = sum(int(s.get("words", 0)) for s in sources)
+    if total <= budget_words:
+        return {}
+
+    overshoot = total - budget_words
+    plan: dict[str, int] = {}
+
+    def _shave(pool: list[dict], floor_ratio: float, floor_min: int) -> None:
+        nonlocal overshoot
+        for s in sorted(pool, key=lambda x: -int(x.get("words", 0))):
+            if overshoot <= 0:
+                break
+            words = int(s.get("words", 0))
+            floor = max(floor_min, int(words * floor_ratio))
+            removable = words - floor
+            if removable <= 0:
+                continue
+            remove = min(removable, overshoot)
+            plan[s["label"]] = words - remove
+            overshoot -= remove
+
+    uncompressed = [
+        s for s in sources
+        if s.get("compressible") and not s.get("compressed")
+    ]
+    _shave(uncompressed, raw_floor_ratio, raw_floor_min)
+
+    if overshoot > 0:
+        compressed = [
+            s for s in sources
+            if s.get("compressible") and s.get("compressed")
+            and s["label"] not in plan
+        ]
+        _shave(compressed, compressed_floor_ratio, raw_floor_min)
+
+    return plan

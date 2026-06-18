@@ -21,6 +21,9 @@ from app.services.staging import (
     compute_verlauf_min_acceptable,
     compute_transcript_target_words,
     compute_transcript_min_acceptable,
+    compute_input_word_budget,
+    plan_source_compression,
+    MAX_SAFE_CTX,
 )
 
 
@@ -118,7 +121,7 @@ class TestTranscriptStage1:
         assert should_run_transcript_stage1(workflow, text) is True
 
     def test_anamnese_knapp_unter_alter_schwelle_triggert(self):
-        """v19.3.1 Schwelle 3500 (vorher 5000): An-Transkripte ~4951w sind drin."""
+        """v19.4 Schwelle 2800 (vorher 5000/3500): An-Transkripte ~4500w sind drin."""
         text = "Wort " * 4500
         assert should_run_transcript_stage1("anamnese", text) is True
 
@@ -220,3 +223,82 @@ class TestComputeTranscriptMinAcceptable:
     def test_floor(self):
         # 600 * 0.40 = 240 -> Floor 300
         assert compute_transcript_min_acceptable(600) == 300
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.4: Kombiniertes Input-Budget (compute_input_word_budget / plan_source_compression)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestInputWordBudget:
+
+    def test_kleiner_systemprompt_grosses_budget(self):
+        # anamnese: max_tokens=5500. MAX_SAFE_CTX - 5500 - sys - 512, /2.0.
+        b = compute_input_word_budget("anamnese", system_prompt_chars=3500)
+        # grobe Plausibilitaet: deutlich ueber dem Floor, unter MAX_SAFE_CTX/2
+        assert 1500 < b < MAX_SAFE_CTX
+        # monoton: groesserer System-Prompt -> kleineres Budget
+        b2 = compute_input_word_budget("anamnese", system_prompt_chars=20000)
+        assert b2 < b
+
+    def test_floor_bei_riesigem_systemprompt(self):
+        # absurd grosser System-Prompt -> Budget faellt auf Floor 1500
+        b = compute_input_word_budget("anamnese", system_prompt_chars=500_000)
+        assert b == 1500
+
+    def test_workflow_mit_groesserem_output_hat_kleineres_budget(self):
+        # entlassbericht (max_tokens 6000) < dokumentation (3500) reserviert mehr
+        # Output -> kleineres Input-Budget bei gleichem System-Prompt.
+        eb = compute_input_word_budget("entlassbericht", system_prompt_chars=3000)
+        doku = compute_input_word_budget("dokumentation", system_prompt_chars=3000)
+        assert eb < doku
+
+
+class TestPlanSourceCompression:
+
+    def test_alles_passt_leerer_plan(self):
+        sources = [
+            {"label": "a", "words": 500, "compressed": False, "compressible": True},
+            {"label": "b", "words": 400, "compressed": False, "compressible": True},
+        ]
+        assert plan_source_compression(sources, budget_words=2000) == {}
+
+    def test_groesste_unverdichtete_zuerst(self):
+        # Summe 5000, Budget 3000 -> 2000 wegkuerzen. Groesste Quelle zuerst.
+        sources = [
+            {"label": "selbst", "words": 3000, "compressed": False, "compressible": True},
+            {"label": "vorbef", "words": 2000, "compressed": False, "compressible": True},
+        ]
+        plan = plan_source_compression(sources, budget_words=3000)
+        # "selbst" (3000w) wird angefasst, Floor 25% => min 750
+        assert "selbst" in plan
+        assert plan["selbst"] >= 750
+        # genug aus selbst allein (3000-750=2250 removable > 2000 overshoot)
+        assert "vorbef" not in plan
+
+    def test_floor_wird_respektiert(self):
+        # eine riesige Quelle, Budget winzig -> Target faellt auf Floor 25%.
+        sources = [
+            {"label": "x", "words": 10000, "compressed": False, "compressible": True},
+        ]
+        plan = plan_source_compression(sources, budget_words=500)
+        assert plan["x"] == 2500  # 10000 * 0.25 Floor
+
+    def test_verdichtete_nur_als_letzte_reserve(self):
+        # Rohquelle reicht nicht (Floor), dann wird die verdichtete gestrafft.
+        sources = [
+            {"label": "roh", "words": 2000, "compressed": False, "compressible": True},
+            {"label": "summary", "words": 4000, "compressed": True, "compressible": True},
+        ]
+        plan = plan_source_compression(sources, budget_words=2000)
+        # roh zuerst (Floor 25% = 500 -> 1500 removable)
+        assert plan["roh"] == 500
+        # overshoot 4000; nach roh noch 2500 -> summary wird gestrafft (Floor 45%)
+        assert "summary" in plan
+        assert plan["summary"] >= int(4000 * 0.45)
+
+    def test_nicht_komprimierbare_bleiben_unangetastet(self):
+        sources = [
+            {"label": "fix", "words": 5000, "compressed": False, "compressible": False},
+        ]
+        # nichts verdichtbar -> leerer Plan trotz Ueberschreitung
+        assert plan_source_compression(sources, budget_words=1000) == {}

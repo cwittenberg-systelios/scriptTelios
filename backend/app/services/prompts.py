@@ -341,10 +341,16 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Zeige Entwicklungsperspektiven auf - was wird möglich, wenn... "
         "Ressourcenorientiert und konkret.\n\n"
         "**Einladungen**\n"
-        "Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden "
-        "- aktiv formuliert: 'Frau M. wurde eingeladen, ...' oder "
-        "'Als Übung wurde vereinbart, ...' (verwende den tatsaechlichen Namen, "
-        "NICHT '[Patient/in]')."
+        "Gib NUR Einladungen, Vorschläge oder Aufgaben wieder, die der/die "
+        "Therapeut/in im Gespräch TATSÄCHLICH und EXPLIZIT ausgesprochen hat. "
+        "Erkennbar an Wendungen wie 'Ich lade Sie ein …', 'Ich schlage vor …', "
+        "'Ein Angebot wäre …', 'In der nächsten Woche / den nächsten Tagen "
+        "könnten Sie …', 'Vielleicht mögen Sie …'. Formuliere sie aktiv "
+        "('Frau M. wurde eingeladen, …', 'Als Übung wurde vereinbart, …'; "
+        "verwende den tatsächlichen Namen, NICHT '[Patient/in]'). "
+        "ERFINDE KEINE Aufgaben, Übungen oder Impulse. Wenn der/die Therapeut/in "
+        "keine ausgesprochen hat: lass diesen Abschnitt weg oder halte mit einem "
+        "knappen Satz fest, dass keine konkrete Einladung erfolgte."
     ),
 
     "anamnese": (

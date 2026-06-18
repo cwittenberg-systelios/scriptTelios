@@ -136,11 +136,12 @@ class Settings(BaseSettings):
     #            _sample_uniformly greift weiter).
     TRANSCRIPT_STAGE1_ENABLED: bool = True
 
-    # Schwelle ab der die Transkript-Verdichtung lohnt. 5000w liegt
-    # bewusst UNTER der _sample_uniformly-Schwelle (~6000-7000w), damit
-    # die Verdichtung sicher davor greift. Darunter passt das Transkript
-    # ohnehin sauber in MAX_SAFE_CTX.
-    TRANSCRIPT_STAGE1_MIN_WORDS: int = 5000
+    # Schwelle ab der die Transkript-Verdichtung lohnt.
+    # v19.4: 5000 -> 2800. Die alten 5000 liessen 40-60-min-Transkripte
+    # (3500-5000w) ROH in den Hauptcall, wo sie zusammen mit anderen Quellen
+    # MAX_SAFE_CTX sprengten ("Doku abgeschnitten", "Anamnese kein Output").
+    # 2800 ist jetzt deckungsgleich mit staging.STAGE1_TRANSCRIPT_MIN_WORDS.
+    TRANSCRIPT_STAGE1_MIN_WORDS: int = 2800
 
     # Zielwortzahl der Transkript-Verdichtung. None = proportional zum
     # Input mit Hard-Cap: min(1500, max(600, raw_words * 0.20)).
@@ -148,6 +149,18 @@ class Settings(BaseSettings):
     #   raw= 7000w → target=1400w
     #   raw=10000w → target=1500w (Hard-Cap)
     TRANSCRIPT_STAGE1_TARGET_WORDS: int | None = None
+
+    # ── v19.4 Kombinierter Input-Budget-Guard ────────────────────
+    # Nach allen Stage-1-Verdichtungen prueft jobs._apply_input_budget_guard
+    # die SUMME aller Quellen gegen ein Wort-Budget (Output zuerst reserviert,
+    # exakte System-Prompt-Groesse abgezogen). Liegt der kombinierte Input
+    # darueber, werden die groessten noch-unverdichteten Quellen
+    # (v.a. Selbstauskunft/Vorbefunde) quellentreu nachverdichtet — statt sie
+    # _sample_uniformly verlustbehaftet zerhacken zu lassen.
+    #   true  -> Guard aktiv (Default ab v19.4)
+    #   false -> Pre-v19.4-Verhalten (nur isolierte Stage-1, _sample_uniformly
+    #            als Notbremse fuer den Rest)
+    SOURCE_COMPRESSION_ENABLED: bool = True
 
     # ── CORS ──────────────────────────────────────────────────────
     # Confluence-Instanz eintragen (internes Netz):

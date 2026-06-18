@@ -27,6 +27,7 @@ from app.services.llm import (
 )
 from app.services.verlauf_summary import summarize_verlauf
 from app.services.transcript_summary import summarize_transcript
+from app.services.document_summary import summarize_document
 from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
 from app.services.quality_check import (
     QualityIssue,
@@ -45,6 +46,8 @@ from app.services.staging import (
     should_run_transcript_stage1,
     verlauf_stage1_skip_reason,
     transcript_stage1_skip_reason,
+    compute_input_word_budget,
+    plan_source_compression,
 )
 import app.services.transcription as _transcription
 
@@ -60,31 +63,47 @@ _STAGE1_MIN_WORDS = STAGE1_VERLAUF_MIN_WORDS
 _TRANSCRIPT_STAGE1_WORKFLOWS = STAGE1_TRANSCRIPT_WORKFLOWS
 _TRANSCRIPT_STAGE1_MIN_WORDS = STAGE1_TRANSCRIPT_MIN_WORDS
 
-# Separater Prompt-Logger – schreibt vollständige System/User-Prompts in prompts.log
-# Zweck: manuelle Inspektion und Prompt-Debugging ohne den Haupt-Log zu fluten.
+# Separater LLM-IO-Logger – schreibt vollständige System/User-Prompts UND die
+# erzeugten Outputs in prompts.log. Zweck: manuelle Qualitätsinspektion
+# (Prompt -> Output paarweise) ohne den Haupt-Log zu fluten.
+# v19.4: täglich rotierend (TimedRotatingFileHandler, Mitternacht), damit die
+# Datei bei viel Text nicht unbegrenzt waechst.
 _prompt_logger = logging.getLogger("systelios.prompts")
+
+# Wieviele Tages-Archive von prompts.log aufbewahrt werden (prompts.log.YYYY-MM-DD).
+_PROMPT_LOG_BACKUP_DAYS = 14
 
 
 def _setup_prompt_logger() -> None:
-    """Richtet den Prompt-Logger ein (einmalig beim Import)."""
+    """Richtet den LLM-IO-Logger ein (einmalig beim Import). Tagesrotation."""
     if _prompt_logger.handlers:
         return
     _prompt_logger.setLevel(logging.DEBUG)
     _prompt_logger.propagate = False
     import os
     from pathlib import Path as _Path2
+    from logging.handlers import TimedRotatingFileHandler
     log_dir = _Path2(os.environ.get("LOG_FILE", "/workspace/systelios.log")).parent
     prompt_file = log_dir / "prompts.log"
     try:
         prompt_file.parent.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(str(prompt_file), encoding="utf-8")
+        handler = TimedRotatingFileHandler(
+            str(prompt_file),
+            when="midnight",
+            interval=1,
+            backupCount=_PROMPT_LOG_BACKUP_DAYS,
+            encoding="utf-8",
+            utc=False,
+        )
+        # Rotierte Dateien als prompts.log.YYYY-MM-DD ablegen.
+        handler.suffix = "%Y-%m-%d"
         handler.setFormatter(logging.Formatter(
             "%(asctime)s  %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         ))
         _prompt_logger.addHandler(handler)
     except Exception as e:
-        logger.warning("Prompt-Logger konnte nicht eingerichtet werden: %s", e)
+        logger.warning("LLM-IO-Logger konnte nicht eingerichtet werden: %s", e)
 
 
 _setup_prompt_logger()
@@ -106,6 +125,143 @@ def _log_prompt(job_id: str, workflow: str, call_label: str,
         sep, job_id, workflow, call_label, sep,
         system, user, sep,
     )
+
+
+def _log_output(job_id: str, workflow: str, call_label: str,
+                output: str, telemetry: Optional[dict] = None) -> None:
+    """
+    Schreibt den ERZEUGTEN Output eines LLM-Calls in prompts.log — gepaart mit
+    dem zugehoerigen _log_prompt-Eintrag (gleiche job_id + call_label).
+
+    Damit steht im rotierenden Log Prompt UND Output zusammen, was die
+    manuelle Qualitaetspruefung erlaubt (v19.4).
+    """
+    sep = "=" * 80
+    out = output or ""
+    tele = ""
+    if telemetry:
+        try:
+            tele = (
+                f"  [words={len(out.split())} "
+                f"think_ratio={telemetry.get('think_ratio')} "
+                f"tokens_hit_cap={telemetry.get('tokens_hit_cap')} "
+                f"degraded={telemetry.get('degraded')}]"
+            )
+        except Exception:
+            tele = ""
+    _prompt_logger.debug(
+        "\n%s\nJOB: %s  |  WORKFLOW: %s  |  CALL: %s  (OUTPUT)%s\n%s\n%s\n%s\n",
+        sep, job_id, workflow, call_label, tele, sep, out, sep,
+    )
+
+
+# Anzeige-Labels fuer die Quellen im Budget-Guard (gehen in den Verdichter-Prompt).
+_SOURCE_LABELS: dict[str, str] = {
+    "transkript":     "Sitzungstranskript",
+    "verlaufsdoku":   "Verlaufsdokumentation",
+    "selbstauskunft": "Selbstauskunft des Patienten",
+    "vorbefunde":     "Vorbefunde",
+    "antragsvorlage": "Antragsvorlage",
+    "vorantrag":      "Vorheriger Antrag",
+}
+
+
+async def _apply_input_budget_guard(
+    *,
+    workflow: str,
+    system_prompt: str,
+    patient_initial: Optional[str],
+    sources: dict[str, dict],
+) -> tuple[dict[str, str], dict]:
+    """
+    v19.4: Kombinierter Input-Budget-Guard.
+
+    Prueft die SUMME aller Quellen gegen ein Wort-Budget (Output zuerst
+    reserviert via max_tokens_for, exakte System-Prompt-Groesse abgezogen) und
+    verdichtet die groessten noch-rohen Quellen quellentreu nach, bis der
+    kombinierte Input passt — statt _sample_uniformly in llm.py das gesamte
+    User-Content verlustbehaftet zerhacken zu lassen.
+
+    sources: {label: {"text": str, "compressed": bool}}
+    Returns: (updated_texts: {label: neuer_text}, audit: dict)
+    """
+    if not getattr(settings, "SOURCE_COMPRESSION_ENABLED", True):
+        return {}, {"applied": False, "reason": "disabled"}
+
+    budget_words = compute_input_word_budget(
+        workflow, system_prompt_chars=len(system_prompt or "")
+    )
+
+    plan_input: list[dict] = []
+    for label, meta in sources.items():
+        text = (meta or {}).get("text") or ""
+        if not text.strip():
+            continue
+        plan_input.append({
+            "label":        label,
+            "words":        len(text.split()),
+            "compressed":   bool(meta.get("compressed")),
+            "compressible": True,
+        })
+
+    total_before = sum(s["words"] for s in plan_input)
+    plan = plan_source_compression(plan_input, budget_words)
+
+    if not plan:
+        return {}, {
+            "applied":       False,
+            "reason":        "within_budget",
+            "budget_words":  budget_words,
+            "total_words":   total_before,
+        }
+
+    logger.info(
+        "Input-Budget-Guard: Summe %dw > Budget %dw -> Nachverdichtung: %s",
+        total_before, budget_words, plan,
+    )
+
+    updated: dict[str, str] = {}
+    compressions: list[dict] = []
+    for label, target in plan.items():
+        text = sources[label]["text"]
+        try:
+            res = await summarize_document(
+                text,
+                target_words=target,
+                doc_label=_SOURCE_LABELS.get(label, label),
+                workflow=workflow,
+                patient_initial=patient_initial,
+            )
+            updated[label] = res["summary"]
+            compressions.append({
+                "label":         label,
+                "raw_words":     res["raw_word_count"],
+                "summary_words": res["summary_word_count"],
+                "target_words":  target,
+                "degraded":      res.get("degraded", False),
+                "ok":            True,
+            })
+        except Exception as e:
+            # Roh-Text bleibt; _sample_uniformly in llm.py greift als Notbremse.
+            logger.warning(
+                "Input-Budget-Guard: Nachverdichtung von '%s' fehlgeschlagen "
+                "(%s) - Roh-Text bleibt", label, e,
+            )
+            compressions.append({"label": label, "ok": False, "error": str(e)[:200]})
+
+    total_after = total_before
+    for c in compressions:
+        if c.get("ok"):
+            total_after -= (c["raw_words"] - c["summary_words"])
+
+    audit = {
+        "applied":            True,
+        "budget_words":       budget_words,
+        "total_words_before": total_before,
+        "total_words_after":  total_after,
+        "compressions":       compressions,
+    }
+    return updated, audit
 
 
 # ── Verfuegbare Modelle ───────────────────────────────────────────────────────
@@ -589,6 +745,7 @@ async def _run_repair_coroutine(
         except Exception:
             pass
 
+    _log_prompt(job.job_id, workflow, "repair", ROLE_PREAMBLE, final_prompt)
     result = await generate_text(
         ROLE_PREAMBLE,
         final_prompt,
@@ -599,6 +756,7 @@ async def _run_repair_coroutine(
     )
 
     raw = (result.get("text") or "").strip()
+    _log_output(job.job_id, workflow, "repair", raw, result.get("telemetry"))
 
     # Wenn Anamnese-Workflow und der Output enthaelt ###BEFUND###:
     # in zwei Felder splitten (analog zur normalen Pipeline). Frontend zeigt
@@ -986,6 +1144,18 @@ async def create_generate_job(
         _stage1_audit: Optional[dict] = None
         _stage1_enabled = getattr(settings, "STAGE1_ENABLED", True)
 
+        # v19.4 / B-Fix "Frau S.": Den EXPLIZIT uebergebenen Patientennamen schon
+        # VOR Stage 1 aufloesen und an die Verdichter durchreichen. Sonst lief
+        # summarize_transcript mit patient_initial=None und nahm den Beispielnamen
+        # ("Frau S.") aus dem Prompt woertlich — der dann durch die Synthese in
+        # den Hauptcall leakte (Substitution dort faengt nur [Patient/in]/Frau X.).
+        # Die vollstaendige Namensaufloesung aus Dokumenten passiert weiterhin
+        # erst in Schritt 4 (nach Stage 1) — fuer Stage 1 reicht der explizite Name;
+        # fehlt er, nutzen die Verdichter neutral "die Patientin/der Patient".
+        _patient_initial_early: Optional[str] = (
+            patientenname.strip() if patientenname and patientenname.strip() else None
+        )
+
         if should_run_verlauf_stage1(
             workflow,
             verlaufsdoku_text,
@@ -1017,7 +1187,7 @@ async def create_generate_job(
                 summarize_kwargs = {
                     "verlauf_text":     verlaufsdoku_raw_text,
                     "workflow":         workflow,
-                    "patient_initial":  None,  # patient_name wird erst spaeter extrahiert
+                    "patient_initial":  _patient_initial_early,
                 }
                 if target_words_override is not None:
                     summarize_kwargs["target_words"] = target_words_override
@@ -1153,7 +1323,7 @@ async def create_generate_job(
                 tr_kwargs = {
                     "transcript_text": transkript_raw_text,
                     "workflow":        workflow,
-                    "patient_initial": None,
+                    "patient_initial": _patient_initial_early,
                 }
                 if tr_target_override is not None:
                     tr_kwargs["target_words"] = tr_target_override
@@ -1455,6 +1625,39 @@ async def create_generate_job(
             patient_name=patient_name,
             word_limits=word_limits,
         )
+        # ── v19.4: Kombinierter Input-Budget-Guard ───────────────────────────
+        # Nach allen isolierten Stage-1-Verdichtungen: prueft die SUMME aller
+        # Quellen gegen das Wort-Budget und verdichtet die groessten noch-rohen
+        # Quellen (v.a. Selbstauskunft/Vorbefunde) quellentreu nach. Laeuft NACH
+        # build_system_prompt (exakte System-Groesse) und VOR build_user_content
+        # (das die ggf. verdichteten Quellen konsumiert). Der System-Prompt
+        # haengt nicht von den Quell-Texten ab, daher ist die Reihenfolge sicher.
+        _budget_updated, _budget_audit = await _apply_input_budget_guard(
+            workflow=workflow,
+            system_prompt=system,
+            patient_initial=_patient_initial_early,
+            sources={
+                "transkript":     {"text": transkript_text,
+                                   "compressed": bool(_transcript_stage1_audit
+                                                      and _transcript_stage1_audit.get("applied"))},
+                "verlaufsdoku":   {"text": verlaufsdoku_text,
+                                   "compressed": bool(_stage1_audit
+                                                      and _stage1_audit.get("applied"))},
+                "selbstauskunft": {"text": selbstauskunft_text, "compressed": False},
+                "vorbefunde":     {"text": vorbefunde_text,     "compressed": False},
+                "antragsvorlage": {"text": antragsvorlage_text, "compressed": False},
+                "vorantrag":      {"text": vorantrag_text,      "compressed": False},
+            },
+        )
+        if "transkript" in _budget_updated:     transkript_text     = _budget_updated["transkript"]
+        if "verlaufsdoku" in _budget_updated:   verlaufsdoku_text   = _budget_updated["verlaufsdoku"]
+        if "selbstauskunft" in _budget_updated: selbstauskunft_text = _budget_updated["selbstauskunft"]
+        if "vorbefunde" in _budget_updated:     vorbefunde_text     = _budget_updated["vorbefunde"]
+        if "antragsvorlage" in _budget_updated: antragsvorlage_text = _budget_updated["antragsvorlage"]
+        if "vorantrag" in _budget_updated:      vorantrag_text      = _budget_updated["vorantrag"]
+        if _budget_audit.get("applied"):
+            logger.info("Input-Budget-Guard Audit: %s", _budget_audit)
+
         user = build_user_content(
             workflow=workflow,
             transcript=transkript_text,
@@ -1547,6 +1750,8 @@ async def create_generate_job(
                                             max_words=v16_max_words,
                                             expected_keywords=v16_expected_keywords)
             anamnese_text = (result_a.get("text") or "").strip()
+            _log_output(job.job_id, workflow, "anamnese", anamnese_text,
+                        result_a.get("telemetry"))
 
             # Cancel-Check zwischen den Calls
             if job._cancel_requested:
@@ -1585,6 +1790,8 @@ async def create_generate_job(
                                             model=model, workflow="befund", on_progress=_on_tok_b,
                                             expected_keywords=v16_expected_keywords)
             befund_text_generated = (result_b.get("text") or "").strip()
+            _log_output(job.job_id, workflow, "befund", befund_text_generated,
+                        result_b.get("telemetry"))
 
             # v19.1: Telemetrie beider Anamnese-Calls aggregieren.
             # Worst-case-Logik: wenn EINER der beiden Calls degradiert ist,
@@ -1637,6 +1844,8 @@ async def create_generate_job(
                                           workflow=workflow, on_progress=_on_tok,
                                           max_words=v16_max_words,
                                           expected_keywords=v16_expected_keywords)
+            _log_output(job.job_id, workflow, workflow,
+                        result.get("text") or "", result.get("telemetry"))
             # v19.1: Telemetrie aus generate_text in result["generation_telemetry"]
             # konsolidieren (im Anamnese-Pfad oben schon explizit gesetzt).
             tel = result.get("telemetry") or {}
