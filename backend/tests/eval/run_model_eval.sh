@@ -1,84 +1,84 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# run_model_eval.sh — Modell-A/B-Eval für scriptTelios
+# run_model_eval.sh  (v2 — RunPod-sicher)
 #
-# Vergleicht mehrere LLMs unter EINER Variable (dem Modell): identische Inputs
-# (Transkripte einmal gecacht), reproduzierbar (fester Seed), gleicher num_ctx.
+# Modell-A/B: qwen3:32b vs qwen3.6:27b vs qwen3.6:35b-a3b. Gleicher Seed, gleiche
+# (gecachte) Transkripte, gleicher num_ctx-Cap -> EINZIGE Variable = Modell.
 #
-# Voraussetzungen:
-#   - Ollama-Dienst läuft mit den Blackwell-Server-Envs (OLLAMA_LLM_LIBRARY=cuda_v13,
-#     OLLAMA_NUM_PARALLEL=1, OLLAMA_FLASH_ATTENTION=true, OLLAMA_KV_CACHE_TYPE=q8_0)
-#   - venv unter $VENV, Backend unter $BE, eval_data befüllbar (Audio/Styles)
+# WICHTIG / Unterschied zu v1:
+#   Startet einen EIGENEN Backend auf Port 8001 und killt am Ende NUR dessen PID.
+#   KEIN 'pkill -f uvicorn' (das wuerde den Pod-Hauptprozess auf Port 8000
+#   killen und den Container neustarten). Port 8000 bleibt unangetastet.
 #
-# Nutzung:
-#   chmod +x run_model_eval.sh
-#   ./run_model_eval.sh
+# Hinweis: alle Backends reden mit DEMSELBEN Ollama -> immer nur EIN Modell im
+# VRAM. 'ollama stop' vor jedem Modell macht den VRAM frei.
 #
-# Ergebnisse: $RESULTS/<modell>/  + run_<modell>.log + ollama_ps_<modell>.txt
+# Optional gleicher Context-Bump wie im Context-Experiment: LLM_NUM_CTX_CAP unten
+# setzen (Default = Pod-.env). Fuer den reinen Modellvergleich konstant lassen.
+#
+# Nutzung:  ./run_model_eval.sh   (oder setsid ... < /dev/null > driver.log 2>&1 &)
 # ─────────────────────────────────────────────────────────────────────────────
-set -uo pipefail                       # KEIN -e: pkill/grep liefern erwartbar non-zero
+set -uo pipefail
 
-RESULTS=/workspace/eval_results
 BE=/workspace/scriptTelios/backend
-VENV=/workspace/venv
+PY=/workspace/venv/bin/python
+PORT=8001
+RESULTS=/workspace/eval_results
+LOGS=/workspace/logs
 MODELS=("qwen3:32b" "qwen3.6:27b" "qwen3.6:35b-a3b")
 
-mkdir -p "$RESULTS" /workspace/logs
-export LLM_SEED=42                      # reproduzierbarer A/B (deterministischer Zug pro Modell)
+mkdir -p "$RESULTS" "$LOGS"
 
-start_backend() {
-  ( cd "$BE" && source "$VENV/bin/activate" \
-    && nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 \
-       >> /workspace/logs/backend.log 2>&1 & )
+export LLM_SEED=42                       # reproduzierbarer A/B
+export EVAL_BACKEND_URL="http://127.0.0.1:$PORT"
+# export LLM_NUM_CTX_CAP=32768           # nur wenn du mit Context-Bump vergleichen willst
+
+MYPID=""
+start_my_backend() {
+  ( cd "$BE" && exec "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port "$PORT" --workers 1 ) \
+    >> "$LOGS/eval_backend_$PORT.log" 2>&1 &
+  MYPID=$!
 }
-
-wait_port_free() {                     # nach pkill: warten bis Port 8000 wirklich frei
-  for _ in $(seq 1 30); do
-    curl -sf localhost:8000/api/health >/dev/null 2>&1 || return 0
-    sleep 1
-  done
-  echo "WARN: Port 8000 noch belegt"
+stop_my_backend() {
+  [ -n "$MYPID" ] && kill "$MYPID" 2>/dev/null
+  [ -n "$MYPID" ] && wait "$MYPID" 2>/dev/null
+  MYPID=""
 }
-
-wait_healthy() {                       # MIT Timeout (120s) statt Endlos-until
+wait_healthy() {
   for _ in $(seq 1 60); do
-    curl -sf localhost:8000/api/health >/dev/null 2>&1 && return 0
+    curl -sf "127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && return 0
     sleep 2
   done
   return 1
 }
+trap 'stop_my_backend' EXIT
 
 first=1
 for M in "${MODELS[@]}"; do
   echo "=== Modell: $M ==="
-  ollama list | grep -q "$M" || ollama pull "$M" || { echo "pull $M fehlgeschlagen -> skip"; continue; }
+  ollama list | grep -q "$M" || ollama pull "$M" || { echo "pull $M fehlgeschlagen -> skip"; first=0; continue; }
 
   export OLLAMA_MODEL="$M"
-  pkill -f "uvicorn app.main:app"; wait_port_free
-  start_backend
+  ollama stop "$M" 2>/dev/null || true   # VRAM frei vor dem naechsten Modell
+  sleep 2
+  start_my_backend
   if ! wait_healthy; then
-    echo "Backend fuer $M nicht healthy -> skip"
-    ollama stop "$M" 2>/dev/null || true
-    continue
+    echo "Eigener Backend fuer $M auf $PORT nicht healthy -> skip"
+    tail -20 "$LOGS/eval_backend_$PORT.log"; stop_my_backend; first=0; continue
   fi
 
   SAFE=$(echo "$M" | tr ':/.' '___')
-  ollama ps > "$RESULTS/ollama_ps_$SAFE.txt" 2>&1     # geladenes Modell + Kontext bestaetigen
+  ollama ps > "$RESULTS/ollama_ps_$SAFE.txt" 2>&1
 
-  # Transkripte nur EINMAL (erstes Modell) erzeugen -> identische Inputs ueber alle
-  # Modelle; danach Cache (in eval_data) wiederverwenden, Whisper laeuft nicht neben
-  # den naechsten LLMs (VRAM-Schonung auf 32GB).
   TR=""; [ "$first" = "1" ] && TR="--transcribe"
-  ( cd "$BE" && source "$VENV/bin/activate" \
-    && pytest tests/eval/test_eval.py -v --tb=short --qa --eval-report $TR \
-       --eval-output "$RESULTS/$SAFE" > "$RESULTS/run_$SAFE.log" 2>&1 )
+  ( cd "$BE" && "$PY" -m pytest tests/eval/test_eval.py -v --tb=short --qa --eval-report $TR \
+       --eval-output "$RESULTS/$SAFE" ) > "$RESULTS/run_$SAFE.log" 2>&1
   echo "  pytest exit=$?  -> $RESULTS/run_$SAFE.log"
   grep -iqE "out of memory|CUDA error|cannot allocate" "$RESULTS/run_$SAFE.log" \
-    && echo "  !! OOM/CUDA-Fehler im Log — Score ist dann unbrauchbar"
+    && echo "  !! OOM/CUDA-Fehler -> $M-Lauf unbrauchbar (32GB zu eng?)"
 
-  ollama stop "$M" 2>/dev/null || true               # VRAM frei (Pflicht auf 32GB)
+  stop_my_backend
   first=0
 done
 
-pkill -f "uvicorn app.main:app" 2>/dev/null || true  # Final-Cleanup
 echo "=== fertig: $RESULTS ==="
