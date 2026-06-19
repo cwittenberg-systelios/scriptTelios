@@ -30,6 +30,11 @@ MODELS=("qwen3:32b" "qwen3.6:27b" "qwen3.6:35b-a3b")
 mkdir -p "$RESULTS" "$LOGS"
 
 export LLM_SEED=42                       # reproduzierbarer A/B
+# Pod-Umgebung uebernehmen (DB-URL, OLLAMA_HOST, HMAC-Secret, WHISPER_MODEL,
+# AUTH_ENABLED, Pfade ...), damit der eigene Backend exakt wie der Pod-Backend
+# laeuft. Ohne das defaultet pydantic u.a. AUTH_ENABLED=True -> 401 auf /generate.
+set -a; [ -f /workspace/.env ] && . /workspace/.env; set +a
+export AUTH_ENABLED=false               # Eval ist server-to-server (kein Confluence-HMAC-Header)
 export EVAL_BACKEND_URL="http://127.0.0.1:$PORT"
 # export LLM_NUM_CTX_CAP=32768           # nur wenn du mit Context-Bump vergleichen willst
 

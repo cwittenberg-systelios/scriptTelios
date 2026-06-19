@@ -660,6 +660,51 @@ async def _ollama_warmup() -> None:
         logger.debug("Ollama-Warmup nicht moeglich (ignoriert): %s", e)
 
 
+def _free_gpu_after_transcription() -> None:
+    """Gibt Whisper (CTranslate2) und pyannote (torch) GPU-Speicher frei.
+
+    Wichtig: CTranslate2 (faster-whisper) reagiert NICHT auf
+    torch.cuda.empty_cache() – sein VRAM wird erst bei Garbage-Collection des
+    WhisperModel-Objekts frei. Darum del aus dem Cache + erzwungenes gc.collect().
+    pyannote ist torch-basiert und wird zusaetzlich per empty_cache() geraeumt.
+
+    Gated ueber WHISPER_UNLOAD_AFTER (Default True). Bei False bleibt das alte
+    Verhalten (nur Whisper-Cache leeren, kein GC, pyannote bleibt resident).
+    """
+    global _diarization_pipeline
+
+    # Whisper immer aus dem Cache nehmen (wie bisher).
+    _model_cache.clear()
+
+    if not settings.WHISPER_UNLOAD_AFTER:
+        logger.info("Whisper-Modell aus Cache entfernt")
+        return
+
+    # pyannote-Pipeline von der GPU nehmen und Referenz loeschen.
+    if _diarization_pipeline is not None:
+        try:
+            import torch
+            _diarization_pipeline.to(torch.device("cpu"))
+        except Exception:
+            pass
+        _diarization_pipeline = None
+
+    # GC erzwingen -> CTranslate2- und pyannote-Objekte werden zerstoert,
+    # ihr VRAM wird freigegeben.
+    import gc
+    gc.collect()
+
+    # torch-Cache leeren (pyannote-Seite; CTranslate2 ist ueber GC schon frei).
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+    logger.info("Whisper + pyannote VRAM freigegeben (zurueck an Ollama)")
+
+
 async def transcribe_audio(file_path: Path) -> dict:
     """
     Transkribiert eine Audiodatei lokal via faster-whisper.
@@ -686,9 +731,9 @@ async def transcribe_audio(file_path: Path) -> dict:
 
     result = await _transcribe_local(file_path)
 
-    # Whisper-Modell aus Cache entfernen damit Ollama VRAM zurueckbekommt
-    _model_cache.clear()
-    logger.info("Whisper-Modell aus Cache entfernt")
+    # Whisper UND pyannote aus dem VRAM nehmen, damit Ollama/das LLM die
+    # volle GPU zurueckbekommt (sonst Partial-Offload auf die CPU).
+    _free_gpu_after_transcription()
 
     # Ollama vorwärmen / keep-alive senden – fire-and-forget.
     # Bei FREE_VRAM=True: lädt das Modell nach Whisper wieder in den VRAM.

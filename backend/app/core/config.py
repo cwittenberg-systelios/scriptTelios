@@ -46,6 +46,17 @@ class Settings(BaseSettings):
     # Kleinere GPUs (<12GB): auf True setzen.
     WHISPER_FREE_OLLAMA_VRAM: bool = False
 
+    # v19.5: Whisper- UND pyannote-Modelle nach jeder Transkription aus dem
+    # VRAM entladen (gc.collect + torch.cuda.empty_cache), damit das LLM die
+    # volle GPU bekommt. ACHTUNG zur Notiz oben: die "~5GB"-Annahme fuer
+    # qwen3:32b gilt nur bei winzigem num_ctx; real belegt das Modell bei
+    # 16k-32k Kontext ~20-24GB. Bleibt Whisper/pyannote (~8GB) dann resident,
+    # ist die GPU ueberbelegt und Ollama lagert Layer auf die CPU aus
+    # (10-20x langsamer). Default True behebt das. Kosten: naechster Audio-Job
+    # laedt Whisper/pyannote neu (~10-30s) – bei geringem Volumen vernachlaessigbar.
+    # Auf False setzen nur bei hohem Transkriptionsdurchsatz auf grosser GPU (>48GB).
+    WHISPER_UNLOAD_AFTER: bool = True
+
     # ── Sprecher-Diarization (pyannote.audio) ─────────────────────
     # Echte Sprecher-Erkennung statt einfacher Pausen-Heuristik.
     # Benötigt: pip install pyannote.audio
