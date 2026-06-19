@@ -288,3 +288,27 @@ class TestRepeatSamplingOpts:
         opts = _repeat_sampling_opts(_get_model_profile("qwen3:32b"))
         assert opts["repeat_penalty"] == 1.18
         assert opts["repeat_last_n"] == 512
+
+
+class TestSeedSamplingOpt:
+
+    def test_kein_seed_per_default(self):
+        # Prod-Default: LLM_SEED None -> kein seed-Key (nicht-deterministisch).
+        from app.core.config import settings
+        if getattr(settings, "LLM_SEED", None) is None:
+            opts = _repeat_sampling_opts(_get_model_profile("qwen3:32b"))
+            assert "seed" not in opts
+
+    def test_seed_wird_uebernommen_wenn_gesetzt(self, monkeypatch):
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "LLM_SEED", 42, raising=False)
+        opts = _repeat_sampling_opts(_get_model_profile("qwen3:32b"))
+        assert opts["seed"] == 42
+        # repeat_* bleiben unberuehrt
+        assert opts["repeat_penalty"] == 1.18
+
+    def test_seed_none_setzt_keinen_key(self, monkeypatch):
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "LLM_SEED", None, raising=False)
+        opts = _repeat_sampling_opts(_get_model_profile("qwen3:32b"))
+        assert "seed" not in opts

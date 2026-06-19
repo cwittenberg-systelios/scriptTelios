@@ -90,14 +90,20 @@ DEFAULT_REPEAT_LAST_N = 256
 
 def _repeat_sampling_opts(profile: dict) -> dict:
     """
-    Liefert {repeat_penalty, repeat_last_n}.
+    Liefert {repeat_penalty, repeat_last_n} (+ seed, falls LLM_SEED gesetzt).
     Praezedenz: Settings-Override (falls gesetzt) > Modell-Profil > globaler Default.
     """
     s_pen = getattr(settings, "LLM_REPEAT_PENALTY", None)
     s_last = getattr(settings, "LLM_REPEAT_LAST_N", None)
     penalty = s_pen if s_pen is not None else profile.get("repeat_penalty", DEFAULT_REPEAT_PENALTY)
     last_n = s_last if s_last is not None else profile.get("repeat_last_n", DEFAULT_REPEAT_LAST_N)
-    return {"repeat_penalty": penalty, "repeat_last_n": last_n}
+    opts = {"repeat_penalty": penalty, "repeat_last_n": last_n}
+    # v19.5 Item 10: fester Seed nur wenn explizit gesetzt (Prod-Default = None =
+    # nicht-deterministisch). Greift dann in JEDEM Call (main + anti-think).
+    seed = getattr(settings, "LLM_SEED", None)
+    if seed is not None:
+        opts["seed"] = seed
+    return opts
 
 def _get_model_profile(model_name: str) -> dict:
     """Gibt modellspezifische Generierungsparameter zurück."""

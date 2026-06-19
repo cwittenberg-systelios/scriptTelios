@@ -170,6 +170,15 @@ class Settings(BaseSettings):
     LLM_REPEAT_PENALTY: float | None = None
     LLM_REPEAT_LAST_N: int | None = None
 
+    # v19.5 Item 10: Fester Sampling-Seed. None = nicht-deterministisch (Prod-
+    # Default). Auf einen festen Wert (z.B. 42) gesetzt liefert Ollama bei
+    # gleichem Modell + Prompt + Parametern denselben Output — fuer einen
+    # reproduzierbaren Modell-A/B-Vergleich, wo Sampling-Varianz (temp 0.4-0.6
+    # + repeat_penalty) sonst kleine Unterschiede verwischt. Pro Modell ein
+    # deterministischer Zug; verschiedene Prompts liefern weiter verschiedene
+    # Outputs. NICHT in Prod setzen (nimmt dem Modell die Sampling-Vielfalt).
+    LLM_SEED: int | None = None
+
     # ── CORS ──────────────────────────────────────────────────────
     # Confluence-Instanz eintragen (internes Netz):
     # z.B. "http://intranet.systelios.local" oder "https://wiki.systelios.de"
