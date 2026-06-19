@@ -29,8 +29,11 @@ STRUCTURAL_WORKFLOWS = frozenset({
 
 
 # ── Datenschutz-Namensregel (zentral) ────────────────────────────────────────
-# Wird in build_system_prompt einmalig in den finalen Prompt aufgenommen
-# (nicht mehr pro Workflow im build_user_content – das war Token-Verschwendung).
+# Wird in build_user_content einmalig in den User-Content aufgenommen (NICHT in
+# build_system_prompt - der frühere Kommentar war falsch). Die formalen
+# Antrags-/Bericht-Workflows fuehren zusaetzlich den NAMENSFORMAT-Pflichtkern im
+# System-Prompt, und bei bekanntem Namen kommt der konkrete PATIENTENNAME-Block
+# in build_system_prompt dazu.
 NAMENSREGEL = (
     "DATENSCHUTZ – NAMENSFORMAT (gilt fuer den gesamten Text):\n"
     "Verwende AUSSCHLIESSLICH den ersten Buchstaben des Nachnamens mit Punkt: "
@@ -39,6 +42,36 @@ NAMENSREGEL = (
     "wenn 'Maria Schmidt': 'Frau S.') – NIEMALS den vollen Nachnamen, "
     "NIEMALS den Vornamen, NIEMALS Namen aus Stilbeispielen. "
     "Selbst wenn der volle Name in den Quellen steht: nur Initiale verwenden."
+)
+
+
+# ── Wiederverwendete Pflichtkern-Bausteine (v19.5 Konsolidierung) ─────────────
+# Diese Bloecke standen vorher 3-5x nahezu wortgleich in einzelnen BASE_PROMPTS
+# verstreut (mit Mini-Abweichungen durch Copy-Paste-Drift). Eine Quelle der
+# Wahrheit verhindert Widersprueche (z.B. Entlassbericht erzwang frueher Wir,
+# obwohl die Workflow-Anweisung 'Wir ODER 3.-Person' sagte).
+
+# Stil-Mimik: Tonfall folgt der Stilvorlage (Wir ODER empathische 3.-Person),
+# kein objektiv-distanzierter Berichtston, kein reines Passiv.
+STIL_VORLAGEN_MIMIK = (
+    "Folge dem Tonfall der Stilvorlage (Wir-Sicht des Therapeutenteams ODER "
+    "empathische 3.-Person mit innerer Patientenperspektive). "
+    "VERMEIDE den objektiv-wissenden Berichtston ('Der Patient zeigte X', "
+    "'Die Klientin äußerte Y'). Schreibe stattdessen aus innerer Perspektive: "
+    "'Sie berichtete, sie fühle sich überfordert', 'Wir erlebten Frau M. "
+    "zunehmend ...'. VERMEIDE auch reine Passivkonstruktionen ('es zeigte sich', "
+    "'konnte differenziert werden', 'wurde bearbeitet'). Setze ein konkretes "
+    "Subjekt (Wir/Patient_in). Systemische Fachsprache wo inhaltlich passend. "
+    "Fließtext, keine Aufzählungen.\n"
+)
+
+# Namensformat fuer die formalen Antrags-/Bericht-Workflows. (Die Doku P1 nutzt
+# bewusst 'die Klientin/der Klient' und bekommt diesen Block NICHT.)
+NAMENSFORMAT = (
+    "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
+    "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
+    "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden, "
+    "ebenso wenig 'die Klientin' / 'der Klient'.\n\n"
 )
 
 
@@ -166,11 +199,9 @@ kann [Patient/in] schrittweise neue Beziehungserfahrungen machen.
 
 Einladungen
 
-[Patient/in] wurde eingeladen, in dieser Woche nach innen zu horchen, \
-wenn sich der Schutzschild aktiviert - nicht um ihn wegzuschieben, \
-sondern um kurz innezuhalten und ihm innerlich zu danken. \
-Unterstützend kann das Führen eines kurzen Notizbuchs sein, \
-in dem sie festhalt, wann und wie stark der Anteil aktiv wird.\
+[Patient/in] wurde eingeladen, dem Schutzanteil innerlich zu danken, \
+wenn er sich im Alltag aktiviert - so wie es im Gespräch bereits anklang \
+("Können Sie dem Schild mal danken"). Es wurde keine weitere Aufgabe vereinbart.\
 """
 
 FEW_SHOT_ANAMNESE = """\
@@ -182,10 +213,10 @@ Alle Inhalte MÜSSEN aus der Selbstauskunft des AKTUELLEN Patienten stammen.
 Steht eine Information NICHT in der Selbstauskunft: schreibe 'nicht erhoben'.
 
 Beispiel-Einstieg (NUR als Stilreferenz):
-'Herr/[Patient/in] stellt sich mit dem Hauptanliegen vor, ... . Die Symptomatik begann vor
+'[Patient/in] stellt sich mit dem Hauptanliegen vor, ... . Die Symptomatik begann vor
 etwa ... Monaten im Kontext von ... . Seither habe sich ... . Vorbehandlungen umfassen
-... . Familiär sei bekannt, dass ... . Beruflich sei er/sie ... . Der Schlaf sei ...,
-der Appetit ... . An Ressourcen nennt er/sie ... .'
+... . Familiär sei bekannt, dass ... . Beruflich sei sie ... . Der Schlaf sei ...,
+der Appetit ... . An Ressourcen nennt sie ... .'
 
 WICHTIG: Schreibe KEINE Überschriften wie 'Vorstellungsanlass:', 'Aktuelle Erkrankung:' etc.
 Alle Inhalte müssen von DIESEM Patienten stammen – KEINE Inhalte aus dem Beispiel übernehmen.\
@@ -233,10 +264,10 @@ dringend indiziert.\
 FEW_SHOT_ENTLASSBERICHT = """\
 BEISPIEL (reiner Fließtext, keine Überschriften):
 
-Zu Beginn des stationären Aufenthaltes formulierte Herr/[Patient/in] als zentrales Anliegen, \
+Zu Beginn des stationären Aufenthaltes formulierte [Patient/in] als zentrales Anliegen, \
 wieder inneren Halt zu finden und sich aus einem über Jahre verfestigten Erleben von \
-innerer Überforderung und Selbstwertzweifeln zu lösen. Wir erlebten ihn/sie zu \
-Therapiebeginn deutlich erschöpft, innerlich angespannt und in seinem/ihrem Selbstwert \
+innerer Überforderung und Selbstwertzweifeln zu lösen. Wir erlebten sie zu \
+Therapiebeginn deutlich erschöpft, innerlich angespannt und in ihrem Selbstwert \
 erheblich verunsichert. Gleichzeitig war bereits früh eine differenzierte \
 Selbstwahrnehmung und ein grundsätzliches Vertrauen in den therapeutischen Prozess \
 erkennbar, was eine tragfähige Arbeitsbasis ermöglichte.
@@ -247,16 +278,16 @@ biographisch eng mit frühen Beziehungserfahrungen verknüpft waren. Diese Antei
 hatten über lange Zeit eine schützende Funktion, gingen jedoch mit massiver innerer \
 Abwertung und emotionaler Selbstentfremdung einher. Im Verlauf gelang es zunehmend, \
 diese inneren Ebenen voneinander zu differenzieren und aus einer erwachseneren, \
-selbstfürsorgelicheren Perspektive in Kontakt zu bringen.
+selbstfürsorglicheren Perspektive in Kontakt zu bringen.
 
 Die therapeutischen Gruppen stellten zunächst eine erhebliche Herausforderung dar. \
-Mit zunehmender Sicherheit nutzte er/sie die Gruppe als Resonanzraum, um eigene \
+Mit zunehmender Sicherheit nutzte sie die Gruppe als Resonanzraum, um eigene \
 Beziehungsmuster zu erkennen. Rückmeldungen der Gruppe wirkten dabei korrigierend \
 auf das kritisch verzerrte Selbstbild und unterstützten den Aufbau eines stabilen \
 Selbstwertgefühls.
 
 Im Gesamtverlauf zeigte sich eine deutliche Entwicklung hin zu mehr innerer \
-Differenzierung, affektiver Stabilität und Selbstwirksamkeit. Herr/[Patient/in] stellte \
+Differenzierung, affektiver Stabilität und Selbstwirksamkeit. [Patient/in] stellte \
 sich mit [Hauptdiagnose] vor dem Hintergrund [biographischer Belastungskontext] vor. \
 Im stationären Rahmen konnte eine deutliche Symptomreduktion erreicht werden. \
 Die prämorbide Persönlichkeitsstruktur mit hoher Leistungsorientierung und \
@@ -265,7 +296,7 @@ eingeschränkter Selbstfürsorge bleibt langfristig therapeutisch relevant.
 Für den weiteren Verlauf ist eine kontinuierliche ambulante psychotherapeutische \
 Begleitung mit traumatherapeutischem Schwerpunkt dringend zu empfehlen. Insbesondere \
 die weitere Arbeit an Beziehungs- und Selbstwertthemen sowie die achtsame Begleitung \
-bei anstehenden Veränderungsprozessenn erscheinen wesentlich, um die erreichten \
+bei anstehenden Veränderungsprozessen erscheinen wesentlich, um die erreichten \
 Fortschritte nachhaltig im Alltag zu verankern.\
 """
 
@@ -329,7 +360,7 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame "
         "Ziel des Gesprächs war. Beispiel: 'Im Mittelpunkt stand...' oder "
         "'Frau M. kam mit dem Anliegen...' (verwende den tatsaechlichen Namen "
-        "des Patienten – NICHT den Platzhalter '[Patient/in]').\n\n"
+        "des Patienten – NICHT einen Platzhalter in eckigen Klammern).\n\n"
         "**Relevante Gesprächsinhalte**\n"
         "Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: "
         "Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. "
@@ -347,7 +378,7 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "'Ein Angebot wäre …', 'In der nächsten Woche / den nächsten Tagen "
         "könnten Sie …', 'Vielleicht mögen Sie …'. Formuliere sie aktiv "
         "('Frau M. wurde eingeladen, …', 'Als Übung wurde vereinbart, …'; "
-        "verwende den tatsächlichen Namen, NICHT '[Patient/in]'). "
+        "verwende den tatsächlichen Namen, NICHT einen Platzhalter in eckigen Klammern). "
         "ERFINDE KEINE Aufgaben, Übungen oder Impulse. Wenn der/die Therapeut/in "
         "keine ausgesprochen hat: lass diesen Abschnitt weg oder halte mit einem "
         "knappen Satz fest, dass keine konkrete Einladung erfolgte."
@@ -382,8 +413,7 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
     ),
 
     "verlaengerung": (
-        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für "
-        "Psychosomatik und Psychotherapie. Verfasse den Abschnitt "
+        "Verfasse den Abschnitt "
         "'Bisheriger Verlauf und Begründung der Verlängerung' "
         "(auch: 'Verlauf und Begründung der weiteren Verlängerung') "
         "für einen Antrag auf Verlängerung der Kostenzusage bei der Krankenversicherung.\n\n"
@@ -400,8 +430,7 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
     ),
 
     "folgeverlaengerung": (
-        "Du bist systemischer Psychotherapeut einer hypnosystemischen Klinik für "
-        "Psychosomatik und Psychotherapie. Verfasse den Abschnitt "
+        "Verfasse den Abschnitt "
         "'Verlauf und Begründung der weiteren Verlängerung' "
         "für einen FOLGE-Verlängerungsantrag bei der Krankenversicherung.\n\n"
         "INHALT (Reihenfolge einhalten):\n"
@@ -413,7 +442,6 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
     ),
 
     "akutantrag": (
-        "Du bist Arzt oder Psychologischer Psychotherapeut der sysTelios Klinik. "
         "Verfasse die 'Begründung für Akutaufnahme' eines AKUTANTRAGS an die "
         "Krankenversicherung für die Erstattung einer stationären Akutaufnahme.\n\n"
         "KONTEXT:\n"
@@ -474,14 +502,11 @@ BASE_PROMPT_AKUTANTRAG = (
     "'Die Klientin äußerte Y'). Schreibe stattdessen aus innerer Perspektive: "
     "'Sie berichtete, sie fühle sich überfordert', 'Wir nehmen Frau X "
     "schwer belastet auf'.\n"
-    "Erster Satz: KEINE generische Floskel wie '[Patient/in] präsentiert sich' "
-    "oder '[Patient/in] berichtet'. Beginne im Stil der Vorlage konkret und "
+    "Erster Satz: Beginne NICHT mit einer generischen Floskel ('… präsentiert sich', "
+    "'… berichtet'), sondern im Stil der Vorlage konkret und "
     "patientenspezifisch.\n"
-    # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
-    "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
-    "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
-    "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden.\n\n"
-    "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
+    + NAMENSFORMAT
+    + "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
     "Jeder Satz MUSS auf eine konkrete Stelle in der Antragsvorlage "
     "zurückführbar sein. Keine Symptome, Diagnosen oder Risiken erfinden.\n"
 )
@@ -494,6 +519,8 @@ ROLE_PREAMBLE = (
     "fuer klinische Dokumentation. "
     "Du erstellst professionelle medizinische Berichte für Ärzte und Therapeuten: "
     "Entlassberichte, Kostenverlängerungsanträge, Aufnahmebefunde und Verlaufsnotizen. "
+    "Die sysTelios Klinik (Psychosomatik und Psychotherapie) arbeitet systemisch "
+    "und hypnosystemisch; schreibe entsprechend aus dieser fachlichen Haltung. "
     "Du arbeitest wie ein erfahrener medizinischer Dokumentationsassistent – "
     "du beginnst sofort mit dem Schreiben des angeforderten Dokuments.\n\n"
     "WICHTIG – BEACHTE LEERZEICHEN:\n"
@@ -625,27 +652,10 @@ BASE_PROMPTS: dict[str, str] = {
         "Schreibe NUR diesen einen Abschnitt als Fließtext – keine Diagnosen, "
         "keine Stammdaten, keine anderen Sektionen des Antrags.\n\n"
         "STIL:\n"
-        # v13 A korrigiert: Wir-Pflicht durch Vorlagen-Mimik ersetzt.
-        # Wenn Vorlage Wir benutzt -> Wir benutzen. Wenn Vorlage 3.-Person ist
-        # -> empathisch-konjunktivische 3.-Person. NIE objektiv-distanzierter
-        # Berichtston ('Der Patient zeigte ...').
-        "Folge dem Tonfall der Stilvorlage (Wir-Sicht des Therapeutenteams ODER "
-        "empathische 3.-Person mit innerer Patientenperspektive). "
-        "VERMEIDE den objektiv-wissenden Berichtston ('Der Patient zeigte X', "
-        "'Die Klientin äußerte Y'). Schreibe stattdessen aus innerer Perspektive: "
-        "'Sie berichtete, sie fühle sich überfordert', 'Wir erlebten Frau M. "
-        "zunehmend ...'. "
-        "VERMEIDE auch reine Passivkonstruktionen ('es zeigte sich', 'konnte "
-        "differenziert werden', 'wurde bearbeitet'). Setze ein konkretes Subjekt "
-        "(Wir/Patient_in). Systemische Fachsprache wo inhaltlich passend. "
-        "Fließtext, keine Aufzählungen.\n"
-        # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
+        + STIL_VORLAGEN_MIMIK +
         "Konkret und patientenspezifisch.\n\n"
-        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
-        "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
-        "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden, "
-        "sowie 'die Klientin' / 'der Klient'.\n\n"
-        "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
+        + NAMENSFORMAT
+        + "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
         "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation "
         "oder Antragsvorlage zurückführbar sein. Keine Therapieinhalte, Methoden, "
         "Fortschritte oder Zitate erfinden die nicht in den Quellen stehen. "
@@ -675,30 +685,15 @@ BASE_PROMPTS: dict[str, str] = {
         "Zeile 1: Überschrift wörtlich: 'Verlauf und Begründung der weiteren Verlängerung'\n"
         "Zeile 2: Leerzeile\n"
         "Zeile 3+: Fließtext im Stil der Vorlage. NICHT mit 'Im weiteren Verlauf'\n"
-        "          oder 'Seither hat sich [Patient/in] ...' beginnen - das sind\n"
+        "          oder 'Seither hat sich …' beginnen - das sind\n"
         "          generische Floskeln. Beginne stattdessen mit einer konkreten\n"
         "          Beobachtung im Stil der Vorlage (z.B. 'Wir erlebten Frau M. ...',\n"
         "          'Frau M. zeigte sich ...', 'Im hypnosystemischen Einzelprozess ...').\n\n"
         "STIL:\n"
-        # v13 A korrigiert: Wir-Pflicht durch Vorlagen-Mimik ersetzt.
-        # Wenn Vorlage Wir benutzt -> Wir benutzen. Wenn Vorlage 3.-Person ist
-        # -> empathisch-konjunktivische 3.-Person. NIE den objektiv-distanzierten
-        # Berichtston ('Der Patient zeigte ...').
-        "Folge dem Tonfall der Stilvorlage (Wir-Sicht oder empathische 3.-Person). "
-        "VERMEIDE den objektiv-wissenden Berichtston ('Der Patient zeigte X', "
-        "'Die Klientin äußerte Y'). Schreibe stattdessen aus innerer Perspektive: "
-        "'Sie berichtete, sie fühle sich überfordert', 'Er beschreibe ein Gefühl "
-        "von ...', 'Wir erlebten Frau M. erschöpft'. "
-        "VERMEIDE auch reine Passivkonstruktionen ('es zeigte sich', 'konnte "
-        "differenziert werden'). Systemische Fachsprache wo inhaltlich passend. "
-        "Fließtext, keine Aufzählungen.\n"
-        # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
+        + STIL_VORLAGEN_MIMIK +
         "Konkret und patientenspezifisch.\n\n"
-        "NAMENSFORMAT: Nur erster Buchstabe des Nachnamens des AKTUELLEN Patienten "
-        "(z.B. 'Frau K.' / 'Herr S.'). NIEMALS einen Platzhalter (z.B. eckige Klammern "
-        "um das Wort Patient/in) und niemals Namen aus dem Stilbeispiel verwenden, "
-        "sowie 'die Klientin' / 'der Klient'.\n\n"
-        "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
+        + NAMENSFORMAT
+        + "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
         "Jeder Satz MUSS auf eine konkrete Stelle in der Verlaufsdokumentation, "
         "dem vorherigen Antrag oder der Antragsvorlage zurückführbar sein. "
         "Keine Therapieinhalte, Methoden, Fortschritte oder Zitate erfinden. "
@@ -720,8 +715,9 @@ BASE_PROMPTS: dict[str, str] = {
         "– Keine 'Einladungen' (nur in Verlaufsnotizen)\n"
         "– Keine Unterschrift, kein Briefkopf, kein Grußsatz\n"
         "– Keine Stammdaten, Diagnosen-Kodierung, Medikation\n\n"
-        "STIL: Fließtext, Wir-Perspektive, systemische Fachsprache, "
-        "konkret und patientenspezifisch – keine Allgemeinplätze.\n"
+        "STIL:\n"
+        + STIL_VORLAGEN_MIMIK +
+        "Konkret und patientenspezifisch – keine Allgemeinplätze.\n"
         # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
         "Vermeide unnötige Ausschmückungen und Wiederholungen.\n\n"
         "QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in der "
@@ -1411,23 +1407,26 @@ def build_system_prompt(
 
     final_prompt = "\n".join(parts)
 
-    # ── Platzhalter-Substitution ──────────────────────────────────────────
-    # Die Beispiele (FEW_SHOT_*) enthalten "[Patient/in]" und "Herr/[Patient/in]"
-    # als generische Platzhalter. Wenn der echte Name bekannt ist, ersetzen
-    # wir diese durchgaengig - sonst uebernimmt das Modell den Platzhalter 1:1
-    # in den Output.
+    # ── Platzhalter-Substitution (v19.5: IMMER) ───────────────────────────
+    # Die Beispiele (FEW_SHOT_*), die ROLE_PREAMBLE und das Glossar nutzen
+    # "[Patient/in]" / "[Name]" als BUILD-ZEIT-Platzhalter. Diese werden hier
+    # IMMER aufgeloest, damit das Modell NIE einen rohen Platzhalter sieht -
+    # sonst kopiert es ihn 1:1 in den Output (der bekannte Platzhalter-Leak,
+    # frueher nur substituiert WENN ein Name bekannt war):
+    #   - Name bekannt + plausibel -> echte Bezeichnung ("Frau M.")
+    #   - sonst neutral            -> "die Patientin/der Patient"
+    # Vorteil ggü. konkretem Beispielnamen ("Frau M." hart im Few-Shot): kein
+    # Falsch-Namen-Leak moeglich. substitute_patient_placeholders (Output-Seite)
+    # ist damit nur noch Sicherheitsnetz, nicht mehr Lasttraeger.
     #
-    # Sicherheits-Check: Substitution NUR wenn full_ref plausibel kurz und
-    # frei von "Klient"/"Patient" ist. Andernfalls droht das Replace mit
-    # einem Müll-String wie "die Klientin/der Klient" auszufuehren -
-    # Quelle waere ein vom Frontend versehentlich gesendeter Hinweistext.
-    # parse_explicit_patient_name filtert solche Strings bereits in
-    # extraction.py raus, dieser Check ist die zweite Verteidigungslinie.
+    # Sicherheits-Check: bei bekanntem Namen Substitution NUR wenn full_ref
+    # plausibel kurz und frei von "Klient"/"Patient" ist (zweite
+    # Verteidigungslinie hinter parse_explicit_patient_name in extraction.py).
+    ref = "die Patientin/der Patient"  # neutraler Default wenn kein Name bekannt
     if patient_name and patient_name.get("initial"):
         anrede_p = patient_name.get("anrede") or ""
         initial_p = patient_name["initial"]
         full_ref = f"{anrede_p} {initial_p}".strip()  # z.B. "Frau M." oder nur "M."
-
         full_ref_low = full_ref.lower()
         is_safe_ref = (
             len(full_ref) <= 12
@@ -1436,15 +1435,12 @@ def build_system_prompt(
             and full_ref not in ("", ".", "Frau .", "Herr .")
         )
         if is_safe_ref:
-            # "Herr/[Patient/in]" -> "Frau M." (komplett ersetzen, keine zweischichtige Anrede mehr)
-            final_prompt = final_prompt.replace("Herr/[Patient/in]", full_ref)
-            # "[Patient/in]" -> "Frau M." / "Herr S."
-            final_prompt = final_prompt.replace("[Patient/in]", full_ref)
-            # "[Name]" (aus FACHLICHES REFERENZWISSEN) -> Initiale
-            final_prompt = final_prompt.replace("[Name]", full_ref)
-    # Wenn kein Name bekannt: Platzhalter bleiben stehen - das Modell muss
-    # aus den Quellen ableiten. Die NAMENSFORMAT-Anweisung sorgt dafuer
-    # dass es die Initiale selbst bildet.
+            ref = full_ref
+
+    # "Herr/[Patient/in]" zuerst (Alt-Beispiele), dann die Einzeltoken.
+    final_prompt = final_prompt.replace("Herr/[Patient/in]", ref)
+    final_prompt = final_prompt.replace("[Patient/in]", ref)
+    final_prompt = final_prompt.replace("[Name]", ref)
 
     return final_prompt
 

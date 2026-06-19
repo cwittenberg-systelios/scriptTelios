@@ -71,12 +71,33 @@ MODEL_PROFILES: dict[str, dict] = {
     # Qwen3: temperature 0.4 fuer klinische Dokumentation (niedrig = faktentreu,
     # hoch = kreativer). Qwen3-Dokumentation empfiehlt 0.7 fuer Chat, aber fuer
     # medizinische Berichte ist 0.3-0.4 der Sweet Spot.
-    "qwen3":       {"min_ctx": 2048, "temperature": 0.4, "top_p": 0.85},
+    # v19.5: repeat_penalty/repeat_last_n explizit. Ollama-Default (1.1 ueber 64
+    # Token) greift zu kurz fuer ABSATZLANGE Wiederholungen in deutscher
+    # Klinik-Prosa -> Degenerations-Loops. 1.18 ueber 512 Token faengt das.
+    "qwen3":       {"min_ctx": 2048, "temperature": 0.4, "top_p": 0.85,
+                    "repeat_penalty": 1.18, "repeat_last_n": 512},
     "llama":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
     "gemma":       {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
     "mistral":     {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
     "_default":    {"min_ctx": 2048, "temperature": 0.3, "top_p": 0.9},
 }
+
+# Globale Defaults fuer Modelle ohne profil-spezifischen Wert (per Settings
+# uebersteuerbar, damit ohne Code-Aenderung getunt werden kann).
+DEFAULT_REPEAT_PENALTY = 1.15
+DEFAULT_REPEAT_LAST_N = 256
+
+
+def _repeat_sampling_opts(profile: dict) -> dict:
+    """
+    Liefert {repeat_penalty, repeat_last_n}.
+    Praezedenz: Settings-Override (falls gesetzt) > Modell-Profil > globaler Default.
+    """
+    s_pen = getattr(settings, "LLM_REPEAT_PENALTY", None)
+    s_last = getattr(settings, "LLM_REPEAT_LAST_N", None)
+    penalty = s_pen if s_pen is not None else profile.get("repeat_penalty", DEFAULT_REPEAT_PENALTY)
+    last_n = s_last if s_last is not None else profile.get("repeat_last_n", DEFAULT_REPEAT_LAST_N)
+    return {"repeat_penalty": penalty, "repeat_last_n": last_n}
 
 def _get_model_profile(model_name: str) -> dict:
     """Gibt modellspezifische Generierungsparameter zurück."""
@@ -639,6 +660,16 @@ async def generate_text(
                          ollama/12907, ollama/14798).
     """
     if len(user_content) > MAX_USER_CONTENT_CHARS:
+        # v19.5: Dieser Pfad sollte mit aktivem Input-Budget-Guard (jobs.py)
+        # praktisch nie greifen - er ist die verlustbehaftete Notbremse. Wenn er
+        # DOCH feuert, hat der Guard einen Rest-Overflow durchgelassen (oder ist
+        # deaktiviert). Sichtbar machen, damit es im Eval-/Prod-Log auffaellt.
+        logger.warning(
+            "_sample_uniformly NOTBREMSE: User-Content %d > %d Zeichen wird "
+            "verlustbehaftet gesampelt (Input-Budget-Guard hat Rest-Overflow "
+            "durchgelassen oder ist aus). workflow=%s",
+            len(user_content), MAX_USER_CONTENT_CHARS, workflow,
+        )
         user_content = _sample_uniformly(user_content, MAX_USER_CONTENT_CHARS)
 
     # Sicherheitscheck: wenn Input + Output > MAX_SAFE_CTX, User-Content kuerzen.
@@ -1200,6 +1231,7 @@ async def _retry_without_thinking(
             "num_ctx":     num_ctx,
             "temperature": min(0.6, profile["temperature"] + 0.2),  # leicht hoeher
             "top_p":       profile["top_p"],
+            **_repeat_sampling_opts(profile),
         },
         "messages": [
             {"role": "system",    "content": hard_system},
@@ -1306,6 +1338,7 @@ async def _generate_ollama(
                 "num_ctx":     num_ctx,
                 "temperature": effective_temperature,
                 "top_p":       profile["top_p"],
+                **_repeat_sampling_opts(profile),
             },
             "messages": [
                 {"role": "system",    "content": system_prompt},

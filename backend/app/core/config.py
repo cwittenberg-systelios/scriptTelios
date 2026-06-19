@@ -162,6 +162,14 @@ class Settings(BaseSettings):
     #            als Notbremse fuer den Rest)
     SOURCE_COMPRESSION_ENABLED: bool = True
 
+    # ── v19.5 Sampling: Wiederholungs-Penalty (gegen Degenerations-Loops) ──
+    # Uebersteuert MODEL_PROFILES["qwen3"] bzw. die globalen Defaults in llm.py.
+    # Nur setzen wenn ein Modell zum Loopen neigt; sonst leer lassen und den
+    # profil-/Default-Wert nutzen. repeat_last_n = Fenster (Token), ueber das
+    # der Penalty greift; gross genug fuer ABSATZLANGE Wiederholungen waehlen.
+    LLM_REPEAT_PENALTY: float | None = None
+    LLM_REPEAT_LAST_N: int | None = None
+
     # ── CORS ──────────────────────────────────────────────────────
     # Confluence-Instanz eintragen (internes Netz):
     # z.B. "http://intranet.systelios.local" oder "https://wiki.systelios.de"

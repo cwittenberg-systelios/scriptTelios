@@ -243,3 +243,48 @@ class TestGetModelProfile:
         """Regression: Qwen3 (0.4) und Qwen2.5 (0.3) muessen unterschiedlich bleiben."""
         assert _get_model_profile("qwen3:32b")["temperature"] == 0.4
         assert _get_model_profile("qwen2.5:32b")["temperature"] == 0.3
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.5: _repeat_sampling_opts (Wiederholungs-Penalty gegen Degeneration)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from app.services.llm import (  # noqa: E402
+    _repeat_sampling_opts,
+    DEFAULT_REPEAT_PENALTY,
+    DEFAULT_REPEAT_LAST_N,
+)
+
+
+class TestRepeatSamplingOpts:
+
+    def test_qwen3_profil_setzt_explizite_werte(self):
+        prof = _get_model_profile("qwen3:32b")
+        opts = _repeat_sampling_opts(prof)
+        assert opts["repeat_penalty"] == 1.18
+        assert opts["repeat_last_n"] == 512
+
+    def test_profil_ohne_werte_faellt_auf_default(self):
+        # _default-Profil hat keine repeat_* Keys -> globale Defaults.
+        prof = _get_model_profile("voellig-unbekanntes-modell")
+        opts = _repeat_sampling_opts(prof)
+        assert opts["repeat_penalty"] == DEFAULT_REPEAT_PENALTY
+        assert opts["repeat_last_n"] == DEFAULT_REPEAT_LAST_N
+
+    def test_settings_override_schlaegt_profil(self, monkeypatch):
+        # Settings-Override (falls gesetzt) gewinnt selbst gegen das qwen3-Profil.
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "LLM_REPEAT_PENALTY", 1.25, raising=False)
+        monkeypatch.setattr(settings, "LLM_REPEAT_LAST_N", 1024, raising=False)
+        opts = _repeat_sampling_opts(_get_model_profile("qwen3:32b"))
+        assert opts["repeat_penalty"] == 1.25
+        assert opts["repeat_last_n"] == 1024
+
+    def test_none_settings_nutzen_profil(self, monkeypatch):
+        # Default-Settings sind None -> Profilwert bleibt maßgeblich.
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "LLM_REPEAT_PENALTY", None, raising=False)
+        monkeypatch.setattr(settings, "LLM_REPEAT_LAST_N", None, raising=False)
+        opts = _repeat_sampling_opts(_get_model_profile("qwen3:32b"))
+        assert opts["repeat_penalty"] == 1.18
+        assert opts["repeat_last_n"] == 512

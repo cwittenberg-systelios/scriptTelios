@@ -18,6 +18,11 @@ from app.services.prompts import (
     derive_word_limits,
     _compute_style_constraints,
     build_system_prompt,
+    BASE_PROMPTS,
+    WORKFLOW_INSTRUCTIONS_DEFAULT,
+    STIL_VORLAGEN_MIMIK,
+    NAMENSFORMAT,
+    ROLE_PREAMBLE,
 )
 
 
@@ -200,12 +205,15 @@ class TestBuildSystemPromptPatientNameSubstitution:
             assert "Frau S." not in verbot_block, \
                 f"Self-reference im Verbots-Block: {verbot_block!r}"
 
-    def test_ohne_patient_name_keine_substitution(self):
-        """Wenn kein patient_name uebergeben → Platzhalter bleiben stehen."""
+    def test_ohne_patient_name_neutrale_substitution(self):
+        """v19.5: Ohne patient_name werden Platzhalter zur NEUTRALEN Bezeichnung
+        aufgeloest (frueher blieben sie roh stehen -> Platzhalter-Leak, weil das
+        Modell '[Patient/in]' 1:1 in den Output kopierte)."""
         prompt = build_system_prompt(workflow="entlassbericht", patient_name=None)
-        # In FEW_SHOT_EB_ENTLASSBERICHT sollte "[Patient/in]" stehen
-        # (Modell muss aus Quellen ableiten)
-        assert "[Patient/in]" in prompt or "Patient/in" in prompt
+        # Kein roher Platzhalter mehr im finalen Prompt ...
+        assert "[Patient/in]" not in prompt
+        # ... stattdessen die neutrale Bezeichnung.
+        assert "die Patientin/der Patient" in prompt
 
     def test_herr_initial_korrekt_substituiert(self):
         patient = {
@@ -300,3 +308,78 @@ class TestBuildSystemPromptDiagnosen:
         assert "{diagnosen}" not in prompt
         # Sollte Default-Text zeigen
         assert "noch nicht festgelegt" in prompt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.5 Item 2: Few-Shots frei von geslashten Genus-Formen + Hybrid-Namen
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFewShotGenderHygiene:
+    """Geslashte Formen ('er/sie', 'Herr/[Patient/in]') wurden vom Modell
+    woertlich in den Output kopiert und unterliefen die KLIENT-GESCHLECHT-
+    Instruktion. Few-Shots muessen in EINER konsistenten Form geschrieben sein."""
+
+    FORBIDDEN = ["er/sie", "ihn/sie", "seinem/ihrem", "sie/er",
+                 "Herr/[Patient/in]", "[Patient/in]/Herr"]
+
+    @pytest.mark.parametrize("workflow", sorted(BASE_PROMPTS.keys()))
+    def test_base_prompt_few_shots_ohne_slashes(self, workflow):
+        text = BASE_PROMPTS[workflow]
+        for bad in self.FORBIDDEN:
+            assert bad not in text, f"{workflow}: geslashte/hybride Form '{bad}' im Pflichtkern"
+
+    @pytest.mark.parametrize("workflow", sorted(WORKFLOW_INSTRUCTIONS_DEFAULT.keys()))
+    def test_workflow_instructions_ohne_slashes(self, workflow):
+        text = WORKFLOW_INSTRUCTIONS_DEFAULT[workflow]
+        for bad in self.FORBIDDEN:
+            assert bad not in text, f"{workflow}: geslashte/hybride Form '{bad}' in Instructions"
+
+    def test_negativ_hinweise_werden_nicht_durch_substitution_korrumpiert(self):
+        # Mit bekanntem Namen darf kein Negativ-Hinweis den substituierten Namen
+        # als "verbotenen Platzhalter" zeigen (frueher: literales '[Patient/in]'
+        # in Negativ-Saetzen wurde mit-substituiert -> "NICHT 'Frau M.'").
+        patient = {"anrede": "Frau", "vorname": "Maria", "nachname": "Schmidt", "initial": "M."}
+        for workflow in ("dokumentation", "akutantrag", "folgeverlaengerung"):
+            prompt = build_system_prompt(workflow=workflow, patient_name=patient)
+            assert "NICHT 'Frau M.'" not in prompt
+            assert "NICHT \"Frau M.\"" not in prompt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.5 Items 3/4/13: Layer-Trennung + Konstanten-Konsolidierung
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPromptLayerSeparation:
+
+    @pytest.mark.parametrize("workflow", sorted(WORKFLOW_INSTRUCTIONS_DEFAULT.keys()))
+    def test_keine_rollendefinition_in_instructions(self, workflow):
+        # Item 4: Rolle gehoert in ROLE_PREAMBLE, nicht in die editierbare Schicht.
+        text = WORKFLOW_INSTRUCTIONS_DEFAULT[workflow]
+        assert "Du bist systemischer Psychotherapeut" not in text
+        assert "Du bist Arzt oder Psychologischer" not in text
+
+    def test_klinik_orientierung_in_role_preamble(self):
+        # Item 4: systemisch/hypnosystemisch jetzt einmal zentral.
+        assert "systemisch" in ROLE_PREAMBLE and "hypnosystemisch" in ROLE_PREAMBLE
+
+    def test_entlassbericht_erzwingt_kein_hartes_wir_mehr(self):
+        # Item 3: frueher Widerspruch (BASE: 'Wir-Perspektive' vs. Instruction:
+        # 'Wir ODER 3.-Person'). Jetzt folgt der BASE der Vorlagen-Mimik.
+        base = BASE_PROMPTS["entlassbericht"]
+        assert "STIL: Fließtext, Wir-Perspektive" not in base
+        assert STIL_VORLAGEN_MIMIK in base
+
+    @pytest.mark.parametrize("workflow", ["verlaengerung", "folgeverlaengerung"])
+    def test_antrag_base_nutzt_konstanten(self, workflow):
+        # Item 13: STIL + NAMENSFORMAT aus einer Quelle (keine Copy-Paste-Drift).
+        base = BASE_PROMPTS[workflow]
+        assert STIL_VORLAGEN_MIMIK in base
+        assert NAMENSFORMAT in base
+
+    def test_akutantrag_nutzt_namensformat_konstante(self):
+        assert NAMENSFORMAT in BASE_PROMPTS["akutantrag"]
+
+    def test_namensformat_verbietet_klientin(self):
+        # Doku P1 nutzt 'die Klientin' bewusst -> bekommt NAMENSFORMAT NICHT.
+        assert "die Klientin" in NAMENSFORMAT
+        assert NAMENSFORMAT not in BASE_PROMPTS["dokumentation"]
