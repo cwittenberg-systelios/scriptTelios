@@ -312,3 +312,39 @@ class TestSeedSamplingOpt:
         monkeypatch.setattr(settings, "LLM_SEED", None, raising=False)
         opts = _repeat_sampling_opts(_get_model_profile("qwen3:32b"))
         assert "seed" not in opts
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.5: konfigurierbarer num_ctx-Cap (Context-Bump auf faehiger Hardware)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from app.services.llm import _estimate_num_ctx  # noqa: E402
+
+
+class TestNumCtxCapConfigurable:
+
+    SEHR_LANG = "x" * 200_000   # erzwingt den Cap
+
+    def test_default_cap_16384(self, monkeypatch):
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "LLM_NUM_CTX_CAP", 16384, raising=False)
+        assert _estimate_num_ctx("System.", self.SEHR_LANG, 2048) == 16384
+
+    def test_cap_hochsetzbar_32768(self, monkeypatch):
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "LLM_NUM_CTX_CAP", 32768, raising=False)
+        assert _estimate_num_ctx("System.", self.SEHR_LANG, 2048) == 32768
+
+    def test_cap_aendert_kurzen_input_nicht(self, monkeypatch):
+        # Kurzer Input bleibt klein, egal wie hoch der Cap steht.
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "LLM_NUM_CTX_CAP", 32768, raising=False)
+        ctx = _estimate_num_ctx("System.", "Kurze Anfrage.", 512)
+        assert ctx <= 4096
+
+    def test_immer_vielfaches_von_512(self, monkeypatch):
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "LLM_NUM_CTX_CAP", 32768, raising=False)
+        for chars in [5000, 50000, 150000]:
+            ctx = _estimate_num_ctx("S.", "x" * chars, 1024)
+            assert ctx % 512 == 0

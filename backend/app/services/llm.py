@@ -899,9 +899,12 @@ def _estimate_num_ctx(system_prompt: str, user_content: str, max_tokens: int) ->
     needed = int(estimated_tokens * 1.2) + max_tokens
     # Auf nächstes Vielfaches von 512 aufrunden, Minimum 2048
     rounded = max(2048, ((needed + 511) // 512) * 512)
-    # Hartes Maximum: 16384 Tokens – sicher auf RTX Pro 4500 (q4_K_M + FP16 KV-Cache).
-    # Fuer RTX 4090: auf 8192 reduzieren oder OLLAMA_KV_CACHE_TYPE=q8_0 verwenden.
-    return min(rounded, 16384)
+    # Hartes Maximum konfigurierbar via LLM_NUM_CTX_CAP (Default 16384, sicher
+    # auf RTX 4090). Auf RTX Pro 4500 (32GB) mit q8_0-KV-Cache passt 32768 ->
+    # dort hochsetzen, damit Inputs bis MAX_SAFE_CTX wirklich ins Fenster passen
+    # (statt von Ollama still gekuerzt zu werden).
+    cap = getattr(settings, "LLM_NUM_CTX_CAP", 16384)
+    return min(rounded, cap)
 
 
 def _sample_uniformly(text: str, max_chars: int, n_windows: int = 10) -> str:

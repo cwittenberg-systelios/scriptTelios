@@ -179,6 +179,16 @@ class Settings(BaseSettings):
     # Outputs. NICHT in Prod setzen (nimmt dem Modell die Sampling-Vielfalt).
     LLM_SEED: int | None = None
 
+    # v19.5: Obergrenze fuer das dynamisch berechnete num_ctx (Modell-
+    # Kontextfenster, das pro Call an Ollama geht). Default 16384 ist sicher
+    # auch auf RTX 4090 (24GB) mit q8_0-KV-Cache. ACHTUNG: liegt unter
+    # MAX_SAFE_CTX (20480) -> Inputs, die der Budget-Guard auf ~20480 plant,
+    # passen NICHT ins Fenster und werden von Ollama still abgeschnitten
+    # (Mitursache der Truncation-/Stub-Outputs). Auf der RTX Pro 4500 (32GB)
+    # passt 32768 nachweislich in den VRAM (q8_0-KV) -> dort LLM_NUM_CTX_CAP=32768
+    # setzen schliesst die Luecke. Hoeher als ~32768 nur mit mehr VRAM.
+    LLM_NUM_CTX_CAP: int = 16384
+
     # ── CORS ──────────────────────────────────────────────────────
     # Confluence-Instanz eintragen (internes Netz):
     # z.B. "http://intranet.systelios.local" oder "https://wiki.systelios.de"
