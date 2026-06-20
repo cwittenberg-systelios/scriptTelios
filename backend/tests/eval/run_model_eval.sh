@@ -40,6 +40,17 @@ MODELS=(
   "mistral-small"      # Mistral Small 3 - europaeisch, ~24B (pull ~14GB)
 )
 
+# Teilmenge nachziehen: per Argument  ->  bash tests/eval/run_model_eval.sh qwen3.6:27b mistral-small
+# oder per Env  ->  CMP_MODELS="qwen3.6:27b mistral-small" bash tests/eval/run_model_eval.sh
+# Praktisch, um nur fehlgeschlagene Modelle erneut laufen zu lassen; compare_models
+# liest danach trotzdem ALLE vorhandenen Unterordner zusammen.
+if [ "$#" -gt 0 ]; then
+  MODELS=("$@")
+elif [ -n "${CMP_MODELS:-}" ]; then
+  # shellcheck disable=SC2206
+  MODELS=($CMP_MODELS)
+fi
+
 TEMP="${CMP_TEMP:-0.0}"                              # 0.0 = greedy/deterministisch
 OUT_ROOT="${CMP_OUT:-/workspace/eval_results/model_cmp}"
 KSEL="${CMP_K:-test_eval_workflow}"                  # welche Eval-Cases
@@ -87,6 +98,20 @@ stop_be () {
 }
 trap stop_be EXIT
 
+pull_with_retry () {  # $1 = modellname. EOF/Netz-Abbrueche sind oft transient.
+  local m="$1" tries="${CMP_PULL_TRIES:-3}" i=1
+  while [ "$i" -le "$tries" ]; do
+    rm -f /workspace/ollama/blobs/*-partial 2>/dev/null || true   # Reste vor jedem Versuch
+    if ollama pull "$m"; then return 0; fi
+    if [ "$i" -lt "$tries" ]; then
+      echo "  Pull-Versuch $i/$tries fehlgeschlagen (EOF/Netz meist transient) - 15s warten, neuer Versuch ..."
+      sleep 15
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
 echo "Temperatur (alle Modelle): $TEMP   |   Cases: $KSEL   |   Out: $OUT_ROOT"
 echo ""
 
@@ -98,12 +123,10 @@ for M in "${MODELS[@]}"; do
   echo "=================================================================="
   if ! ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$M"; then
     if [ "$AUTOPULL" = "1" ]; then
-      echo "  nicht vorhanden -> ollama pull $M ..."
-      # Reste abgebrochener Pulls vorher wegraeumen (sonst fressen sie die Platte
-      # und der naechste Pull scheitert erneut an 'disk quota exceeded')
-      rm -f /workspace/ollama/blobs/*-partial 2>/dev/null || true
-      if ! ollama pull "$M"; then
-        echo "  !! pull fehlgeschlagen fuer $M (Tag pruefen: ollama.com/library) - uebersprungen"
+      echo "  nicht vorhanden -> ollama pull $M (mit Retry) ..."
+      if ! pull_with_retry "$M"; then
+        echo "  !! pull endgueltig fehlgeschlagen fuer $M. Bei 'EOF': Netz/Registry"
+        echo "     (transient, spaeter erneut). Bei '404/manifest': Tag falsch -> ollama.com/library."
         rm -f /workspace/ollama/blobs/*-partial 2>/dev/null || true
         echo ""
         continue
