@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # ── LLM (ausschliesslich Ollama, lokal) ──────────────────────
     OLLAMA_HOST:  str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen3:32b"
+    # Erzwingt eine feste Temperatur ueber ALLE Modelle/Pfade (auch den Hard-Anti-
+    # Think-Pfad, der sonst +0.2 addiert). None = Modell-Profil gilt wie bisher.
+    # Nur fuer den Modellvergleich gedacht (Determinismus): LLM_TEMPERATURE_OVERRIDE=0.0
+    LLM_TEMPERATURE_OVERRIDE: float | None = None
 
     # Vision-Modell fuer OCR-Fallback (Stufe 3: wenn pdfplumber + Tesseract scheitern)
     # Modell einmalig laden: ollama pull llava

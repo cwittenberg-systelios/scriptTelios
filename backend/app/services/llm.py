@@ -106,12 +106,20 @@ def _repeat_sampling_opts(profile: dict) -> dict:
     return opts
 
 def _get_model_profile(model_name: str) -> dict:
-    """Gibt modellspezifische Generierungsparameter zurück."""
+    """Gibt modellspezifische Generierungsparameter zurück.
+
+    Wenn LLM_TEMPERATURE_OVERRIDE gesetzt ist (Modellvergleich), wird die Temperatur
+    ueber ALLE Modelle hinweg auf diesen Wert erzwungen - als Kopie, damit das globale
+    MODEL_PROFILES-Dict unveraendert bleibt."""
     name_lower = model_name.lower()
-    for prefix, profile in MODEL_PROFILES.items():
+    profile = MODEL_PROFILES["_default"]
+    for prefix, p in MODEL_PROFILES.items():
         if prefix != "_default" and name_lower.startswith(prefix):
-            return profile
-    return MODEL_PROFILES["_default"]
+            profile = p
+            break
+    if settings.LLM_TEMPERATURE_OVERRIDE is not None:
+        profile = {**profile, "temperature": settings.LLM_TEMPERATURE_OVERRIDE}
+    return profile
 
 # Maximale Zeichen für Stilvorlagen im System-Prompt.
 # Durch explizite "nur Stil"-Rahmung bei C&P-Texten ist das Looping-Risiko
@@ -1238,7 +1246,11 @@ async def _retry_without_thinking(
         "options": {
             "num_predict": max_tokens,
             "num_ctx":     num_ctx,
-            "temperature": min(0.6, profile["temperature"] + 0.2),  # leicht hoeher
+            "temperature": (
+                profile["temperature"]
+                if settings.LLM_TEMPERATURE_OVERRIDE is not None
+                else min(0.6, profile["temperature"] + 0.2)  # leicht hoeher
+            ),
             "top_p":       profile["top_p"],
             **_repeat_sampling_opts(profile),
         },
