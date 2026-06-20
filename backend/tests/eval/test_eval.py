@@ -20,6 +20,7 @@ Voraussetzungen:
     - Ollama laeuft mit dem konfigurierten Modell
     - Verlaufsdoku-PDFs liegen in tests/fixtures/eval/ (optional)
 """
+import asyncio
 import json
 import logging
 import os
@@ -155,10 +156,16 @@ async def _source_text_for_fidelity(test_case: dict) -> str:
             try:
                 if p.exists():
                     from app.services.extraction import extract_text
-                    t = await extract_text(p)
+                    # Timeout gegen kaputte/gescannte PDFs: OCR-Fallback kann sehr
+                    # langsam sein (z.B. an-02 selbstauskunft.pdf). Datei dann
+                    # ueberspringen statt den Eval auszubremsen - Transkript/andere
+                    # Dokumente erden trotzdem.
+                    t = await asyncio.wait_for(extract_text(p), timeout=30)
                     if t:
                         parts.append(t)
                         doc_chars += len(t)
+            except asyncio.TimeoutError:
+                logger.warning("Fidelity-Quelle: Extraktion > 30s, uebersprungen: %s", p)
             except Exception as e:  # Extraktion robust: ein Fehler darf den Eval nicht kippen
                 logger.warning("Fidelity-Quelle: Extraktion fehlgeschlagen fuer %s: %s", p, e)
 
