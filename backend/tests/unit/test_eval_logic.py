@@ -291,8 +291,8 @@ class TestCheckSourceFidelity:
         assert any("QUELLENTREUE" in i and "Notizbuch" in i for i in ev.issues)
 
     def test_belegtes_vokabular_kein_issue(self):
-        ev = EvalResult("dokumentation", "t", "Ein Schutzschild zeigte sich.")
-        ev.check_source_fidelity("Klientin: da ist so ein Schutzschild.")
+        ev = EvalResult("dokumentation", "t", "Ein Manager zeigte sich.")
+        ev.check_source_fidelity("Klientin: da ist so ein Manager, der alles kontrolliert.")
         assert not any("QUELLENTREUE" in i for i in ev.issues)
         assert any("Quellentreue" in p for p in ev.passed)
 

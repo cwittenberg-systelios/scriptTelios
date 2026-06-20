@@ -32,7 +32,7 @@ from pathlib import Path
 # Begriffslisten + Vergleichslogik zentral aus dem Produktionscode (single
 # source of truth) - identisch zu Produktions-QA und Eval-Framework.
 from app.services.source_fidelity import (  # noqa: E402
-    METHOD_TERMS, HOMEWORK_TERMS, find_imposed_vocab,
+    METHOD_TERMS, HOMEWORK_TERMS, find_imposed_vocab, _stem_present,
 )
 
 
@@ -50,8 +50,8 @@ def scan(text_lo: str, tr_lo: str | None, terms):
     """-> Liste (label, used, imposed)."""
     rows = []
     for label, stem in terms:
-        if stem in text_lo:
-            grounded = (tr_lo is not None) and (stem in tr_lo)
+        if _stem_present(stem, text_lo):
+            grounded = (tr_lo is not None) and _stem_present(stem, tr_lo)
             rows.append((label, True, not grounded))
     return rows
 

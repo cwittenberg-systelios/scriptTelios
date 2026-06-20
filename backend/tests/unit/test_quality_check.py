@@ -666,8 +666,8 @@ class TestSourceFidelityQA:
 
     def test_belegt_kein_issue(self):
         issues = run_quality_check(
-            "Ein Schutzschild zeigte sich.", "dokumentation",
-            source_text="Klientin: da ist ein Schutzschild, das mich abschirmt.",
+            "Ein Manager zeigte sich im Prozess.", "dokumentation",
+            source_text="Klientin: da ist so ein Manager, der alles kontrolliert.",
         )
         assert not any(i.code == "SOURCE_FIDELITY" for i in issues)
 

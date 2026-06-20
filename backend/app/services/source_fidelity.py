@@ -19,35 +19,40 @@ Quelle enthaelt sie nie) und werden als "untypisch" mitgeprueft.
 """
 from __future__ import annotations
 
+import re
+
 
 # (Anzeige-Label, Wortstamm-zum-Suchen in lower-case)
 METHOD_TERMS: list[tuple[str, str]] = [
-    # Klinik-Vokabular (deutsch) - nur belegt, wenn in der Quelle
+    # Spezifische Anteilsnamen der sysTelios-Klinik - konkrete Entitaeten. Tauchen sie
+    # im Output auf, ohne in der Quelle belegt zu sein, ist das eine ERFUNDENE SPEZIFIK
+    # (kein blosses Zusammenfassungs-Label). Geringes Synonym-Risiko, weil dies die
+    # kanonischen Begriffe der Klinik sind - die Quelle nutzt dieselben Worte.
     ("Manager",                      "manager"),
     ("Antreiber",                    "antreiber"),
     ("Richter",                      "richter"),
     ("Feuerbekämpfer",               "feuerbekämpf"),
     ("Verbannte",                    "verbannt"),
     ("inneres Kind",                 "inneres kind"),
-    ("Ego-State",                    "ego-state"),
-    ("Ich-Zustand",                  "ich-zustand"),
-    ("Schutzanteil",                 "schutzanteil"),
-    ("Schutzschild",                 "schutzschild"),
-    ("Hypnosystemik",                "hypnosystem"),
-    ("Schema-Modus",                 "schema-modus"),
-    ("EMDR",                         "emdr"),
-    ("Reframing",                    "reframing"),
-    ("Externalisierung",             "external"),
-    ("zirkulaere Frage",             "zirkul"),
-    ("Stuhlarbeit",                  "stuhlarbeit"),
-    ("IFS (Verfahrensname)",         "ifs"),
-    # Englische/Fremdbegriffe, die die sysTelios-Klinik NICHT nutzt ->
-    # bei Auftreten fast immer aufgestuelpt (auch die Quelle hat sie nie).
+    # Englische/Fremdbegriffe, die die sysTelios-Klinik NIE nutzt -> bei Auftreten
+    # praktisch immer aufgestuelpt (die Quelle enthaelt sie in keiner Form).
     ("Self-Energy (untypisch)",      "self-energy"),
     ("Self-Leadership (untypisch)",  "self-leadership"),
     ("Exile (engl., untypisch)",     "exile"),
     ("Feuerwehr-Anteil (untypisch)", "feuerwehr"),
 ]
+
+# BEWUSST NICHT in der Liste (Stand v19.5, datengestuetzt): generische Verfahrens-/
+# Konzept-Label (IFS, Reframing, Externalisierung, Hypnosystemik, Schema-Modus, EMDR,
+# Stuhlarbeit, zirkulaere Frage) und generische Anteils-Kategorien (Schutzanteil,
+# Schutzschild, Ego-State/Ich-Zustand). Grund: das sind Zusammenfassungs-Vokabeln -
+# Kliniker benennen damit, was passiert ist, oft mit anderem Wort als die Quelle
+# ('IFS' fuer 'Anteilearbeit', 'Schutzanteil' fuer 'Waechteranteil', 'Reframing' fuer
+# Glaubenssatz-Arbeit). Binaeres Flaggen erzeugt nur Rauschen - im Baseline 16384 waren
+# ALLE drei Treffer (IFS, Reframing, Schutzanteil) belegte Konzepte, nur anders
+# formuliert. Ueber-Nutzung von Methodensprache wird im Prompt gesteuert (Item-1-Gating
+# in prompts.py), nicht per Eval-Flag. Ego-State bleibt im KLINISCHES_GLOSSAR als
+# erkanntes Vokabular - nur eben nicht in der Fidelity-Pruefung.
 
 # Standard-Hausaufgaben, die das Modell gern erfindet, wenn keine konkrete
 # Einladung vereinbart wurde.
@@ -60,12 +65,22 @@ HOMEWORK_TERMS: list[tuple[str, str]] = [
 ]
 
 
+def _stem_present(stem: str, text_lo: str) -> bool:
+    """Wortstamm an einer WORTGRENZE in text_lo (lower-case)?
+
+    Wortgrenze vorne (\\b) verhindert Substring-Fehltreffer - z.B. 'richter' in
+    'Berichterstattung', frueher auch 'ifs' in 'Tarifs'. Das Suffix bleibt frei,
+    damit Flexionen matchen ('verbannt' -> 'Verbannte'/'Verbannten', 'manager' ->
+    'Managerin'). Gilt fuer Output UND Quelle gleich."""
+    return re.search(r"\b" + re.escape(stem), text_lo) is not None
+
+
 def find_imposed_vocab(output_text: str, source_text: str) -> list[str]:
     """Labels, deren Wortstamm im Output, aber NICHT in der Quelle vorkommt.
 
     Verfahrensbegriffe + Hausaufgaben in einer Liste (Hausaufgaben mit Praefix).
-    Leere/zu duenne Quelle -> [] (nicht pruefbar; Aufrufer entscheidet, ob der
-    Check ueberhaupt sinnvoll ist).
+    Matching an Wortgrenzen (siehe _stem_present). Leere/zu duenne Quelle -> []
+    (nicht pruefbar; Aufrufer entscheidet, ob der Check ueberhaupt sinnvoll ist).
     """
     if not source_text or not source_text.strip():
         return []
@@ -73,10 +88,10 @@ def find_imposed_vocab(output_text: str, source_text: str) -> list[str]:
     src_lo = source_text.lower()
     imposed = [
         label for label, stem in METHOD_TERMS
-        if stem in out_lo and stem not in src_lo
+        if _stem_present(stem, out_lo) and not _stem_present(stem, src_lo)
     ]
     imposed += [
         f"Hausaufgabe '{label}'" for label, stem in HOMEWORK_TERMS
-        if stem in out_lo and stem not in src_lo
+        if _stem_present(stem, out_lo) and not _stem_present(stem, src_lo)
     ]
     return imposed
