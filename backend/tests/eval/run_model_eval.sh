@@ -18,6 +18,11 @@
 #   # -> pullt jedes fehlende Modell vor dem Lauf, entfernt es danach wieder
 #   #    (ausser CMP_KEEP, default qwen3:32b). Peak: ~1 neues Modell + Baseline.
 #
+#   # Stilsteuerbarkeit mitmessen (passt sich das Modell an Therapeuten-Stile an?):
+#   CMP_STYLE_VAR=1 bash tests/eval/run_model_eval.sh
+#   # -> faehrt zusaetzlich test_style_variance; deutlich laenger. Empfehlung: erst
+#   #    die Prosa, Feld eingrenzen, dann CMP_STYLE_VAR=1 nur auf den Finalisten.
+#
 # Wichtig (Pod-Eigenheiten, aus frueheren Laeufen):
 #   - eigener uvicorn auf Port 8001 (NIE pkill -f uvicorn -> killt PID-1-Kind)
 #   - AUTH_ENABLED=false (Eval sendet kein Confluence-HMAC)
@@ -37,6 +42,12 @@ MODELS=(
 TEMP="${CMP_TEMP:-0.0}"                              # 0.0 = greedy/deterministisch
 OUT_ROOT="${CMP_OUT:-/workspace/eval_results/model_cmp}"
 KSEL="${CMP_K:-test_eval_workflow}"                  # welche Eval-Cases
+STYLE_VAR="${CMP_STYLE_VAR:-0}"                       # 1 = Stilsteuerbarkeit mitmessen
+# Stil-Varianz-Test (A-vs-B-Stiltransfer) dazunehmen, wenn gewuenscht. Misst, ob
+# das Modell sich an verschiedene Therapeuten-Stile anpasst - eine modell-
+# diskriminierende Faehigkeit, fuer scriptTelios ein Kernfeature. Verteuert den Lauf
+# (pro Modell zusaetzlich ~ Workflows x Therapeuten-Paare Generierungen).
+[ "$STYLE_VAR" = "1" ] && KSEL="($KSEL) or test_style_variance"
 # Disk-Management (70GB-Platte reicht NICHT fuer alle Modelle gleichzeitig):
 AUTOPULL="${CMP_AUTOPULL:-0}"                         # 1 = fehlende Modelle vor dem Lauf pullen
 RM_AFTER="${CMP_RM_AFTER:-0}"                         # 1 = Modell NACH dem Lauf wieder entfernen
@@ -86,8 +97,12 @@ for M in "${MODELS[@]}"; do
   if ! ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$M"; then
     if [ "$AUTOPULL" = "1" ]; then
       echo "  nicht vorhanden -> ollama pull $M ..."
+      # Reste abgebrochener Pulls vorher wegraeumen (sonst fressen sie die Platte
+      # und der naechste Pull scheitert erneut an 'disk quota exceeded')
+      rm -f /workspace/ollama/blobs/*-partial 2>/dev/null || true
       if ! ollama pull "$M"; then
         echo "  !! pull fehlgeschlagen fuer $M (Tag pruefen: ollama.com/library) - uebersprungen"
+        rm -f /workspace/ollama/blobs/*-partial 2>/dev/null || true
         echo ""
         continue
       fi
