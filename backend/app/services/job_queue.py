@@ -794,7 +794,22 @@ class JobQueue:
                     qc_text = combined_result_text(
                         job.workflow, job.result_text, job.result_befund,
                     )
-                    issues = run_quality_check(qc_text, job.workflow)
+                    # v19.5: Quellentreue-Check braucht die Quelle - Roh-Transkript
+                    # + volle Dokument-Extrakte (Verlaufsdoku, Antragsvorlage mit
+                    # Anamnese/Befund/Diagnosen, Vorantrag). Volle Extrakte, KEIN
+                    # Summary -> keine Falsch-Positive durch Verdichtung. Leere
+                    # Quelle (z.B. fehlende Felder) -> Schritt 7 entfaellt automatisch.
+                    _fidelity_source = "\n\n".join(
+                        s for s in (
+                            job.result_transcript,
+                            job.source_verlauf_text,
+                            job.source_antragsvorlage_text,
+                            job.source_vorantrag_text,
+                        ) if s and s.strip()
+                    )
+                    issues = run_quality_check(
+                        qc_text, job.workflow, source_text=_fidelity_source,
+                    )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(
                         "QualityCheck %s (%s): %d Issues (%s)",

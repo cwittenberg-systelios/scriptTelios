@@ -119,22 +119,52 @@ STYLES_DIR = EVAL_DATA_DIR / "styles"
 TIMEOUT = 900  # 5 Minuten pro Generierung (lang wegen GPU-Kaltstart)
 
 
-def _source_text_for_fidelity(test_case: dict) -> str:
-    """Quelltext fuer den Quellentreue-Check (EvalResult.check_source_fidelity).
+async def _source_text_for_fidelity(test_case: dict) -> str:
+    """Vollstaendiger Quelltext fuer den Quellentreue-Check (check_source_fidelity):
 
-    Bei Audio-Workflows (dokumentation, anamnese): das GECACHTE Transkript - nur
-    lesen, nie transkribieren (kein Backend-Call). Liegt kein Cache vor oder gibt es
-    kein Audio, wird "" zurueckgegeben und der Check entfaellt. Text-/PDF-Eingaben
-    werden hier bewusst NICHT geladen, um Falsch-Positive durch eine unvollstaendige
-    Quelle zu vermeiden (Quellentreue gegen Text-Inputs ist ein Folgeschritt)."""
-    audio = (test_case.get("input_files") or {}).get("audio")
-    if not audio:
-        return ""
-    p = Path(audio)
-    if not p.is_absolute():
-        p = EVAL_DATA_DIR / p
-    cache = _transcript_cache_path(p)
-    return cache.read_text(encoding="utf-8") if cache.exists() else ""
+      - der Auftrags-Prompt (traegt legitim Vokabular - eb-02 nennt im Prompt
+        'Wächteranteil Türsteher', das darf das Modell dann nutzen),
+      - Audio: gecachtes Transkript (nur lesen, nie transkribieren),
+      - PDF/DOCX/TXT-Eingaben (Verlaufsdoku, Selbstauskunft, Antragsvorlage mit
+        Anamnese/Befund/Diagnosen, Vorantrag ...) via extraction.extract_text -
+        identische Extraktion wie im Generierungs-Pfad.
+
+    Der Check laeuft NUR, wenn substanzielle Quelle vorliegt (Transkript ODER
+    extrahierte Dokumente, >= 200 Zeichen). Nur-Prompt-Grundlage oder
+    fehlgeschlagene Extraktion -> "" (Check entfaellt, vermeidet Falsch-Positive)."""
+    parts: list[str] = []
+    prompt = test_case.get("prompt") or ""
+    if prompt.strip():
+        parts.append(prompt)
+
+    files = test_case.get("input_files") or {}
+    doc_chars = 0  # extrahierter Dokument-/Transkript-Inhalt (Prompt zaehlt NICHT mit)
+    for field, val in files.items():
+        if not isinstance(val, str) or not val:
+            continue
+        p = Path(val)
+        if not p.is_absolute():
+            p = EVAL_DATA_DIR / p
+        if field == "audio":
+            cache = _transcript_cache_path(p)
+            if cache.exists():
+                t = cache.read_text(encoding="utf-8")
+                parts.append(t)
+                doc_chars += len(t)
+        else:
+            try:
+                if p.exists():
+                    from app.services.extraction import extract_text
+                    t = await extract_text(p)
+                    if t:
+                        parts.append(t)
+                        doc_chars += len(t)
+            except Exception as e:  # Extraktion robust: ein Fehler darf den Eval nicht kippen
+                logger.warning("Fidelity-Quelle: Extraktion fehlgeschlagen fuer %s: %s", p, e)
+
+    if doc_chars < 200:
+        return ""  # keine substanzielle Quelle -> Check entfaellt (kein Falsch-Positiv)
+    return "\n\n".join(s for s in parts if s and s.strip())
 
 # Abschnitts-Überschriften in den DOCX-Vorlagen pro Workflow
 STYLE_SECTION_HEADINGS = {
@@ -991,17 +1021,13 @@ class EvalResult:
 
     def check_source_fidelity(self, source_text: str):
         """Quellentreue: meldet Verfahrens-/IFS-Vokabular und Standard-Hausaufgaben,
-        die im Output stehen, aber NICHT in der Quelle (Transkript) - aufgestuelpt.
-        Konservativ (Wortstamm-Substring, untertreibt eher). Ohne nicht-leere Quelle
-        entfaellt der Check. Begriffslisten zentral aus faithfulness_probe."""
+        die im Output stehen, aber NICHT in der Quelle (aufgestuelpt). Konservativ.
+        Ohne nicht-leere Quelle entfaellt der Check. Logik + Begriffe zentral aus
+        app.services.source_fidelity - identisch zur Produktions-QA."""
         if not source_text or not source_text.strip():
             return
-        from tests.eval.faithfulness_probe import METHOD_TERMS, HOMEWORK_TERMS
-        out_lo = self.text.lower()
-        src_lo = source_text.lower()
-        imposed = [label for label, stem in METHOD_TERMS if stem in out_lo and stem not in src_lo]
-        imposed += [f"Hausaufgabe '{label}'" for label, stem in HOMEWORK_TERMS
-                    if stem in out_lo and stem not in src_lo]
+        from app.services.source_fidelity import find_imposed_vocab
+        imposed = find_imposed_vocab(self.text, source_text)
         if imposed:
             for label in imposed:
                 self.issues.append(f"QUELLENTREUE: '{label}' im Output, nicht in der Quelle (aufgestülpt)")
@@ -1062,13 +1088,27 @@ class EvalResult:
             if ref_avg == 0:
                 continue
 
-            # Bug-Fix #3b: Wenn die Wortzahl insgesamt im erlaubten Bereich liegt,
-            # ist eine Abweichung der Absatzlänge oft akzeptabel (kürzere Absätze
-            # bei korrekter Gesamtlänge bedeutet z.B. nur mehr Strukturierung).
-            # Wir loggen dann als "passed" mit Hinweis statt als Issue.
-            _is_paragraph_check = (name == "Absatzlänge")
-            _word_count_passed = getattr(self, "word_count_ok", False)
-            _downgrade = _is_paragraph_check and _word_count_passed
+            # v19.5: Absatzlaenge ist ein weicher Stil-Score und KEIN Ko-Kriterium.
+            # Sie zaehlt nur bei ECHTER Fragmentierung (sehr kurze Absaetze, ~Ein-Satz-
+            # Stubs) als Fehler - NICHT, wenn der Output bloss kuerzere Absaetze hat als
+            # eine Block-Stilvorlage (z.B. Output 55w vs. Vorlage 342w ist akzeptabel,
+            # oft sogar lesbarer). Schwelle absolut, unabhaengig von der Referenz.
+            if name == "Absatzlänge":
+                _FRAGMENT_FLOOR = 18  # Woerter/Absatz; darunter = Ein-Satz-Stubs
+                if out_val < _FRAGMENT_FLOOR:
+                    self.issues.append(
+                        f"STIL Absatzlänge: Fragmentierung, Output={out_val:.1f}w/Absatz "
+                        f"(< {_FRAGMENT_FLOOR}w = Ein-Satz-Stubs; Referenz {ref_avg:.0f}w)"
+                    )
+                else:
+                    self.passed.append(
+                        f"STIL Absatzlänge OK (kein Ko-Kriterium): Output={out_val:.1f}w/Absatz, "
+                        f"Referenz {ref_avg:.0f}w"
+                    )
+                continue
+
+            # Uebrige Checks (z.B. Satzlaenge): Bandbreiten-Logik wie bisher.
+            _downgrade = False
 
             if len(refs) > 1:
                 # Mehrere Referenzen: Output muss in die Bandbreite fallen (+ Toleranz)
@@ -1432,7 +1472,7 @@ async def test_eval_workflow(workflow, test_case, request):
     # Quellentreue gegen die Quelle (gecachtes Transkript bei Audio-Workflows):
     # aufgestuelptes Verfahrens-/IFS-Vokabular + erfundene Hausaufgaben fliessen in
     # den Score ein. Ohne Transkript-Cache entfaellt der Check geraeuschlos.
-    _fidelity_src = _source_text_for_fidelity(test_case)
+    _fidelity_src = await _source_text_for_fidelity(test_case)
     if _fidelity_src:
         ev.check_source_fidelity(_fidelity_src)
 

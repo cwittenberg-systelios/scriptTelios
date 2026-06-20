@@ -644,3 +644,34 @@ class TestSanitizeForRepairPrompt:
         once = sanitize_for_repair_prompt("[INST]hi<|im_start|>x<|im_end|>")
         twice = sanitize_for_repair_prompt(once)
         assert once == twice
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.5: Quellentreue-Check in der Produktions-QA (run_quality_check Schritt 7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestSourceFidelityQA:
+
+    def test_aufgestuelpt_flaggt_warning(self):
+        issues = run_quality_check(
+            "Sie zeigte einen Manager und ein Notizbuch.", "dokumentation",
+            source_text="Klientin spricht ueber ihren Arbeitsalltag.",
+        )
+        sf = [i for i in issues if i.code == "SOURCE_FIDELITY"]
+        assert any("Manager" in i.message for i in sf)
+        assert any("Notizbuch" in i.message for i in sf)
+        assert sf and all(i.severity == "warning" for i in sf)
+        assert all(i.repair_hint for i in sf)
+
+    def test_belegt_kein_issue(self):
+        issues = run_quality_check(
+            "Ein Schutzschild zeigte sich.", "dokumentation",
+            source_text="Klientin: da ist ein Schutzschild, das mich abschirmt.",
+        )
+        assert not any(i.code == "SOURCE_FIDELITY" for i in issues)
+
+    def test_ohne_quelle_kein_check(self):
+        # Rueckwaertskompatibel: ohne source_text laeuft Schritt 7 nicht.
+        issues = run_quality_check("Ein Manager und ein Antreiber.", "dokumentation")
+        assert not any(i.code == "SOURCE_FIDELITY" for i in issues)

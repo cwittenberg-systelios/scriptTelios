@@ -29,42 +29,11 @@ import argparse
 import json
 from pathlib import Path
 
-# (Label, distinktiver Such-Stamm). Stamm wird klein in Output UND Transkript gesucht.
-METHOD_TERMS = [
-    # Klinik-Vokabular (deutsch) - nur belegt, wenn im Transkript
-    ("Manager",                      "manager"),
-    ("Antreiber",                    "antreiber"),
-    ("Richter",                      "richter"),
-    ("Feuerbekämpfer",               "feuerbekämpf"),
-    ("Verbannte",                    "verbannt"),
-    ("inneres Kind",                 "inneres kind"),
-    ("Ego-State",                    "ego-state"),
-    ("Ich-Zustand",                  "ich-zustand"),
-    ("Schutzanteil",                 "schutzanteil"),
-    ("Schutzschild",                 "schutzschild"),
-    ("Hypnosystemik",                "hypnosystem"),
-    ("Schema-Modus",                 "schema-modus"),
-    ("EMDR",                         "emdr"),
-    ("Reframing",                    "reframing"),
-    ("Externalisierung",             "external"),
-    ("zirkulaere Frage",             "zirkul"),
-    ("Stuhlarbeit",                  "stuhlarbeit"),
-    ("IFS (Verfahrensname)",         "ifs"),
-    # Englische/Fremdbegriffe, die die sysTelios-Klinik NICHT nutzt ->
-    # bei Auftreten fast immer aufgestuelpt (auch das Transkript hat sie nie).
-    ("Self-Energy (untypisch)",      "self-energy"),
-    ("Self-Leadership (untypisch)",  "self-leadership"),
-    ("Exile (engl., untypisch)",     "exile"),
-    ("Feuerwehr-Anteil (untypisch)", "feuerwehr"),
-]
-
-HOMEWORK_TERMS = [
-    ("Notizbuch",                    "notizbuch"),
-    ("Tagebuch",                     "tagebuch"),
-    ("Journal",                      "journal"),
-    ("Achtsamkeitsuebung",           "achtsamkeitsüb"),
-    ("aufschreiben/notieren",        "aufschreib"),
-]
+# Begriffslisten + Vergleichslogik zentral aus dem Produktionscode (single
+# source of truth) - identisch zu Produktions-QA und Eval-Framework.
+from app.services.source_fidelity import (  # noqa: E402
+    METHOD_TERMS, HOMEWORK_TERMS, find_imposed_vocab,
+)
 
 
 def load_case_transcripts(backend: Path, eval_data: Path) -> dict[str, Path]:

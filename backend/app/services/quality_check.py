@@ -71,6 +71,10 @@ ISSUE_CODE_BEFUND_SEPARATOR_MISSING = "BEFUND_SEPARATOR_MISSING"
 ISSUE_CODE_KOMPOSITA_KLEBEBUG = "KOMPOSITA_KLEBEBUG"
 ISSUE_CODE_PREFIX_MISSING_KEYWORD = "MISSING_KEYWORD_"
 ISSUE_CODE_PREFIX_MISSING_SECTION = "MISSING_SECTION_"
+# v19.5: Quellentreue - aufgestuelptes Verfahrens-/Methoden-Vokabular bzw. erfundene
+# Hausaufgaben (im Output, nicht in den Quelldaten). Nur aktiv, wenn der Aufrufer
+# source_text uebergibt (Roh-Transkript + extrahierte Eingabedokumente).
+ISSUE_CODE_SOURCE_FIDELITY = "SOURCE_FIDELITY"
 
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
@@ -272,7 +276,39 @@ def _check_kompositum_klebebugs(text: str) -> list[QualityIssue]:
 
 # ── Hauptfunktion ──────────────────────────────────────────────────────────────
 
-def run_quality_check(text: str, workflow: str) -> list[QualityIssue]:
+def _check_source_fidelity(text: str, source_text: str) -> list[QualityIssue]:
+    """Quellentreue: aufgestuelptes Verfahrens-/Methoden-Vokabular (IFS-/Ego-State-
+    Anteilssprache etc.) bzw. erfundene Standard-Hausaufgaben - im Output, aber NICHT
+    in den Quelldaten belegt. source_text = Roh-Transkript + extrahierte
+    Eingabedokumente (Verlaufsdoku, Antragsvorlage mit Anamnese/Befund/Diagnosen ...).
+    Leere Quelle -> keine Issues (nicht pruefbar). Logik/Begriffe zentral aus
+    app.services.source_fidelity (identisch zum Eval-Framework)."""
+    if not source_text or not source_text.strip():
+        return []
+    from app.services.source_fidelity import find_imposed_vocab
+    issues: list[QualityIssue] = []
+    for label in find_imposed_vocab(text, source_text):
+        issues.append(QualityIssue(
+            code=ISSUE_CODE_SOURCE_FIDELITY,
+            severity=SEVERITY_WARNING,
+            message=(
+                f"Quellentreue: '{label}' steht im Output, ist aber in den "
+                "Quelldaten (Transkript/Unterlagen) nicht belegt - vermutlich aufgestülpt."
+            ),
+            repair_hint=(
+                f"Pruefe, ob '{label}' tatsaechlich im Transkript oder den Unterlagen "
+                "vorkommt. Falls nicht, entferne den Begriff bzw. die erfundene "
+                "Einladung - verwende ausschliesslich Vokabular und Vereinbarungen, "
+                "die im Quellmaterial belegt sind (Quellentreue)."
+            ),
+            code_detail={"term": label},
+        ))
+    return issues
+
+
+def run_quality_check(
+    text: str, workflow: str, source_text: str = "",
+) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
     Reihenfolge der Issues ist deterministisch (gut fuer Audit/Tests):
@@ -282,6 +318,10 @@ def run_quality_check(text: str, workflow: str) -> list[QualityIssue]:
       4. MISSING_KEYWORD_*
       5. MISSING_SECTION_*
       6. KOMPOSITA_KLEBEBUG
+      7. SOURCE_FIDELITY        (nur wenn source_text uebergeben wird)
+
+    source_text: optionale Quelle (Roh-Transkript + extrahierte Eingabedokumente)
+    fuer die Quellentreue-Pruefung. Leer -> Schritt 7 entfaellt.
 
     Idempotent (kein State, keine Seiteneffekte ausser logging).
     """
@@ -307,6 +347,7 @@ def run_quality_check(text: str, workflow: str) -> list[QualityIssue]:
     issues.extend(_check_required_keywords(text, workflow))
     issues.extend(_check_required_sections(text, workflow))
     issues.extend(_check_kompositum_klebebugs(text))
+    issues.extend(_check_source_fidelity(text, source_text))
 
     logger.debug(
         "QualityCheck %s: %d Issues (%d critical, %d warning, %d info)",
