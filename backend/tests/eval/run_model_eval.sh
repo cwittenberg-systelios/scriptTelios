@@ -33,10 +33,11 @@ set -uo pipefail
 # ===== HIER Modelle eintragen (muessen via `ollama pull` vorhanden sein, ODER
 # ===== CMP_AUTOPULL=1 setzen) ================================================
 MODELS=(
-  "qwen3:32b"          # Baseline (aktuelles Produktionsmodell) - NICHT entfernen
-  "gemma3:27b"         # Google Gemma 3 - deutsche Prosa (~17GB)
-  "qwen3.6:27b"        # Alibaba Qwen 3.6 - neueste Qwen-Gen, aber coding-orientiert (~17GB)
-  "mistral-small"      # Mistral Small 3 - europaeisch, ~24B (~14GB)
+  "qwen3:32b"          # Baseline (Produktion) - schon da, wird NIE entfernt
+  "qwen3:30b-a3b"      # MoE-Kandidat (3B aktiv) - schon da, kein Pull, bleibt erhalten
+  "gemma3:27b"         # Google Gemma 3 - deutsche Prosa (pull ~17GB)
+  "qwen3.6:27b"        # Alibaba Qwen 3.6 - neueste Qwen-Gen, coding-orientiert (pull ~17GB, Tag unsicher)
+  "mistral-small"      # Mistral Small 3 - europaeisch, ~24B (pull ~14GB)
 )
 
 TEMP="${CMP_TEMP:-0.0}"                              # 0.0 = greedy/deterministisch
@@ -91,6 +92,7 @@ echo ""
 
 for M in "${MODELS[@]}"; do
   SLUG=$(printf '%s' "$M" | tr '/:. ' '____')
+  PULLED=0
   echo "=================================================================="
   echo "  MODELL: $M    ->    $OUT_ROOT/$SLUG"
   echo "=================================================================="
@@ -106,6 +108,7 @@ for M in "${MODELS[@]}"; do
         echo ""
         continue
       fi
+      PULLED=1
     else
       echo "  FEHLT in Ollama. Erst holen:  ollama pull $M   (oder CMP_AUTOPULL=1) - uebersprungen"
       echo ""
@@ -122,9 +125,12 @@ for M in "${MODELS[@]}"; do
 
   stop_be
   ollama stop "$M" 2>/dev/null; sleep 2
-  if [ "$RM_AFTER" = "1" ] && [ "$M" != "$KEEP" ]; then
-    echo "  ollama rm $M  (Platte freigeben; KEEP=$KEEP bleibt)"
+  # Nur ENTFERNEN, was diese Harness selbst gepullt hat - vorhandene Modelle
+  # (z.B. qwen3:32b Baseline, qwen3:30b-a3b) bleiben unangetastet.
+  if [ "$RM_AFTER" = "1" ] && [ "$PULLED" = "1" ] && [ "$M" != "$KEEP" ]; then
+    echo "  ollama rm $M  (war frisch gepullt, gebe Platte wieder frei)"
     ollama rm "$M" 2>/dev/null || true
+    rm -f /workspace/ollama/blobs/*-partial 2>/dev/null || true
   fi
   echo ""
 done
