@@ -118,6 +118,24 @@ EVAL_RESULTS_DIR = Path(os.environ.get("EVAL_RESULTS_DIR", "/workspace/eval_resu
 STYLES_DIR = EVAL_DATA_DIR / "styles"
 TIMEOUT = 900  # 5 Minuten pro Generierung (lang wegen GPU-Kaltstart)
 
+
+def _source_text_for_fidelity(test_case: dict) -> str:
+    """Quelltext fuer den Quellentreue-Check (EvalResult.check_source_fidelity).
+
+    Bei Audio-Workflows (dokumentation, anamnese): das GECACHTE Transkript - nur
+    lesen, nie transkribieren (kein Backend-Call). Liegt kein Cache vor oder gibt es
+    kein Audio, wird "" zurueckgegeben und der Check entfaellt. Text-/PDF-Eingaben
+    werden hier bewusst NICHT geladen, um Falsch-Positive durch eine unvollstaendige
+    Quelle zu vermeiden (Quellentreue gegen Text-Inputs ist ein Folgeschritt)."""
+    audio = (test_case.get("input_files") or {}).get("audio")
+    if not audio:
+        return ""
+    p = Path(audio)
+    if not p.is_absolute():
+        p = EVAL_DATA_DIR / p
+    cache = _transcript_cache_path(p)
+    return cache.read_text(encoding="utf-8") if cache.exists() else ""
+
 # Abschnitts-Überschriften in den DOCX-Vorlagen pro Workflow
 STYLE_SECTION_HEADINGS = {
     "entlassbericht": [
@@ -764,8 +782,10 @@ def _delta_qc(original_qc: dict | None, repair_qc: dict | None) -> dict:
 
 # IFS/systemische Fachbegriffe für Dichte-Messung
 FACHBEGRIFFE = {
-    "anteile", "anteil", "anteilearbeit", "manager", "exile", "feuerwehr",
-    "self-energy", "selbst-energie", "steuerungsposition", "schutzanteil",
+    "anteile", "anteil", "anteilearbeit", "manager", "antreiber", "richter",
+    "feuerbekämpfer", "verbannte", "verbannter", "ego-state", "ich-zustand",
+    "im selbst", "das selbst", "frühere ich", "kleine mädchen", "kleine junge",
+    "steuerungsposition", "schutzanteil",
     "schutzanteile", "inneres kind", "türsteher", "wächter", "wächterin",
     "hypnosystemisch", "systemisch", "ressource", "ressourcen",
     "ressourcenorientiert", "reframing", "externalisierung", "stuhlarbeit",
@@ -865,15 +885,19 @@ class EvalResult:
         self.length_n_substantial: int = 0
 
     def check_word_count(self, min_words: int, max_words: int):
-        if self.word_count < min_words:
-            self.issues.append(f"Zu kurz: {self.word_count}w < {min_words}w Minimum")
-            self.word_count_ok = False
+        # Laenge ist KEIN Ko-Kriterium (nur grobe Stub-/Abbruch-Erkennung). Nur
+        # extreme Kuerze (< 50% des Minimums = Degeneration/Kontextabbruch) zaehlt
+        # als Score-Fehler; moderate Abweichungen sind Notizen ohne Score-Abzug.
+        # Inhaltliche Vollstaendigkeit deckt der Sektions-/Quellentreue-Check ab.
+        self.word_count_ok = (min_words <= self.word_count <= max_words)
+        if self.word_count < min_words * 0.5:
+            self.issues.append(f"Stub/Abbruch: nur {self.word_count}w (< 50% von {min_words}w)")
+        elif self.word_count < min_words:
+            self.passed.append(f"Wortanzahl knapp ({self.word_count}w < {min_words}w; kein Ko-Kriterium)")
         elif self.word_count > max_words:
-            self.issues.append(f"Zu lang: {self.word_count}w > {max_words}w Maximum")
-            self.word_count_ok = False
+            self.passed.append(f"Wortanzahl über Richtwert ({self.word_count}w > {max_words}w; kein Ko-Kriterium)")
         else:
             self.passed.append(f"Wortanzahl OK: {self.word_count}w ({min_words}-{max_words})")
-            self.word_count_ok = True  # Bug-Fix #3b: erlaubt Absatzlängen-Check zu lockern
 
     def check_required_keywords(self, keywords: list[str]):
         # Synonyme fuer Keywords die im Fließtext anders ausgedrueckt werden koennen
@@ -964,6 +988,25 @@ class EvalResult:
                 self.issues.append(f"HALLUZINATION: '{h}' gefunden – nicht in Quelldaten!")
             else:
                 self.passed.append(f"Keine Halluzination: '{h}'")
+
+    def check_source_fidelity(self, source_text: str):
+        """Quellentreue: meldet Verfahrens-/IFS-Vokabular und Standard-Hausaufgaben,
+        die im Output stehen, aber NICHT in der Quelle (Transkript) - aufgestuelpt.
+        Konservativ (Wortstamm-Substring, untertreibt eher). Ohne nicht-leere Quelle
+        entfaellt der Check. Begriffslisten zentral aus faithfulness_probe."""
+        if not source_text or not source_text.strip():
+            return
+        from tests.eval.faithfulness_probe import METHOD_TERMS, HOMEWORK_TERMS
+        out_lo = self.text.lower()
+        src_lo = source_text.lower()
+        imposed = [label for label, stem in METHOD_TERMS if stem in out_lo and stem not in src_lo]
+        imposed += [f"Hausaufgabe '{label}'" for label, stem in HOMEWORK_TERMS
+                    if stem in out_lo and stem not in src_lo]
+        if imposed:
+            for label in imposed:
+                self.issues.append(f"QUELLENTREUE: '{label}' im Output, nicht in der Quelle (aufgestülpt)")
+        else:
+            self.passed.append("Quellentreue: kein aufgestülptes Vokabular / keine erfundene Aufgabe")
 
     def check_befund_separator(self, separator: str):
         if separator in self.text:
@@ -1385,6 +1428,13 @@ async def test_eval_workflow(workflow, test_case, request):
 
     if "must_not_hallucinate" in expected:
         ev.check_hallucinations(expected["must_not_hallucinate"])
+
+    # Quellentreue gegen die Quelle (gecachtes Transkript bei Audio-Workflows):
+    # aufgestuelptes Verfahrens-/IFS-Vokabular + erfundene Hausaufgaben fliessen in
+    # den Score ein. Ohne Transkript-Cache entfaellt der Check geraeuschlos.
+    _fidelity_src = _source_text_for_fidelity(test_case)
+    if _fidelity_src:
+        ev.check_source_fidelity(_fidelity_src)
 
     # befund_separator: wird durch das Verketten von Anamnese+Befund implizit gesetzt.
     # Wenn befund_text leer war, fehlt der Separator → Check greift korrekt als Fail.

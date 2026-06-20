@@ -81,8 +81,8 @@ KLINISCHES_GLOSSAR = """FACHLICHES REFERENZWISSEN (sysTelios-Klinik):
 
 QUELLENTREUE-REGEL (gilt durchgängig, ist die wichtigste Regel dieses Glossars):
 Verwende konkrete Therapieverfahren (IFS, Hypnosystemik, Schematherapie,
-EMDR, Stuhlarbeit etc.) und ihre Fachbegriffe (Manager-Anteile, Exile,
-Self-Energy, Self-Leadership, Schema-Modus, zirkuläre Fragen, Reframing etc.)
+EMDR, Stuhlarbeit etc.) und ihre Fachbegriffe (Manager, Antreiber, Verbannte, 'im Selbst sein',
+Schema-Modus, zirkuläre Fragen, Reframing etc.)
 NUR DANN namentlich, wenn das Verfahren oder seine Begriffe in den Quellen
 (Transkript, Stichpunkte, Verlaufsdokumentation, Antragsvorlage,
 Selbstauskunft) explizit vorkommen oder erkennbar angewendet wurden.
@@ -92,13 +92,17 @@ Andernfalls schreibe in deskriptiv-systemischer Sprache
 Im Zweifel: lieber neutral-deskriptiv als ein Verfahren erfinden.
 
 Therapeutische Ansätze (Referenzvokabular – nur einsetzen wenn im Material belegt):
-- IFS / Anteilemodell / Anteilearbeit: Manager-Anteile (proaktiv schützend: Kontrolle,
-  Perfektionismus, Leistungsorientierung, Selbstaufgabe), Feuerwehr-Anteile
-  (reaktiv: Dissoziation, Sucht, Selbstverletzung), Exile (Schmerz, Scham,
-  Trauma, Wertlosigkeit), Self / Steuerungsposition (Ruhe, Neugier,
-  Mitgefühl, Klarheit). Ziel: Anteile entlasten, Self-Leadership.
-  Anteile bekommen oft eigene Namen ('Türsteher', 'Wächterin',
-  'Schutzschild', 'König/Königin').
+- IFS / Anteilemodell / Anteilearbeit (Begriffe wie an der sysTelios-Klinik üblich):
+  schützende Anteile - Manager, Antreiber, Richter (innerer Kritiker),
+  Feuerbekämpfer (reaktiv: Dissoziation, Sucht, Selbstverletzung); verletzte
+  Anteile - Verbannte, inneres Kind ('das kleine Mädchen', 'der kleine Junge'),
+  das 'frühere Ich'. Steuerungsposition: 'im Selbst sein', 'das Selbst spüren'
+  (Ruhe, Neugier, Mitgefühl, Klarheit). WICHTIG: die englischen Begriffe
+  'Self-Energy' / 'Self-Leadership' werden hier NICHT verwendet. Anteile bekommen
+  oft eigene Namen ('Türsteher', 'Wächterin', 'Schutzschild').
+- Ego-State-Therapie (von anderen Therapeut/innen genutzt, gleichwertig zur
+  Anteilearbeit): Ego-States / Ich-Zustände, verletzte vs. ressourcenreiche
+  Anteile - dieselbe Teile-Sprache, andere Schule. Ebenfalls nur wenn im Material belegt.
 - Hypnosystemik (G. Schmidt): Ressourcenaktivierung, Seitenmodell,
   Körpersignale als Bedürfnisrückmeldung, körperliche Symptome in
   Bedürfnisse übersetzen, annehmende Beziehung zum Organismus,
@@ -156,7 +160,7 @@ BEFUND_VORLAGE = """Im Gespräch offen, wach, bewusstseinsklar, zu allen Qualit�
 # ── Few-Shot-Beispiele ────────────────────────────────────────────────────────
 
 FEW_SHOT_DOKUMENTATION = """\
-BEISPIEL (zeigt Stil und Struktur - nicht den Inhalt übernehmen):
+BEISPIEL (zeigt Stil, Struktur UND Absatzdichte - nicht den Inhalt übernehmen):
 
 EINGABE:
 [A]: Wie ist es Ihnen seit letzter Woche ergangen?
@@ -164,44 +168,55 @@ EINGABE:
 Ich hab mich dann rausgezogen, war danach aber erschöpft.
 [A]: Was war das für ein Teil, der sich zurückgezogen hat?
 [B]: So ein Schutzschild. Der will eigentlich nicht, dass ich verletzt werde.
+[A]: Wo spüren Sie diesen Schild im Körper?
+[B]: Hier, im Brustkorb, wie eine Enge. Wenn er aktiv wird, mache ich dicht.
 [A]: Können Sie dem Schild mal danken - er arbeitet ja schon lange für Sie?
-[B]: Das ist seltsam, aber ja, irgendwie fühlt sich das richtig an.
-STICHPUNKTE: Kontakt zur Schwester schwierig, Rückzugsmuster, IFS-Arbeit mit Schutzanteil
+[B]: Das ist seltsam, aber ja, irgendwie fühlt sich das richtig an. Ein bisschen weicher wird es dann.
+[A]: Gab es Zeiten, in denen der Kontakt zur Schwester anders war?
+[B]: Als Kinder waren wir mal nah. Das ist lange her, aber es gab das.
+STICHPUNKTE: Kontakt zur Schwester schwierig, Rückzugsmuster, körperliche Enge im Brustkorb, \
+IFS-Arbeit mit Schutzanteil, frühere Nähe als Ressource
 
 AUSGABE:
 
 Auftragsklärung
 
 Im Mittelpunkt stand das wiederkehrende Anspannungserleben von [Patient/in] \
-im Vorfeld familiärer Begegnungen, insbesondere in Kontakt mit ihrer Schwester. \
-Ziel war es, den dahinterliegenden Schutzmechanismus besser zu verstehen \
-und erste Kontaktaufnahme mit diesem Anteil zu ermöglichen.
+im Vorfeld familiärer Begegnungen, insbesondere im Kontakt mit ihrer Schwester. \
+[Patient/in] schilderte, dass sich vor solchen Treffen regelhaft eine innere Enge \
+aufbaut, die in Rückzug mündet und anschließend Erschöpfung hinterlässt. Gemeinsames \
+Ziel des Gesprächs war es, den dahinterliegenden Schutzmechanismus genauer zu verstehen, \
+ihm im Körper nachzuspüren und eine erste, wohlwollende Kontaktaufnahme mit diesem Anteil \
+zu ermöglichen, statt ihn weiterhin nur als Hindernis zu erleben.
 
 Relevante Gesprächsinhalte
 
 [Patient/in] berichtete von einer erneuten Anspannungsepisode vor dem Familientreffen, \
-die im Rückzug endete und Erschöpfung hinterließ. Im Sinne des IFS zeigte sich \
-ein aktiver Manager-Anteil in Form eines inneren Schutzschildes, \
-der proaktiv Kontakt zu potenziell verletzenden Situationen vermeidet. \
-Die Erschöpfung nach dem Rückzug weist auf die hohe Aktivierungsintensität \
-dieses Anteils hin. Bemerkenswert war der spontane Zugang zu Self-Energy: \
-Als [Patient/in] eingeladen wurde, dem Schutzanteil Dankbarkeit entgegenzubringen, \
-war dies körperlich spürbar und emotional stimmig.
+die im Rückzug endete und Erschöpfung nach sich zog. Im Sinne des IFS zeigte sich \
+ein aktiver Manager-Anteil in Form eines inneren Schutzschildes, der proaktiv Kontakt \
+zu potenziell verletzenden Situationen vermeidet. Körperlich war dieser Anteil als Enge \
+im Brustkorb spürbar, die mit einem inneren Dichtmachen einhergeht. Die Erschöpfung nach \
+dem Rückzug verweist auf die hohe Aktivierungsintensität des Anteils. Bemerkenswert war \
+ein Moment des Im-Selbst-Seins: Als [Patient/in] eingeladen wurde, dem Schutzanteil \
+Dankbarkeit entgegenzubringen, war dies körperlich spürbar, emotional stimmig und ließ \
+die Enge ein Stück weit weicher werden.
 
 Hypothesen und Entwicklungsperspektiven
 
-Das Rückzugsmuster lässt sich als sinnvolle Schutzleistung eines \
-Manager-Anteils verstehen, der früh gelernt hat, Verletzungen durch \
-Vermeidung abzuwenden. Entwicklungsperspektivisch steht die Differenzierung \
-zwischen Schutz und Kontaktfähigkeit im Vordergrund: Wenn der Schutzanteil \
-erfährt, dass er nicht mehr allein für die Sicherheit zuständig sein muss, \
-kann [Patient/in] schrittweise neue Beziehungserfahrungen machen.
+Das Rückzugsmuster lässt sich als sinnvolle Schutzleistung eines Manager-Anteils \
+verstehen, der früh gelernt hat, drohende Verletzungen durch Vermeidung abzuwenden. \
+Die körperliche Enge im Brustkorb erscheint dabei als somatischer Marker dieser \
+Schutzaktivierung. Entwicklungsperspektivisch steht die Differenzierung zwischen Schutz \
+und Kontaktfähigkeit im Vordergrund: Wenn der Schutzanteil erfährt, dass er nicht mehr \
+allein für die Sicherheit zuständig sein muss, kann [Patient/in] schrittweise neue \
+Beziehungserfahrungen wagen. Die Erinnerung an eine früher als nah erlebte Phase mit \
+der Schwester deutet auf eine vorhandene Ressource hin, an die angeknüpft werden kann.
 
 Einladungen
 
-[Patient/in] wurde eingeladen, dem Schutzanteil innerlich zu danken, \
-wenn er sich im Alltag aktiviert - so wie es im Gespräch bereits anklang \
-("Können Sie dem Schild mal danken"). Es wurde keine weitere Aufgabe vereinbart.\
+[Patient/in] wurde eingeladen, dem Schutzanteil innerlich zu danken, wenn er sich im \
+Alltag aktiviert - so wie es im Gespräch bereits anklang ("Können Sie dem Schild mal \
+danken"). Darüber hinaus wurde keine weitere Aufgabe vereinbart.\
 """
 
 FEW_SHOT_ANAMNESE = """\
@@ -356,6 +371,12 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Perspektive der Klientin/des Klienten - nicht über das Gespräch, "
         "sondern über die Person und ihre Themen. "
         "Gliedere den Text in folgende vier Abschnitte mit den jeweiligen Überschriften:\n\n"
+        "Formuliere JEDEN Abschnitt als dichten, ausformulierten Fliesstext-Absatz - "
+        "mehrere vollstaendige, aufeinander aufbauende Saetze, die das vorhandene Material "
+        "entfalten (vergleichbar der Absatzdichte des Beispiels unten). KEINE Stichpunkte, "
+        "keine fragmentierten Ein-Satz-Absaetze, keine blossen Aufzaehlungen. Schoepfe die "
+        "Inhalte aus dem Gespraech aus, strecke aber NIE durch Erfindung oder Wiederholung. "
+        "Ausnahme 'Einladungen': nur was tatsaechlich ausgesprochen wurde - hier ist Kuerze korrekt.\n\n"
         "**Auftragsklärung**\n"
         "Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame "
         "Ziel des Gesprächs war. Beispiel: 'Im Mittelpunkt stand...' oder "
@@ -365,8 +386,13 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: "
         "Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. "
         "Konkrete Formulierungen statt allgemeiner Beschreibungen. "
-        "Systemische und IFS-Begriffe wo passend "
-        "(Manager-Anteile, Exile, Self-Energy, Feuerwehr-Anteile etc.).\n\n"
+        "WICHTIG zur Fachsprache: Systemische und IFS-Begriffe "
+        "(Manager, Antreiber, Verbannte, Feuerbekämpfer, 'im Selbst sein' etc.) NUR dann, wenn "
+        "Klient/in oder Therapeut/in im Gespräch tatsächlich in Anteile-/Teile-Sprache "
+        "gesprochen oder das Verfahren erkennbar angewendet haben (gemäß Quellentreue-Regel "
+        "des Glossars). Wurde das Gespräch NICHT so geführt, beschreibe in Alltagssprache "
+        "('ein Teil von ihr, der schützt' statt 'Manager-Anteil') und stülpe KEIN "
+        "IFS-Vokabular über. Im Zweifel deskriptiv, statt ein Verfahren zu benennen.\n\n"
         "**Hypothesen und Entwicklungsperspektiven**\n"
         "Formuliere systemische Hypothesen über Sinnzusammenhänge. "
         "Zeige Entwicklungsperspektiven auf - was wird möglich, wenn... "
@@ -379,9 +405,14 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "könnten Sie …', 'Vielleicht mögen Sie …'. Formuliere sie aktiv "
         "('Frau M. wurde eingeladen, …', 'Als Übung wurde vereinbart, …'; "
         "verwende den tatsächlichen Namen, NICHT einen Platzhalter in eckigen Klammern). "
-        "ERFINDE KEINE Aufgaben, Übungen oder Impulse. Wenn der/die Therapeut/in "
-        "keine ausgesprochen hat: lass diesen Abschnitt weg oder halte mit einem "
-        "knappen Satz fest, dass keine konkrete Einladung erfolgte."
+        "ERFINDE KEINE Aufgaben, Übungen oder Impulse - insbesondere KEINE generischen "
+        "Standard-Hausaufgaben wie 'ein Notizbuch/Tagebuch führen', 'Beobachtungen "
+        "aufschreiben', 'Achtsamkeitsübungen machen', es sei denn, der/die Therapeut/in "
+        "hat GENAU DAS wörtlich ausgesprochen. In den meisten Gesprächen wird KEINE "
+        "explizite Einladung formuliert - dann ist der korrekte und vollständige Abschluss "
+        "dieses Abschnitts schlicht: 'Es wurde keine konkrete Einladung oder Aufgabe "
+        "vereinbart.' Das ist KEINE Lücke, sondern die treue Wiedergabe des Gesprächs. "
+        "Lieber dieser eine Satz als irgendeine erfundene Aufgabe."
     ),
 
     "anamnese": (

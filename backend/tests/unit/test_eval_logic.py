@@ -145,19 +145,31 @@ class TestCheckWordCount:
         assert ev.word_count_ok is True
         assert any("OK" in p for p in ev.passed)
 
-    def test_word_count_nicht_ok_bei_zu_kurz(self):
-        text = "wort " * 50  # 50 Woerter
+    def test_word_count_knapp_kein_score_abzug(self):
+        # v19.5: Laenge ist kein Ko-Kriterium. Moderate Kuerze -> word_count_ok False,
+        # ABER kein Score-Fehler (Notiz im passed), kein "Zu kurz"-Issue.
+        text = "wort " * 70  # 70w, min 100 -> knapp, aber > 50% (kein Stub)
         ev = EvalResult("entlassbericht", "test-2", text)
         ev.check_word_count(min_words=100, max_words=300)
         assert ev.word_count_ok is False
-        assert any("Zu kurz" in i for i in ev.issues)
+        assert not any("Zu kurz" in i for i in ev.issues)
+        assert any("knapp" in p for p in ev.passed)
 
-    def test_word_count_nicht_ok_bei_zu_lang(self):
+    def test_word_count_stub_ist_fehler(self):
+        # Extreme Kuerze (< 50% Minimum = Stub/Abbruch) zaehlt weiterhin als Fehler.
+        text = "wort " * 30  # 30w < 50 (= 50% von 100)
+        ev = EvalResult("entlassbericht", "test-2b", text)
+        ev.check_word_count(min_words=100, max_words=300)
+        assert any("Stub" in i for i in ev.issues)
+
+    def test_word_count_zu_lang_kein_score_abzug(self):
+        # Ueberlaenge ebenfalls kein Ko-Kriterium -> Notiz, kein Issue.
         text = "wort " * 500
         ev = EvalResult("entlassbericht", "test-3", text)
         ev.check_word_count(min_words=100, max_words=300)
         assert ev.word_count_ok is False
-        assert any("Zu lang" in i for i in ev.issues)
+        assert not any("Zu lang" in i for i in ev.issues)
+        assert any("Richtwert" in p for p in ev.passed)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,3 +275,29 @@ class TestCheckRequiredKeywords:
         ev.check_required_keywords(["Behandlungsverlauf"])
         # Sollte als Issue
         assert any("Keyword fehlt" in i or "Behandlungsverlauf" in i for i in ev.issues)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.5: EvalResult.check_source_fidelity() — Quellentreue im Score
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestCheckSourceFidelity:
+
+    def test_aufgestuelptes_vokabular_ist_issue(self):
+        ev = EvalResult("dokumentation", "t", "Sie zeigte einen Manager und ein Notizbuch.")
+        ev.check_source_fidelity("Klientin: ich ziehe mich oft zurueck.")
+        assert any("QUELLENTREUE" in i and "Manager" in i for i in ev.issues)
+        assert any("QUELLENTREUE" in i and "Notizbuch" in i for i in ev.issues)
+
+    def test_belegtes_vokabular_kein_issue(self):
+        ev = EvalResult("dokumentation", "t", "Ein Schutzschild zeigte sich.")
+        ev.check_source_fidelity("Klientin: da ist so ein Schutzschild.")
+        assert not any("QUELLENTREUE" in i for i in ev.issues)
+        assert any("Quellentreue" in p for p in ev.passed)
+
+    def test_leere_quelle_kein_check(self):
+        ev = EvalResult("dokumentation", "t", "Ein Manager und ein Antreiber.")
+        ev.check_source_fidelity("")
+        assert not any("QUELLENTREUE" in i for i in ev.issues)
+        assert not any("Quellentreue" in p for p in ev.passed)
