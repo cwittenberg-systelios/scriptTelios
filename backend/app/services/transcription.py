@@ -48,7 +48,16 @@ WHISPER_INITIAL_PROMPT = (
     "Verlängerungsantrag, Kostenübernahme, Krankenkasse, "
     "AMDP, Psychopathologie, Affektregulation, Dissoziation, "
     "Bindungsmuster, Traumatisierung, "
-    "Therapeut, Klient, Klientin, Sitzung, Intervention."
+    "Therapeut, Klient, Klientin, Sitzung, Intervention. "
+    # 2026-07-03 (Live-Fund Herr W.): institutionelle/organisatorische
+    # Klinikbegriffe ergaenzt. Whisper kannte z.B. "Familiengespraech" nicht
+    # gut genug und halluzinierte "Bruder-Treibens-Gespraech". Diese Begriffe
+    # sind KORREKTE, aber im Alltagssprachgebrauch seltene Institutions-
+    # vokabeln - genau der Fall, fuer den ein Initial-Prompt gedacht ist.
+    "Klinikorganisation: Familiengespräch, Transfergespräch, "
+    "Angehörigengespräch, Bezugsgruppe, Bezugstherapeut, Ü-Gruppe, "
+    "Konzeptgruppe, Sprechstundenzeit, ambulante Therapeutin, "
+    "stationärer Aufenthalt."
 )
 
 # Modell-Cache – einmalig laden, dann wiederverwenden

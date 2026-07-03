@@ -734,3 +734,46 @@ class TestSourceFidelityQA:
         # Rueckwaertskompatibel: ohne source_text laeuft Schritt 7 nicht.
         issues = run_quality_check("Ein Manager und ein Antreiber.", "dokumentation")
         assert not any(i.code == "SOURCE_FIDELITY" for i in issues)
+
+
+class TestOrganisatorischOptional:
+    """2026-07-03 (Live-Fund Herr W.): Rein organisatorische Absprachen
+    (Termine, Transfergespraech-Modalitaeten, Kontaktwege) landeten faelschlich
+    in Auftragsklaerung/Einladungen. Fix: eigene OPTIONALE Schluss-Sektion
+    'Organisatorisches' - die aber NICHT als Pflichtsektion geflaggt werden darf."""
+
+    def test_organisatorisches_ist_nicht_pflicht(self):
+        # Vollstaendige Doku OHNE 'Organisatorisches' -> keine Sektions-Issues
+        text = _make_text(
+            300,
+            prefix=(
+                "Auftragsklärung: das Anliegen. "
+                "Relevante Gesprächsinhalte: Themen. "
+                "Hypothesen und Entwicklungsperspektiven: Muster. "
+                "Einladungen: Herr W. wurde eingeladen, zu berichten."
+            ),
+        )
+        issues = run_quality_check(text, "dokumentation")
+        codes = {i.code for i in issues}
+        assert not any(
+            c.startswith(ISSUE_CODE_PREFIX_MISSING_SECTION) for c in codes
+        ), "Organisatorisches darf keine Pflichtsektion sein"
+
+    def test_organisatorisches_vorhanden_stoert_nicht(self):
+        # Doku MIT optionaler Orga-Sektion -> ebenfalls sauber
+        text = _make_text(
+            300,
+            prefix=(
+                "Auftragsklärung: das Anliegen. "
+                "Relevante Gesprächsinhalte: Themen. "
+                "Hypothesen und Entwicklungsperspektiven: Muster. "
+                "Einladungen: Herr W. wurde eingeladen, zu berichten. "
+                "Organisatorisches: Das Familiengespräch ist für Dienstag "
+                "geplant; die Modalitäten des Transfergesprächs wurden geklärt."
+            ),
+        )
+        issues = run_quality_check(text, "dokumentation")
+        codes = {i.code for i in issues}
+        assert not any(
+            c.startswith(ISSUE_CODE_PREFIX_MISSING_SECTION) for c in codes
+        )

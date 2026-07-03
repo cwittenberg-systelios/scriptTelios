@@ -154,6 +154,62 @@ Anspannungszustände, Grübelneigung, Nähe-Distanz-Themen.\
 """
 
 
+# ── Institutionelles Klinik-Glossar (2026-07-03, Live-Fund Herr W.) ──────────
+#
+# Getrennt vom KLINISCHES_GLOSSAR (Therapieverfahren/Fachbegriffe): hier geht
+# es um sysTelios-INSTITUTIONELLE Begriffe - Gruppen-/Gesprächsformate,
+# Rollen, Ablaeufe -, die fuer ein allgemeines Sprachmodell ungewoehnlich
+# klingen, obwohl sie im Klinikkontext gebraeuchlich sind ("Familiengespräch"
+# war der konkrete Ausloeser: korrekt transkribiert, aber vom LLM unnoetig
+# umschrieben; Whisper halluzinierte an anderer Stelle "Bruder-Treibens-
+# Gespräch" statt eines aehnlichen Begriffs - dafuer wurde stattdessen
+# WHISPER_INITIAL_PROMPT in transcription.py erweitert, siehe dort).
+#
+# STRUKTUR ZUM BEFUELLEN: "Begriff": "kurze Erklaerung, was gemeint ist".
+# Absichtlich KEIN Ersetzungs-/Mapping-Mechanismus (X ersetzt Y) - das waere
+# fragil und kontextblind. Stattdessen bekommt das Modell die Begriffe
+# ERKLAERT, damit es sie korrekt einordnet und selbst treffend verwendet,
+# statt sie zu paraphrasieren oder misszuverstehen.
+#
+# Ein paar Startbegriffe sind bereits gefuellt (aus dem Live-Fund + den
+# offensichtlichen Parallelbegriffen); c.wittenberg ergaenzt weitere nach
+# Bedarf - kein Code-Wissen noetig, nur diesen dict erweitern.
+INSTITUTIONELLES_GLOSSAR: dict[str, str] = {
+    "Familiengespräch": "gemeinsames Gespräch mit Patient/in und Angehörigen",
+    "Transfergespräch": "Übergabegespräch zwischen stationärer Behandlung und "
+                        "der ambulant weiterbehandelnden Praxis/Therapeut/in",
+    "Angehörigengespräch": "Gespräch mit Angehörigen, ggf. ohne Patient/in",
+    "Bezugsgruppe": "feste Kleingruppe von Patient/innen mit gemeinsamem "
+                    "Bezugstherapeuten/gemeinsamer Bezugstherapeutin",
+    "Ü-Gruppe": "Übergangsgruppe/Ü-Gruppe für Patient/innen kurz vor Entlassung",
+    # weitere Begriffe hier ergaenzen ("Begriff": "Erklaerung"), z.B.:
+    # "Konzeptgruppe": "...",
+    # "Sprechstundenzeit": "...",
+}
+
+
+def _render_institutionelles_glossar() -> str:
+    """Baut den Prompt-Textblock aus INSTITUTIONELLES_GLOSSAR.
+
+    Leerer dict -> leerer String (Block entfaellt sauber aus dem Prompt,
+    kein Platzhalter-Rauschen). So kann das Glossar gefahrlos leer bleiben,
+    bis Begriffe ergaenzt werden.
+    """
+    if not INSTITUTIONELLES_GLOSSAR:
+        return ""
+    zeilen = "\n".join(
+        f"- {begriff}: {erklaerung}"
+        for begriff, erklaerung in INSTITUTIONELLES_GLOSSAR.items()
+    )
+    return (
+        "\n\nKLINIK-ORGANISATORISCHE BEGRIFFE (sysTelios, institutionell - "
+        "keine Therapieverfahren): Diese Begriffe sind im Klinikalltag "
+        "gebräuchlich, auch wenn sie ungewöhnlich klingen. Verwende sie "
+        "korrekt, wenn sie in den Quellen vorkommen oder erkennbar gemeint "
+        "sind - umschreibe sie nicht unnötig:\n" + zeilen
+    )
+
+
 # ── Issue-2 (2026-07-03): Konditionales Glossar ──────────────────────────────
 #
 # Kernbefund aus Eval + Produktions-Log (e74be3): Die konditionale
@@ -532,7 +588,9 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Erstelle eine systemische Gesprächsdokumentation. Schreibe aktiv aus der "
         "Perspektive der Klientin/des Klienten - nicht über das Gespräch, "
         "sondern über die Person und ihre Themen. "
-        "Gliedere den Text in folgende vier Abschnitte mit den jeweiligen Überschriften:\n\n"
+        "Gliedere den Text in folgende Abschnitte mit den jeweiligen Überschriften "
+        "(der letzte Abschnitt 'Organisatorisches' nur, wenn es tatsaechlich "
+        "administrative Absprachen gab - sonst weglassen):\n\n"
         "Formuliere JEDEN Abschnitt als dichten, ausformulierten Fliesstext-Absatz - "
         "mehrere vollstaendige, aufeinander aufbauende Saetze, die das vorhandene Material "
         "entfalten (vergleichbar der Absatzdichte des Beispiels unten). KEINE Stichpunkte, "
@@ -543,7 +601,17 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Beschreibe worum es der Klientin/dem Klienten ging und was das gemeinsame "
         "Ziel des Gesprächs war. Beispiel: 'Im Mittelpunkt stand...' oder "
         "'Frau M. kam mit dem Anliegen...' (verwende den tatsaechlichen Namen "
-        "des Patienten – NICHT einen Platzhalter in eckigen Klammern).\n\n"
+        "des Patienten – NICHT einen Platzhalter in eckigen Klammern).\n"
+        "WICHTIG - Auftrag vs. Organisatorisches trennen: Der therapeutische "
+        "Auftrag ist das INHALTLICH-therapeutische Anliegen (Symptome, Erleben, "
+        "Muster, Beziehungsthemen). Rein administrative Absprachen zu Beginn eines "
+        "Gesprächs - Terminfindung, Raum-/Verwaltungsfragen, Modalitaeten eines "
+        "Transfer-/Angehoerigengespraechs, Kontakt-/Zugangswege, Wartelisten - sind "
+        "NICHT der Auftrag, auch wenn sie zeitlich zuerst besprochen wurden. Sie "
+        "gehoeren ausschliesslich in die Schluss-Sektion 'Organisatorisches' (siehe "
+        "unten) und duerfen die Auftragsklaerung nicht dominieren. Wenn der/die "
+        "Klient/in solche Punkte selbst als Vorgeplaenkel rahmt ('vorweg noch kurz "
+        "ein paar Fragen'), ist genau das das Signal, sie NICHT als Auftrag zu werten.\n\n"
         "**Relevante Gesprächsinhalte**\n"
         "Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: "
         "Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. "
@@ -574,7 +642,18 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "explizite Einladung formuliert - dann ist der korrekte und vollständige Abschluss "
         "dieses Abschnitts schlicht: 'Es wurde keine konkrete Einladung oder Aufgabe "
         "vereinbart.' Das ist KEINE Lücke, sondern die treue Wiedergabe des Gesprächs. "
-        "Lieber dieser eine Satz als irgendeine erfundene Aufgabe."
+        "Lieber dieser eine Satz als irgendeine erfundene Aufgabe. "
+        "Rein organisatorische Absprachen (Termine, Kontaktwege, Transfergespraech-"
+        "Modalitaeten) gehoeren NICHT hierher, sondern in 'Organisatorisches'.\n\n"
+        "**Organisatorisches**\n"
+        "NUR anlegen, wenn im Gespraech tatsaechlich administrative Punkte besprochen "
+        "wurden. Fasse hier - knapp und getrennt vom therapeutischen Auftrag - die rein "
+        "organisatorischen Absprachen zusammen: vereinbarte oder geplante Termine "
+        "(mit korrektem Tempus: was GEPLANT ist, nicht als bereits geschehen "
+        "darstellen), Modalitaeten von Transfer-/Angehoerigengespraechen, Kontakt- und "
+        "Verwaltungswege. Ein bis wenige Saetze genuegen; keine therapeutische "
+        "Deutung. Gab es nichts Organisatorisches, LASSE diesen Abschnitt komplett weg "
+        "(keine Ueberschrift, kein Platzhaltersatz)."
     ),
 
     "anamnese": (
@@ -1506,6 +1585,9 @@ def build_system_prompt(
     # source_text=None (Legacy/Tests) -> konservativ das volle Glossar.
     _parts_work = True if source_text is None else source_mentions_parts_work(source_text)
     _glossar = KLINISCHES_GLOSSAR if _parts_work else KLINISCHES_GLOSSAR_NEUTRAL
+    # Institutionelles Glossar ist KEIN Priming-Risiko (keine Therapieverfahren-
+    # Begriffe) - deshalb unabhaengig von _parts_work immer angehaengt.
+    _glossar = _glossar + _render_institutionelles_glossar()
     parts = [ROLE_PREAMBLE + _glossar]
 
     # Workflow-Anweisungen vom Frontend - das ist der eigentliche Auftrag,
