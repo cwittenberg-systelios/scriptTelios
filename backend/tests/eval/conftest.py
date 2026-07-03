@@ -17,6 +17,44 @@ import urllib.request
 import pytest
 
 
+def pytest_addoption(parser):
+    """Registriert die CLI-Flags, die test_eval.py via request.config.getoption
+    liest und die run_model_eval.sh uebergibt.
+
+    2026-07-03: Diese Registrierung fehlte auf dem aktuellen Branch - test_eval.py
+    RUFT die Optionen ab (--qa, --eval-output, --qa-mode, --summary-mode,
+    --transcribe), ohne dass sie je definiert waren. Folge: pytest brach mit
+    'unrecognized arguments: --qa --eval-output ...' ab und der Modellvergleich
+    schrieb leere Ordner. Default-Werte exakt wie in den getoption()-Aufrufen.
+    """
+    group = parser.getgroup("scriptTelios-eval", "scriptTelios Evaluations-Flags")
+    group.addoption(
+        "--eval-output", action="store", default=None,
+        help="Zielverzeichnis fuer Eval-Outputs (<id>.txt/.eval.txt/.style.json). "
+             "Ohne Angabe: EVAL_RESULTS_DIR.",
+    )
+    group.addoption(
+        "--qa", action="store_true", default=False,
+        help="Schreibt zusaetzlich <id>.qa.json mit quality_check-Ergebnissen.",
+    )
+    group.addoption(
+        "--qa-mode", action="store", default="auto",
+        choices=["auto", "critical_only", "all_issues"],
+        help="Filtert die im QA-Modus beruecksichtigten Issues. "
+             "auto=Default-Verhalten; critical_only/all_issues fuer A/B-Vergleich.",
+    )
+    group.addoption(
+        "--summary-mode", action="store", default="auto",
+        choices=["auto", "require_stage1", "require_no_stage1"],
+        help="Validiert das Stage-1-Verdichtungsverhalten (v19.2). "
+             "require_stage1 erzwingt Verdichtung, require_no_stage1 verbietet sie.",
+    )
+    group.addoption(
+        "--transcribe", action="store_true", default=False,
+        help="Erzwingt echte Whisper-Transkription statt vorgecachter Transkripte.",
+    )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def ollama_vision_setup():
     """
