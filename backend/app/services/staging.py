@@ -32,10 +32,15 @@ STAGE1_TRANSCRIPT_WORKFLOWS: frozenset[str] = frozenset({
 })
 
 # Schwelle ab der Transkript-Verdichtung lohnt.
-# v19.4: 3500 -> 2800, deckungsgleich mit config.TRANSCRIPT_STAGE1_MIN_WORDS
-# (das den effektiven Wert ueber settings setzt). Liegt unter der
-# _sample_uniformly-Schwelle in llm.py, damit die Verdichtung VORHER greift.
-STAGE1_TRANSCRIPT_MIN_WORDS = 2800
+# DRY-Fix 2026-07-01: config.TRANSCRIPT_STAGE1_MIN_WORDS ist die EINZIGE
+# Quelle (env-overridebar); vorher wurde der Wert hier UND in config manuell
+# "deckungsgleich" gehalten (Drift-Falle). Der Re-Export behaelt den
+# etablierten Namen fuer Funktions-Defaults, Tests und jobs.py bei.
+# Liegt unter der _sample_uniformly-Schwelle in llm.py, damit die
+# Verdichtung VORHER greift.
+from app.core.config import settings as _settings
+
+STAGE1_TRANSCRIPT_MIN_WORDS = _settings.TRANSCRIPT_STAGE1_MIN_WORDS
 
 
 def _word_count(text: Optional[str]) -> int:

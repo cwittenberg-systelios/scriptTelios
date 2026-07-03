@@ -242,6 +242,65 @@ class TestSectionCheck:
         target = f"{ISSUE_CODE_PREFIX_MISSING_SECTION}EMPFEHLUNG"
         assert target in codes
 
+    # ── dokumentation-Sektionen (2026-07-01) ─────────────────────────────────
+    # Ausgerechnet dokumentation hatte KEINE Pflichtsektionen definiert -
+    # der Workflow, dessen 'Einladungen' durch den Hard-Cap-Bug (Issue 1)
+    # verloren ging. Diese Tests sichern die neue Spec ab.
+
+    def test_dokumentation_required_sections(self):
+        secs = required_sections_for("dokumentation")
+        assert "Auftragsklärung" in secs
+        assert "Relevante Gesprächsinhalte" in secs
+        assert "Hypothesen und Entwicklungsperspektiven" in secs
+        assert "Einladungen" in secs
+
+    def test_missing_einladungen_wird_geflaggt(self):
+        # Das Issue-1-Szenario: alle Sektionen da AUSSER Einladungen
+        # (die der alte Hard-Cap abgeschnitten hat).
+        text = _make_text(
+            300,
+            prefix=(
+                "Auftragsklärung: Im Mittelpunkt stand das Anliegen. "
+                "Relevante Gesprächsinhalte: zentrale Themen wurden besprochen. "
+                "Hypothesen und Entwicklungsperspektiven: es zeigt sich ein Muster."
+            ),
+        )
+        issues = run_quality_check(text, "dokumentation")
+        codes = {i.code for i in issues}
+        assert f"{ISSUE_CODE_PREFIX_MISSING_SECTION}EINLADUNGEN" in codes
+
+    def test_vollstaendige_dokumentation_keine_sektions_issues(self):
+        text = _make_text(
+            300,
+            prefix=(
+                "Auftragsklärung: Im Mittelpunkt stand das Anliegen. "
+                "Relevante Gesprächsinhalte: zentrale Themen. "
+                "Hypothesen und Entwicklungsperspektiven: ein Muster. "
+                "Einladungen: Herr Z. wurde eingeladen, Initiativen zu erproben."
+            ),
+        )
+        issues = run_quality_check(text, "dokumentation")
+        codes = {i.code for i in issues}
+        assert not any(
+            c.startswith(ISSUE_CODE_PREFIX_MISSING_SECTION) for c in codes
+        )
+
+    def test_einladungen_synonym_keine_konkrete_einladung(self):
+        # Der Prompt erlaubt explizit den Abschluss 'Es wurde keine konkrete
+        # Einladung oder Aufgabe formuliert' - das darf NICHT flaggen.
+        text = _make_text(
+            300,
+            prefix=(
+                "Auftragsklärung: das Anliegen. "
+                "Relevante Gesprächsinhalte: Themen. "
+                "Hypothesen und Entwicklungsperspektiven: Muster. "
+                "Es wurde keine konkrete Einladung oder Aufgabe formuliert."
+            ),
+        )
+        issues = run_quality_check(text, "dokumentation")
+        codes = {i.code for i in issues}
+        assert f"{ISSUE_CODE_PREFIX_MISSING_SECTION}EINLADUNGEN" not in codes
+
 
 class TestThinkBlockCheck:
 

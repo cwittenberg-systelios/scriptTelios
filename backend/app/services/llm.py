@@ -718,6 +718,13 @@ async def generate_text(
 
     estimated_input_tokens = int((len(system_prompt) + len(user_content)) / 3.5)
 
+    # O4 (2026-07-01): stille Eingriffe sichtbar machen. Beide Flags landen
+    # in result["telemetry"] und damit in prompts.log + jobs.generation_telemetry.
+    # Ausloeser: Job 9b3b58 (prompts.log 2026-06-30, ~18k Input-Tokens) - der
+    # Verlauf wurde still beschnitten, der Therapeut erfuhr es nie.
+    _original_max_tokens = max_tokens
+    input_truncated = False
+
     # max_tokens dynamisch anpassen: so viel wie moeglich, aber mindestens min_output
     if estimated_input_tokens + max_tokens > MAX_SAFE_CTX:
         # Zuerst: max_tokens auf das Maximum setzen das nach Input noch passt
@@ -737,6 +744,7 @@ async def generate_text(
             if max_user_chars > 0 and len(user_content) > max_user_chars:
                 original_len = len(user_content)
                 user_content = _sample_uniformly(user_content, max_user_chars)
+                input_truncated = True
                 logger.warning(
                     "User-Content gekuerzt um min. %d Output-Tokens zu garantieren: "
                     "%d → %d Zeichen",
@@ -780,6 +788,7 @@ async def generate_text(
             model=model,
             assistant_primer=assistant_primer,
             original_telemetry={},
+            temperature_override=temperature_override,
         )
     else:
         result = await _generate_ollama(
@@ -823,6 +832,7 @@ async def generate_text(
             model=model,
             assistant_primer=assistant_primer,
             original_telemetry=result.get("telemetry", {}),
+            temperature_override=temperature_override,
         )
 
         # Retry-Output ebenfalls durch Postprocessing
@@ -872,6 +882,14 @@ async def generate_text(
                 result["retry_failed"] = True
 
     result["duration_s"] = round(time.time() - t0, 1)
+
+    # O4: Kuerzungs-Flags in die Telemetrie injizieren - hier am einzigen
+    # finalen Return, damit auch der Retry-Pfad (der result["telemetry"]
+    # ersetzt) die Flags traegt.
+    _tel = result.setdefault("telemetry", {})
+    _tel["input_truncated"] = input_truncated
+    _tel["output_budget_reduced"] = max_tokens < _original_max_tokens
+
     logger.info(
         "Generierung: %d Tokens in %.1fs (Modell: %s)%s",
         result.get("token_count", 0),
@@ -1190,6 +1208,7 @@ async def _retry_without_thinking(
     model: Optional[str],
     assistant_primer: str,
     original_telemetry: dict,
+    temperature_override: Optional[float] = None,
 ) -> dict:
     """
     Zweiter Versuch wenn der erste durch Think-Block scheiterte.
@@ -1247,7 +1266,12 @@ async def _retry_without_thinking(
             "num_predict": max_tokens,
             "num_ctx":     num_ctx,
             "temperature": (
-                profile["temperature"]
+                # Per-Call-Override gewinnt (O5: Repair laeuft kalt/deterministisch;
+                # die uebrigen 4 Anti-Think-Schichten bleiben aktiv, nur der
+                # Temp-Nudge entfaellt bewusst).
+                temperature_override
+                if temperature_override is not None
+                else profile["temperature"]
                 if settings.LLM_TEMPERATURE_OVERRIDE is not None
                 else min(0.6, profile["temperature"] + 0.2)  # leicht hoeher
             ),

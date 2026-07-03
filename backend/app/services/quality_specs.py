@@ -52,6 +52,26 @@ KEYWORD_SYNONYMS: dict[str, list[str]] = {
     "diagnose": [
         "diagnose", "icd-10", "icd 10", "f33", "f32", "f43", "f41",
     ],
+    # ── dokumentation-Sektionen (2026-07-01, siehe REQUIRED_SECTIONS) ────────
+    # Umlaut-Varianten explizit, da Outputs mal 'ä' mal 'ae' schreiben.
+    "auftragsklärung": [
+        "auftragsklärung", "auftragsklaerung",
+        "im mittelpunkt stand", "kam mit dem anliegen", "anliegen des",
+        "worum es", "gemeinsame ziel",
+    ],
+    "relevante gesprächsinhalte": [
+        "relevante gesprächsinhalte", "relevante gespraechsinhalte",
+        "gesprächsinhalte", "gespraechsinhalte", "inhaltlich fokussierte",
+        "zentrale themen", "zentraler themenkomplex",
+    ],
+    "hypothesen und entwicklungsperspektiven": [
+        "hypothesen und entwicklungsperspektiven",
+        "hypothesen", "entwicklungsperspektiv",
+    ],
+    "einladungen": [
+        "einladungen", "einladung", "wurde eingeladen",
+        "keine konkrete einladung",
+    ],
 }
 
 
@@ -84,7 +104,18 @@ REQUIRED_KEYWORDS: dict[str, list[str]] = {
 # Fallback exakter Match). Anders als Keywords sind Sektionen
 # strukturell - ihr Fehlen ist ein staerkeres Signal fuer Repair-Bedarf.
 REQUIRED_SECTIONS: dict[str, list[str]] = {
-    "dokumentation": [],
+    # 2026-07-01: vorher leer - ausgerechnet der Workflow, dessen
+    # 'Einladungen'-Sektion durch den Hard-Cap-Bug verloren ging (Issue 1),
+    # hatte keinen Sektions-Check. Die vier Sektionen sind die kanonische
+    # Gliederung aus WORKFLOW_INSTRUCTIONS_DEFAULT["dokumentation"]
+    # (prompts.py). Deterministischer Post-Check; greift NICHT in die
+    # Generierung ein.
+    "dokumentation": [
+        "Auftragsklärung",
+        "Relevante Gesprächsinhalte",
+        "Hypothesen und Entwicklungsperspektiven",
+        "Einladungen",
+    ],
     "anamnese": ["Vorstellungsanlass", "Anamnese", "Befund"],
     "verlaengerung": ["Behandlungsverlauf"],
     "folgeverlaengerung": ["Behandlungsverlauf"],

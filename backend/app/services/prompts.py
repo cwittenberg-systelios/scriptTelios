@@ -12,6 +12,10 @@ Struktur:
 from typing import Optional
 import re
 
+# Zentraler abkuerzungsfester Satz-Splitter (R1) - Stilanalyse nutzt ab
+# v19.5/Issue-2 dieselbe Satzdefinition wie Hard-Cap und Loop-Detection.
+from app.services.postprocessing import split_sentences_de
+
 
 # ── Workflow-Kategorisierung ─────────────────────────────────────────────────
 # Strukturelle Workflows: P2/P3/P4 - Stilbeispiel wird als Schablone verwendet
@@ -150,6 +154,91 @@ Anspannungszustände, Grübelneigung, Nähe-Distanz-Themen.\
 """
 
 
+# ── Issue-2 (2026-07-03): Konditionales Glossar ──────────────────────────────
+#
+# Kernbefund aus Eval + Produktions-Log (e74be3): Die konditionale
+# QUELLENTREUE-REGEL verliert gegen das Priming - allein die AUFZAEHLUNG der
+# IFS-Begriffe (Manager, Verbannte, Tuersteher ...) im System-Prompt saet die
+# Tokens, das Modell stuelpt sie quellenfremden Faellen auf. Auch Negation
+# primt ("Name-Leak"-Lektion v19.4). Deterministische Loesung: Die Begriffe
+# stehen NUR DANN im Prompt, wenn die Quellen des konkreten Auftrags
+# Teilearbeit-Vokabular enthalten. build_system_prompt() waehlt anhand von
+# source_text; ohne source_text (Legacy/Tests) bleibt das Verhalten alt.
+
+# Stems (lowercase) zur Erkennung von Teilearbeit/verfahrensspezifischem
+# Vokabular in den QUELLEN. Bewusst breit (Substring-Match): lieber einmal
+# zu oft das volle Glossar als eine verpasste legitime Anteile-Session.
+PARTS_WORK_STEMS: frozenset = frozenset({
+    "anteil", "ifs", "teilearbeit", "manager", "antreiber", "verbannt",
+    "inneres kind", "innere kind", "ego-state", "ego state", "ich-zustand",
+    "türsteher", "tuersteher", "wächter", "waechter", "exil", "feuerbekämpf",
+    "feuerbekaempf", "schutzschild", "im selbst", "das selbst", "seitenmodell",
+    "stuhlarbeit", "schema-modus", "schemamodus", "emdr",
+})
+
+
+def source_mentions_parts_work(source_text: str) -> bool:
+    """True wenn die Quellen Teilearbeit-/verfahrensspezifisches Vokabular
+    enthalten -> volles KLINISCHES_GLOSSAR + IFS-Beispiel sind dann korrekt
+    und noetig. Sonst neutrales Glossar (Priming-Vermeidung)."""
+    if not source_text:
+        return False
+    low = source_text.lower()
+    return any(stem in low for stem in PARTS_WORK_STEMS)
+
+
+# Neutrale Glossar-Variante: KEINE Verfahrens-/Anteilsbegriff-Aufzaehlung
+# (kein Priming), dafuer eine explizite Pro-Auftrag-Feststellung und das
+# verfahrensagnostische Beobachtungs-Vokabular als positives Angebot.
+KLINISCHES_GLOSSAR_NEUTRAL = """FACHLICHES REFERENZWISSEN (sysTelios-Klinik):
+
+QUELLENTREUE-FESTSTELLUNG FUER DIESEN AUFTRAG (wichtigste Regel):
+Die Quellen dieses Auftrags enthalten KEINE Teilearbeit- oder
+verfahrensspezifischen Begriffe. Benenne daher KEIN Therapieverfahren
+namentlich und verwende KEINE verfahrensspezifischen Fachbegriffe.
+Schreibe durchgängig in deskriptiv-systemischer Sprache: beschreibe
+Erlebensmuster, Schutzreaktionen, innere Bewegungen und Beziehungsdynamiken
+so, wie sie im Gespräch sichtbar wurden - konkret, würdigend,
+ressourcenorientiert.
+
+Haltung (hypnosystemisch, G. Schmidt): Ressourcenaktivierung, Körpersignale
+als Bedürfnisrückmeldung, körperliche Symptome in Bedürfnisse übersetzen,
+annehmende Beziehung zum Organismus, selbstwirksame Einflussnahme.
+Systemisch: Auftragsklärung, Symptome als sinnvolle Schutzreaktion verstehen.
+Biographiearbeit: frühere Sinnhaftigkeit von Strategien als
+Überlebensleistung würdigen, biographische Erfahrungen mit aktuellen
+Mustern verbinden.
+Traumafokussiert: Window of Tolerance, Stabilisierung, Embodiment.
+AMDP-Schema: Bewusstsein, Orientierung, Aufmerksamkeit/Gedächtnis,
+formales und inhaltliches Denken, Wahrnehmung, Ich-Erleben, Affektivität,
+Antrieb, Suizidalität.
+
+Therapieangebot sysTelios: Einzelgespräche (2-3/Woche), Gruppentherapie
+(Gesprächs-, Kunst-, Musik-, Körper-, Bewegungstherapie, mind. 5/Woche),
+Bezugsgruppe, Paar-/Familiengespräche. Konzept: tiefenpsychologisch fundiert,
+verhaltenstherapeutisch ergänzt, hypnosystemisch optimiert.
+
+Klinik-typische Wendungen (im realen Korpus belegt - nur wenn sachlich passend):
+- 'Mithilfe des Therapiekonzepts gelang es [Name] die intrapsychischen
+  Erlebensmuster und deren Einfluss auf die Symptome zu verstehen und
+  schrittweise zu beeinflussen.'
+- 'Wir erlebten [Name] zu Therapiebeginn deutlich erschöpft und in
+  seinem/ihrem Selbstwert erheblich verunsichert.'
+- 'Die Alltagstauglichkeit ist derzeit noch nicht gegeben.'
+- 'Eine tragfähige Stabilität für den ambulanten Kontext ist noch nicht erreicht.'
+- Befund: 'bewusstseinsklar, allseits orientiert' / 'Affekt situationsadäquat
+  schwingungsfähig' / 'formalgedanklich grübelnd, eingeengtes Denken mit Fokus
+  auf [X]'.
+
+Häufige Beobachtungs-Vokabeln (deskriptiv, verfahrensagnostisch):
+Schutzreaktion, Schutzfunktion, Selbstabwertung, Selbstmitgefühl,
+Schwingungsfähigkeit, Selbstwirksamkeit, Selbstfürsorge, Reflexionsfähigkeit,
+Emotionsregulation, Resonanzraum, Beobachterposition, innere Klarheit,
+biographische Verwurzelung, Vermeidungsmuster, Beziehungsdynamik,
+Anspannungszustände, Grübelneigung, Nähe-Distanz-Themen.\
+"""
+
+
 # ── Psychopathologischer Befund Vorlage ──────────────────────────────────────
 # Exakte Vorlage aus der Klinik. Wird durch Informationen aus der Selbstauskunft
 # befüllt – Lücken werden geschlossen, Mehrfachoptionen auf die passende reduziert.
@@ -218,6 +307,79 @@ Einladungen
 Alltag aktiviert - so wie es im Gespräch bereits anklang ("Können Sie dem Schild mal \
 danken"). Darüber hinaus wurde keine weitere Aufgabe vereinbart.\
 """
+
+# Issue-2: Neutrale Variante OHNE Teilearbeit-Vokabular. Wird von
+# build_system_prompt() eingesetzt, wenn die Quellen des Auftrags keine
+# Teilearbeit-Begriffe enthalten (Priming-Vermeidung). Gleiche Struktur,
+# gleiche Absatzdichte, gleiche Vier-Sektionen-Gliederung wie das Original.
+FEW_SHOT_DOKUMENTATION_NEUTRAL = """\
+BEISPIEL (zeigt Stil, Struktur UND Absatzdichte - nicht den Inhalt übernehmen):
+
+EINGABE:
+[A]: Wie ist es Ihnen seit letzter Woche ergangen?
+[B]: Anstrengend. Auf der Arbeit kamen wieder ständig Zusatzaufgaben, und ich \
+habe zu allem Ja gesagt. Abends war ich völlig leer.
+[A]: Was passiert in dem Moment, in dem Sie Ja sagen?
+[B]: Es geht ganz schnell. Ich spüre so einen Druck, bloß nicht zu enttäuschen.
+[A]: Wo im Körper zeigt sich dieser Druck?
+[B]: Im Nacken und in den Schultern. Wie eine Last, die sich sofort auflegt.
+[A]: Gab es diese Woche einen Moment, in dem es anders lief?
+[B]: Einmal, am Mittwoch. Da habe ich gesagt, ich schaffe das erst morgen. \
+Der Kollege war völlig entspannt. Ich war fast enttäuscht, wie leicht das ging.
+[A]: Was hat Ihnen diesen Moment möglich gemacht?
+[B]: Ich war ausgeschlafen, glaube ich. Und ich hatte mir morgens vorgenommen, \
+auf mich zu achten.
+STICHPUNKTE: Überlastung im Arbeitskontext, automatisches Ja-Sagen, Angst zu \
+enttäuschen, körperliche Last in Nacken/Schultern, gelungene Abgrenzung am \
+Mittwoch als Ausnahme, Selbstfürsorge-Vorsatz als Ressource
+
+AUSGABE:
+
+Auftragsklärung
+
+Im Mittelpunkt stand das Erschöpfungserleben von [Patient/in] im Arbeitskontext, \
+das sich in einem nahezu automatischen Ja-Sagen auf zusätzliche Anforderungen \
+und einer abendlichen inneren Leere zeigt. [Patient/in] beschrieb einen \
+unmittelbaren inneren Druck, andere nicht enttäuschen zu dürfen, der schneller \
+wirksam wird als jede bewusste Abwägung. Gemeinsames Ziel des Gesprächs war es, \
+dieses Reaktionsmuster genauer zu verstehen, seine körperliche Seite \
+wahrzunehmen und an eine bereits gelungene Ausnahme anzuknüpfen.
+
+Relevante Gesprächsinhalte
+
+[Patient/in] berichtete von einer arbeitsreichen Woche mit wiederholten \
+Zusatzaufgaben, denen ein sofortiges Ja folgte - begleitet von der Sorge, \
+andere zu enttäuschen. Körperlich zeigt sich dieses Muster als Last im Nacken- \
+und Schulterbereich, die sich unmittelbar mit der Zusage auflegt; abends bleibt \
+eine deutliche Leere zurück. Bemerkenswert war eine Ausnahme am Mittwoch: \
+[Patient/in] verschob eine Aufgabe auf den Folgetag, der Kollege reagierte \
+entspannt, und die befürchtete Enttäuschung blieb aus - eine Erfahrung, die \
+[Patient/in] selbst überraschte. Als begünstigende Bedingungen dieser gelungenen \
+Abgrenzung wurden ausreichender Schlaf und ein morgendlicher Vorsatz zur \
+Selbstfürsorge erkennbar. Damit wurde im Gespräch ein Unterschied sichtbar \
+zwischen dem automatischen Reagieren unter Druck und einem Handeln aus einer \
+gesammelten, selbstfürsorglichen Verfassung heraus.
+
+Hypothesen und Entwicklungsperspektiven
+
+Das automatische Ja-Sagen lässt sich als früh gelernte Schutzreaktion \
+verstehen, die Zugehörigkeit sichern und Enttäuschung anderer vermeiden soll - \
+um den Preis der eigenen Erschöpfung. Die körperliche Last in Nacken und \
+Schultern erscheint dabei als verlässliche Rückmeldung des Organismus, dass \
+eine Grenze überschritten wird. Die Mittwochs-Erfahrung deutet \
+entwicklungsperspektivisch darauf hin, dass [Patient/in] unter günstigen \
+Bedingungen bereits über die Fähigkeit zur Abgrenzung verfügt; es geht weniger \
+um den Aufbau einer neuen Kompetenz als um das Herstellen der Bedingungen, \
+unter denen die vorhandene abrufbar wird.
+
+Einladungen
+
+[Patient/in] wurde eingeladen, in der kommenden Woche die körperliche \
+Rückmeldung in Nacken und Schultern als frühes Signal zu nutzen und vor einer \
+Zusage einen kurzen Moment innezuhalten - so wie es am Mittwoch bereits \
+gelungen ist. Darüber hinaus wurde keine weitere Aufgabe vereinbart.\
+"""
+
 
 FEW_SHOT_ANAMNESE = """\
 STILVORLAGE (zeigt den erwarteten Schreibstil – KEINE Inhalte übernehmen):
@@ -386,13 +548,13 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: "
         "Symptome, Erlebensmuster, innere Anteile, Beziehungsdynamiken, Ressourcen. "
         "Konkrete Formulierungen statt allgemeiner Beschreibungen. "
-        "WICHTIG zur Fachsprache: Systemische und IFS-Begriffe "
-        "(Manager, Antreiber, Verbannte, Feuerbekämpfer, 'im Selbst sein' etc.) NUR dann, wenn "
+        "WICHTIG zur Fachsprache: Verfahrensspezifische Begriffe (etwa aus der "
+        "Teilearbeit) NUR dann, wenn "
         "Klient/in oder Therapeut/in im Gespräch tatsächlich in Anteile-/Teile-Sprache "
         "gesprochen oder das Verfahren erkennbar angewendet haben (gemäß Quellentreue-Regel "
         "des Glossars). Wurde das Gespräch NICHT so geführt, beschreibe in Alltagssprache "
-        "('ein Teil von ihr, der schützt' statt 'Manager-Anteil') und stülpe KEIN "
-        "IFS-Vokabular über. Im Zweifel deskriptiv, statt ein Verfahren zu benennen.\n\n"
+        "('ein Teil von ihr, der schützt') und stülpe KEIN "
+        "Verfahrens-Vokabular über. Im Zweifel deskriptiv, statt ein Verfahren zu benennen.\n\n"
         "**Hypothesen und Entwicklungsperspektiven**\n"
         "Formuliere systemische Hypothesen über Sinnzusammenhänge. "
         "Zeige Entwicklungsperspektiven auf - was wird möglich, wenn... "
@@ -567,7 +729,45 @@ ROLE_PREAMBLE = (
     "Korrekte Antwort: 'Zu Beginn des stationaeren Aufenthaltes zeigte sich [Patient/in] "
     "deutlich erschoepft und in seinem Selbstwert erheblich verunsichert...'\n"
     "Falsche Antwort: 'Entschuldigung, ich kann keine Berichte erstellen...'\n\n"
-    + KLINISCHES_GLOSSAR
+    # Issue-2 (2026-07-03): KLINISCHES_GLOSSAR ist NICHT mehr Teil der
+    # statischen Komposition. build_system_prompt() haengt die passende
+    # Variante an (voll bei Teilearbeit in den Quellen, sonst neutral).
+)
+
+
+# ── REPAIR_SYSTEM_PROMPT – System-Prompt fuer den Ueberarbeitungs-Modus ───────
+#
+# WICHTIG: Der Repair-Pfad (api/jobs.py::_run_repair_coroutine) darf NICHT
+# ROLE_PREAMBLE verwenden. ROLE_PREAMBLE ist auf GENERIERUNG ausgelegt
+# ("du beginnst sofort mit dem Schreiben des angeforderten Dokuments") und
+# enthaelt ein Behandlungsverlauf-Beispiel sowie das KLINISCHES_GLOSSAR. Im
+# Repair fuehrt das nachweislich dazu, dass das Modell das Beispiel woertlich
+# kopiert, ein neues Dokument schreibt (statt zu ueberarbeiten), das Geschlecht
+# der Patient*in wechselt und IFS-Vokabular einstreut. Dieser Prompt etabliert
+# stattdessen klar den Ueberarbeitungs-Modus (passend zu _REPAIR_ROLE_HEADER im
+# User-Prompt) – ohne Generierungs-Anweisung, ohne Beispiel, ohne Glossar.
+REPAIR_SYSTEM_PROMPT = (
+    "Du bist ein klinisches Schreibsystem der sysTelios Klinik im "
+    "UEBERARBEITUNGS-MODUS. Dir liegt ein bereits fertig generierter Text vor. "
+    "Du schreibst KEINEN neuen Text und beginnst KEIN neues Dokument – du "
+    "ueberarbeitest ausschliesslich den vorgelegten ORIGINAL-TEXT gemaess der "
+    "Liste der UEBERARBEITUNGS-HINWEISE im User-Prompt.\n\n"
+    "GRUNDREGELN DER UEBERARBEITUNG:\n"
+    "- Behalte Struktur, Reihenfolge, Sektionen und Laenge des Original-Textes "
+    "bei. Aendere NUR, was die Hinweise verlangen.\n"
+    "- Behalte den Patientenbezug exakt bei: Geschlecht, Anrede (Herr/Frau) und "
+    "Namensnennung bleiben wie im Original-Text. Wechsle niemals das Geschlecht.\n"
+    "- Erfinde KEINE neuen Inhalte, Diagnosen, Befunde oder Ereignisse. Fuege "
+    "KEINE Therapieverfahren oder deren Fachbegriffe hinzu (z.B. IFS-, Schema-, "
+    "EMDR- oder hypnosystemische Termini), die nicht bereits im Original-Text "
+    "stehen.\n"
+    "- Gib ausschliesslich den vollstaendigen ueberarbeiteten Text zurueck – "
+    "keine Vorrede, keine Erklaerung, keine Auflistung der Aenderungen.\n\n"
+    "WICHTIG – BEACHTE LEERZEICHEN:\n"
+    "Achte sorgfaeltig auf die korrekte Trennung von Woertern. Im Fliesstext "
+    "steht IMMER ein Leerzeichen zwischen zwei Woertern (NICHT "
+    "'Aufenthaltszeigte', sondern 'Aufenthaltes zeigte sich'). Pruefe vor jeder "
+    "Wortgrenze ob ein Leerzeichen noetig ist.\n"
 )
 
 
@@ -594,7 +794,7 @@ BASE_PROMPTS: dict[str, str] = {
         "konzeptuell-distanziert. Beschreibe was die Person erlebt und beschreibt, "
         "nicht nur was theoretisch dahintersteckt. "
         "Beispiel besser: 'Frau M. beschreibt, dass ein Teil von ihr immer wieder...' "
-        "statt 'Es zeigt sich ein Manager-Anteil der...'\n\n"
+        "statt das Erleben mit einem Verfahrensbegriff zu etikettieren\n\n"
         "QUELLENREGEL: Alle Inhalte müssen aus dem Transkript oder den Stichpunkten "
         "ableitbar sein. Keine Symptome, Diagnosen, Interventionen oder Zitate "
         "erfinden die nicht im Gespräch vorkamen.\n\n"
@@ -1041,7 +1241,10 @@ def _compute_style_constraints(
         return ""
 
     # Satzlaenge
-    sentences = _re.split(r'[.!?]+', style_text)
+    # Issue-2/R1: zentraler abkuerzungsfester Splitter statt naivem
+    # [.!?]+-Split (der zaehlte 'z.B.' als Satzende -> verzerrte
+    # Satzlaengen-Constraints im System-Prompt).
+    sentences = split_sentences_de(style_text)
     sentences = [s.strip() for s in sentences if len(s.strip().split()) >= 3]
     avg_sentence_len = round(sum(len(s.split()) for s in sentences) / max(len(sentences), 1), 0)
 
@@ -1234,6 +1437,13 @@ def build_system_prompt(
     # workflow_instructions. Bestehende Tests / Legacy-Aufrufe brechen
     # dadurch nicht.
     custom_prompt: Optional[str] = None,
+    # Issue-2 (2026-07-03): Konditionales Glossar/Few-Shot. Wenn die
+    # zusammengefuehrten QUELLEN uebergeben werden, entscheidet
+    # source_mentions_parts_work(), ob das volle KLINISCHES_GLOSSAR + das
+    # IFS-Beispiel in den Prompt kommen (Teilearbeit in den Quellen belegt)
+    # oder die neutralen Varianten (Priming-Vermeidung). None = altes
+    # Verhalten (volles Glossar) fuer Legacy-Aufrufe und Tests.
+    source_text: Optional[str] = None,
 ) -> str:
     """
     Baut den finalen System-Prompt zusammen.
@@ -1292,7 +1502,11 @@ def build_system_prompt(
     # Reihenfolge (v18):
     #   ROLE_PREAMBLE  →  WORKFLOW-ANWEISUNGEN (Frontend)  →  Stilschablone
     #     →  BASE_PROMPT-Kernel  →  Diagnosen/Wortlimit (im base eingebettet)
-    parts = [ROLE_PREAMBLE]
+    # Issue-2: Glossar-Variante anhand der Quellen dieses Auftrags waehlen.
+    # source_text=None (Legacy/Tests) -> konservativ das volle Glossar.
+    _parts_work = True if source_text is None else source_mentions_parts_work(source_text)
+    _glossar = KLINISCHES_GLOSSAR if _parts_work else KLINISCHES_GLOSSAR_NEUTRAL
+    parts = [ROLE_PREAMBLE + _glossar]
 
     # Workflow-Anweisungen vom Frontend - das ist der eigentliche Auftrag,
     # gehoert direkt nach der Rolle vor allen restriktiven Pflichtkern-Regeln.
@@ -1374,6 +1588,11 @@ def build_system_prompt(
     # Frontend-Anweisungen und der Stilschablone eingehaengt. Enthaelt
     # Stilregeln, Negativ-Listen, Quellenregel und Few-Shot.
     if base:
+        # Issue-2: neutrales Doku-Beispiel wenn die Quellen keine
+        # Teilearbeit enthalten (deterministischer String-Tausch; schlaegt
+        # der Tausch fehl, bleibt schlicht das alte Verhalten).
+        if workflow == "dokumentation" and not _parts_work:
+            base = base.replace(FEW_SHOT_DOKUMENTATION, FEW_SHOT_DOKUMENTATION_NEUTRAL)
         parts.append("\n" + base)
 
     # Expliziter Patientennamen-Hinweis (aus den Unterlagen extrahiert)

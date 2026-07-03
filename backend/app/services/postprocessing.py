@@ -113,6 +113,74 @@ def fix_kompositum_klebebugs(text: str) -> str:
     return fixed
 
 
+# ── 1b. Zentraler deutscher Satz-Splitter ─────────────────────────────────────
+#
+# Single Source of Truth fuer Satz-Splitting (R1-Refactoring).
+# Hintergrund (Issue 1, prompts.log 2026-06-30): das naive
+# re.split(r"(?<=[.!?])\s+") behandelt Abkuerzungspunkte (z.B., u.a., d.h.)
+# und Namens-Initialen (Herr Z.) als Satzenden. Folge im Hard-Cap: Kuerzung
+# landet mitten in der Abkuerzung ("... wie z.B."), in der Loop-Detection:
+# falsche Satzbloecke.
+#
+# Merge-Heuristik ist bewusst grosszuegig ("im Zweifel KEIN Satzende"):
+# fuer Hard-Cap und Loop-Detection ist Uebermergen sicher (es wird hoechstens
+# an einer spaeteren, echten Grenze geschnitten), Untermergen ist der Bug.
+
+# Abkuerzungen (lowercase, mit Schlusspunkt), nach denen KEIN Satzende folgt.
+_DE_ABBREVIATIONS = frozenset({
+    # mehrteilig (ohne Binnen-Leerzeichen geschrieben)
+    "z.b.", "u.a.", "d.h.", "o.ä.", "o.a.", "u.ä.", "u.u.", "i.d.r.",
+    "u.v.m.", "s.o.", "s.u.", "v.a.", "z.t.", "o.g.", "u.g.", "i.s.",
+    # einteilig
+    "ggf.", "bzw.", "bspw.", "etc.", "evtl.", "inkl.", "exkl.", "ca.",
+    "vgl.", "sog.", "usw.", "max.", "min.", "mind.", "tel.", "nr.",
+    "abs.", "kap.", "bd.", "str.", "geb.", "verh.", "led.", "gesch.",
+    # Titel/Anreden
+    "dr.", "prof.", "dipl.", "med.", "psych.", "hr.", "fr.",
+})
+
+# Einzelbuchstabe + Punkt: Namens-Initial ("Herr Z.") oder Teil einer
+# mit Leerzeichen gesetzten Abkuerzung ("z. B." -> Segmente enden "z." / "B.").
+_SINGLE_LETTER_DOT_RE = re.compile(r"^[A-Za-zÄÖÜäöü]\.$")
+
+# Ordinalzahl 1-3-stellig ("am 3. Mai", "Kap. 12."). Bewusst NICHT 4-stellig,
+# damit Jahreszahlen am Satzende ("... seit 2013.") weiter als Ende gelten.
+_ORDINAL_DOT_RE = re.compile(r"^\d{1,3}\.$")
+
+# Folgesegment beginnt kleingeschrieben -> kann kein Satzanfang sein.
+_LOWERCASE_START_RE = re.compile(r"^[a-zäöüß]")
+
+
+def split_sentences_de(text: str) -> list[str]:
+    """Splittet deutschen Text in Saetze, abkuerzungs- und initialenfest.
+
+    Verwendet von hard_cap_word_count() und detect_loop_repetition().
+    (Die Stilanalyse in prompts.py nutzt noch ihre eigene Variante –
+    Umstellung dort ist Generierungs-Baseline und laeuft mit der
+    Issue-2/Prompt-Revision, nicht hier.)
+    """
+    if not text:
+        return []
+
+    raw_segments = re.split(r"(?<=[.!?])\s+", text)
+    merged: list[str] = []
+    for seg in raw_segments:
+        if merged:
+            prev = merged[-1].rstrip()
+            prev_tokens = prev.split()
+            last_token = prev_tokens[-1] if prev_tokens else ""
+            if (
+                last_token.lower() in _DE_ABBREVIATIONS
+                or _SINGLE_LETTER_DOT_RE.match(last_token)
+                or _ORDINAL_DOT_RE.match(last_token)
+                or _LOWERCASE_START_RE.match(seg)
+            ):
+                merged[-1] = merged[-1] + " " + seg
+                continue
+        merged.append(seg)
+    return merged
+
+
 # ── 2. Loop-Repetition-Detector (Bug 11 v16) ───────────────────────────────────
 
 # Mindestlaenge eines wiederholten Blocks der als Loop gilt (Zeichen).
@@ -153,8 +221,8 @@ def detect_loop_repetition(text: str) -> str:
     if not text or len(text) < 2 * _MIN_LOOP_BLOCK_CHARS:
         return text
 
-    # Saetze splitten (an .!?)
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    # Saetze splitten (abkuerzungsfest, siehe split_sentences_de)
+    sentences = split_sentences_de(text.strip())
     if len(sentences) < 6:
         # Zu wenige Saetze fuer Loop-Erkennung
         return text
@@ -277,6 +345,20 @@ def extract_likely_keywords(source_text: str, *, max_keywords: int = 10) -> list
 
 # ── 4. Hard-Cap fuer Output-Laenge (Bug 13 v16) ───────────────────────────────
 
+# Ab welchem Faktor ueber max_words der Hard-Cap ueberhaupt eingreift.
+#
+# Entscheidung 2026-07-01 (Nutzerfeedback): laengere Texte sind fuer die
+# Therapeut*innen KEIN Problem ("etwas rausloeschen ist schnell gemacht"),
+# abgeschnittener Output ist IMMER unbefriedigend - insbesondere weil der
+# Schnitt am Textende die Pflichtsektion 'Einladungen' opfert. Der Cap ist
+# deshalb keine Stil-Disziplin mehr, sondern nur noch Notbremse gegen
+# pathologische Ueberlaenge (Degeneration). Gegen Wiederholungs-Loops
+# schuetzen unabhaengig davon detect_loop_repetition() und
+# deduplicate_paragraphs() (laufen VOR dem Cap), gegen Token-Amoklauf
+# max_tokens auf API-Ebene.
+HARD_CAP_RUNAWAY_FACTOR = 2.0
+
+
 def hard_cap_word_count(text: str, max_words: int) -> str:
     """
     Schneidet den Output an einer Satzgrenze ab, wenn er max_words
@@ -289,20 +371,24 @@ def hard_cap_word_count(text: str, max_words: int) -> str:
         Output:      323 Woerter (Faktor 2.3)
     => abschneiden auf 143 Woerter, an Satzgrenze.
 
-    Strategie:
-      - Wenn word_count <= max_words * 1.05 (5% Toleranz): nichts tun
-      - Sonst: Saetze sammeln bis Limit erreicht, am letzten ganzen Satz abschneiden
+    Strategie (seit 2026-07-01, siehe HARD_CAP_RUNAWAY_FACTOR):
+      - Wenn word_count <= max_words * HARD_CAP_RUNAWAY_FACTOR: nichts tun
+        (auch deutlich uebers Limit hinaus - Ueberlaenge ist akzeptiert,
+        nur Degeneration wird gekappt)
+      - Sonst: Saetze sammeln bis max_words erreicht, am letzten ganzen
+        Satz abschneiden (abkuerzungsfest via split_sentences_de)
       - Logging als Warnung
     """
     if not text or max_words <= 0:
         return text
 
     words = text.split()
-    if len(words) <= int(max_words * 1.05):
+    if len(words) <= int(max_words * HARD_CAP_RUNAWAY_FACTOR):
         return text
 
-    # Saetze finden und auswaehlen bis Limit erreicht
-    sentences = re.split(r"(?<=[.!?])\s+", text)
+    # Saetze finden und auswaehlen bis Limit erreicht (abkuerzungsfest,
+    # Issue 1: naiver Split schnitt nach "z.B." ab und warf den Rest weg)
+    sentences = split_sentences_de(text)
     accumulated_words = 0
     accumulated_sentences = []
     for s in sentences:

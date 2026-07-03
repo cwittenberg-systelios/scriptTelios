@@ -1,0 +1,20 @@
+# ruff-Konfiguration (2026-07-01)
+# Fokus: die Fehlerklassen aus dem Code-Review automatisch verhindern.
+#   E722    bare except                (main.py-Fund)
+#   B       flake8-bugbear             (u.a. B006 mutable defaults)
+#   ASYNC   blockierende Calls in async
+#   RUF006  asyncio-Task ohne Referenz (job_queue-Fund)
+#   F       pyflakes (undefined names, unused imports)
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E722", "F", "B", "ASYNC", "RUF006"]
+# F841 (unused variable) erzeugt in gewachsenem Code viel Rauschen -
+# bewusst erst in einer eigenen Aufraeumrunde aktivieren.
+# B008: Depends(...) im Default ist das FastAPI-Standard-Idiom (kein Bug).
+ignore = ["F841", "B008"]
+
+[lint.per-file-ignores]
+# Tests duerfen breite excepts und ungenutzte Imports haben (Fixtures)
+"tests/**" = ["E722", "F401"]

@@ -1,0 +1,409 @@
+// ────────────────────────────────────────────────────────────────────────────
+// src/ui.jsx — extrahiert aus klinische-dokumentation.jsx (R4, 2026-07-01).
+// Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
+// ────────────────────────────────────────────────────────────────────────────
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { apiFetch, getApiBase } from "./api.jsx";
+
+
+function JobProgressBar({ jobId, onTerminal }) {
+  const [p, setP] = useState({ progress: 0, progress_phase: "Starte...", progress_detail: "" });
+  // Sprint Draft-Persistence Bugfix: onTerminal in ref ablegen, damit der
+  // useEffect nicht bei jedem neuen Callback-Identitaet neu laeuft (sonst
+  // wuerde die SSE bei jeder Parent-Rerender neu aufgebaut).
+  const onTerminalRef = useRef(onTerminal);
+  useEffect(() => { onTerminalRef.current = onTerminal; }, [onTerminal]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    let cancelled = false;
+
+    // Versuch 1: Server-Sent Events (live, kein Polling)
+    const sseUrl = `${getApiBase()}/jobs/${jobId}/stream`;
+    let es;
+    try {
+      es = new EventSource(sseUrl);
+      es.onmessage = (e) => {
+        if (cancelled) return;
+        try {
+          const d = JSON.parse(e.data);
+          if (d.type === "progress") {
+            setP({ progress: d.progress || 0, progress_phase: d.phase || "", progress_detail: d.detail || "" });
+          } else if (d.type === "done" || d.type === "error" || d.type === "cancelled") {
+            setP(prev => ({ ...prev, progress: d.type === "done" ? 100 : prev.progress, progress_phase: d.type === "done" ? "Fertig" : d.type === "error" ? "Fehler" : "Abgebrochen" }));
+            es.close();
+            // Parent benachrichtigen (z.B. P1: Detail-Dict neu laden)
+            if (onTerminalRef.current) onTerminalRef.current(d.type);
+          }
+        } catch (_) {}
+      };
+      es.onerror = () => {
+        // SSE fehlgeschlagen → Fallback auf Polling
+        es.close();
+        if (!cancelled) startPolling();
+      };
+    } catch (_) {
+      // EventSource nicht verfuegbar → Polling
+      startPolling();
+    }
+
+    // Fallback: Polling (alle 3s)
+    function startPolling() {
+      const tick = async () => {
+        try {
+          const r = await apiFetch(`${getApiBase()}/jobs/${jobId}`);
+          const j = await r.json();
+          if (cancelled) return;
+          setP({ progress: j.progress || 0, progress_phase: j.progress_phase || "", progress_detail: j.progress_detail || "" });
+          if (j.status === "done" || j.status === "error" || j.status === "cancelled") {
+            // Auch im Polling-Fallback Parent benachrichtigen
+            if (onTerminalRef.current) onTerminalRef.current(j.status);
+            return;
+          }
+          setTimeout(tick, 3000);
+        } catch { if (!cancelled) setTimeout(tick, 5000); }
+      };
+      tick();
+    }
+
+    return () => {
+      cancelled = true;
+      if (es) try { es.close(); } catch (_) {}
+    };
+  }, [jobId]);
+  return (
+    <div style={{margin:"12px 0"}}>
+      <div style={{height:8, background:"var(--st-gray-bg)", borderRadius:4, overflow:"hidden"}}>
+        <div style={{height:"100%", width:`${p.progress}%`, background:"var(--st-red)", transition:"width 0.4s ease-out"}}/>
+      </div>
+      <div style={{fontSize:12, color:"var(--st-text-soft)", marginTop:4, textAlign:"center"}}>
+        {p.progress_phase} {p.progress_detail && `— ${p.progress_detail}`} ({p.progress}%)
+      </div>
+    </div>
+  );
+}
+
+function Dropzone({ label, hint, accept, file, onFile, icon }) {
+  const [drag, setDrag] = useState(false);
+
+  function onDrop(e) {
+    e.preventDefault(); setDrag(false);
+    const f = e.dataTransfer.files[0];
+    if (f) onFile(f);
+  }
+
+  let cls = "dropzone";
+  if (drag) cls += " drag";
+  if (file) cls += " filled";
+
+  return (
+    <div className={cls}
+      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={onDrop}
+    >
+      {file ? (
+        <div className="dz-file">
+          <span>{icon}</span>
+          <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
+          <button className="dz-remove" onClick={(e) => { e.stopPropagation(); onFile(null); }}>&#215;</button>
+        </div>
+      ) : (
+        <>
+          <div className="dz-icon">{icon}</div>
+          <div className="dz-label">{label}</div>
+          {hint && <div className="dz-hint">{hint}</div>}
+          <input type="file" accept={accept}
+            onChange={(e) => { if (e.target.files && e.target.files[0]) onFile(e.target.files[0]); }} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * InputTabs – kompakte Tab-Navigation für alternative Eingabemodi.
+ * Kinder bekommen den aktiven Tab-ID als Argument (render-prop).
+ * Beispiel:
+ *   <InputTabs tabs={[{id:"a",icon:"🎙",label:"Audio"}, ...]}>
+ *     {(active) => active === "a" && <Dropzone ... />}
+ *   </InputTabs>
+ */
+/**
+ * ModelSelector – kompakter Inline-Selektor für das LLM-Modell.
+ * Lädt verfügbare Modelle vom Backend und zeigt sie als Buttons an.
+ * Props: model (aktiver Wert), onChange (Callback), apiBase
+ */
+function ModelSelector({ model, onChange, apiBase }) {
+  const [models, setModels] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [defaultModel, setDefaultModel] = useState("");
+
+  useEffect(() => {
+    setLoading(true);
+    apiFetch(`${apiBase}/models`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.models?.length) {
+          setModels(data.models);
+          setDefaultModel(data.default || "");
+          // Wenn noch kein Modell gewählt, Default setzen
+          if (!model && data.default) onChange(data.default);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [apiBase]);
+
+  if (loading || models.length === 0) return null;
+
+  // Effektiv aktives Modell: explizite Wahl > localStorage-Default > Server-Default
+  const activeModel = model || defaultModel;
+
+  return (
+    <div style={{display:"flex", alignItems:"center", gap:4, flexWrap:"wrap"}}>
+      <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)",
+        textTransform:"uppercase", letterSpacing:"0.06em", marginRight:2}}>Modell</span>
+      {models.map(m => {
+        const isActive = activeModel === m.name || (!activeModel && m.is_default);
+        const shortName = m.name.replace(/:latest$/, "");
+        return (
+          <button key={m.name} onClick={() => onChange(m.name)} title={m.name}
+            style={{
+              padding:"3px 8px", borderRadius:3, cursor:"pointer",
+              fontSize:11, fontWeight: isActive ? 700 : 400,
+              background: isActive ? "var(--st-red)" : "var(--st-gray-light)",
+              color: isActive ? "white" : "var(--st-text-soft)",
+              border: isActive ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+              transition:"all 0.12s", whiteSpace:"nowrap",
+            }}>
+            {shortName}
+            {m.size_gb ? <span style={{opacity:0.75, fontSize:10}}> {m.size_gb}G</span> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function InputTabs({ tabs, children, defaultTab }) {
+  const [active, setActive] = useState(defaultTab || tabs[0]?.id);
+  return (
+    <div className="input-tabs-wrap">
+      <div className="input-tabs-bar">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            className={"input-tab" + (active === t.id ? " active" : "")}
+            onClick={() => setActive(t.id)}
+            type="button"
+          >
+            <span className="input-tab-icon">{t.icon}</span>
+            <span className="input-tab-label">{t.label}</span>
+          </button>
+        ))}
+      </div>
+      <div className="input-tabs-body">
+        {children(active)}
+      </div>
+    </div>
+  );
+}
+
+function Card({ num, title, badge, open: defaultOpen = true, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="step-card">
+      <div className={"step-head" + (open ? " open" : "")} onClick={() => setOpen(!open)}>
+        <div className="step-num">{num}</div>
+        <div className="step-label">{title}</div>
+        {badge && (
+          <span className={"step-pill " + (badge === "opt" ? "pill-opt" : "pill-req")}>
+            {badge === "opt" ? "Optional" : "Erforderlich"}
+          </span>
+        )}
+        <span className={"step-caret" + (open ? " open" : "")}>&#9660;</span>
+      </div>
+      {open && <div className="step-body">{children}</div>}
+    </div>
+  );
+}
+
+function PromptEditor({ value, onChange, def }) {
+  return (
+    <div className="prompt-box">
+      <div className="prompt-bar">
+        <span className="prompt-bar-label">Prompt-Vorlage</span>
+        <button className="btn-xs" onClick={() => onChange(def)}>Zuruecksetzen</button>
+      </div>
+      <textarea rows={8} value={value} onChange={(e) => onChange(e.target.value)} />
+    </div>
+  );
+}
+
+function Output({ text, loading, jobId, tabs, activeTab, onTab, onCopy, onDownload, extraButtons = [], warn = null, onTerminal = null }) {
+  const empty = !text && !loading;
+  return (
+    <div className="output-card">
+      <div className="output-head">
+        <span className="output-title">Ergebnis</span>
+        <div className="output-btns">
+          {text && <button className="btn-out" onClick={onCopy}>Kopieren</button>}
+          {text && onDownload && <button className="btn-out" onClick={onDownload}>Download</button>}
+          {extraButtons.map((btn, i) => (
+            <button key={i} className="btn-out" onClick={btn.onClick}>{btn.label}</button>
+          ))}
+        </div>
+      </div>
+      {tabs && (
+        <div className="output-tabs">
+          {tabs.map((t) => (
+            <div key={t} className={"otab" + (activeTab === t ? " on" : "")} onClick={() => onTab(t)}>{t}</div>
+          ))}
+        </div>
+      )}
+      <div className={"output-text" + (empty ? " empty" : "")}>
+        {loading
+          ? (jobId ? <JobProgressBar jobId={jobId} onTerminal={onTerminal} /> : "Wird generiert ...")
+          : text
+            ? text
+            : warn
+              ? <span style={{color:"var(--st-error,#b00)",fontStyle:"normal",fontWeight:500}}>{warn}</span>
+              : "Der generierte Text erscheint hier."}
+      </div>
+    </div>
+  );
+}
+
+function Tags({ list, onChange }) {
+  const [val, setVal] = useState("");
+  function add() {
+    const v = val.trim();
+    if (v && !list.includes(v)) { onChange([...list, v]); setVal(""); }
+  }
+  return (
+    <div className="tag-wrap">
+      {list.map((d) => (
+        <span key={d} className="tag">
+          {d}
+          <button className="tag-x" onClick={() => onChange(list.filter((x) => x !== d))}>&#215;</button>
+        </span>
+      ))}
+      <input className="tag-input" placeholder="ICD-Code + Enter ..."
+        value={val} onChange={(e) => setVal(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); add(); } }}
+        onBlur={add}
+      />
+    </div>
+  );
+}
+
+
+
+// ── JobModelPicker ────────────────────────────────────────────────────────────
+// Modellwahl direkt beim Job-Generieren (2026-07-03). Zeigt die verfuegbaren
+// Modelle mit FREUNDLICHEN Familiennamen (Gemma/Mistral/Qwen - keine
+// technischen Tags) als Pill-Auswahl und markiert die pro Workflow empfohlene
+// Familie mit einem "Empfehlung"-Chip. Routing-Default (Modellvergleich
+// Runde 1, 2026-07): Gemma fuer klinische Dokumente (hypnosystemische
+// Sprache), Mistral fuer Kassenkommunikation (knapp, klar). Die Wahl in den
+// Einstellungen (ModelSelector) bleibt der globale Fallback.
+const JOB_MODEL_RECOMMENDATION = {
+  dokumentation:      "gemma",
+  anamnese:           "gemma",
+  entlassbericht:     "gemma",
+  akutantrag:         "mistral",
+  verlaengerung:      "mistral",
+  folgeverlaengerung: "mistral",
+};
+
+function modelFamily(name) {
+  const t = (name || "").toLowerCase();
+  if (t.startsWith("gemma"))   return "gemma";
+  if (t.startsWith("mistral")) return "mistral";
+  if (t.startsWith("qwen"))    return "qwen";
+  return t.split(/[:\/]/)[0];
+}
+
+// Freundliches Label: Familienname; bei mehreren Modellen derselben Familie
+// wird die Hauptversion angehaengt ("Gemma 3" / "Gemma 4") - weiterhin ohne
+// technische Tags wie ":27b-q4".
+function friendlyModelLabel(name, allNames) {
+  const fam = modelFamily(name);
+  const pretty = fam.charAt(0).toUpperCase() + fam.slice(1);
+  const siblings = allNames.filter(n => modelFamily(n) === fam);
+  if (siblings.length <= 1) return pretty;
+  const ver = (name.match(/(\d+(?:\.\d+)?)/) || [])[1];
+  return ver ? `${pretty} ${ver}` : pretty;
+}
+
+function JobModelPicker({ workflow, value, onChange }) {
+  const [models, setModels] = useState([]);
+
+  useEffect(() => {
+    let alive = true;
+    apiFetch(`${getApiBase()}/models`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (!alive || !data?.models?.length) return;
+        setModels(data.models);
+        // Default: empfohlenes Modell des Workflows, falls verfuegbar.
+        // Bei mehreren Kandidaten derselben Familie gewinnt die hoechste
+        // Versionsnummer. Kein Kandidat -> Wahl bleibt leer (globaler
+        // Fallback greift beim Submit: jobModel || model).
+        if (!value) {
+          const fam = JOB_MODEL_RECOMMENDATION[workflow];
+          const candidates = data.models
+            .map(m => m.name)
+            .filter(n => modelFamily(n) === fam)
+            .sort((a, b) => {
+              const va = parseFloat((a.match(/(\d+(?:\.\d+)?)/) || [0, 0])[1]);
+              const vb = parseFloat((b.match(/(\d+(?:\.\d+)?)/) || [0, 0])[1]);
+              return vb - va;
+            });
+          if (candidates.length) onChange(candidates[0]);
+        }
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [workflow]);
+
+  if (models.length < 2) return null;   // eine Option = keine Wahl noetig
+
+  const names = models.map(m => m.name);
+  const recFam = JOB_MODEL_RECOMMENDATION[workflow];
+
+  return (
+    <div style={{display:"flex", alignItems:"center", gap:4, flexWrap:"wrap", margin:"8px 0 6px"}}>
+      <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)",
+        textTransform:"uppercase", letterSpacing:"0.06em", marginRight:2}}>Modell</span>
+      {models.map(m => {
+        const isActive = value === m.name;
+        const isRec = modelFamily(m.name) === recFam;
+        return (
+          <button key={m.name} onClick={() => onChange(m.name)} title={m.name}
+            style={{
+              display:"inline-flex", alignItems:"center", gap:5,
+              padding:"3px 8px", borderRadius:3, cursor:"pointer",
+              fontSize:11, fontWeight: isActive ? 700 : 400,
+              background: isActive ? "var(--st-red)" : "var(--st-gray-light)",
+              color: isActive ? "white" : "var(--st-text-soft)",
+              border: isActive ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+            }}>
+            {friendlyModelLabel(m.name, names)}
+            {isRec && (
+              <span style={{
+                fontSize:9, fontWeight:700, textTransform:"uppercase",
+                letterSpacing:"0.05em", padding:"1px 5px", borderRadius:8,
+                background: isActive ? "rgba(255,255,255,0.25)" : "var(--st-teal, #2a7d7d)",
+                color:"white",
+              }}>Empfehlung</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export { JobProgressBar, Dropzone, ModelSelector, InputTabs, Card, PromptEditor, Output, Tags, JobModelPicker };

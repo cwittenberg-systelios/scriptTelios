@@ -165,16 +165,29 @@ class TestHardCapWordCount:
 
     def test_text_ueber_limit_wird_an_satzgrenze_gekuerzt(self):
         from app.services.postprocessing import hard_cap_word_count
+        # Seit 2026-07-01 greift der Cap erst ab HARD_CAP_RUNAWAY_FACTOR (2x):
+        # 25 Woerter bei max_words=10 -> pathologisch, wird gekappt.
         text = (
             "Erster Satz mit fuenf Worten. "
             "Zweiter Satz auch fuenf Worten. "
             "Dritter Satz hat fuenf Worten. "
-            "Vierter Satz hat fuenf Worten."
+            "Vierter Satz hat fuenf Worten. "
+            "Fuenfter Satz hat fuenf Worten."
         )
         result = hard_cap_word_count(text, max_words=10)
         # Erste 2 Saetze sind 10 Worte zusammen, sollte da abgeschnitten werden
         assert result.endswith(".") or result.endswith("!") or result.endswith("?")
         assert len(result.split()) <= 12  # mit Toleranz
+
+    def test_ueberlaenge_unter_runaway_faktor_bleibt_vollstaendig(self):
+        from app.services.postprocessing import hard_cap_word_count
+        # Entscheidung 2026-07-01: verbose Outputs (z.B. 1.5x Limit) werden
+        # NICHT mehr gekuerzt - Ueberlaenge ist akzeptiert, nur Degeneration
+        # (> HARD_CAP_RUNAWAY_FACTOR) wird gekappt. Vorher haette die alte
+        # 5%-Toleranz hier geschnitten und die letzte Sektion geopfert.
+        text = ". ".join(f"Satz {i} hat hier fuenf Woerter" for i in range(5)) + "."
+        # 30 Woerter, Limit 20 -> Faktor 1.5 -> unveraendert durchlassen
+        assert hard_cap_word_count(text, max_words=20) == text
 
     def test_5prozent_toleranz(self):
         """Bei 105% des Limits wird NICHT abgeschnitten."""
@@ -226,3 +239,85 @@ class TestPostprocessOutput:
         from app.services.postprocessing import postprocess_output
         assert postprocess_output("") == ""
         assert postprocess_output(None) is None
+
+
+# ── split_sentences_de (R1: zentraler abkuerzungsfester Splitter) ─────────────
+
+class TestSplitSentencesDe:
+    """Issue 1 (prompts.log 2026-06-30): naiver Split behandelte
+    Abkuerzungspunkte und Namens-Initialen als Satzenden. Der Hard-Cap
+    schnitt dadurch nach '... wie z.B.' ab."""
+
+    def test_abkuerzung_zb_kein_satzende(self):
+        from app.services.postprocessing import split_sentences_de
+        text = "Er probiert Initiativen, wie z.B. Gespraeche. Danach folgt mehr."
+        sentences = split_sentences_de(text)
+        assert len(sentences) == 2
+        assert sentences[0].endswith("Gespraeche.")
+
+    def test_mehrere_abkuerzungen(self):
+        from app.services.postprocessing import split_sentences_de
+        text = ("Es zeigen sich Muster, d.h. Rueckzug u.a. im Studium, "
+                "ggf. auch privat. Ein zweiter Satz folgt hier.")
+        sentences = split_sentences_de(text)
+        assert len(sentences) == 2
+
+    def test_abkuerzung_mit_leerzeichen_gesetzt(self):
+        from app.services.postprocessing import split_sentences_de
+        # Typographische Variante 'z. B.' (Segmente enden 'z.' und 'B.')
+        text = "Er probiert Initiativen, wie z. B. Gespraeche. Danach mehr Text."
+        sentences = split_sentences_de(text)
+        assert len(sentences) == 2
+
+    def test_namens_initial_kein_satzende(self):
+        from app.services.postprocessing import split_sentences_de
+        text = "Herr Z. berichtet von Unruhe. Frau M. bestaetigt dies."
+        sentences = split_sentences_de(text)
+        # 'Herr Z. berichtet...' bleibt EIN Satz ('berichtet' klein
+        # geschrieben); 'Frau M. bestaetigt...' ebenso.
+        assert len(sentences) == 2
+        assert sentences[0].startswith("Herr Z. berichtet")
+
+    def test_ordinalzahl_kein_satzende(self):
+        from app.services.postprocessing import split_sentences_de
+        text = "Der Aufenthalt begann am 3. Mai im Haus. Danach folgte die Aufnahme."
+        assert len(split_sentences_de(text)) == 2
+
+    def test_jahreszahl_bleibt_satzende(self):
+        from app.services.postprocessing import split_sentences_de
+        text = "Die Beschwerden bestehen seit 2013. Danach verschlechterte sich alles."
+        assert len(split_sentences_de(text)) == 2
+
+    def test_normale_saetze_unveraendert(self):
+        from app.services.postprocessing import split_sentences_de
+        text = "Erster Satz hier. Zweiter Satz folgt! Dritter Satz endet?"
+        assert len(split_sentences_de(text)) == 3
+
+    def test_leerer_input(self):
+        from app.services.postprocessing import split_sentences_de
+        assert split_sentences_de("") == []
+
+
+class TestHardCapAbkuerzungsRegression:
+    """Regressionstest fuer das Produktions-Symptom: Kuerzung endete
+    mitten in der Abkuerzung ('... wie z.B.')."""
+
+    def test_cap_schneidet_nicht_in_abkuerzung(self):
+        from app.services.postprocessing import hard_cap_word_count
+        # Satz 1: 12 Woerter inkl. 'z.B.' mittendrin; danach Fuellsaetze.
+        s1 = "Herr Z. probiert kleine Initiativen wie z.B. Gespraeche mit anderen Menschen dort."
+        filler = " ".join(f"Fuellsatz Nummer {i} mit einigen weiteren Woertern darin." for i in range(12))
+        text = s1 + " " + filler
+        capped = hard_cap_word_count(text, max_words=20)
+        # Der Cap darf NICHT nach 'z.B.' enden (alter Bug), sondern nur
+        # an einem echten Satzende.
+        assert not capped.rstrip().endswith("z.B.")
+        assert capped.rstrip().endswith((".", "!", "?"))
+        # Satz 1 muss vollstaendig enthalten sein
+        assert "Gespraeche mit anderen Menschen dort." in capped
+
+    def test_cap_verhalten_ohne_abkuerzung_unveraendert(self):
+        from app.services.postprocessing import hard_cap_word_count
+        text = ". ".join(f"Satz {i} hat hier fuenf Woerter" for i in range(10)) + "."
+        capped = hard_cap_word_count(text, max_words=12)
+        assert len(capped.split()) <= 12

@@ -399,6 +399,53 @@ class TestRunRepairCoroutine:
         assert result["befund_text"] is None
         assert "###BEFUND###" in result["text"]
 
+    @pytest.mark.asyncio
+    async def test_repair_uses_repair_system_prompt_and_hard_no_think(self):
+        """Issue-3-Fix: Repair MUSS REPAIR_SYSTEM_PROMPT verwenden (nicht
+        ROLE_PREAMBLE, das auf Generierung ausgelegt ist) und den harten
+        Anti-Think-Pfad erzwingen (gegen den im prompts.log gemessenen
+        48-57% Think-Leak im Repair)."""
+        from app.api.jobs import _run_repair_coroutine
+        from app.services.prompts import REPAIR_SYSTEM_PROMPT, ROLE_PREAMBLE
+
+        fake_job = MagicMock()
+        fake_job.set_progress = MagicMock()
+
+        captured: dict = {}
+
+        async def _fake_generate(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return {
+                "text": "Ueberarbeiteter Text.",
+                "model_used": "qwen3:32b",
+                "telemetry": {},
+                "retry_used": False,
+                "degraded": False,
+            }
+
+        with patch("app.api.jobs.generate_text", _fake_generate):
+            await _run_repair_coroutine(
+                fake_job, "dokumentation", "FINAL-REPAIR-PROMPT",
+            )
+
+        system_arg = captured["args"][0]
+        # System-Prompt ist der Ueberarbeitungs-Prompt, NICHT ROLE_PREAMBLE
+        assert system_arg == REPAIR_SYSTEM_PROMPT
+        assert system_arg != ROLE_PREAMBLE
+        # User-Prompt wird unveraendert durchgereicht
+        assert captured["args"][1] == "FINAL-REPAIR-PROMPT"
+        # Harter Anti-Think-Pfad erzwungen
+        assert captured["kwargs"].get("force_hard_no_think") is True
+        # O5: Ueberarbeitung laeuft kalt/deterministisch
+        assert captured["kwargs"].get("temperature_override") == 0.15
+        # Der Repair-System-Prompt darf weder das Generierungs-Beispiel noch
+        # das Glossar enthalten (sonst kopiert das Modell das Beispiel / streut
+        # IFS-Vokabular ein).
+        assert "[Patient/in]" not in system_arg
+        assert "beginnst sofort" not in system_arg
+        assert "KLINISCHES_GLOSSAR" not in system_arg
+
 
 # ── job_queue.create_repair_job ───────────────────────────────────────────────
 

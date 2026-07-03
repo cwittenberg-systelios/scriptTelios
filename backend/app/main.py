@@ -65,15 +65,17 @@ async def lifespan(app: FastAPI):
     # v18: Embedding-Modell beim Start prüfen → klare Warnung wenn nicht geladen
     try:
         from app.services.embeddings import check_embedding_model_available
-        asyncio.create_task(check_embedding_model_available())
+        # Referenz halten (RUF006): referenzlose Tasks darf der GC einsammeln.
+        emb_check_task = asyncio.create_task(check_embedding_model_available())
+        app.state.emb_check_task = emb_check_task
     except Exception:
         pass
     yield
     cleanup_task.cancel()
     try: p0_worker_task.cancel()
-    except: pass
+    except Exception: pass
     try: retention_task_handle.cancel()
-    except: pass
+    except Exception: pass
     # Persistenten Ollama-Client schliessen
     from app.services.llm import _ollama_client
     if _ollama_client and not _ollama_client.is_closed:

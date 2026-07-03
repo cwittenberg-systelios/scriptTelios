@@ -17,6 +17,10 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
+# Hintergrund-Warmup-Tasks (Referenzhaltung gegen GC, RUF006)
+_BG_WARMUP_TASKS: set = set()
+
 # Maximale Chunk-Laenge in Sekunden (15 Minuten)
 # Groessere Chunks reduzieren Setup-Overhead (VAD-Initialisierung, Modell-Transfer)
 # Bei 71-Min-Aufnahme: 5 Chunks statt 8.
@@ -740,7 +744,11 @@ async def transcribe_audio(file_path: Path) -> dict:
     # Bei FREE_VRAM=False: verhindert Ollama-Inaktivitäts-Timeout.
     # Fehler im Warmup werden geloggt aber nie an den Caller weitergegeben.
     import asyncio
-    asyncio.ensure_future(_ollama_warmup())
+    # Referenz halten (RUF006, analog job_queue._spawn_db_task): sonst darf
+    # der GC den laufenden Warmup-Task einsammeln. Modul-Set + discard-Callback.
+    _warmup_task = asyncio.ensure_future(_ollama_warmup())
+    _BG_WARMUP_TASKS.add(_warmup_task)
+    _warmup_task.add_done_callback(_BG_WARMUP_TASKS.discard)
 
     # Audio bleibt erhalten — retention.py loescht nach 24h (v18)
 

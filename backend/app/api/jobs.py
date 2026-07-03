@@ -41,7 +41,6 @@ from app.services.staging import (
     STAGE1_VERLAUF_WORKFLOWS,
     STAGE1_VERLAUF_MIN_WORDS,
     STAGE1_TRANSCRIPT_WORKFLOWS,
-    STAGE1_TRANSCRIPT_MIN_WORDS,
     should_run_verlauf_stage1,
     should_run_transcript_stage1,
     verlauf_stage1_skip_reason,
@@ -61,7 +60,8 @@ logger = logging.getLogger(__name__)
 _STAGE1_WORKFLOWS = STAGE1_VERLAUF_WORKFLOWS
 _STAGE1_MIN_WORDS = STAGE1_VERLAUF_MIN_WORDS
 _TRANSCRIPT_STAGE1_WORKFLOWS = STAGE1_TRANSCRIPT_WORKFLOWS
-_TRANSCRIPT_STAGE1_MIN_WORDS = STAGE1_TRANSCRIPT_MIN_WORDS
+# _TRANSCRIPT_STAGE1_MIN_WORDS entfernt (DRY-Fix 2026-07-01):
+# settings.TRANSCRIPT_STAGE1_MIN_WORDS ist die einzige Quelle.
 
 # Separater LLM-IO-Logger – schreibt vollständige System/User-Prompts UND die
 # erzeugten Outputs in prompts.log. Zweck: manuelle Qualitätsinspektion
@@ -145,7 +145,9 @@ def _log_output(job_id: str, workflow: str, call_label: str,
                 f"  [words={len(out.split())} "
                 f"think_ratio={telemetry.get('think_ratio')} "
                 f"tokens_hit_cap={telemetry.get('tokens_hit_cap')} "
-                f"degraded={telemetry.get('degraded')}]"
+                f"degraded={telemetry.get('degraded')} "
+                f"input_truncated={telemetry.get('input_truncated')} "
+                f"output_budget_reduced={telemetry.get('output_budget_reduced')}]"
             )
         except Exception:
             tele = ""
@@ -520,7 +522,7 @@ from app.models.schemas import (
     RepairResponse,
 )
 from app.services.quality_check import combined_result_text
-from app.services.prompts import ROLE_PREAMBLE
+from app.services.prompts import REPAIR_SYSTEM_PROMPT
 from app.core.workflows import max_tokens_for
 
 
@@ -745,14 +747,19 @@ async def _run_repair_coroutine(
         except Exception:
             pass
 
-    _log_prompt(job.job_id, workflow, "repair", ROLE_PREAMBLE, final_prompt)
+    _log_prompt(job.job_id, workflow, "repair", REPAIR_SYSTEM_PROMPT, final_prompt)
     result = await generate_text(
-        ROLE_PREAMBLE,
+        REPAIR_SYSTEM_PROMPT,
         final_prompt,
         max_tokens=max_tok,
         model=model_override,
         workflow=workflow,
         on_progress=_on_tok,
+        force_hard_no_think=True,
+        # O5 (2026-07-01): Ueberarbeitung soll deterministisch sein, nicht
+        # kreativ - kalte Temperatur statt Profil-Default (~0.4) bzw. dem
+        # +0.2-Nudge des harten Anti-Think-Pfads.
+        temperature_override=0.15,
     )
 
     raw = (result.get("text") or "").strip()
@@ -859,6 +866,291 @@ async def repair_execute(
         parent_job_id=job_id,
         workflow=workflow,
     )
+
+
+# ── R2 (2026-07-01): Stage-1-Phasen aus _run() extrahiert ─────────────────────
+#
+# create_generate_job/_run war eine >1900-Zeilen-Closure. Die beiden Stage-1-
+# Bloecke (Verlauf- und Transkript-Verdichtung) sind in sich geschlossen und
+# leben jetzt als Modul-Funktionen mit expliziten Ein-/Ausgaben. Verhalten
+# ist 1:1 identisch (gleiche Logs, gleiche Audit-Shapes, gleiche Fallbacks);
+# das 6-fach duplizierte Audit-Dict baut _stage1_audit_bundle().
+
+
+def _stage1_audit_bundle(
+    *,
+    applied: bool,
+    raw_word_count: int,
+    summary_word_count: Optional[int] = None,
+    compression_ratio: Optional[float] = None,
+    duration_s: Optional[float] = None,
+    telemetry: Optional[dict] = None,
+    retry_used: bool = False,
+    retry_telemetry: Optional[dict] = None,
+    degraded: bool = False,
+    issues: Optional[list] = None,
+    target_words: Optional[int] = None,
+    fallback_reason: Optional[str] = None,
+) -> dict:
+    """Einheitliche Audit-Struktur fuer beide Stage-1-Pipelines."""
+    return {
+        "applied":              applied,
+        "raw_word_count":       raw_word_count,
+        "summary_word_count":   summary_word_count,
+        "compression_ratio":    compression_ratio,
+        "duration_s":           duration_s,
+        "telemetry":            telemetry or {},
+        "retry_used":           retry_used,
+        "retry_telemetry":      retry_telemetry or {},
+        "degraded":             degraded,
+        "issues":               issues or [],
+        "target_words":         target_words,
+        "fallback_reason":      fallback_reason,
+    }
+
+
+async def _run_verlauf_stage1(
+    *,
+    workflow: str,
+    verlaufsdoku_text: str,
+    patient_initial: Optional[str],
+    job,
+    bands: dict,
+) -> tuple[str, Optional[dict]]:
+    """v19.2 Schritt 5: Stage-1-Pipeline (Verlauf-Verdichtung).
+
+    Aktivierung an drei Bedingungen geknuepft:
+      1. Feature-Flag STAGE1_ENABLED ist gesetzt (default: True ab v19.2)
+      2. Workflow gehoert zur Whitelist (Verlaengerung, Folgeverl., EB)
+      3. Bereinigte Verlaufsdoku hat substanzielle Laenge (>=1500 Woerter)
+
+    Returns (ggf. ersetzter verlaufsdoku_text, audit_bundle_oder_None).
+    Bei Erfolg: verlaufsdoku_text wird durch die Stage-1-Summary ersetzt.
+    Bei Fehler (Exception, leerer/zu kurzer Output): Fallback auf das
+    Original — Job laeuft weiter, aber mit erhoehtem VRAM-Risiko in Stage 2.
+    """
+    _stage1_enabled = getattr(settings, "STAGE1_ENABLED", True)
+
+    if should_run_verlauf_stage1(
+        workflow,
+        verlaufsdoku_text,
+        flag_enabled=_stage1_enabled,
+    ):
+        verlaufsdoku_raw_text = verlaufsdoku_text
+        raw_words = len(verlaufsdoku_raw_text.split())
+        logger.info(
+            "Stage 1 aktiviert fuer Job %s (%s): Verlauf hat %d Woerter",
+            job.job_id, workflow, raw_words,
+        )
+
+        # Optional: Sub-Progress innerhalb der Extraktions-Phase
+        try:
+            if "extraction" in bands:
+                eb = bands["extraction"]
+                # 70% des Extraktions-Bandes ist die Stage-1-Phase
+                stage1_progress = eb[0] + int((eb[1] - eb[0]) * 0.7)
+                job.set_progress(stage1_progress, "Sammeln und Zusammenfassen von Informationen.")
+        except Exception:
+            pass
+
+        # v19.2.1: STAGE1_TARGET_WORDS nur nutzen wenn explizit gesetzt.
+        # Andernfalls den proportionalen Default von summarize_verlauf greifen lassen
+        # (target = max(800, raw_words * 0.12)). Hintergrund: fixe 4000w war zu hoch,
+        # fuehrte zu 95% Failure-Rate weil Qwen3 konsistent ~500-1500w produziert.
+        target_words_override = getattr(settings, "STAGE1_TARGET_WORDS", None)
+        try:
+            summarize_kwargs = {
+                "verlauf_text":     verlaufsdoku_raw_text,
+                "workflow":         workflow,
+                "patient_initial":  patient_initial,
+            }
+            if target_words_override is not None:
+                summarize_kwargs["target_words"] = target_words_override
+            stage1_result = await summarize_verlauf(**summarize_kwargs)
+            # Erfolg -> ersetzen, Audit-Bundle aufbauen
+            # target_words kommt jetzt aus stage1_result (echter Wert),
+            # nicht aus der lokalen Variable
+            effective_target = stage1_result.get("target_words", target_words_override)
+            audit = _stage1_audit_bundle(
+                applied=True,
+                raw_word_count=stage1_result["raw_word_count"],
+                summary_word_count=stage1_result["summary_word_count"],
+                compression_ratio=stage1_result["compression_ratio"],
+                duration_s=stage1_result["duration_s"],
+                telemetry=stage1_result.get("telemetry", {}),
+                retry_used=stage1_result.get("retry_used", False),
+                retry_telemetry=stage1_result.get("retry_telemetry", {}),
+                degraded=stage1_result.get("degraded", False),
+                issues=stage1_result.get("issues", []),
+                target_words=effective_target,
+            )
+            logger.info(
+                "Stage 1 erfolgreich: %d -> %d Woerter (Kompression %.0f%%), "
+                "retry=%s, degraded=%s, issues=%d",
+                stage1_result["raw_word_count"],
+                stage1_result["summary_word_count"],
+                (1 - stage1_result["compression_ratio"]) * 100,
+                stage1_result["retry_used"],
+                stage1_result["degraded"],
+                len(stage1_result.get("issues", [])),
+            )
+            return stage1_result["summary"], audit
+        except Exception as e:
+            # Fallback: Original-Verlauf behalten, Audit-Eintrag mit Begruendung
+            logger.warning(
+                "Stage 1 fehlgeschlagen (%s), Fallback auf Roh-Verlauf",
+                e,
+            )
+            audit = _stage1_audit_bundle(
+                applied=False,
+                raw_word_count=raw_words,
+                target_words=target_words_override,
+                fallback_reason=f"exception: {type(e).__name__}: {str(e)[:200]}",
+            )
+            # verlaufsdoku_text bleibt unveraendert (das Original)
+            return verlaufsdoku_text, audit
+    elif workflow in STAGE1_VERLAUF_WORKFLOWS and verlaufsdoku_text:
+        # Workflow waere passend, aber Verlauf zu kurz oder Flag aus.
+        # Trotzdem einen Mini-Audit-Eintrag, damit man im Performance-Log
+        # sehen kann _warum_ Stage 1 nicht lief.
+        reason = verlauf_stage1_skip_reason(
+            workflow,
+            verlaufsdoku_text,
+            flag_enabled=_stage1_enabled,
+        )
+        audit = _stage1_audit_bundle(
+            applied=False,
+            raw_word_count=len(verlaufsdoku_text.split()),
+            target_words=getattr(settings, "STAGE1_TARGET_WORDS", None),
+            fallback_reason=reason,
+        )
+        return verlaufsdoku_text, audit
+
+    return verlaufsdoku_text, None
+
+
+async def _run_transcript_stage1(
+    *,
+    workflow: str,
+    transkript_text: str,
+    patient_initial: Optional[str],
+    job,
+    bands: dict,
+) -> tuple[str, Optional[str], Optional[dict]]:
+    """v19.3 Transkript-Stage-1 (Transkript-Verdichtung).
+
+    Verdichtet Sitzungs-Transkripte auf eine 3-Sektionen-Synthese BEVOR
+    sie in den Hauptcall gehen. Wirkt nur fuer Workflows
+    {dokumentation, anamnese}.
+
+    Returns (ggf. ersetzter transkript_text, summary_text_oder_None,
+    audit_bundle_oder_None). Bei Erfolg wird transkript_text durch die
+    Synthese ersetzt und die Synthese zusaetzlich fuer den Repair-Kontext
+    zurueckgegeben (v19.3-Persistierung). Bei Fehler: Fallback auf
+    Roh-Transkript (_sample_uniformly-Risiko bleibt).
+    """
+    _tr_stage1_enabled = getattr(settings, "TRANSCRIPT_STAGE1_ENABLED", True)
+    # DRY-Fix 2026-07-01: settings ist die einzige Quelle (staging
+    # re-exportiert denselben Wert) - kein getattr-Fallback mehr noetig.
+    _tr_stage1_min_words = settings.TRANSCRIPT_STAGE1_MIN_WORDS
+
+    if should_run_transcript_stage1(
+        workflow,
+        transkript_text,
+        flag_enabled=_tr_stage1_enabled,
+        min_words=_tr_stage1_min_words,
+    ):
+        transkript_raw_text = transkript_text
+        tr_raw_words = len(transkript_raw_text.split())
+        logger.info(
+            "Transcript-Stage 1 aktiviert fuer Job %s (%s): Transkript hat %d Woerter",
+            job.job_id, workflow, tr_raw_words,
+        )
+
+        try:
+            if "extraction" in bands:
+                eb = bands["extraction"]
+                # 90% des Extraktions-Bandes ist die Transkript-Stage-1-Phase
+                # (Verlauf-Stage-1 nutzt 70%; Transkript-Stage-1 kommt danach)
+                tr_stage1_progress = eb[0] + int((eb[1] - eb[0]) * 0.9)
+                job.set_progress(tr_stage1_progress, "Transkript-Verdichtung (Stage 1)")
+        except Exception:
+            pass
+
+        tr_target_override = getattr(settings, "TRANSCRIPT_STAGE1_TARGET_WORDS", None)
+        try:
+            tr_kwargs = {
+                "transcript_text": transkript_raw_text,
+                "workflow":        workflow,
+                "patient_initial": patient_initial,
+            }
+            if tr_target_override is not None:
+                tr_kwargs["target_words"] = tr_target_override
+            tr_result = await summarize_transcript(**tr_kwargs)
+
+            effective_target = tr_result.get("target_words", tr_target_override)
+            audit = _stage1_audit_bundle(
+                applied=True,
+                raw_word_count=tr_result["raw_word_count"],
+                summary_word_count=tr_result["summary_word_count"],
+                compression_ratio=tr_result["compression_ratio"],
+                duration_s=tr_result["duration_s"],
+                telemetry=tr_result.get("telemetry", {}),
+                retry_used=tr_result.get("retry_used", False),
+                retry_telemetry=tr_result.get("retry_telemetry", {}),
+                degraded=tr_result.get("degraded", False),
+                issues=tr_result.get("issues", []),
+                target_words=effective_target,
+            )
+            logger.info(
+                "Transcript-Stage 1 erfolgreich: %d -> %d Woerter "
+                "(Kompression %.0f%%), retry=%s",
+                tr_result["raw_word_count"],
+                tr_result["summary_word_count"],
+                (1 - tr_result["compression_ratio"]) * 100,
+                tr_result["retry_used"],
+            )
+            # ÜBERSCHREIBEN + v19.3: fuer Repair-Kontext persistieren
+            return tr_result["summary"], tr_result["summary"], audit
+        except Exception as e:
+            # Fallback: Roh-Transkript behalten, Audit mit Begruendung.
+            # _sample_uniformly in llm.py wird dann vermutlich greifen.
+            logger.warning(
+                "Transcript-Stage 1 fehlgeschlagen (%s), Fallback auf "
+                "Roh-Transkript (_sample_uniformly wird vermutlich greifen)",
+                e,
+            )
+            audit = _stage1_audit_bundle(
+                applied=False,
+                raw_word_count=tr_raw_words,
+                target_words=tr_target_override,
+                fallback_reason=f"exception: {type(e).__name__}: {str(e)[:200]}",
+            )
+            # transkript_text bleibt das Original (mit Sampling-Risiko)
+            return transkript_text, None, audit
+    elif workflow in STAGE1_TRANSCRIPT_WORKFLOWS and transkript_text:
+        # Workflow waere passend, aber Transkript zu kurz oder Flag aus.
+        # Mini-Audit-Eintrag damit man im Performance-Log sieht _warum_.
+        _tr_actual_words = len(transkript_text.split())
+        reason = transcript_stage1_skip_reason(
+            workflow,
+            transkript_text,
+            flag_enabled=_tr_stage1_enabled,
+            min_words=_tr_stage1_min_words,
+        )
+        logger.info(
+            "Transcript-Stage 1 NICHT aktiviert fuer Job %s (%s): %s",
+            job.job_id, workflow, reason,
+        )
+        audit = _stage1_audit_bundle(
+            applied=False,
+            raw_word_count=_tr_actual_words,
+            target_words=getattr(settings, "TRANSCRIPT_STAGE1_TARGET_WORDS", None),
+            fallback_reason=reason,
+        )
+        return transkript_text, None, audit
+
+    return transkript_text, None, None
 
 
 # ── Asynchrone Generierung ────────────────────────────────────────────────────
@@ -1130,20 +1422,9 @@ async def create_generate_job(
                 logger.warning("Verlaufsdoku-Extraktion fehlgeschlagen: %s", e)
 
         # ── v19.2 Schritt 5: Stage-1-Pipeline (Verlauf-Verdichtung) ────────
+        # R2 (2026-07-01): Logik extrahiert nach _run_verlauf_stage1()
+        # (Modul-Level, oberhalb von create_generate_job).
         #
-        # Aktivierung an drei Bedingungen geknueppfft:
-        #   1. Feature-Flag STAGE1_ENABLED ist gesetzt (default: True ab v19.2)
-        #   2. Workflow gehoert zur Whitelist (Verlaengerung, Folgeverl., EB)
-        #   3. Bereinigte Verlaufsdoku hat substanzielle Laenge (>=1500 Woerter)
-        #
-        # Bei Erfolg: verlaufsdoku_text wird durch die Stage-1-Summary ersetzt.
-        # Bei Fehler (Exception, leerer/zu kurzer Output): Fallback auf das
-        # Original — Job laeuft weiter, aber mit erhoehtem VRAM-Risiko in Stage 2.
-        # Audit-Bundle wandert ans Result und in die DB-Spalte
-        # verlauf_summary_audit (siehe Schritt 7).
-        _stage1_audit: Optional[dict] = None
-        _stage1_enabled = getattr(settings, "STAGE1_ENABLED", True)
-
         # v19.4 / B-Fix "Frau S.": Den EXPLIZIT uebergebenen Patientennamen schon
         # VOR Stage 1 aufloesen und an die Verdichter durchreichen. Sonst lief
         # summarize_transcript mit patient_initial=None und nahm den Beispielnamen
@@ -1156,255 +1437,33 @@ async def create_generate_job(
             patientenname.strip() if patientenname and patientenname.strip() else None
         )
 
-        if should_run_verlauf_stage1(
-            workflow,
-            verlaufsdoku_text,
-            flag_enabled=_stage1_enabled,
-        ):
-            verlaufsdoku_raw_text = verlaufsdoku_text
-            raw_words = len(verlaufsdoku_raw_text.split())
-            logger.info(
-                "Stage 1 aktiviert fuer Job %s (%s): Verlauf hat %d Woerter",
-                job.job_id, workflow, raw_words,
-            )
-
-            # Optional: Sub-Progress innerhalb der Extraktions-Phase
-            try:
-                if "extraction" in bands:
-                    eb = bands["extraction"]
-                    # 70% des Extraktions-Bandes ist die Stage-1-Phase
-                    stage1_progress = eb[0] + int((eb[1] - eb[0]) * 0.7)
-                    job.set_progress(stage1_progress, "Sammeln und Zusammenfassen von Informationen.")
-            except Exception:
-                pass
-
-            # v19.2.1: STAGE1_TARGET_WORDS nur nutzen wenn explizit gesetzt.
-            # Andernfalls den proportionalen Default von summarize_verlauf greifen lassen
-            # (target = max(800, raw_words * 0.12)). Hintergrund: fixe 4000w war zu hoch,
-            # fuehrte zu 95% Failure-Rate weil Qwen3 konsistent ~500-1500w produziert.
-            target_words_override = getattr(settings, "STAGE1_TARGET_WORDS", None)
-            try:
-                summarize_kwargs = {
-                    "verlauf_text":     verlaufsdoku_raw_text,
-                    "workflow":         workflow,
-                    "patient_initial":  _patient_initial_early,
-                }
-                if target_words_override is not None:
-                    summarize_kwargs["target_words"] = target_words_override
-                stage1_result = await summarize_verlauf(**summarize_kwargs)
-                # Erfolg → ersetzen, Audit-Bundle aufbauen
-                # target_words kommt jetzt aus stage1_result (echter Wert),
-                # nicht aus der lokalen Variable
-                effective_target = stage1_result.get("target_words", target_words_override)
-                verlaufsdoku_text = stage1_result["summary"]
-                _stage1_audit = {
-                    "applied":              True,
-                    "raw_word_count":       stage1_result["raw_word_count"],
-                    "summary_word_count":   stage1_result["summary_word_count"],
-                    "compression_ratio":    stage1_result["compression_ratio"],
-                    "duration_s":           stage1_result["duration_s"],
-                    "telemetry":            stage1_result.get("telemetry", {}),
-                    "retry_used":           stage1_result.get("retry_used", False),
-                    "retry_telemetry":      stage1_result.get("retry_telemetry", {}),
-                    "degraded":             stage1_result.get("degraded", False),
-                    "issues":               stage1_result.get("issues", []),
-                    "target_words":         effective_target,
-                    "fallback_reason":      None,
-                }
-                logger.info(
-                    "Stage 1 erfolgreich: %d -> %d Woerter (Kompression %.0f%%), "
-                    "retry=%s, degraded=%s, issues=%d",
-                    stage1_result["raw_word_count"],
-                    stage1_result["summary_word_count"],
-                    (1 - stage1_result["compression_ratio"]) * 100,
-                    stage1_result["retry_used"],
-                    stage1_result["degraded"],
-                    len(stage1_result.get("issues", [])),
-                )
-            except Exception as e:
-                # Fallback: Original-Verlauf behalten, Audit-Eintrag mit Begruendung
-                logger.warning(
-                    "Stage 1 fehlgeschlagen (%s), Fallback auf Roh-Verlauf",
-                    e,
-                )
-                _stage1_audit = {
-                    "applied":              False,
-                    "raw_word_count":       raw_words,
-                    "summary_word_count":   None,
-                    "compression_ratio":    None,
-                    "duration_s":           None,
-                    "telemetry":            {},
-                    "retry_used":           False,
-                    "retry_telemetry":      {},
-                    "degraded":             False,
-                    "issues":               [],
-                    "target_words":         target_words_override,
-                    "fallback_reason":      f"exception: {type(e).__name__}: {str(e)[:200]}",
-                }
-                # verlaufsdoku_text bleibt unveraendert (das Original)
-        elif workflow in STAGE1_VERLAUF_WORKFLOWS and verlaufsdoku_text:
-            # Workflow waere passend, aber Verlauf zu kurz oder Flag aus.
-            # Trotzdem einen Mini-Audit-Eintrag, damit man im Performance-Log
-            # sehen kann _warum_ Stage 1 nicht lief.
-            reason = verlauf_stage1_skip_reason(
-                workflow,
-                verlaufsdoku_text,
-                flag_enabled=_stage1_enabled,
-            )
-            _stage1_audit = {
-                "applied":              False,
-                "raw_word_count":       len(verlaufsdoku_text.split()),
-                "summary_word_count":   None,
-                "compression_ratio":    None,
-                "duration_s":           None,
-                "telemetry":            {},
-                "retry_used":           False,
-                "retry_telemetry":      {},
-                "degraded":             False,
-                "issues":               [],
-                "target_words":         getattr(settings, "STAGE1_TARGET_WORDS", None),
-                "fallback_reason":      reason,
-            }
-
-        # ── v19.3 Transkript-Stage-1 (Transkript-Verdichtung) ──────────────
-        #
-        # Verdichtet Sitzungs-Transkripte auf eine 3-Sektionen-Synthese BEVOR
-        # sie in den Hauptcall gehen. Verhindert dass _sample_uniformly in
-        # llm.py (greift ab estimated_input_tokens + max_tokens > MAX_SAFE_CTX
-        # = 20480, was bei Transkripten > ~5000-6000w eintritt) den Inhalt
-        # willkuerlich in 10 Fenstern mit Luecken kuerzt.
-        #
-        # Wirkt nur fuer Workflows {dokumentation, anamnese} - die anderen
-        # bekommen in Produktion kein Transkript.
-        #
-        # Bei Erfolg: transkript_text wird durch die Stage-1-Synthese ersetzt.
-        # Bei Fehler: Fallback auf Roh-Transkript (Sampling-Risiko bleibt).
-        # Audit-Bundle landet im result-Dict als "transcript_summary_audit".
-        #
-        # WICHTIG: Wir snapshotten das Roh-Transkript VOR dem Stage-1-Lauf
-        # in _transkript_raw_for_result. Das Result-Dict liefert immer das
-        # ROH-Transkript an's Frontend (Therapeut*innen wollen Whisper-Output
-        # zum Download), waehrend die LLM-Pipeline (build_user_content,
-        # P2-Befund) mit der Verdichtung weiterarbeitet.
-        _transkript_raw_for_result = transkript_text
-        _transcript_stage1_audit: Optional[dict] = None
-        # v19.3: Transcript-Synthese persistieren wenn Stage 1 erfolgreich
-        _transcript_summary_text: Optional[str] = None
-        _tr_stage1_enabled = getattr(settings, "TRANSCRIPT_STAGE1_ENABLED", True)
-        _tr_stage1_min_words = getattr(
-            settings, "TRANSCRIPT_STAGE1_MIN_WORDS", _TRANSCRIPT_STAGE1_MIN_WORDS,
+        verlaufsdoku_text, _stage1_audit = await _run_verlauf_stage1(
+            workflow=workflow,
+            verlaufsdoku_text=verlaufsdoku_text,
+            patient_initial=_patient_initial_early,
+            job=job,
+            bands=bands,
         )
 
-        if should_run_transcript_stage1(
-            workflow,
+        # ── v19.3 Transkript-Stage-1 (Transkript-Verdichtung) ──────────────
+        # R2 (2026-07-01): Logik extrahiert nach _run_transcript_stage1()
+        # (Modul-Level). WICHTIG: Wir snapshotten das Roh-Transkript VOR dem
+        # Stage-1-Lauf — die Job-API liefert weiterhin das ROH-Transkript ans
+        # Frontend (Therapeut*innen wollen Whisper-Output zum Download),
+        # waehrend die LLM-Pipeline (build_user_content, P2-Befund) mit der
+        # Verdichtung weiterarbeitet.
+        _transkript_raw_for_result = transkript_text
+        (
             transkript_text,
-            flag_enabled=_tr_stage1_enabled,
-            min_words=_tr_stage1_min_words,
-        ):
-            transkript_raw_text = transkript_text
-            tr_raw_words = len(transkript_raw_text.split())
-            logger.info(
-                "Transcript-Stage 1 aktiviert fuer Job %s (%s): Transkript hat %d Woerter",
-                job.job_id, workflow, tr_raw_words,
-            )
-
-            try:
-                if "extraction" in bands:
-                    eb = bands["extraction"]
-                    # 90% des Extraktions-Bandes ist die Transkript-Stage-1-Phase
-                    # (Verlauf-Stage-1 nutzt 70%; Transkript-Stage-1 kommt danach)
-                    tr_stage1_progress = eb[0] + int((eb[1] - eb[0]) * 0.9)
-                    job.set_progress(tr_stage1_progress, "Transkript-Verdichtung (Stage 1)")
-            except Exception:
-                pass
-
-            tr_target_override = getattr(settings, "TRANSCRIPT_STAGE1_TARGET_WORDS", None)
-            try:
-                tr_kwargs = {
-                    "transcript_text": transkript_raw_text,
-                    "workflow":        workflow,
-                    "patient_initial": _patient_initial_early,
-                }
-                if tr_target_override is not None:
-                    tr_kwargs["target_words"] = tr_target_override
-                tr_result = await summarize_transcript(**tr_kwargs)
-
-                effective_target = tr_result.get("target_words", tr_target_override)
-                transkript_text = tr_result["summary"]   # ÜBERSCHREIBEN
-                _transcript_summary_text = tr_result["summary"]  # v19.3: fuer Repair-Kontext persistieren
-                _transcript_stage1_audit = {
-                    "applied":              True,
-                    "raw_word_count":       tr_result["raw_word_count"],
-                    "summary_word_count":   tr_result["summary_word_count"],
-                    "compression_ratio":    tr_result["compression_ratio"],
-                    "duration_s":           tr_result["duration_s"],
-                    "telemetry":            tr_result.get("telemetry", {}),
-                    "retry_used":           tr_result.get("retry_used", False),
-                    "retry_telemetry":      tr_result.get("retry_telemetry", {}),
-                    "degraded":             tr_result.get("degraded", False),
-                    "issues":               tr_result.get("issues", []),
-                    "target_words":         effective_target,
-                    "fallback_reason":      None,
-                }
-                logger.info(
-                    "Transcript-Stage 1 erfolgreich: %d -> %d Woerter "
-                    "(Kompression %.0f%%), retry=%s",
-                    tr_result["raw_word_count"],
-                    tr_result["summary_word_count"],
-                    (1 - tr_result["compression_ratio"]) * 100,
-                    tr_result["retry_used"],
-                )
-            except Exception as e:
-                # Fallback: Roh-Transkript behalten, Audit mit Begruendung.
-                # _sample_uniformly in llm.py wird dann vermutlich greifen.
-                logger.warning(
-                    "Transcript-Stage 1 fehlgeschlagen (%s), Fallback auf "
-                    "Roh-Transkript (_sample_uniformly wird vermutlich greifen)",
-                    e,
-                )
-                _transcript_stage1_audit = {
-                    "applied":              False,
-                    "raw_word_count":       tr_raw_words,
-                    "summary_word_count":   None,
-                    "compression_ratio":    None,
-                    "duration_s":           None,
-                    "telemetry":            {},
-                    "retry_used":           False,
-                    "retry_telemetry":      {},
-                    "degraded":             False,
-                    "issues":               [],
-                    "target_words":         tr_target_override,
-                    "fallback_reason":      f"exception: {type(e).__name__}: {str(e)[:200]}",
-                }
-                # transkript_text bleibt das Original (mit Sampling-Risiko)
-        elif workflow in STAGE1_TRANSCRIPT_WORKFLOWS and transkript_text:
-            # Workflow waere passend, aber Transkript zu kurz oder Flag aus.
-            # Mini-Audit-Eintrag damit man im Performance-Log sieht _warum_.
-            _tr_actual_words = len(transkript_text.split())
-            reason = transcript_stage1_skip_reason(
-                workflow,
-                transkript_text,
-                flag_enabled=_tr_stage1_enabled,
-                min_words=_tr_stage1_min_words,
-            )
-            logger.info(
-                "Transcript-Stage 1 NICHT aktiviert fuer Job %s (%s): %s",
-                job.job_id, workflow, reason,
-            )
-            _transcript_stage1_audit = {
-                "applied":              False,
-                "raw_word_count":       _tr_actual_words,
-                "summary_word_count":   None,
-                "compression_ratio":    None,
-                "duration_s":           None,
-                "telemetry":            {},
-                "retry_used":           False,
-                "retry_telemetry":      {},
-                "degraded":             False,
-                "issues":               [],
-                "target_words":         getattr(settings, "TRANSCRIPT_STAGE1_TARGET_WORDS", None),
-                "fallback_reason":      reason,
-            }
+            _transcript_summary_text,   # v19.3: fuer Repair-Kontext persistieren
+            _transcript_stage1_audit,
+        ) = await _run_transcript_stage1(
+            workflow=workflow,
+            transkript_text=transkript_text,
+            patient_initial=_patient_initial_early,
+            job=job,
+            bands=bands,
+        )
 
         # P3/P4: Antragsvorlage (EB/VA mit Diagnosen, Anamnese, ohne Verlauf)
         antragsvorlage_text = ""
@@ -1616,6 +1675,13 @@ async def create_generate_job(
         # 5. Generieren – jede Variable hat genau eine Bedeutung
         # v18: prompt-Feld → workflow_instructions, neuer Parameter befund_vorlage.
         # `instructions` wurde oben aus workflow_instructions/prompt geholt und validiert.
+        # Issue-2: Quellen fuer die Glossar-Konditionalitaet zusammenfuehren.
+        # Bewusst die ROH-Quellen VOR dem Budget-Guard (der verdichtet nur -
+        # Erkennung auf den volleren Texten ist die konservative Richtung).
+        _glossar_source = "\n".join(t for t in (
+            transkript_text, verlaufsdoku_text, selbstauskunft_text,
+            vorbefunde_text, antragsvorlage_text, vorantrag_text,
+        ) if t)
         system = build_system_prompt(
             workflow=workflow,
             workflow_instructions=instructions,
@@ -1624,6 +1690,7 @@ async def create_generate_job(
             diagnosen=dx_list,
             patient_name=patient_name,
             word_limits=word_limits,
+            source_text=_glossar_source,
         )
         # ── v19.4: Kombinierter Input-Budget-Guard ───────────────────────────
         # Nach allen isolierten Stage-1-Verdichtungen: prueft die SUMME aller
@@ -1631,7 +1698,8 @@ async def create_generate_job(
         # Quellen (v.a. Selbstauskunft/Vorbefunde) quellentreu nach. Laeuft NACH
         # build_system_prompt (exakte System-Groesse) und VOR build_user_content
         # (das die ggf. verdichteten Quellen konsumiert). Der System-Prompt
-        # haengt nicht von den Quell-Texten ab, daher ist die Reihenfolge sicher.
+        # haengt seit Issue-2 nur SCHWACH von den Quellen ab (Glossar-Wahl auf den
+        # ROH-Quellen); der Guard verdichtet quellentreu, die Wahl bleibt gueltig.
         _budget_updated, _budget_audit = await _apply_input_budget_guard(
             workflow=workflow,
             system_prompt=system,
@@ -1765,6 +1833,7 @@ async def create_generate_job(
                 workflow_instructions="",  # Befund hat keinen Frontend-Auftragsteil
                 diagnosen=dx_list,
                 befund_vorlage=befund_vorlage,
+                source_text=_glossar_source,
             )
             # User-Content fuer Befund: Selbstauskunft + Vorbefunde + die generierte Anamnese
             befund_user_parts = []

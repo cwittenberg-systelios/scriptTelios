@@ -267,6 +267,32 @@ class JobQueue:
     def __init__(self):
         self._cache: dict[str, JobState] = {}
         self._max_cache = 500
+        # Referenzen auf Hintergrund-DB-Tasks. Ohne Referenz darf der
+        # Python-GC ensure_future-Tasks jederzeit einsammeln (offizielle
+        # asyncio-Doku) - der DB-Insert kann dann still verloren gehen.
+        # Das Set haelt die Referenz bis zum Abschluss; add_done_callback
+        # raeumt auf und loggt Exceptions statt sie zu verschlucken.
+        self._bg_tasks: set = set()
+
+    def _spawn_db_task(self, coro, what: str) -> None:
+        """Startet einen Hintergrund-DB-Task mit gehaltener Referenz.
+
+        Ersetzt das nackte asyncio.ensure_future() (fire-and-forget):
+          1. Referenz im Set -> kein GC-Verlust des laufenden Tasks.
+          2. done_callback loggt Exceptions, die sonst nur beim
+             Interpreter-Shutdown als 'Task exception was never retrieved'
+             auftauchen wuerden.
+        """
+        task = asyncio.ensure_future(coro)
+        self._bg_tasks.add(task)
+
+        def _done(t: asyncio.Task, _what=what) -> None:
+            self._bg_tasks.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                logger.error("Hintergrund-DB-Task fehlgeschlagen (%s): %r",
+                             _what, t.exception())
+
+        task.add_done_callback(_done)
 
     def create_job(
         self,
@@ -291,10 +317,11 @@ class JobQueue:
                           if j.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)])
         logger.info("Job erstellt: %s (%s) | Warteschlange: %d", job_id, workflow, queue_size)
 
-        # DB-Insert asynchron (fire-and-forget) – gleicher Ansatz wie cancel_job
-        asyncio.ensure_future(self._db_insert_job(
+        # DB-Insert asynchron im Hintergrund - mit gehaltener Task-Referenz
+        # (siehe _spawn_db_task; vorher fire-and-forget mit GC-Verlust-Risiko)
+        self._spawn_db_task(self._db_insert_job(
             job_id, workflow, description, therapeut_id, patient_kuerzel,
-        ))
+        ), what=f"insert_job {job_id}")
 
         return state
 
@@ -587,8 +614,8 @@ class JobQueue:
             return False
         state._cancel_requested = True
         logger.info("Abbruch angefordert: %s (%s)", job_id, state.workflow)
-        # Async DB-Update
-        asyncio.ensure_future(self._db_set_cancel(job_id))
+        # Async DB-Update - mit gehaltener Task-Referenz (siehe _spawn_db_task)
+        self._spawn_db_task(self._db_set_cancel(job_id), what=f"set_cancel {job_id}")
         return True
 
     async def _db_set_cancel(self, job_id: str):

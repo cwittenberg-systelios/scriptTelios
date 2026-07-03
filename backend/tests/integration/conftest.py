@@ -48,8 +48,14 @@ def init_test_db():
 
     async def teardown():
         # Pending Background-Tasks (z.B. fire-and-forget job_queue._db_*)
-        # 50ms drainen, sonst halten sie Connections und DROP TABLE blockiert.
-        await asyncio.sleep(0.05)
+        # drainen, sonst halten sie Connections und DROP TABLE blockiert.
+        # v19.3: von 50ms auf 200ms erhoeht - bei langen Test-Runs (>20min,
+        # 800+ Tests) summieren sich Tasks auf und das alte Timeout reichte
+        # nicht mehr (8 sporadische "database is locked" failures auf
+        # style_embeddings-INSERTs nach DB-Last gesehen). 200ms ist ein
+        # konservativer Kompromiss - addiert ca. 3min auf den gesamten
+        # Test-Lauf (864 Tests * 0.15s extra), aber keine flaky Failures.
+        await asyncio.sleep(0.2)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
         # Pool leeren -> alle gepoolten Connections schliessen.
