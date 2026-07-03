@@ -1218,6 +1218,15 @@ async def create_generate_job(
             ),
         )
 
+    # Workflow-Modell-Routing (2026-07-03): Wenn das Frontend KEIN Modell
+    # explizit waehlt, den workflow-spezifischen Default aus der Konfiguration
+    # anwenden (gemma4:31b fuer Doku/Anamnese/EB, mistral-small3.2 fuer
+    # Antraege). Explizite Frontend-Wahl hat Vorrang; ohne Map-Eintrag faellt
+    # model_for_workflow() auf OLLAMA_MODEL zurueck. Das aufgeloeste Modell
+    # fliesst ueber die bestehende model-Variable in die gesamte _run-Kette.
+    if not (model and model.strip()):
+        model = settings.model_for_workflow(workflow)
+
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht thread-safe)
     audio_bytes            = await audio.read()          if audio          and audio.filename          else None
     audio_name             = audio.filename               if audio          and audio.filename          else None

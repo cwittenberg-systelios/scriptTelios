@@ -339,6 +339,8 @@ function friendlyModelLabel(name, allNames) {
 
 function JobModelPicker({ workflow, value, onChange }) {
   const [models, setModels] = useState([]);
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef(null);
 
   useEffect(() => {
     let alive = true;
@@ -368,40 +370,92 @@ function JobModelPicker({ workflow, value, onChange }) {
     return () => { alive = false; };
   }, [workflow]);
 
+  // Klick ausserhalb schliesst das Dropdown
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
   if (models.length < 2) return null;   // eine Option = keine Wahl noetig
 
   const names = models.map(m => m.name);
   const recFam = JOB_MODEL_RECOMMENDATION[workflow];
+  // Das konkret empfohlene Modell (hoechste Version der empfohlenen Familie)
+  const recModel = names
+    .filter(n => modelFamily(n) === recFam)
+    .sort((a, b) => {
+      const va = parseFloat((a.match(/(\d+(?:\.\d+)?)/) || [0, 0])[1]);
+      const vb = parseFloat((b.match(/(\d+(?:\.\d+)?)/) || [0, 0])[1]);
+      return vb - va;
+    })[0];
+
+  const selectedLabel = value ? friendlyModelLabel(value, names) : "Modell wählen";
+
+  // Empfehlung-Chip (farbig, runde Ecken) - wiederverwendbar
+  const Chip = ({ light }) => (
+    <span style={{
+      fontSize:9, fontWeight:700, textTransform:"uppercase",
+      letterSpacing:"0.05em", padding:"1px 6px", borderRadius:10,
+      background: light ? "rgba(255,255,255,0.25)" : "var(--st-teal, #2a7d7d)",
+      color:"white", whiteSpace:"nowrap",
+    }}>Empfehlung</span>
+  );
 
   return (
-    <div style={{display:"flex", alignItems:"center", gap:4, flexWrap:"wrap", margin:"8px 0 6px"}}>
+    <div style={{display:"flex", alignItems:"center", gap:8, margin:"8px 0 6px"}}>
       <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)",
-        textTransform:"uppercase", letterSpacing:"0.06em", marginRight:2}}>Modell</span>
-      {models.map(m => {
-        const isActive = value === m.name;
-        const isRec = modelFamily(m.name) === recFam;
-        return (
-          <button key={m.name} onClick={() => onChange(m.name)} title={m.name}
-            style={{
-              display:"inline-flex", alignItems:"center", gap:5,
-              padding:"3px 8px", borderRadius:3, cursor:"pointer",
-              fontSize:11, fontWeight: isActive ? 700 : 400,
-              background: isActive ? "var(--st-red)" : "var(--st-gray-light)",
-              color: isActive ? "white" : "var(--st-text-soft)",
-              border: isActive ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
-            }}>
-            {friendlyModelLabel(m.name, names)}
-            {isRec && (
-              <span style={{
-                fontSize:9, fontWeight:700, textTransform:"uppercase",
-                letterSpacing:"0.05em", padding:"1px 5px", borderRadius:8,
-                background: isActive ? "rgba(255,255,255,0.25)" : "var(--st-teal, #2a7d7d)",
-                color:"white",
-              }}>Empfehlung</span>
-            )}
-          </button>
-        );
-      })}
+        textTransform:"uppercase", letterSpacing:"0.06em"}}>Modell</span>
+
+      <div ref={boxRef} style={{position:"relative", minWidth:180}}>
+        {/* Select-Feld (geschlossen) */}
+        <button type="button" onClick={() => setOpen(o => !o)}
+          style={{
+            width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+            gap:8, padding:"5px 10px", borderRadius:4, cursor:"pointer",
+            fontSize:12, fontWeight:500, textAlign:"left",
+            background:"white", color:"var(--st-text-soft)",
+            border:"1px solid var(--st-gray-border)",
+          }}>
+          <span style={{display:"inline-flex", alignItems:"center", gap:6}}>
+            {selectedLabel}
+            {value && value === recModel && <Chip />}
+          </span>
+          {/* Chevron */}
+          <span style={{fontSize:9, opacity:0.6, transform: open ? "rotate(180deg)" : "none",
+            transition:"transform 0.15s"}}>▼</span>
+        </button>
+
+        {/* Options-Liste (offen) */}
+        {open && (
+          <div style={{
+            position:"absolute", top:"calc(100% + 2px)", left:0, right:0, zIndex:50,
+            background:"white", border:"1px solid var(--st-gray-border)", borderRadius:4,
+            boxShadow:"0 4px 12px rgba(0,0,0,0.12)", overflow:"hidden",
+          }}>
+            {models.map(m => {
+              const isActive = value === m.name;
+              const isRec = m.name === recModel;
+              return (
+                <button key={m.name} type="button" title={m.name}
+                  onClick={() => { onChange(m.name); setOpen(false); }}
+                  style={{
+                    width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+                    gap:8, padding:"7px 10px", cursor:"pointer", fontSize:12, textAlign:"left",
+                    border:"none", borderBottom:"1px solid var(--st-gray-light)",
+                    fontWeight: isActive ? 700 : 400,
+                    background: isActive ? "var(--st-red)" : "white",
+                    color: isActive ? "white" : "var(--st-text-soft)",
+                  }}>
+                  <span>{friendlyModelLabel(m.name, names)}</span>
+                  {isRec && <Chip light={isActive} />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

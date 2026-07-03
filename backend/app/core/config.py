@@ -6,7 +6,7 @@ DATENSCHUTZ-HINWEIS:
   Alle LLM-Anfragen gehen ausschliesslich an den lokalen Ollama-Dienst.
   Es werden keine Daten an externe APIs (Anthropic, OpenAI etc.) gesendet.
 """
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +25,38 @@ class Settings(BaseSettings):
     # ── LLM (ausschliesslich Ollama, lokal) ──────────────────────
     OLLAMA_HOST:  str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen3:32b"
+
+    # ── Workflow-spezifisches Modell-Routing (2026-07-03) ─────────
+    # Default-Modell pro Workflow, wenn das Frontend keins mitsendet.
+    # Grundlage: Modellvergleich Runde 2 + Referenzfall-Analyse:
+    #   - gemma4:31b  fuer transkriptbasierte Doku/Anamnese/Entlassbericht:
+    #     ueberlegene Rekonstruktion aus verrauschten Transkripten (Rollen-/
+    #     Verlaufstreue), sauberes Deutsch ohne erfundene Komposita.
+    #   - mistral-small3.2  fuer die redigiert-strukturierten Antraege
+    #     (Akut/Verlaengerung/Folgeverlaengerung): knapp, sachlich, 0 Fehler
+    #     ueber alle Eval-Faelle, EU/Apache.
+    # Leerer Wert / fehlender Key -> Fallback auf OLLAMA_MODEL (kein Routing).
+    # Explizite Modellwahl im Frontend hat IMMER Vorrang vor dieser Map.
+    # Format wie OLLAMA_MODEL: Ollama-Tag OHNE "ollama/"-Praefix.
+    WORKFLOW_MODEL: dict[str, str] = {
+        "dokumentation":      "gemma4:31b",
+        "anamnese":           "gemma4:31b",
+        "entlassbericht":     "gemma4:31b",
+        "akutantrag":         "mistral-small3.2",
+        "verlaengerung":      "mistral-small3.2",
+        "folgeverlaengerung": "mistral-small3.2",
+    }
+
+    def model_for_workflow(self, workflow: Optional[str]) -> str:
+        """Default-Modell fuer einen Workflow (ohne 'ollama/'-Praefix).
+
+        Reihenfolge der Aufloesung liegt im Aufrufer (jobs.py): explizite
+        Frontend-Wahl > diese Map > OLLAMA_MODEL. Hier nur Map-Lookup mit
+        Fallback auf OLLAMA_MODEL.
+        """
+        if not workflow:
+            return self.OLLAMA_MODEL
+        return self.WORKFLOW_MODEL.get(workflow) or self.OLLAMA_MODEL
     # Erzwingt eine feste Temperatur ueber ALLE Modelle/Pfade (auch den Hard-Anti-
     # Think-Pfad, der sonst +0.2 addiert). None = Modell-Profil gilt wie bisher.
     # Nur fuer den Modellvergleich gedacht (Determinismus): LLM_TEMPERATURE_OVERRIDE=0.0
