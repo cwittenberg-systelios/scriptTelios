@@ -638,6 +638,12 @@ if [ "$NEED_RESTART" = "true" ]; then
     # der dynamische Anpasser clampt auf ~2880 (alter Stand vor v19.1).
     export OLLAMA_FLASH_ATTENTION=true
     export OLLAMA_KV_CACHE_TYPE=q8_0
+    # Workflow-Modell-Routing (2026-07-03): Doku/EB laufen auf gemma4:31b,
+    # Anamnese/Befund/Antraege auf mistral-small3.2. Beide passen NICHT
+    # gleichzeitig in 32 GB VRAM. MAX_LOADED_MODELS=1 erzwingt genau ein
+    # Modell im VRAM: sauberer Wechsel bei Workflow-Wechsel (~30-60s Ladezeit
+    # beim ersten Job nach dem Umschalten) statt unkontrollierter Verdraengung.
+    export OLLAMA_MAX_LOADED_MODELS=1
     nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
     sleep 10
 
