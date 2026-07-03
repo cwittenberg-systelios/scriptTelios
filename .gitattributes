@@ -1,0 +1,11 @@
+# Zeilenenden vereinheitlichen (2026-07-01): app/main.py war die einzige
+# CRLF-Datei im Repo (Mixed Line Endings). Quellcode ist ab jetzt LF.
+*.py    text eol=lf
+*.jsx   text eol=lf
+*.js    text eol=lf
+*.sh    text eol=lf
+*.sql   text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.toml  text eol=lf
