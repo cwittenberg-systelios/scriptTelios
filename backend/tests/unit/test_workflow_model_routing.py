@@ -22,16 +22,21 @@ from app.core.config import settings
 class TestWorkflowModelMap:
 
     def test_doku_gruppe_gemma4(self):
-        for wf in ("dokumentation", "anamnese", "entlassbericht"):
+        for wf in ("dokumentation", "entlassbericht"):
             assert settings.model_for_workflow(wf) == "gemma4:31b", wf
+
+    def test_klinisch_strukturiert_mistral(self):
+        # Anamnese + Befund: AMDP-strukturiert -> mistral
+        for wf in ("anamnese", "befund"):
+            assert settings.model_for_workflow(wf) == "mistral-small3.2", wf
 
     def test_antrags_gruppe_mistral(self):
         for wf in ("akutantrag", "verlaengerung", "folgeverlaengerung"):
             assert settings.model_for_workflow(wf) == "mistral-small3.2", wf
 
     def test_unbekannter_workflow_faellt_auf_default(self):
-        # 'befund' ist ein interner Sub-Workflow ohne eigenen Map-Eintrag
-        assert settings.model_for_workflow("befund") == settings.OLLAMA_MODEL
+        # 'stage1' ist ein interner Sub-Workflow ohne eigenen Map-Eintrag
+        assert settings.model_for_workflow("stage1") == settings.OLLAMA_MODEL
 
     def test_none_faellt_auf_default(self):
         assert settings.model_for_workflow(None) == settings.OLLAMA_MODEL
@@ -46,6 +51,6 @@ class TestWorkflowModelMap:
 
     def test_alle_haupt_workflows_abgedeckt(self):
         # Die sechs frontend-waehlbaren Workflows haben alle einen Default
-        for wf in ("dokumentation", "anamnese", "entlassbericht",
+        for wf in ("dokumentation", "anamnese", "entlassbericht", "befund",
                    "akutantrag", "verlaengerung", "folgeverlaengerung"):
             assert wf in settings.WORKFLOW_MODEL, wf

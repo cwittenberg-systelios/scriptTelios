@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # ── LLM (ausschliesslich Ollama, lokal) ──────────────────────
     OLLAMA_HOST:  str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "qwen3:32b"
+    OLLAMA_MODEL: str = "mistral-small3.2"
 
     # ── Workflow-spezifisches Modell-Routing (2026-07-03) ─────────
     # Default-Modell pro Workflow, wenn das Frontend keins mitsendet.
@@ -40,8 +40,9 @@ class Settings(BaseSettings):
     # Format wie OLLAMA_MODEL: Ollama-Tag OHNE "ollama/"-Praefix.
     WORKFLOW_MODEL: dict[str, str] = {
         "dokumentation":      "gemma4:31b",
-        "anamnese":           "gemma4:31b",
         "entlassbericht":     "gemma4:31b",
+        "anamnese":           "mistral-small3.2",
+        "befund":             "mistral-small3.2",
         "akutantrag":         "mistral-small3.2",
         "verlaengerung":      "mistral-small3.2",
         "folgeverlaengerung": "mistral-small3.2",

@@ -310,7 +310,7 @@ function Tags({ list, onChange }) {
 // Einstellungen (ModelSelector) bleibt der globale Fallback.
 const JOB_MODEL_RECOMMENDATION = {
   dokumentation:      "gemma",
-  anamnese:           "gemma",
+  anamnese:           "mistral",
   entlassbericht:     "gemma",
   akutantrag:         "mistral",
   verlaengerung:      "mistral",
