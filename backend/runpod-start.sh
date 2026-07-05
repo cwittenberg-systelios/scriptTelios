@@ -13,7 +13,7 @@
 #  Optionen:
 #    --hf-token   hf_xxxx   HuggingFace Token fuer pyannote Diarization
 #    --confluence  URL       Confluence-Intranet-URL fuer CORS
-#    --model       NAME      Ollama-Modell (Standard: qwen3:32b)
+#    --model       NAME      Ollama-Modell (Standard: mistral-small3.2)
 #    --help                  Diese Hilfe anzeigen
 #
 #  Beispiel (neuer Pod):
@@ -678,19 +678,19 @@ echo "${GO}Modelle pruefen..."
 
 # .env-Migration: alten/falschen Modellnamen korrigieren
 if [ -f "$BACKEND_DIR/.env" ]; then
-    if grep -q "OLLAMA_MODEL=mistral-nemo\|OLLAMA_MODEL=qwen2.5\|OLLAMA_MODEL=qwen2.5:32b\|OLLAMA_MODEL=qwen3:30b" "$BACKEND_DIR/.env"; then
-        echo "${WARN}.env enthaelt veralteten/suboptimalen Modellnamen – migriere auf qwen3:32b..."
-        sed -i 's|OLLAMA_MODEL=.*|OLLAMA_MODEL=qwen3:32b|' "$BACKEND_DIR/.env"
-        echo "${OK}OLLAMA_MODEL=qwen3:32b gesetzt"
+    if grep -q "OLLAMA_MODEL=mistral-nemo\|OLLAMA_MODEL=qwen2.5\|OLLAMA_MODEL=qwen2.5:32b\|OLLAMA_MODEL=qwen3:30b\|OLLAMA_MODEL=qwen3:32b" "$BACKEND_DIR/.env"; then
+        echo "${WARN}.env enthaelt veralteten/suboptimalen Modellnamen – migriere auf mistral-small3.2..."
+        sed -i 's|OLLAMA_MODEL=.*|OLLAMA_MODEL=mistral-small3.2|' "$BACKEND_DIR/.env"
+        echo "${OK}OLLAMA_MODEL=mistral-small3.2 gesetzt"
     fi
 fi
 
 # Empfohlene Modelle:
-#   RTX Pro 4500 / 32GB:  qwen3:32b       (~19GB)  <- Empfehlung
-#   RTX 4090 / 24GB:      qwen3:32b-q4_K_S        (~18GB)  <- Empfehlung
-#   Alternative (beide):  qwen3:14b-q5_K_M        (~10GB)
-#   Reasoning:            deepseek-r1:32b          (~19GB)
-LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b")
+#   Produktions-Routing (RTX Pro 4500 / 32GB):
+#     gemma4:31b        (~19GB)  Doku + Entlassbericht
+#     mistral-small3.2  (~15GB)  Anamnese/Befund/Antraege  <- Default-Fallback
+#   OLLAMA_MAX_LOADED_MODELS=1 -> Swap zwischen beiden bei Workflow-Wechsel
+LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "mistral-small3.2")
 for model in "$LLM_MODEL" "nomic-embed-text"; do
     if OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama list 2>/dev/null | grep -q "$model"; then
         echo "${OK}$model vorhanden"
@@ -832,7 +832,7 @@ if [ ! -f "$BACKEND_DIR/.env" ]; then
     # Confluence-URL: Argument > Default
     CONF_URL="${ARG_CONFLUENCE:-http://intranet.systelios.local}"
     # Modell: Argument > Default
-    MODEL_NAME="${ARG_MODEL:-qwen3:32b}"
+    MODEL_NAME="${ARG_MODEL:-mistral-small3.2}"
     # Diarization: automatisch aktivieren wenn Token mitgegeben
     DIAR_ENABLED="false"
     DIAR_TOKEN=""
@@ -930,7 +930,7 @@ done
 
 # 8b. Ollama-Modell in VRAM vorwaermen (im Hintergrund, blockiert Start nicht)
 # Erstmaliges Laden eines 20GB-Modells dauert 60-90s (Disk→VRAM).
-OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "qwen3:32b")
+OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "mistral-small3.2")
 (
     WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
         -H "Content-Type: application/json" \
