@@ -44,7 +44,7 @@ const P1_DRAFT_TEXT_DEFAULT = {
 };
 const P1_TEXT_FIELDS = Object.keys(P1_DRAFT_TEXT_DEFAULT);
 
-function P1({ toast, resumeJob, onResumed, model }) {
+function P1({ toast, resumeJob, onResumed }) {
   // Modellwahl fuer DIESEN Job (JobModelPicker); leer = globaler Fallback
   const [jobModel, setJobModel] = useState("");
   // Multi-Draft-State (NEU, Sprint B Part 2)
@@ -232,7 +232,7 @@ function P1({ toast, resumeJob, onResumed, model }) {
         style:        d.style,
         styleText:    d.styleText || null,
         bullets:      d.bullets || null,
-        model:        jobModel || model || null,
+        model:        jobModel || null,
         patientName:  patientNameExplicit,
       });
       // Submit erfolgreich. Den verbrauchten Draft durch einen frischen leeren

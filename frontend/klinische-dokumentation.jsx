@@ -9,7 +9,6 @@ import { P4 } from "./src/panels/P4.jsx";
 import { P5 } from "./src/panels/P5.jsx";
 import { clearActiveJob, friendlyError, loadActiveJob } from "./src/shared.jsx";
 import { S, useHeadStyle } from "./src/styles.jsx";
-import { ModelSelector } from "./src/ui.jsx";
 
 
 const NAVS = [
@@ -29,9 +28,11 @@ export default function App() {
   const [msg, setMsg]         = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [resumeJob, setResumeJob] = useState(null); // { jobId, page } falls ein Job wiederhergestellt wird
-  const [selectedModel, setSelectedModel] = useState(() => {
-    try { return localStorage.getItem("systelios_model") || ""; } catch (_) { return ""; }
-  });
+
+  // v19.5.3: Kein globales "Standard-Modell" mehr. Die Modellwahl erfolgt pro
+  // Call im JobModelPicker des jeweiligen Workflows; ohne Wahl nimmt das Backend
+  // den Workflow-Default (model_for_workflow). Es gibt daher keinen
+  // selectedModel-State/localStorage-Wert mehr, der in die Calls fliesst.
 
   // Stilbibliothek – State im Root, damit Daten beim Tab-Öffnen bereits vorliegen
   const [stilListe, setStilListe]       = useState(null);
@@ -73,11 +74,13 @@ export default function App() {
     } catch (_) { return false; }
   });
 
-  // Modell-Wahl persistent speichern
-  function handleModelChange(m) {
-    setSelectedModel(m);
-    try { localStorage.setItem("systelios_model", m); } catch (_) {}
-  }
+  // v19.5.3: Einmalige Bereinigung eines evtl. noch in localStorage
+  // persistierten (veralteten) Modellnamens aus dem entfernten globalen
+  // ModelSelector. Ein dort verbliebenes 'qwen3:32b' wurde bisher als
+  // Job-Modell mitgeschickt -> Ollama-404 ('model qwen3:32b not found').
+  useEffect(() => {
+    try { localStorage.removeItem("systelios_model"); } catch (_) {}
+  }, []);
 
   // Stilbibliothek beim Start vorladen (parallel, kein Warten auf Tab-Öffnen)
   useEffect(() => {
@@ -235,12 +238,12 @@ export default function App() {
           </div>
         )}
         {page === "p0"  && <P0 toast={toast} />}
-        {page === "p1"  && <P1  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
-        {page === "p2"  && <P2  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
-        {page === "p2b" && <P2b toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
-        {page === "p3"  && <P3  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
-        {page === "p3b" && <P3b toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
-        {page === "p4"  && <P4  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} model={selectedModel} />}
+        {page === "p1"  && <P1  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
+        {page === "p2"  && <P2  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
+        {page === "p2b" && <P2b toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
+        {page === "p3"  && <P3  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
+        {page === "p3b" && <P3b toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
+        {page === "p4"  && <P4  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
         {page === "p5" && <P5
           toast={toast}
           liste={stilListe}
@@ -270,15 +273,11 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{marginBottom:8, fontSize:12, fontWeight:600, color:"#444", textTransform:"uppercase", letterSpacing:"0.06em"}}>
-              Standard-Modell
-            </div>
-            <div style={{marginBottom:6}}>
-              <ModelSelector model={selectedModel} onChange={handleModelChange} apiBase={getApiBase()} />
-            </div>
-            <div style={{fontSize:11, color:"#a0a49e", marginBottom:20, lineHeight:1.6}}>
-              Gilt für alle Workflows (Gesprächsdokumentation, Anamnese, Verlängerung, Entlassbericht).<br />
-              Reasoning-Modelle (z.B. deepseek-r1) für tiefe Hypothesenarbeit, Standard-Modelle schneller.
+            <div style={{fontSize:12, color:"#666", marginBottom:20, lineHeight:1.6}}>
+              Die Modellwahl erfolgt jetzt pro Workflow direkt im jeweiligen
+              Formular (Karte „Prompt &amp; Modellauswahl"). Ein globales
+              Standard-Modell gibt es nicht mehr — ohne explizite Wahl nutzt der
+              Server das für den Workflow hinterlegte Modell.
             </div>
 
             <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>

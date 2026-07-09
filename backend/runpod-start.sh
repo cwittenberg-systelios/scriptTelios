@@ -691,15 +691,58 @@ fi
 #     mistral-small3.2  (~15GB)  Anamnese/Befund/Antraege  <- Default-Fallback
 #   OLLAMA_MAX_LOADED_MODELS=1 -> Swap zwischen beiden bei Workflow-Wechsel
 LLM_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "mistral-small3.2")
-for model in "$LLM_MODEL" "nomic-embed-text"; do
-    if OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama list 2>/dev/null | grep -q "$model"; then
+SUMMARY_MODEL=$(grep "^SUMMARY_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"')
+[ -z "$SUMMARY_MODEL" ] && SUMMARY_MODEL="mistral-small3.2"
+
+# Erwartete Modelle = Workflow-Routing (config.py WORKFLOW_MODEL) + Verdichtung
+# (SUMMARY_MODEL) + OLLAMA_MODEL-Fallback + Embedding. Bei Aenderung des
+# Routings in config.py hier synchron halten.
+#
+# BEWUSST KEIN Auto-Pull: ein blindes 'ollama pull' eines ~15-19GB-Modells auf
+# (fast) voller Platte korrumpiert den Modell-Store und legt den Pod lahm.
+# Fehlende Modelle -> LAUTE, umsetzbare Warnung; Pull macht der Betreiber
+# manuell nach df-Check.
+REQUIRED_MODELS=("gemma4:31b" "mistral-small3.2" "$LLM_MODEL" "$SUMMARY_MODEL" "nomic-embed-text")
+
+INSTALLED=$(OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama list 2>/dev/null || true)
+MISSING=()
+SEEN=""
+for model in "${REQUIRED_MODELS[@]}"; do
+    [ -z "$model" ] && continue
+    case " $SEEN " in *" $model "*) continue ;; esac
+    SEEN="$SEEN $model"
+    if echo "$INSTALLED" | grep -qF "$model"; then
         echo "${OK}$model vorhanden"
     else
-        echo "${GO}$model laden (kann einige Minuten dauern)..."
-        OLLAMA_MODELS="$OLLAMA_MODELS_DIR" ollama pull "$model"
-        echo "${OK}$model geladen"
+        MISSING+=("$model")
     fi
 done
+
+if [ ${#MISSING[@]} -gt 0 ]; then
+    echo ""
+    echo "${WARN}############################################################"
+    echo "${WARN}#  ACHTUNG: ${#MISSING[@]} erwartete(s) Ollama-Modell(e) FEHLEN"
+    echo "${WARN}#  -> KEIN automatischer Pull (Schutz vor voller Platte)"
+    echo "${WARN}############################################################"
+    for m in "${MISSING[@]}"; do
+        echo "${WARN}#  FEHLT: $m"
+    done
+    echo "${WARN}#"
+    echo "${WARN}#  Freien Speicher pruefen:"
+    echo "${WARN}#     df -h $OLLAMA_MODELS_DIR"
+    echo "${WARN}#  Dann bei genug Platz MANUELL laden:"
+    for m in "${MISSING[@]}"; do
+        echo "${WARN}#     OLLAMA_MODELS=$OLLAMA_MODELS_DIR ollama pull $m"
+    done
+    echo "${WARN}#"
+    echo "${WARN}#  Bis dahin: betroffene Workflows schlagen fehl. Die interne"
+    echo "${WARN}#  Verdichtung faellt zur Laufzeit auf ein vorhandenes Modell"
+    echo "${WARN}#  zurueck (resolve_summary_model), sofern ueberhaupt eines da ist."
+    echo "${WARN}############################################################"
+    echo ""
+else
+    echo "${OK}Alle erwarteten Modelle vorhanden (Routing + Verdichtung + Embedding)."
+fi
 
 # 4. Python Virtual Environment
 echo ""

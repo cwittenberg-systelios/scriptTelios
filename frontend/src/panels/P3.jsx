@@ -12,7 +12,7 @@ import { Card, Dropzone, InputTabs, Output, PromptEditor, JobModelPicker } from 
 
 
 
-function P3({ toast, resumeJob, onResumed, model }) {
+function P3({ toast, resumeJob, onResumed }) {
   // Modellwahl fuer DIESEN Job (JobModelPicker); leer = globaler Fallback
   const [jobModel, setJobModel] = useState("");
   const [antrag, setAntrag]       = useState(null);
@@ -84,7 +84,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
         style:          style,
         styleText:      styleText || null,
         bullets:        fokus || null,
-        model:          jobModel || model || null,
+        model:          jobModel || null,
         patientName:    patientNameExplicit,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
@@ -203,7 +203,7 @@ function P3({ toast, resumeJob, onResumed, model }) {
 //          Stilvorlage (opt), Fokus (opt), Prompt (opt)
 // Backend-Workflow: "folgeverlaengerung"
 // ─────────────────────────────────────────────────────────────────
-function P3b({ toast, resumeJob, onResumed, model }) {
+function P3b({ toast, resumeJob, onResumed }) {
   // Modellwahl fuer DIESEN Job (JobModelPicker); leer = globaler Fallback
   const [jobModel, setJobModel] = useState("");
   const [verlauf, setVerlauf]     = useState(null);
@@ -272,7 +272,7 @@ function P3b({ toast, resumeJob, onResumed, model }) {
         style:          style,
         styleText:      styleText || null,
         bullets:        fokus || null,
-        model:          jobModel || model || null,
+        model:          jobModel || null,
         patientName:    patientNameExplicit,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,

@@ -26,6 +26,18 @@ class Settings(BaseSettings):
     OLLAMA_HOST:  str = "http://localhost:11434"
     OLLAMA_MODEL: str = "mistral-small3.2"
 
+    # ── Verdichtungs-/Zusammenfassungsmodell ─────────────────────
+    # Interne Verdichtungs-Calls (Stage-1 Verlauf/Transkript + Input-Budget-
+    # Guard: summarize_verlauf/transcript/document) nutzen NICHT das Workflow-
+    # Modell, sondern dieses dedizierte, knapp-praezise Modell. Bewusst getrennt
+    # von OLLAMA_MODEL, damit ein (versehentlich) veralteter globaler Default
+    # nicht mehr die Verdichtung bricht (war Ursache des anamnese-404: eine
+    # stale OLLAMA_MODEL=qwen3:32b liess jeden Verdichtungs-Call mit Ollama-404
+    # scheitern). Muss ein am Pod GEPULLTES Ollama-Tag sein (ohne 'ollama/'-
+    # Praefix). resolve_summary_model() in llm.py faellt zur Laufzeit auf ein
+    # tatsaechlich geladenes Modell zurueck, falls dieses hier fehlt.
+    SUMMARY_MODEL: str = "mistral-small3.2"
+
     # ── Workflow-spezifisches Modell-Routing (2026-07-03) ─────────
     # Default-Modell pro Workflow, wenn das Frontend keins mitsendet.
     # Grundlage: Modellvergleich Runde 2 + Referenzfall-Analyse:

@@ -1,2 +1,13 @@
 .DS_Store
 .claude
+node_modules/
+package-lock.json
+
+# Python-Artefakte (2026-07-01: fehlte bisher - pyc-Dateien konnten
+# versehentlich committet werden)
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/

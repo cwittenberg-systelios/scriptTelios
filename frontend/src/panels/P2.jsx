@@ -21,7 +21,7 @@ const P2_DRAFT_DEFAULT = {
   geschlecht: "auto", kuerzel: "",
 };
 
-function P2({ toast, resumeJob, onResumed, model }) {
+function P2({ toast, resumeJob, onResumed }) {
   // Modellwahl fuer DIESEN Job (JobModelPicker); leer = globaler Fallback
   const [jobModel, setJobModel] = useState("");
   // File-Felder bleiben in-memory only (ueberleben weder Tab-Wechsel noch F5)
@@ -148,7 +148,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
         style:     style,
         styleText: styleText || null,
         bullets:   text || null,
-        model:     jobModel || model || null,
+        model:     jobModel || null,
         patientName: patientNameExplicit,
         // v18: editierbare Befund-Vorlage fuer den separaten Befund-Call
         befundVorlage: befundVorlage || null,
@@ -344,7 +344,7 @@ function P2({ toast, resumeJob, onResumed, model }) {
 // Inputs: Antragsvorlage (req), Stilvorlage (opt), Fokus (opt), Prompt (opt)
 // Backend-Workflow: "akutantrag"
 // ─────────────────────────────────────────────────────────────────
-function P2b({ toast, resumeJob, onResumed, model }) {
+function P2b({ toast, resumeJob, onResumed }) {
   // Modellwahl fuer DIESEN Job (JobModelPicker); leer = globaler Fallback
   const [jobModel, setJobModel] = useState("");
   const [antrag, setAntrag]       = useState(null);
@@ -409,7 +409,7 @@ function P2b({ toast, resumeJob, onResumed, model }) {
         style:          style,
         styleText:      styleText || null,
         bullets:        fokus || null,
-        model:          jobModel || model || null,
+        model:          jobModel || null,
         patientName:    patientNameExplicit,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,

@@ -285,7 +285,7 @@ async def summarize_verlauf(
         das ab und faellt auf das Original zurueck.
     """
     # Lokal-Import um Zirkelimport zu vermeiden (llm.py kennt diese Datei nicht).
-    from app.services.llm import generate_text
+    from app.services.llm import generate_text, resolve_summary_model
 
     if not verlauf_text or not verlauf_text.strip():
         raise RuntimeError("Stage 1: leerer Verlauf-Text")
@@ -362,11 +362,15 @@ async def summarize_verlauf(
     # Siehe ollama/12907, ollama/14798 — "think":False allein ist bei Qwen3
     # nicht zuverlaessig.
     import time as _t
+    # v19.5.2: garantiert geladenes Verdichtungsmodell (statt stiller
+    # OLLAMA_MODEL-Default -> kein Ollama-404 durch stale/retired Config).
+    _summary_model = await resolve_summary_model()
     t0 = _t.time()
     result = await generate_text(
         system_prompt=system_prompt,
         user_content=user_content,
         max_tokens=int(target_words * 1.5),  # Wort->Token-Puffer
+        model=_summary_model,
         workflow=None,
         temperature_override=0.4,
         skip_aggressive_dedup=True,
@@ -475,7 +479,7 @@ async def _retry_stricter_summary(
     Returns:
         (retry_summary, retry_telemetry)
     """
-    from app.services.llm import generate_text
+    from app.services.llm import generate_text, resolve_summary_model
 
     issue_summary = "; ".join(
         f"{i['type']}: {i['detail']}" for i in previous_issues
@@ -521,11 +525,13 @@ async def _retry_stricter_summary(
         + "/no_think"
     )
 
+    _summary_model = await resolve_summary_model()
     try:
         result = await generate_text(
             system_prompt=system_prompt,
             user_content=user_content,
             max_tokens=int(target_words * 1.5),
+            model=_summary_model,
             workflow=None,
             # v19.2.2: Temperatur 0.3 statt 0.1 - selbst beim Halluzinations-Retry
             # nicht zu deterministisch, sonst greift Anti-Think-Schutz nicht

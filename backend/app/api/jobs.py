@@ -1224,8 +1224,15 @@ async def create_generate_job(
     # Antraege). Explizite Frontend-Wahl hat Vorrang; ohne Map-Eintrag faellt
     # model_for_workflow() auf OLLAMA_MODEL zurueck. Das aufgeloeste Modell
     # fliesst ueber die bestehende model-Variable in die gesamte _run-Kette.
-    if not (model and model.strip()):
-        model = settings.model_for_workflow(workflow)
+    #
+    # v19.5.3: Das aufgeloeste Modell zusaetzlich gegen die real geladenen
+    # Ollama-Modelle validieren. Ein vom Client geschicktes veraltetes/nicht
+    # gepulltes Modell (z.B. stale localStorage 'systelios_model=qwen3:32b')
+    # wurde bisher ungeprueft an den Haupt-Call gereicht -> Ollama-404 killte
+    # den Job. ensure_generation_model faellt in dem Fall auf den Workflow-
+    # Default (bzw. ein garantiert geladenes Modell) zurueck.
+    from app.services.llm import ensure_generation_model
+    model = await ensure_generation_model(model, workflow)
 
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht thread-safe)
     audio_bytes            = await audio.read()          if audio          and audio.filename          else None

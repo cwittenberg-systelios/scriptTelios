@@ -168,6 +168,161 @@ def _normalize_model_id(model: Optional[str]) -> Optional[str]:
     return model
 
 
+# ── Modell-Verfuegbarkeit / Verdichtungsmodell-Aufloesung (v19.5.2) ──────────
+# Cache fuer die Ollama-Tag-Liste. Kurze TTL: frisch gepullte Modelle werden
+# zeitnah sichtbar, ohne /api/tags bei jedem Verdichtungs-Call abzufragen.
+_available_models_cache: Optional[tuple[float, set[str]]] = None
+_AVAILABLE_MODELS_TTL = 60.0  # Sekunden
+
+
+async def _list_available_models() -> set[str]:
+    """Nackte Ollama-Tags der aktuell geladenen Modelle (60s gecacht).
+
+    Enthaelt jeden Tag doppelt: vollstaendig ("mistral-small3.2:latest") und
+    ohne Suffix ("mistral-small3.2"), damit beide Schreibweisen matchen.
+    Leere Menge = Liste nicht abrufbar (Ollama down) -> Aufrufer behandelt das
+    optimistisch (nutzt den konfigurierten Wert unveraendert).
+    """
+    global _available_models_cache
+    now = time.time()
+    if (
+        _available_models_cache is not None
+        and now - _available_models_cache[0] < _AVAILABLE_MODELS_TTL
+    ):
+        return _available_models_cache[1]
+    try:
+        client = _get_ollama_client()
+        r = await client.get("/api/tags")
+        r.raise_for_status()
+        names: set[str] = set()
+        for m in r.json().get("models", []):
+            name = m.get("name", "")
+            if name:
+                names.add(name)
+                names.add(name.split(":")[0])
+        _available_models_cache = (now, names)
+        return names
+    except Exception as e:
+        logger.warning(
+            "Modell-Verfuegbarkeit nicht abrufbar (%s) - optimistisch fortfahren", e
+        )
+        return set()
+
+
+def _model_is_available(model: Optional[str], available: set[str]) -> bool:
+    """True, wenn 'model' unter den geladenen Tags ist. Bei leerer Liste
+    (kein Check moeglich) optimistisch True (Verhalten wie vor v19.5.2)."""
+    if not available:
+        return True
+    m = _normalize_model_id(model) or ""
+    return m in available or m.split(":")[0] in available
+
+
+async def resolve_summary_model() -> str:
+    """Liefert ein GARANTIERT geladenes Modell fuer interne Verdichtungen.
+
+    Aufloesung: SUMMARY_MODEL -> OLLAMA_MODEL -> erstes geladenes Nicht-Embed-
+    Modell. Jeder Fallback wird geloggt. Dadurch kann eine falsch konfigurierte
+    oder nicht gepullte SUMMARY_MODEL keinen Job mehr mit Ollama-404 killen
+    (Ursache des anamnese-404, v19.5.1: stale OLLAMA_MODEL=qwen3:32b).
+    """
+    preferred = _normalize_model_id(
+        getattr(settings, "SUMMARY_MODEL", None) or settings.OLLAMA_MODEL
+    )
+    available = await _list_available_models()
+    if _model_is_available(preferred, available):
+        return preferred
+
+    fallback = _normalize_model_id(settings.OLLAMA_MODEL)
+    if fallback != preferred and _model_is_available(fallback, available):
+        logger.warning(
+            "SUMMARY_MODEL '%s' nicht geladen - Fallback auf OLLAMA_MODEL '%s'. "
+            "Am Pod laden mit: ollama pull %s",
+            preferred, fallback, preferred,
+        )
+        return fallback
+
+    # Letzter Ausweg: irgendein geladenes vollstaendiges Chat-Tag (kein Embed).
+    for name in sorted(available):
+        if ":" not in name or "embed" in name.lower():
+            continue
+        logger.warning(
+            "Weder SUMMARY_MODEL '%s' noch OLLAMA_MODEL '%s' geladen - nutze "
+            "ersatzweise '%s'. Bitte 'ollama pull %s'.",
+            preferred, fallback, name, preferred,
+        )
+        return name
+
+    logger.error(
+        "Kein geladenes Ollama-Modell fuer Verdichtung gefunden; nutze "
+        "konfiguriertes '%s' (Aufrufer erhaelt ggf. aussagekraeftigen Fehler).",
+        preferred,
+    )
+    return preferred
+
+
+async def ensure_generation_model(requested: Optional[str], workflow: Optional[str]) -> str:
+    """Validiert das Generierungsmodell (ggf. vom Client gewaehlt) gegen die real
+    geladenen Ollama-Modelle. Fallback-Kette: angefordert -> Workflow-Default
+    -> resolve_summary_model (garantiert geladen).
+
+    Schuetzt vor stale/retired Client-Modellen (v19.5.3): der alte globale
+    ModelSelector persistiert die Wahl in localStorage['systelios_model']; ein
+    dort verbliebenes 'qwen3:32b' wurde bisher ungeprueft an den Haupt-Call
+    gereicht -> Ollama-404 ('model qwen3:32b not found'), der den Job killte.
+
+    Bei nicht abrufbarer Ollama-Liste (Ollama down) optimistisch: kein Override,
+    Verhalten wie vor v19.5.3.
+    """
+    model = (
+        requested.strip()
+        if (requested and requested.strip())
+        else settings.model_for_workflow(workflow)
+    )
+    available = await _list_available_models()
+    if _model_is_available(model, available):
+        return _normalize_model_id(model)
+
+    wf_default = settings.model_for_workflow(workflow)
+    if _normalize_model_id(wf_default) != _normalize_model_id(model) and _model_is_available(
+        wf_default, available
+    ):
+        logger.warning(
+            "Angefordertes Modell '%s' nicht in Ollama geladen -> "
+            "Workflow-Default '%s' (Workflow: %s)",
+            model, wf_default, workflow,
+        )
+        return _normalize_model_id(wf_default)
+
+    fallback = await resolve_summary_model()
+    logger.warning(
+        "Angefordertes Modell '%s' UND Workflow-Default '%s' nicht geladen -> "
+        "Ersatz '%s' (Workflow: %s)",
+        model, wf_default, fallback, workflow,
+    )
+    return fallback
+
+
+async def check_summary_model_available() -> bool:
+    """Startup-Check (analog check_embedding_model_available): loggt das
+    aufgeloeste Verdichtungsmodell und warnt laut, wenn die konfigurierte
+    SUMMARY_MODEL nicht geladen ist. Macht Fehlkonfiguration beim Boot sichtbar
+    statt erst beim ersten Verdichtungs-Call."""
+    configured = _normalize_model_id(
+        getattr(settings, "SUMMARY_MODEL", None) or settings.OLLAMA_MODEL
+    )
+    resolved = await resolve_summary_model()
+    if resolved == configured:
+        logger.info("Verdichtungsmodell '%s' verfuegbar.", configured)
+        return True
+    logger.warning(
+        "Verdichtungsmodell '%s' NICHT geladen - Verdichtung nutzt Fallback "
+        "'%s'. Empfohlen: ollama pull %s",
+        configured, resolved, configured,
+    )
+    return False
+
+
 def deduplicate_paragraphs(text: str, *, strict_mode: bool = False) -> str:
     """
     Entfernt wiederholte Absätze aus dem LLM-Output.

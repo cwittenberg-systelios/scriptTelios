@@ -100,11 +100,15 @@ async def summarize_document(
         RuntimeError wenn die Verdichtung leer ist oder auch nach Retry
         implausibel kurz bleibt.
     """
-    from app.services.llm import generate_text
+    from app.services.llm import generate_text, resolve_summary_model
     from app.services.verlauf_summary import detect_summary_hallucination_signals
 
     if not text or not text.strip():
         raise RuntimeError(f"Dokument-Verdichtung ({doc_label}): leerer Input")
+
+    # v19.5.2: dediziertes, garantiert geladenes Verdichtungsmodell (nicht mehr
+    # der stille OLLAMA_MODEL-Default -> kein Ollama-404 durch stale Config).
+    _summary_model = await resolve_summary_model()
 
     raw_words = len(text.split())
     target_words = max(200, int(target_words))
@@ -139,6 +143,7 @@ async def summarize_document(
         system_prompt=system_prompt,
         user_content=_build_user(),
         max_tokens=max(2500, int(target_words * 2.0)),
+        model=_summary_model,
         workflow=None,
         temperature_override=0.3,
         skip_aggressive_dedup=True,
@@ -170,6 +175,7 @@ async def summarize_document(
                 system_prompt=system_prompt,
                 user_content=_build_user(hint),
                 max_tokens=max(3000, int(target_words * 2.2)),
+                model=_summary_model,
                 workflow=None,
                 temperature_override=0.3,
                 skip_aggressive_dedup=True,

@@ -70,6 +70,15 @@ async def lifespan(app: FastAPI):
         app.state.emb_check_task = emb_check_task
     except Exception:
         pass
+    # v19.5.2: Verdichtungsmodell (SUMMARY_MODEL) beim Start prüfen → laute
+    # Warnung wenn nicht geladen (Stage-1/Budget-Guard faellt sonst zur Laufzeit
+    # auf ein Ersatzmodell zurueck; verhindert stillen Ollama-404).
+    try:
+        from app.services.llm import check_summary_model_available
+        sum_check_task = asyncio.create_task(check_summary_model_available())
+        app.state.sum_check_task = sum_check_task
+    except Exception:
+        pass
     yield
     cleanup_task.cancel()
     try: p0_worker_task.cancel()

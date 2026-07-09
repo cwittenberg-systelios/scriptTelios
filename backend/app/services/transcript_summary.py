@@ -155,7 +155,7 @@ async def summarize_transcript(
         Roh-Transkript zurueck (mit dem bekannten Sampling-Risiko).
     """
     # Lokal-Import um Zirkelimport zu vermeiden.
-    from app.services.llm import generate_text
+    from app.services.llm import generate_text, resolve_summary_model
 
     if not transcript_text or not transcript_text.strip():
         raise RuntimeError("Transcript-Stage 1: leeres Transkript")
@@ -211,6 +211,10 @@ async def summarize_transcript(
         + "/no_think"
     )
 
+    # v19.5.2: garantiert geladenes Verdichtungsmodell (statt stiller
+    # OLLAMA_MODEL-Default -> kein Ollama-404 durch stale/retired Config).
+    _summary_model = await resolve_summary_model()
+
     t0 = time.time()
     result = await generate_text(
         system_prompt=system_prompt,
@@ -218,6 +222,7 @@ async def summarize_transcript(
         # max_tokens-Heuristik: 2.0x target_words (Wort->Token-Faktor 1.3-1.6
         # plus Puffer fuer Section-Header). Floor 2500 fuer kleine Targets.
         max_tokens=max(2500, int(target_words * 2.0)),
+        model=_summary_model,
         workflow=None,
         # v19.2.2: 0.4 statt 0.2 — bricht Reasoning-Loops.
         temperature_override=0.4,
@@ -316,6 +321,7 @@ async def summarize_transcript(
                 system_prompt=retry_system_prompt,
                 user_content=retry_user,
                 max_tokens=max(3000, int(target_words * 2.2)),
+                model=_summary_model,
                 workflow=None,
                 # 0.3 statt 0.4 - etwas deterministischer beim Retry, aber
                 # nicht zu niedrig (sonst greift Anti-Think nicht mehr).

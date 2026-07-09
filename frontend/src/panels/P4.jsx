@@ -12,7 +12,7 @@ import { Card, Dropzone, InputTabs, Output, PromptEditor, JobModelPicker } from 
 
 
 
-function P4({ toast, resumeJob, onResumed, model }) {
+function P4({ toast, resumeJob, onResumed }) {
   // Modellwahl fuer DIESEN Job (JobModelPicker); leer = globaler Fallback
   const [jobModel, setJobModel] = useState("");
   const [bericht, setBericht]     = useState(null);
@@ -83,7 +83,7 @@ function P4({ toast, resumeJob, onResumed, model }) {
         style:          style,
         styleText:      styleText || null,
         bullets:        fokus || null,
-        model:          jobModel || model || null,
+        model:          jobModel || null,
         patientName:    patientNameExplicit,
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
