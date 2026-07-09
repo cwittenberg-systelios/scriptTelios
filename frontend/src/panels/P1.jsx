@@ -362,7 +362,8 @@ function P1({ toast, resumeJob, onResumed }) {
         </InputTabs>
       </Card>
 
-      <Card num="D" title="Prompt anpassen" open={false}>
+      <Card num="D" title="Prompt/Modell anpassen (advanced)" open={false}>
+        <JobModelPicker workflow="dokumentation" value={jobModel} onChange={setJobModel} />
         <PromptEditor value={currentDraft.prompt}
           onChange={(v) => updateDraft(currentDraft.id, { prompt: v })}
           def={P_DOKU} />
@@ -405,7 +406,6 @@ function P1({ toast, resumeJob, onResumed }) {
             />
           </div>
         </div>
-        <JobModelPicker workflow="dokumentation" value={jobModel} onChange={setJobModel} />
         {currentDraft.starting
           ? <button className="btn-secondary" disabled>Wird gestartet…</button>
           : <button

@@ -146,13 +146,13 @@ function P3({ toast, resumeJob, onResumed }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
           </Card>
 
-          <Card num="E" title="Prompt-Vorlage (advanced)" badge="opt" open={false}>
+          <Card num="E" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
+            <JobModelPicker workflow="verlaengerung" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_VERL} />
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
           </Card>
 
           <div className="action-bar">
-        <JobModelPicker workflow="verlaengerung" value={jobModel} onChange={setJobModel} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button
@@ -339,7 +339,8 @@ function P3b({ toast, resumeJob, onResumed }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku oder dem Vorantrag belegt sind werden aufgegriffen.</div>
           </Card>
 
-          <Card num="F" title="Prompt-Vorlage (advanced)" badge="opt" open={false}>
+          <Card num="F" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
+            <JobModelPicker workflow="folgeverlaengerung" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_VERL_FOLGE} />
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
           </Card>
@@ -375,7 +376,6 @@ function P3b({ toast, resumeJob, onResumed }) {
                 />
               </div>
             </div>
-        <JobModelPicker workflow="folgeverlaengerung" value={jobModel} onChange={setJobModel} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button

@@ -145,13 +145,13 @@ function P4({ toast, resumeJob, onResumed }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
           </Card>
 
-          <Card num="E" title="Prompt-Vorlage (advanced)" badge="opt" open={false}>
+          <Card num="E" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
+            <JobModelPicker workflow="entlassbericht" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_ENTL} />
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
           </Card>
 
           <div className="action-bar">
-        <JobModelPicker workflow="entlassbericht" value={jobModel} onChange={setJobModel} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button

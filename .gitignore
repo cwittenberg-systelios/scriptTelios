@@ -2,6 +2,7 @@
 .claude
 node_modules/
 package-lock.json
+brackend/static
 
 # Python-Artefakte (2026-07-01: fehlte bisher - pyc-Dateien konnten
 # versehentlich committet werden)

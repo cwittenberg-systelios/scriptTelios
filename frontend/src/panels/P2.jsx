@@ -148,6 +148,13 @@ function P2({ toast, resumeJob, onResumed }) {
         style:     style,
         styleText: styleText || null,
         bullets:   text || null,
+        // v19.5.5 Bugfix: Diagnosen auch als eigenes Form-Feld senden. Bisher
+        // wurden sie nur via {diagnosen}-Ersetzung in den Anamnese-Prompt
+        // geschrieben; der SEPARATE Befund-Call (build_system_prompt workflow=
+        // "befund") liest sie aber aus dem 'diagnosen'-Feld (-> dx_list).
+        // Ohne dieses Feld war dx_list leer -> Befund endete mit
+        // "DIAGNOSEN gemäß ICD: noch nicht festgelegt" trotz eingegebener Diagnose.
+        diagnosen: dx.length ? dx.join(", ") : null,
         model:     jobModel || null,
         patientName: patientNameExplicit,
         // v18: editierbare Befund-Vorlage fuer den separaten Befund-Call
@@ -243,7 +250,8 @@ function P2({ toast, resumeJob, onResumed }) {
             </InputTabs>
           </Card>
 
-          <Card num="E" title="Prompt anpassen (advanced)" open={false}>
+          <Card num="E" title="Prompt/Modell anpassen (advanced)" open={false}>
+            <JobModelPicker workflow="anamnese" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_ANAMNESE} />
             <div className="field-note" style={{marginTop:8}}>Inhaltliche Anweisungen fuer die Anamnese. Stil-/Quellenregeln liegen im Backend.</div>
           </Card>
@@ -280,7 +288,6 @@ function P2({ toast, resumeJob, onResumed }) {
                   }} />
               </div>
             </div>
-        <JobModelPicker workflow="anamnese" value={jobModel} onChange={setJobModel} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button className="btn-primary" onClick={run} disabled={!selbst}>Anamnese und Befund generieren</button>
@@ -466,7 +473,8 @@ function P2b({ toast, resumeJob, onResumed }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Antragsvorlage belegt sind werden aufgegriffen.</div>
           </Card>
 
-          <Card num="D" title="Prompt-Vorlage (advanced)" badge="opt" open={false}>
+          <Card num="D" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
+            <JobModelPicker workflow="akutantrag" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_AKUT} />
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
           </Card>
@@ -502,7 +510,6 @@ function P2b({ toast, resumeJob, onResumed }) {
                 />
               </div>
             </div>
-        <JobModelPicker workflow="akutantrag" value={jobModel} onChange={setJobModel} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button
