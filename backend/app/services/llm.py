@@ -5,6 +5,7 @@ Ausschliesslich Ollama (lokales Modell, On-Premise).
 Kein externer API-Aufruf – alle Daten bleiben im internen Netz.
 """
 import logging
+import re
 import time
 
 from typing import Optional
@@ -703,7 +704,20 @@ async def generate_text(
     # bei Inputs > 17k Tokens akutes VRAM-OOM-Risiko. Der OOM-Fallback in
     # _is_vram_error() faengt das ab (Retry mit num_ctx=8192), reduziert
     # aber die Generierungsqualitaet bei langen Inputs deutlich.
-    MAX_SAFE_CTX = 20480
+    #
+    # v19.5.1 FIX (Job 2922a9, prompts.log 2026-07-09 – gemma-Verweigerung):
+    # MAX_SAFE_CTX war fix 20480, LLM_NUM_CTX_CAP aber default 16384. Inputs im
+    # Bereich [cap, 20480] Tokens (z.B. ein ROHES ~8.500-Woerter-Transkript
+    # ≈ 17.3k Tokens, wenn Transcript-Stage-1 vorher scheiterte) wurden vom
+    # Budget-Guard NICHT gekuerzt (input_truncated blieb False), passten aber
+    # nicht ins Ollama-Fenster (num_ctx = min(needed, cap) = 16384). Ollama
+    # schnitt den Prompt dann STILL ab → das Modell sah kein zusammenhaengendes
+    # Transkript mehr und verweigerte ("Bitte stellen Sie mir die Quellen zur
+    # Verfuegung"). Fix: Guard an das TATSAECHLICHE Fenster koppeln, damit
+    # sichtbar (input_truncated=True) gekuerzt statt still uebergelaufen wird.
+    # Auf 32GB-GPUs zusaetzlich LLM_NUM_CTX_CAP=32768 setzen (q8_0-KV ist am Pod
+    # aktiv) – dann passt das volle Transkript und Stage 1 verdichtet es sauber.
+    MAX_SAFE_CTX = min(20480, getattr(settings, "LLM_NUM_CTX_CAP", 16384))
     # Workflow-spezifische Mindest-Output-Tokens:
     # Der Output darf nie unter dieses Minimum fallen, sonst wird der Input gekuerzt.
     MIN_OUTPUT_TOKENS = {
@@ -1094,6 +1108,39 @@ _MIN_PLAUSIBLE_WORDS = {
 }
 
 
+# v19.5.1: Formeln, mit denen das Modell den Bericht VERWEIGERT und stattdessen
+# Quellen anfordert. Bewusst eng auf Meta-Anforderungen gefasst, damit ein
+# echter (patientenbezogener) Bericht nicht faelschlich matcht. Lowercased-Input.
+_REFUSAL_PATTERNS = (
+    r"stellen sie (mir|uns)\b[^.]{0,80}(quelle|transkript|material|stichpunkt|verlaufs|unterlage|dokument|notiz|informationen)",
+    r"(sobald|wenn)\b[^.]{0,20}(mir|uns)\b[^.]{0,50}(material|transkript|quelle|unterlage|inhalt)[^.]{0,25}(vorlieg|zur verf|erhalt|habe|bekomm)",
+    r"(liegt|liegen)\b[^.]{0,30}(mir|uns)\b[^.]{0,30}(kein|keine)\b[^.]{0,30}(transkript|quelle|material|unterlage|inhalt|information)",
+    r"(kein|keine)\b[^.]{0,20}(transkript|quelle|material|unterlage)\b[^.]{0,30}(vorhanden|beigef|übermittelt|uebermittelt|enthalten|vorlieg)",
+    r"bitte\b[^.]{0,20}(übermitteln|uebermitteln|senden|liefern|stellen|teilen|reichen)\b[^.]{0,10}sie\b",
+    r"benötige ich\b[^.]{0,40}(transkript|quelle|material|unterlage|stichpunkt|information|inhalt)",
+    r"benoetige ich\b[^.]{0,40}(transkript|quelle|material|unterlage|stichpunkt|information|inhalt)",
+    r"auf basis der tats(ä|ae)chlichen inhalte",
+)
+
+
+def _looks_like_refusal(text: str) -> bool:
+    """
+    Erkennt eine Meta-Verweigerung: das Modell fordert Quellen an, statt den
+    Bericht zu schreiben ("Bitte stellen Sie mir das Transkript zur Verfuegung",
+    "Sobald mir das Material vorliegt ..."). Klinisch wertlos, wurde aber vom
+    reinen Laengen-/Think-Check NICHT erkannt (think_ratio=0, sauberer Stop) und
+    lief als vermeintlicher Erfolg durch (Job 2922a9, prompts.log 2026-07-09).
+    """
+    if not text:
+        return False
+    norm = " ".join(text.lower().split())
+    # Echte Berichte sind laenger und enthalten keine Quellen-Anforderung an den
+    # Leser; Verweigerungen sind kurz. Laengen-Gate = zusaetzliche Sicherheit.
+    if len(norm.split()) > 220:
+        return False
+    return any(re.search(p, norm) for p in _REFUSAL_PATTERNS)
+
+
 def _is_output_implausibly_short(
     workflow: Optional[str],
     final_text: str,
@@ -1113,6 +1160,15 @@ def _is_output_implausibly_short(
     """
     if not final_text:
         return True, "Output komplett leer nach Postprocessing"
+
+    # v19.5.1: Explizite Verweigerung IMMER als Fehlschlag behandeln – unabhaengig
+    # von Laenge und Think-Indikatoren. Loest den Retry-Pfad aus; verweigert auch
+    # der Retry, greift degraded=True (Eval-Hard-Fail statt stillem Durchwinken).
+    if _looks_like_refusal(final_text):
+        return True, (
+            "Modell-Verweigerung erkannt (fordert Quellen an statt Bericht zu "
+            f"schreiben): '{final_text.strip()[:140]}'"
+        )
 
     word_count = len(final_text.split())
     threshold = _MIN_PLAUSIBLE_WORDS.get(workflow or "", 100)
