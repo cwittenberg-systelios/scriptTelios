@@ -88,6 +88,10 @@ ISSUE_CODE_MISSING_STICHPUNKT = "MISSING_STICHPUNKT"
 # (kein Mangel - die Modalitaet hat evtl. nicht stattgefunden, siehe
 # quality_specs.RECOMMENDED_SECTIONS). Suffix = Modalitaet, matcht ^[A-Z_]+$.
 ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED = "MODALITY_NOT_COVERED_"
+# v19.7: Selbstauskunft (P2-Input) lieferte keinen verwertbaren Inhalt (leeres/
+# unausgefuelltes PDF-Formular). Ohne Input baut das Modell die Anamnese frei aus
+# dem Stil-Anker -> fabrizierter Bericht. Warnung (nicht durch Repair behebbar).
+ISSUE_CODE_SELBSTAUSKUNFT_LEER = "SELBSTAUSKUNFT_LEER"
 
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
@@ -129,6 +133,36 @@ class QualityIssue:
 
 
 # ── Einzelne Check-Funktionen (jede liefert 0..N Issues) ───────────────────────
+
+def _check_selbstauskunft(
+    workflow: str, selbstauskunft_empty: bool | None,
+) -> list[QualityIssue]:
+    """Meldet, wenn fuer eine Anamnese (P2) eine Selbstauskunft hochgeladen wurde,
+    aus der KEIN verwertbarer Inhalt extrahiert werden konnte (leeres/unausgefuelltes
+    PDF-Formular). Ohne diesen Input baut das Modell die Anamnese frei aus dem
+    Stil-Anker -> fabrizierter Bericht (bestaetigt an an-01: 'Dagmar, Lehrerin' ->
+    erfundener 'Herr T.'). WARNUNG statt critical: (a) es kann ein anderer Input
+    (Audio/Vorbefunde) vorliegen, (b) eine Neu-Generierung wuerde das fehlende
+    Input NICHT beheben - daher kein repair-vorausgewaehltes critical."""
+    if workflow != "anamnese" or not selbstauskunft_empty:
+        return []
+    return [QualityIssue(
+        code=ISSUE_CODE_SELBSTAUSKUNFT_LEER,
+        severity=SEVERITY_WARNING,
+        message=(
+            "Selbstauskunft konnte nicht extrahiert werden (leeres oder "
+            "unausgefuelltes PDF-Formular?). Falls kein anderer Patienten-Input "
+            "(Audio/Vorbefunde) vorliegt, basiert dieser Bericht NICHT auf echten "
+            "Patientendaten, sondern auf der Stilvorlage."
+        ),
+        repair_hint=(
+            "Nicht durch Neu-Generierung behebbar. Pruefe das hochgeladene PDF "
+            "(ausgefuellt? Formular mit Textfeldern?) und lade die ausgefuellte "
+            "Selbstauskunft erneut hoch."
+        ),
+        code_detail={"workflow": workflow},
+    )]
+
 
 def _check_forbidden_names(
     text: str, patient_name: dict | None,
@@ -442,11 +476,13 @@ def run_quality_check(
     *,
     stichpunkte: list[str] | None = None,
     patient_name: dict | None = None,
+    selbstauskunft_empty: bool | None = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
     Reihenfolge der Issues ist deterministisch (gut fuer Audit/Tests):
-      0. DATENSCHUTZ_NAME_LEAK  (nur wenn patient_name uebergeben wird)
+      0a. SELBSTAUSKUNFT_LEER    (nur anamnese, wenn Selbstauskunft leer war)
+      0b. DATENSCHUTZ_NAME_LEAK  (nur wenn patient_name uebergeben wird)
       1. THINK_BLOCK_LEAK
       2. BEFUND_SEPARATOR_MISSING
       3. LENGTH_TOO_SHORT       (nur bei Stub < 50% des Minimums)
@@ -462,7 +498,10 @@ def run_quality_check(
     stichpunkte:  optionale Liste der Stichpunkte/Fokus-Themen (Feld 'bullets').
                   Leer/None -> Schritt 6 entfaellt.
     patient_name: optionales Namens-Dict ({anrede,vorname,nachname,initial}) aus
-                  extract_patient_name. None -> Schritt 0 entfaellt.
+                  extract_patient_name. None -> Schritt 0b entfaellt.
+    selbstauskunft_empty: True, wenn die P2-Selbstauskunft keinen verwertbaren
+                  Inhalt lieferte (extraction.source_extraction_is_empty). None/
+                  False -> Schritt 0a entfaellt.
 
     Idempotent (kein State, keine Seiteneffekte ausser logging).
     """
@@ -482,6 +521,7 @@ def run_quality_check(
         )]
 
     issues: list[QualityIssue] = []
+    issues.extend(_check_selbstauskunft(workflow, selbstauskunft_empty))
     issues.extend(_check_forbidden_names(text, patient_name))
     issues.extend(_check_think_blocks(text))
     issues.extend(_check_befund_separator(text, workflow))

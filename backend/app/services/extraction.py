@@ -792,6 +792,69 @@ def _image_to_base64(img: Image.Image, max_size: int = 1600) -> str:
 
 # ── Stufe 1: pdfplumber ───────────────────────────────────────────────────────
 
+def _pdf_form_fields(file_path: Path) -> str:
+    """Liest ausgefuellte AcroForm-Formularfelder, die der Text-Layer NICHT
+    enthaelt (v19.7). Kritisch fuer die sysTelios-Selbstauskunft: ein ausgefuelltes
+    PDF-Formular traegt seinen gesamten Patienten-Inhalt in Formularfeldern -
+    pdfplumber's extract_text() sieht nur die leere Vorlage. Ohne diese Felder
+    bekommt das Modell keinen Patienten-Inhalt und halluziniert eine Anamnese aus
+    dem Stil-Anker (bestaetigt an an-01: reale Patientin 'Dagmar, Lehrerin, drei
+    Kinder' -> erfundener 'Herr T.' mit alkoholkrankem Vater).
+
+    Liefert 'Feldname: Wert'-Zeilen; leer wenn kein AcroForm, keine ausgefuellten
+    Felder oder pypdf fehlt (graceful degradation)."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        logger.warning("[OCR] pypdf fehlt - AcroForm-Formularfelder werden NICHT "
+                       "extrahiert (pip install pypdf). Ausgefuellte PDF-Formulare "
+                       "liefern dann nur die leere Vorlage!")
+        return ""
+    try:
+        fields = PdfReader(str(file_path)).get_fields() or {}
+    except Exception as e:
+        logger.debug("[OCR] AcroForm-Lesen fehlgeschlagen (%s): %s", file_path.name, e)
+        return ""
+    lines: list[str] = []
+    for name, obj in fields.items():
+        val = obj.get("/V") if hasattr(obj, "get") else None
+        if val in (None, "", "/Off"):
+            continue
+        text = str(val).replace("\r", "\n").strip()
+        if len(text) < 2:
+            continue
+        lines.append(f"{str(name).strip()}: {text}")
+    return "\n".join(lines)
+
+
+def source_extraction_is_empty(file_path: Path, extracted_text: str) -> bool:
+    """True, wenn aus einer Quelldatei KEIN verwertbarer Inhalt gewonnen wurde
+    (v19.7). Typisch: ein ausgefuellt-erwartetes, aber leeres PDF-Formular
+    (Selbstauskunft) oder eine praktisch leere Extraktion. Zwei Signale (ODER):
+      1. PDF-Fillable-Formular mit >=3 definierten, aber 0 ausgefuellten Feldern
+         (klassisch: leeres/unausgefuelltes Formular hochgeladen; der Text-Layer
+         liefert dann nur die Vorlage, > 40 Woerter -> Signal 2 greift NICHT).
+      2. extrahierter Text < 40 Woerter (Extraktion lieferte praktisch nichts).
+    Ein ausgefuelltes Formular (>=1 Feld mit Wert) oder inhaltsreicher Text
+    -> False. Speist den QC-Check 'Selbstauskunft nicht extrahiert'."""
+    if len((extracted_text or "").split()) < 40:
+        return True
+    if file_path.suffix.lower() == ".pdf":
+        try:
+            from pypdf import PdfReader
+            fields = PdfReader(str(file_path)).get_fields() or {}
+            if len(fields) >= 3:
+                filled = sum(
+                    1 for o in fields.values()
+                    if (o.get("/V") if hasattr(o, "get") else None) not in (None, "", "/Off")
+                )
+                if filled == 0:
+                    return True
+        except Exception:
+            pass
+    return False
+
+
 def _pdfplumber_extract(file_path: Path):
     import pdfplumber
     parts = []
@@ -807,6 +870,12 @@ def _pdfplumber_extract(file_path: Path):
                 rows = [r for r in rows if r]
                 if rows:
                     parts.append("\n".join(rows))
+    # v19.7: ausgefuellte AcroForm-Formularfelder anhaengen. Der Text-Layer oben
+    # enthaelt bei PDF-Formularen (Selbstauskunft!) nur die leere Vorlage - der
+    # Patienten-Inhalt steckt in den Formularfeldern. Ohne das -> Halluzination.
+    form = _pdf_form_fields(file_path)
+    if form:
+        parts.append("=== AUSGEFÜLLTE FORMULARFELDER ===\n" + form)
     return _normalize_text("\n\n".join(parts)), pages
 
 

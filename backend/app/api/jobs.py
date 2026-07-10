@@ -1394,6 +1394,7 @@ async def create_generate_job(
             return text_out
 
         selbstauskunft_text = ""
+        selbstauskunft_empty = False   # v19.7: leeres/unextrahierbares Formular?
         if selbstauskunft_bytes and selbstauskunft_name:
             suffix = _Path(selbstauskunft_name).suffix.lower()
             path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
@@ -1404,6 +1405,15 @@ async def create_generate_job(
                     selbstauskunft_text, "Selbstauskunft", selbstauskunft_name)
             except Exception as e:
                 logger.warning("Selbstauskunft-Extraktion fehlgeschlagen: %s", e)
+                selbstauskunft_empty = True
+            else:
+                from app.services.extraction import source_extraction_is_empty
+                selbstauskunft_empty = source_extraction_is_empty(path, selbstauskunft_text)
+            if selbstauskunft_empty:
+                logger.warning(
+                    "[QC] Selbstauskunft '%s' ohne verwertbaren Inhalt "
+                    "(leeres/unausgefuelltes Formular?) - QC-Warnung gesetzt.",
+                    selbstauskunft_name)
 
         # P2: Vorbefunde (Berichte früherer Therapeuten/Kliniken)
         vorbefunde_text = ""
@@ -1692,6 +1702,7 @@ async def create_generate_job(
         # dem Job hinterlegen - in-process, wird dort per getattr gelesen.
         job.patient_name = patient_name   # Datenschutz-Namensleck-Check (Punkt 1)
         job.fokus_themen = bullets        # Stichpunkt/Fokus-Themen-Check (Punkt 6)
+        job.selbstauskunft_empty = selbstauskunft_empty  # v19.7: leere Selbstauskunft (P2)
 
         # 5. Generieren – jede Variable hat genau eine Bedeutung
         # v18: prompt-Feld → workflow_instructions, neuer Parameter befund_vorlage.

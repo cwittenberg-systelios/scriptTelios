@@ -23,6 +23,7 @@ soundfile==0.12.1                # Audio-Loader fuer pyannote-Diarization
 
 # ── Dokument-Verarbeitung ─────────────────────────────────────────
 pdfplumber==0.11.4               # PDF-Textextraktion (Stufe 1)
+pypdf==5.1.0                     # AcroForm-Formularfelder (ausgefuellte PDF-Formulare, v19.7)
 python-docx==1.1.2               # DOCX lesen & schreiben
 Pillow==11.1.0                   # Bild-Vorverarbeitung fuer OCR
 pytesseract==0.3.13              # OCR Wrapper fuer Tesseract (Stufe 2)

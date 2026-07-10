@@ -842,9 +842,11 @@ class JobQueue:
                     # falls nicht gesetzt (aeltere Aufrufer, Repair-Jobs).
                     _patient_name = getattr(job, "patient_name", None)
                     _stichpunkte = split_stichpunkte(getattr(job, "fokus_themen", None))
+                    _sa_empty = getattr(job, "selbstauskunft_empty", None)
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
+                        selbstauskunft_empty=_sa_empty,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(
