@@ -742,16 +742,17 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "KONTEXT:\n"
         "Die Antragsvorlage enthält bereits Aktuelle Anamnese, Problemrelevante Vorgeschichte, "
         "Psychischen Befund und Einweisungsdiagnosen. Diese Informationen sind deine QUELLEN.\n\n"
-        "INHALT der Begründung:\n"
-        "- Warum ist ein stationäres Setting medizinisch AKUT notwendig?\n"
-        "- Konkrete Symptome und Risiken aus den Quellen benennen\n"
-        "- Ambulante Insuffizienz begründen (warum reicht ambulant nicht?)\n"
-        "- Dekompensationszeichen und aktuelle Krisensituation\n"
+        "INHALT der Begründung (zusammenhängende ARGUMENTATION, keine Symptomliste):\n"
+        "- Kernbegründung: warum ist ein stationäres Setting medizinisch AKUT notwendig?\n"
+        "- Symptome, Vorgeschichte und Risiken aus den Quellen NUR als Beleg der "
+        "Indikation anführen (nicht als eigenständige Symptom-Aufzählung)\n"
+        "- Ambulante Insuffizienz begründen (warum reicht ambulant nicht (mehr)?)\n"
+        "- Dekompensationszeichen und aktuelle Krise als Nachweis der Dringlichkeit\n"
         # v13 A korrigiert: Wir-Pflicht durch Vorlagen-Mimik ersetzt (siehe STIL-Block).
         # Wenn Vorlage Wir nutzt: 'Wir nehmen ... auf', 'Wir erleben ...'.
         # Wenn Vorlage 3.-Person nutzt: empathisch-konjunktivisch, NIE 'Der
         # Patient zeigte ...' (objektiv-distanzierter Berichtston).
-        "- Konkret und symptombezogen"
+        "- Verdichtet und begründend, nicht narrativ-beschreibend"
         # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
     ),
 
@@ -805,6 +806,18 @@ BASE_PROMPT_AKUTANTRAG = (
     "Erster Satz: Beginne NICHT mit einer generischen Floskel ('… präsentiert sich', "
     "'… berichtet'), sondern im Stil der Vorlage konkret und "
     "patientenspezifisch.\n"
+    "DUKTUS – BEGRÜNDEN STATT BESCHREIBEN (Kern des Akutantrags):\n"
+    "Ein Akutantrag ist eine ärztlich-therapeutische BEGRÜNDUNG der Indikation, "
+    "keine Symptom-Erzählung. Jeder Absatz arbeitet auf die stationäre Akut-"
+    "Indikation hin: Symptome, Vorgeschichte und Risiken werden NICHT chronologisch "
+    "aufgezählt, sondern als BELEG angeführt, warum ambulante Behandlung aktuell "
+    "nicht (mehr) ausreicht und ein geschützter stationärer Rahmen unmittelbar "
+    "erforderlich ist. Verdichtet und schlussfolgernd formulieren (klinisch-"
+    "funktionale Begründung, hohe Nominaldichte), NICHT narrativ-aufzählend. "
+    "Übernimm nicht nur den Tonfall, sondern den ARGUMENTATIVEN Duktus der "
+    "Stilvorlage – sie begründet die Notwendigkeit, sie zählt keine Symptome auf. "
+    "Leitfrage jedes Satzes: 'Was begründet dies für die akute stationäre "
+    "Indikation?' – nicht 'Welches Symptom liegt vor?'.\n"
     + NAMENSFORMAT
     + "HALLUZINATIONSSCHUTZ – QUELLENREGEL:\n"
     "Jeder Satz MUSS auf eine konkrete Stelle in der Antragsvorlage "
