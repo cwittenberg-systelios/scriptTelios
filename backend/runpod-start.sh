@@ -783,6 +783,16 @@ else
     echo "${OK}Python-Pakete vorhanden"
 fi
 
+# pypdf: AcroForm-Formularfelder (ausgefuellte PDF-Formulare, v19.7). EIGENER
+# Guard noetig, weil der requirements.txt-Install oben bei bestehendem venv
+# (fastapi bereits vorhanden) uebersprungen wird - pypdf wuerde sonst auf einem
+# persistenten /workspace-venv nie nachgezogen. Gleiche Logik wie pytest-timeout.
+if ! python -c "import pypdf" 2>/dev/null; then
+    echo "${GO}pypdf installieren (PDF-Formularfelder)..."
+    python -m pip install --quiet "pypdf==5.1.0"
+    echo "${OK}pypdf installiert"
+fi
+
 # pytest-timeout: benötigt für Tests mit @pytest.mark.timeout (z.B. OCR-Tests).
 # Prüfen ob installiert, ggf. nachrüsten.
 if ! python -c "import pytest_timeout" 2>/dev/null; then
