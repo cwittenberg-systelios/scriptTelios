@@ -1688,6 +1688,11 @@ async def create_generate_job(
                 workflow,
             )
 
+        # v19.6: Kontext fuer den QualityCheck (laeuft in run_job nach DONE) auf
+        # dem Job hinterlegen - in-process, wird dort per getattr gelesen.
+        job.patient_name = patient_name   # Datenschutz-Namensleck-Check (Punkt 1)
+        job.fokus_themen = bullets        # Stichpunkt/Fokus-Themen-Check (Punkt 6)
+
         # 5. Generieren – jede Variable hat genau eine Bedeutung
         # v18: prompt-Feld → workflow_instructions, neuer Parameter befund_vorlage.
         # `instructions` wurde oben aus workflow_instructions/prompt geholt und validiert.

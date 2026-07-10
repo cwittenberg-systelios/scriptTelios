@@ -42,10 +42,12 @@ from app.core.workflows import word_limit_for
 from app.services.quality_specs import (
     BEFUND_SEPARATOR,
     keyword_present,
+    recommended_sections_for,
     requires_befund_separator,
     required_keywords_for,
     required_sections_for,
     section_present,
+    stichpunkt_present,
     synonyms_for,
     upper_code_suffix,
 )
@@ -75,6 +77,17 @@ ISSUE_CODE_PREFIX_MISSING_SECTION = "MISSING_SECTION_"
 # Hausaufgaben (im Output, nicht in den Quelldaten). Nur aktiv, wenn der Aufrufer
 # source_text uebergibt (Roh-Transkript + extrahierte Eingabedokumente).
 ISSUE_CODE_SOURCE_FIDELITY = "SOURCE_FIDELITY"
+# v19.6 (Punkt 1): Datenschutz - realer Patientenname im Output (Bericht muss
+# auf die Initiale anonymisiert sein). Kritisch, DSGVO-relevant. Nur aktiv, wenn
+# der Aufrufer patient_name uebergibt (abgeleitet aus den Quelldokumenten).
+ISSUE_CODE_DATENSCHUTZ_NAME_LEAK = "DATENSCHUTZ_NAME_LEAK"
+# v19.6 (Punkt 6): vom Therapeuten mitgegebener Stichpunkt/Fokus-Thema nicht im
+# Output aufgegriffen. Nur aktiv, wenn stichpunkte uebergeben werden.
+ISSUE_CODE_MISSING_STICHPUNKT = "MISSING_STICHPUNKT"
+# v19.6.1: empfohlene (optionale) Therapie-Modalitaet nicht erwaehnt. INFO-Ebene
+# (kein Mangel - die Modalitaet hat evtl. nicht stattgefunden, siehe
+# quality_specs.RECOMMENDED_SECTIONS). Suffix = Modalitaet, matcht ^[A-Z_]+$.
+ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED = "MODALITY_NOT_COVERED_"
 
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
@@ -117,47 +130,102 @@ class QualityIssue:
 
 # ── Einzelne Check-Funktionen (jede liefert 0..N Issues) ───────────────────────
 
-def _check_length(text: str, workflow: str) -> list[QualityIssue]:
-    """Wortzahl gegen Workflow-Default-Limit. Stilvorlagen-abgeleitete Limits
-    sind NICHT verfuegbar (die wurden zur Generierungszeit angewandt) - hier
-    pruefen wir gegen den robusten Workflow-Default, nicht gegen Style-Anker."""
-    word_count = len(text.split())
-    fb_min, fb_max = word_limit_for(workflow, fallback=(200, 800))
+def _check_forbidden_names(
+    text: str, patient_name: dict | None,
+) -> list[QualityIssue]:
+    """Datenschutz (Punkt 1): der reale Patientenname darf NICHT im Output stehen
+    - der Bericht anonymisiert auf die Initiale ('Frau M.'). patient_name ist das
+    Dict aus extract_patient_name/parse_explicit_patient_name ({anrede,vorname,
+    nachname,initial}) oder None. None -> kein pruefbarer Name -> keine Issues
+    (analog Quellentreue bei leerer Quelle). Der reale Name wird upstream aus den
+    Quelldokumenten abgeleitet, hier nur gegen den Output geprueft.
 
+    Analog zum Eval-check_forbidden_names, aber ohne Fixture-Oracle: die
+    'verbotenen' Namen sind die realen Namensbestandteile des Patienten. Voller
+    Name + Nachname allein -> kritisch; Vorname allein -> Warnung (kann mit
+    Allerweltsnamen kollidieren, Therapeut entscheidet)."""
+    if not patient_name:
+        return []
+    text_lo = text.lower()
+
+    def _present(name: str) -> bool:
+        n = (name or "").strip().lower().rstrip(".")
+        if len(n) < 3:
+            return False
+        # Wortgrenze vorne, Suffix frei (Flexion: 'Muellers', 'Muellern').
+        return re.search(r"\b" + re.escape(n), text_lo) is not None
+
+    nachname = (patient_name.get("nachname") or "").strip()
+    vorname = (patient_name.get("vorname") or "").strip()
+    anonym = patient_name.get("initial") or "die Initiale"
     issues: list[QualityIssue] = []
-    if word_count < fb_min:
+
+    hard_hits: list[str] = []
+    if nachname and _present(nachname):
+        hard_hits.append(nachname)
+    if vorname and nachname and _present(f"{vorname} {nachname}"):
+        combo = f"{vorname} {nachname}"
+        if combo not in hard_hits:
+            hard_hits.append(combo)
+    if hard_hits:
         issues.append(QualityIssue(
-            code=ISSUE_CODE_LENGTH_TOO_SHORT,
-            severity=SEVERITY_WARNING,
-            message=f"Text zu kurz: {word_count} Woerter < {fb_min} Minimum",
-            repair_hint=(
-                f"Erweitere den Text auf mindestens {fb_min} Woerter. "
-                "Fuege fehlende Inhalte aus den Quellen ein, ohne neue "
-                "Sachverhalte zu erfinden."
+            code=ISSUE_CODE_DATENSCHUTZ_NAME_LEAK,
+            severity=SEVERITY_CRITICAL,
+            message=(
+                "DATENSCHUTZ: realer Patientenname im Output gefunden "
+                f"({', '.join(hard_hits)}) - Bericht muss anonymisiert sein."
             ),
-            code_detail={
-                "actual": word_count,
-                "min": fb_min,
-                "max": fb_max,
-            },
+            repair_hint=(
+                f"Ersetze JEDES Vorkommen des realen Namens durch die "
+                f"anonymisierte Form '{anonym}' (bzw. 'Frau/Herr {anonym}'). "
+                "Der Bericht darf keinen Klarnamen enthalten."
+            ),
+            code_detail={"hits": hard_hits, "initial": patient_name.get("initial")},
         ))
-    elif word_count > fb_max:
+
+    if vorname and _present(vorname) and not hard_hits:
         issues.append(QualityIssue(
-            code=ISSUE_CODE_LENGTH_TOO_LONG,
+            code=ISSUE_CODE_DATENSCHUTZ_NAME_LEAK,
             severity=SEVERITY_WARNING,
-            message=f"Text zu lang: {word_count} Woerter > {fb_max} Maximum",
-            repair_hint=(
-                f"Kuerze den Text auf maximal {fb_max} Woerter. "
-                "Streiche Redundanzen, Aufzaehlungen und nicht-essentielle "
-                "Nebensaetze. Erhalte alle strukturellen Sektionen."
+            message=(
+                f"DATENSCHUTZ: Vorname '{vorname}' im Output - pruefen, ob er "
+                "den Patienten bezeichnet (ggf. anonymisieren)."
             ),
-            code_detail={
-                "actual": word_count,
-                "min": fb_min,
-                "max": fb_max,
-            },
+            repair_hint=(
+                f"Falls '{vorname}' den Patienten bezeichnet, ersetze ihn durch "
+                f"die anonymisierte Form '{anonym}'."
+            ),
+            code_detail={"hits": [vorname], "initial": patient_name.get("initial")},
         ))
     return issues
+
+
+def _check_length(text: str, workflow: str) -> list[QualityIssue]:
+    """Laenge ist KEIN Ko-Kriterium (uebernommen aus dem Eval-Framework,
+    check_word_count - Punkt 3): moderate Ueber-/Unterschreitungen erzeugen KEIN
+    Issue mehr, sie feuerten nur unnoetige Repair-Prompts (Rauschen). Ein Issue
+    gibt es nur bei EXTREMER Kuerze (< 50% des Minimums), was auf Degeneration
+    oder Kontextabbruch (Stub) hindeutet. Inhaltliche Vollstaendigkeit deckt der
+    Sektions-/Stichpunkt-/Quellentreue-Check ab, nicht die Wortzahl. Geprueft
+    wird gegen den robusten Workflow-Default (Style-Anker galt zur Gen.-Zeit)."""
+    word_count = len(text.split())
+    fb_min, fb_max = word_limit_for(workflow, fallback=(200, 800))
+    if word_count < fb_min * 0.5:
+        return [QualityIssue(
+            code=ISSUE_CODE_LENGTH_TOO_SHORT,
+            severity=SEVERITY_WARNING,
+            message=(
+                f"Stub/Abbruch-Verdacht: nur {word_count} Woerter "
+                f"(< 50% von {fb_min}) - Text wirkt abgeschnitten."
+            ),
+            repair_hint=(
+                f"Der Text ist ungewoehnlich kurz. Erzeuge einen vollstaendigen "
+                f"{workflow}-Text aus den vorhandenen Quellen (Richtwert "
+                f"{fb_min}-{fb_max} Woerter), ohne neue Sachverhalte zu erfinden."
+            ),
+            code_detail={"actual": word_count, "min": fb_min, "max": fb_max},
+        )]
+    return []
 
 
 def _check_required_keywords(text: str, workflow: str) -> list[QualityIssue]:
@@ -196,6 +264,37 @@ def _check_required_sections(text: str, workflow: str) -> list[QualityIssue]:
             repair_hint=(
                 f"Ergaenze die strukturelle Sektion '{section}'. "
                 f"Erkennungsmerkmale: {', '.join(synonyms_for(section))}."
+            ),
+            code_detail={"section": section, "synonyms": synonyms_for(section)},
+        ))
+    return issues
+
+
+def _check_recommended_sections(text: str, workflow: str) -> list[QualityIssue]:
+    """Empfohlene Therapie-Modalitaeten (v19.6.1): INFO-Ebene. Anders als
+    Pflicht-Sektionen ist ihr Fehlen KEIN Mangel - die Modalitaet hat evtl. nicht
+    stattgefunden (nicht jeder Patient macht Kunst-/Musik-/Koerpertherapie). Der
+    Check surfacet nur eine Abdeckungs-Uebersicht ('keine Gruppentherapie
+    erwaehnt - beabsichtigt?'), failt aber keinen gueltigen Bericht und wird im
+    Repair nicht vorausgewaehlt (nur critical wird vorausgewaehlt)."""
+    issues: list[QualityIssue] = []
+    for section in recommended_sections_for(workflow):
+        if section_present(text, section):
+            continue
+        suffix = upper_code_suffix(section)
+        if not suffix:
+            continue
+        issues.append(QualityIssue(
+            code=f"{ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED}{suffix}",
+            severity=SEVERITY_INFO,
+            message=(
+                f"Modalitaet nicht erwaehnt: '{section}' - sofern nicht "
+                "durchgefuehrt, ist das in Ordnung."
+            ),
+            repair_hint=(
+                f"Falls '{section}' im Aufenthalt stattgefunden hat, ergaenze "
+                "einen kurzen Absatz dazu - AUSSCHLIESSLICH sofern durch die "
+                "Quellen gedeckt (keine erfundene Modalitaet)."
             ),
             code_detail={"section": section, "synonyms": synonyms_for(section)},
         ))
@@ -276,6 +375,36 @@ def _check_kompositum_klebebugs(text: str) -> list[QualityIssue]:
 
 # ── Hauptfunktion ──────────────────────────────────────────────────────────────
 
+def _check_stichpunkte(
+    text: str, stichpunkte: list[str] | None,
+) -> list[QualityIssue]:
+    """Dynamische Pro-Job-Keywords (Punkt 6): jeder vom Therapeuten mitgegebene
+    Stichpunkt (P1) bzw. jedes Fokus-Thema (P3/P4) soll im Output vorkommen.
+    Ersetzt die statischen (leeren) REQUIRED_KEYWORDS durch etwas Sinnhaftes/
+    Individuelles. Erkennung generoes (quality_specs.stichpunkt_present) - Bias
+    gegen Rausch-Repairs. Ein fehlender Stichpunkt = eine WARNUNG (Therapeut
+    entscheidet; ggf. bewusst weggelassen)."""
+    if not stichpunkte:
+        return []
+    issues: list[QualityIssue] = []
+    for bullet in stichpunkte:
+        b = (bullet or "").strip()
+        if not b or stichpunkt_present(text, b):
+            continue
+        issues.append(QualityIssue(
+            code=ISSUE_CODE_MISSING_STICHPUNKT,
+            severity=SEVERITY_WARNING,
+            message=f"Stichpunkt/Fokus-Thema nicht aufgegriffen: '{b}'",
+            repair_hint=(
+                f"Greife das Thema '{b}' im Text auf - AUSSCHLIESSLICH sofern es "
+                "durch die Quellen (Transkript/Unterlagen) gedeckt ist. Erfinde "
+                "keine Inhalte, nur um das Stichwort unterzubringen (Quellentreue)."
+            ),
+            code_detail={"stichpunkt": b},
+        ))
+    return issues
+
+
 def _check_source_fidelity(text: str, source_text: str) -> list[QualityIssue]:
     """Quellentreue: aufgestuelptes Verfahrens-/Methoden-Vokabular (IFS-/Ego-State-
     Anteilssprache etc.) bzw. erfundene Standard-Hausaufgaben - im Output, aber NICHT
@@ -307,21 +436,33 @@ def _check_source_fidelity(text: str, source_text: str) -> list[QualityIssue]:
 
 
 def run_quality_check(
-    text: str, workflow: str, source_text: str = "",
+    text: str,
+    workflow: str,
+    source_text: str = "",
+    *,
+    stichpunkte: list[str] | None = None,
+    patient_name: dict | None = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
     Reihenfolge der Issues ist deterministisch (gut fuer Audit/Tests):
+      0. DATENSCHUTZ_NAME_LEAK  (nur wenn patient_name uebergeben wird)
       1. THINK_BLOCK_LEAK
       2. BEFUND_SEPARATOR_MISSING
-      3. LENGTH_TOO_SHORT / LENGTH_TOO_LONG
-      4. MISSING_KEYWORD_*
+      3. LENGTH_TOO_SHORT       (nur bei Stub < 50% des Minimums)
+      4. MISSING_KEYWORD_*      (aktuell leer - siehe quality_specs)
       5. MISSING_SECTION_*
-      6. KOMPOSITA_KLEBEBUG
-      7. SOURCE_FIDELITY        (nur wenn source_text uebergeben wird)
+      6. MODALITY_NOT_COVERED_* (info; empfohlene Modalitaet nicht erwaehnt)
+      7. MISSING_STICHPUNKT     (nur wenn stichpunkte uebergeben werden)
+      8. KOMPOSITA_KLEBEBUG
+      9. SOURCE_FIDELITY        (nur wenn source_text uebergeben wird)
 
-    source_text: optionale Quelle (Roh-Transkript + extrahierte Eingabedokumente)
-    fuer die Quellentreue-Pruefung. Leer -> Schritt 7 entfaellt.
+    source_text:  optionale Quelle (Roh-Transkript + extrahierte Eingabedokumente)
+                  fuer die Quellentreue-Pruefung. Leer -> Schritt 8 entfaellt.
+    stichpunkte:  optionale Liste der Stichpunkte/Fokus-Themen (Feld 'bullets').
+                  Leer/None -> Schritt 6 entfaellt.
+    patient_name: optionales Namens-Dict ({anrede,vorname,nachname,initial}) aus
+                  extract_patient_name. None -> Schritt 0 entfaellt.
 
     Idempotent (kein State, keine Seiteneffekte ausser logging).
     """
@@ -341,11 +482,14 @@ def run_quality_check(
         )]
 
     issues: list[QualityIssue] = []
+    issues.extend(_check_forbidden_names(text, patient_name))
     issues.extend(_check_think_blocks(text))
     issues.extend(_check_befund_separator(text, workflow))
     issues.extend(_check_length(text, workflow))
     issues.extend(_check_required_keywords(text, workflow))
     issues.extend(_check_required_sections(text, workflow))
+    issues.extend(_check_recommended_sections(text, workflow))
+    issues.extend(_check_stichpunkte(text, stichpunkte))
     issues.extend(_check_kompositum_klebebugs(text))
     issues.extend(_check_source_fidelity(text, source_text))
 

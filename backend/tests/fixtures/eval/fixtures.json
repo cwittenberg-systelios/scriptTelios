@@ -19,7 +19,7 @@
         "max_words": 900,
         "required_keywords": ["Anteile", "Selbstwert", "Gruppe", "ambulant"],
         "forbidden_patterns": ["**", "##", "Epikrise:", "Procedere:", "I.", "II."],
-        "must_contain_sections": ["Behandlungsverlauf", "Empfehlung"],
+        "must_contain_sections": ["Anliegen und Behandlungsziele", "Behandlungsverlauf", "Gesamtbewertung", "Empfehlung"],
         "forbidden_names": ["Mayer", "Isdek", "A28094"]
       }
     },
@@ -38,7 +38,7 @@
         "max_words": 900,
         "required_keywords": ["Anteile", "Trennung", "Gruppe", "ambulant"],
         "forbidden_patterns": ["**", "##", "Epikrise:", "Procedere:"],
-        "must_contain_sections": ["Behandlungsverlauf", "Empfehlung"],
+        "must_contain_sections": ["Anliegen und Behandlungsziele", "Behandlungsverlauf", "Gesamtbewertung", "Empfehlung"],
         "forbidden_names": ["Reif", "28032"]
       }
     }

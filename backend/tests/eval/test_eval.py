@@ -937,15 +937,8 @@ class EvalResult:
             self.passed.append(f"Wortanzahl OK: {self.word_count}w ({min_words}-{max_words})")
 
     def check_required_keywords(self, keywords: list[str]):
-        # Synonyme fuer Keywords die im Fließtext anders ausgedrueckt werden koennen
-        keyword_synonyms = {
-            "vorstellungsanlass": ["vorstellungsanlass", "stellt sich vor", "stellt sich mit",
-                                    "hauptanliegen", "hauptbeschwerde", "kommt mit", "berichtet"],
-            "behandlungsverlauf": ["behandlungsverlauf", "im verlauf", "im einzelprozess",
-                                    "therapeutische arbeit", "wir erlebten"],
-            "empfehlung": ["empfehlung", "empfohlen", "ambulant", "nachsorge",
-                            "weiterbehandlung", "weitere therapie"],
-        }
+        # v19.6 (#5): Keyword-Synonyme aus quality_specs (SoT) statt dupliziert.
+        from app.services.quality_specs import synonyms_for
         text_lower = self.text.lower()
         for kw in keywords:
             kw_lower = kw.lower()
@@ -953,7 +946,7 @@ class EvalResult:
                 self.passed.append(f"Keyword vorhanden: '{kw}'")
                 continue
             # Semantischer Match
-            synonyms = keyword_synonyms.get(kw_lower, [kw_lower])
+            synonyms = synonyms_for(kw)
             if any(s in text_lower for s in synonyms):
                 self.passed.append(f"Keyword (semantisch) vorhanden: '{kw}'")
             else:
@@ -972,31 +965,11 @@ class EvalResult:
         Erlaubt Synonyme und thematische Indikatoren — passend zum Fließtext-Stil
         ohne explizite Unterueberschriften.
         """
-        # Synonym-Sets: Sektion → Liste von Indikatoren (mind. einer muss vorkommen)
-        synonyms = {
-            "Behandlungsverlauf": [
-                "behandlungsverlauf", "verlauf", "im einzelprozess", "therapeutische arbeit",
-                "im laufe der behandlung", "im verlauf der behandlung", "wir erlebten",
-                "im stationaren rahmen", "im stationären rahmen",
-            ],
-            "Empfehlung": [
-                "empfehlung", "empfohlen", "empfehlen", "ambulant", "nachsorge",
-                "weiterbehandlung", "weitere therapie", "fortführung", "fortsetzen",
-            ],
-            "Vorstellungsanlass": [
-                "vorstellungsanlass", "stellt sich vor", "stellt sich mit",
-                "hauptanliegen", "hauptbeschwerde", "vorstellungsgrund",
-                "kommt mit", "leidet unter", "berichtet über", "berichtet von",
-            ],
-            "Anamnese": [
-                "anamnese", "berichtet", "biographisch", "vorgeschichte",
-                "in der vergangenheit", "fruher", "früher",
-            ],
-            "Befund": [
-                "befund", "psychischer befund", "psychopathologisch",
-                "im gespräch", "im gespraech", "stimmungslage",
-            ],
-        }
+        # v19.6 (#5): Synonym-Sets kommen jetzt aus der EINEN Quelle
+        # (quality_specs.synonyms_for) statt aus einem hier duplizierten Dict -
+        # vorher drifteten Eval- und Produktions-Synonyme auseinander. Damit ist
+        # auch die neue Sektion 'Anliegen und Behandlungsziele' automatisch bekannt.
+        from app.services.quality_specs import synonyms_for
 
         text_lower = self.text.lower()
         for section in sections:
@@ -1005,8 +978,8 @@ class EvalResult:
             if section_lower in text_lower:
                 self.passed.append(f"Sektion vorhanden: '{section}'")
                 continue
-            # Dann semantisch via Synonym-Set
-            indicators = synonyms.get(section, [section_lower])
+            # Dann semantisch via Synonym-Set (aus quality_specs, SoT)
+            indicators = synonyms_for(section)
             if any(ind in text_lower for ind in indicators):
                 self.passed.append(f"Sektion (semantisch) vorhanden: '{section}'")
             else:
@@ -1398,16 +1371,13 @@ async def test_eval_workflow(workflow, test_case, request):
 
     # Wortlimit: dynamisch aus Therapeuten-Stilvorlagen ableiten wenn verfügbar,
     # Fixture-Defaults als Fallback. Spiegelt die Logik in jobs.py/prompts.py.
-    _wl_defaults = {
-        "dokumentation":      (150, 500),
-        "anamnese":           (450, 700),
-        "verlaengerung":      (300, 600),
-        "folgeverlaengerung": (300, 600),
-        "entlassbericht":     (600, 1200),
-        "akutantrag":         (150, 400),
-    }
-    _fb_min = expected.get("min_words", _wl_defaults.get(workflow, (200, 800))[0])
-    _fb_max = expected.get("max_words", _wl_defaults.get(workflow, (200, 800))[1])
+    # v19.6 (#4): Fallback-Defaults kommen jetzt aus der EINEN Quelle
+    # (app.core.workflows.word_limit_for) - vorher divergierte diese Tabelle
+    # fuer JEDEN Workflow von workflows.py. Fixture-min/max ueberschreiben weiter.
+    from app.core.workflows import word_limit_for
+    _wl = word_limit_for(workflow, fallback=(200, 800))
+    _fb_min = expected.get("min_words", _wl[0])
+    _fb_max = expected.get("max_words", _wl[1])
     _style_therapeut = test_case.get("style_therapeut")
 
     # v13 Ä5: Identische Resolution wie Production via resolve_length_anchor.

@@ -17,6 +17,7 @@ WICHTIG: KEINE LLM-Aufrufe. Reine Datendefinitionen + ein paar Helfer.
 """
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 
@@ -94,7 +95,42 @@ KEYWORD_SYNONYMS: dict[str, list[str]] = {
         # (b) verlaufstypische Einstiegsmarker
         "zu beginn der begleitung", "zu beginn der behandlung",
         "zu beginn des aufenthalts", "zu beginn des aufenthaltes",
-        "zu behandlungsbeginn", "bei aufnahme", "eingangs", "anfangs",
+        "zu beginn des stationären aufenthalt",
+        "zu behandlungsbeginn", "zu therapiebeginn",
+        "bei aufnahme", "eingangs", "anfangs",
+        # (c) Ankommen / Ersteindruck (v19.6.1) - der Einstieg beschreibt oft
+        # auch das Ankommen und den Ersteindruck ("Wir erlebten sie zu
+        # Therapiebeginn ..."). Ein Marker daraus genuegt.
+        "ankommen", "angekommen", "ersteindruck",
+        "wir erlebten sie", "wir erlebten ihn", "erlebten wir",
+    ],
+    # ── Gesamtbewertung (v19.6.1) - zusammenfassende Gesamtwuerdigung am Ende
+    # des Verlaufs (Symptomentwicklung, Prae-Post, Gesamtbild). Distinktive
+    # Marker (KEIN bare 'insgesamt'/'abschliessend' -> zu haeufig, waere immer
+    # erfuellt und damit zahnlos).
+    "gesamtbewertung": [
+        "gesamtbewertung", "gesamtverlauf", "im gesamtverlauf", "gesamtbild",
+        "im gesamtbild", "gesamtprozess", "im gesamtprozess", "gesamtwürdigung",
+        "zusammenfassend", "zusammenfassende", "prä-post", "prä- post",
+        "praepost", "prä-/post", "symptomreduktion", "über die begleitung",
+        "über die gesamte begleitung",
+    ],
+    # ── empfohlene Therapie-Modalitaeten (v19.6.1, siehe RECOMMENDED_SECTIONS) ─
+    # NICHT pflicht - nur erwartet, WENN die Modalitaet stattgefunden hat. Werden
+    # auf info-Ebene geprueft (kein Fehlalarm, wenn z.B. keine Kunsttherapie lief).
+    "einzeltherapie": [
+        "einzeltherapie", "einzelprozess", "im einzelprozess", "einzelsetting",
+        "einzelgespräch", "einzelsitzung", "im einzelkontakt",
+    ],
+    "gruppentherapie": [
+        "gruppentherapie", "therapeutischen gruppen", "therapeutische gruppe",
+        "in der gruppe", "in den gruppen", "gruppenprozess", "gruppensetting",
+    ],
+    "nonverbale therapie": [
+        "nonverbale", "nonverbaler", "kunsttherapie", "musiktherapie",
+        "körperpsychotherapie", "koerperpsychotherapie", "körpertherapie",
+        "körperarbeit", "koerperarbeit", "bewegungstherapie", "tanztherapie",
+        "gestaltungstherapie", "kreativtherapie", "maltherapie",
     ],
 }
 
@@ -144,7 +180,24 @@ REQUIRED_SECTIONS: dict[str, list[str]] = {
     "verlaengerung": ["Behandlungsverlauf"],
     "folgeverlaengerung": ["Behandlungsverlauf"],
     "akutantrag": [],
-    "entlassbericht": ["Anliegen und Behandlungsziele", "Behandlungsverlauf", "Empfehlung"],
+    "entlassbericht": [
+        "Anliegen und Behandlungsziele", "Behandlungsverlauf",
+        "Gesamtbewertung", "Empfehlung",
+    ],
+}
+
+
+# ── Empfohlene (optionale) Sektionen pro Workflow (v19.6.1) ────────────────────
+#
+# Anders als REQUIRED_SECTIONS: diese Sektionen sind ERWARTET, aber optional -
+# sie erscheinen, WENN die Modalitaet stattgefunden hat. Ihr Fehlen ist KEIN
+# Mangel (der Patient hat die Modalitaet evtl. nicht genutzt), sondern nur ein
+# info-Hinweis ("keine Gruppentherapie erwaehnt - beabsichtigt?"). Beim
+# entlassbericht sind das die im Fewshot vorgesehenen Therapie-Bausteine, die je
+# nach Behandlung variieren. So bekommt der Therapeut eine Abdeckungs-Uebersicht,
+# ohne dass gueltige Berichte (ohne diese Modalitaet) faelschlich failen.
+RECOMMENDED_SECTIONS: dict[str, list[str]] = {
+    "entlassbericht": ["Einzeltherapie", "Gruppentherapie", "Nonverbale Therapie"],
 }
 
 
@@ -215,6 +268,12 @@ def required_sections_for(workflow: str) -> list[str]:
     return list(REQUIRED_SECTIONS.get(workflow, []))
 
 
+def recommended_sections_for(workflow: str) -> list[str]:
+    """Empfohlene (optionale) Sektionen fuer einen Workflow. Leer falls keine.
+    Fehlen ist KEIN Mangel - nur info-Hinweis (siehe RECOMMENDED_SECTIONS)."""
+    return list(RECOMMENDED_SECTIONS.get(workflow, []))
+
+
 def requires_befund_separator(workflow: str) -> bool:
     return workflow in WORKFLOWS_REQUIRING_BEFUND_SEPARATOR
 
@@ -238,3 +297,77 @@ def section_present(text: str, section: str) -> bool:
     if section.lower() in text_lower:
         return True
     return _any_indicator_present(text_lower, synonyms_for(section))
+
+
+# ── Stichpunkte / Fokus-Themen (v19.6, Punkt 6) ────────────────────────────────
+#
+# Dynamische PRO-JOB-Keywords: die vom Therapeuten mitgegebenen Stichpunkte (P1)
+# bzw. Fokus-Themen (P3/P4, Feld 'bullets') sollen im Output vorkommen. Ersetzt
+# die statischen (leeren) REQUIRED_KEYWORDS durch etwas Sinnhaftes/Individuelles.
+# Bewusst GENEROESE Erkennung (Bias gegen Rausch-Repairs): ein Stichpunkt gilt
+# als erfuellt, wenn EIN distinktiver Begriff daraus im Text auftaucht. Generische
+# Fuellwoerter ('Arbeit', 'Thema' ...) zaehlen NICHT als Anker - sonst wuerde
+# 'Traumafokussierte Arbeit' schon durch das ueberall vorkommende 'Arbeit' als
+# erfuellt gelten.
+
+_STICHWORT_STOP: frozenset[str] = frozenset({
+    "und", "oder", "der", "die", "das", "des", "dem", "den", "ein", "eine",
+    "einer", "eines", "einem", "einen", "mit", "von", "vom", "zum", "zur",
+    "im", "in", "am", "auf", "für", "fuer", "bei", "als", "auch", "sowie",
+    "sich", "seine", "seiner", "ihre", "ihrer", "insb", "bzgl", "the",
+})
+
+# Generisches Klinik-Fuellwort - kommt in nahezu jedem Bericht vor, taugt daher
+# NICHT als Anker fuer die Anwesenheit eines spezifischen Stichpunkts.
+_STICHWORT_FILLER: frozenset[str] = frozenset({
+    "arbeit", "thema", "themen", "bereich", "aspekt", "aspekte", "umgang",
+    "sitzung", "sitzungen", "gespräch", "gespräche", "gespraech", "prozess",
+    "punkt", "punkte", "frage", "fragen", "ziel", "ziele",
+})
+
+
+def stichpunkt_terms(bullet: str) -> list[str]:
+    """Distinktive Anker-Begriffe eines Stichpunkts (lowercase, ohne Stop-/
+    Fuellwoerter, Mindestlaenge 5). Fallback: laengstes Token, falls nach dem
+    Filtern nichts uebrig bleibt (reiner Fuellwort-Stichpunkt)."""
+    raw = re.findall(r"[a-zäöüß]+", (bullet or "").lower())
+    terms = [
+        t for t in raw
+        if len(t) >= 5 and t not in _STICHWORT_STOP and t not in _STICHWORT_FILLER
+    ]
+    if terms:
+        return terms
+    return [max(raw, key=len)] if raw else []
+
+
+def stichpunkt_present(text: str, bullet: str) -> bool:
+    """True, wenn mindestens ein distinktiver Begriff des Stichpunkts (Wortstamm
+    an Wortgrenze) im Text vorkommt. Leerer Stichpunkt -> True (nichts zu
+    pruefen)."""
+    terms = stichpunkt_terms(bullet)
+    if not terms:
+        return True
+    text_lo = text.lower()
+    # Wortstamm ab Wortgrenze; Suffix frei fuer Flexion (traumafokussiert ->
+    # traumafokussierte). Praefix auf max. 8 Zeichen begrenzt, damit lange
+    # Komposita ueber Flexions-/Fugengrenzen matchen.
+    for t in terms:
+        if re.search(r"\b" + re.escape(t[:8]), text_lo):
+            return True
+    return False
+
+
+def split_stichpunkte(raw: str | None) -> list[str]:
+    """Zerlegt das freitextliche 'bullets'-Feld in einzelne Punkte. Trennt an
+    Zeilenumbruechen, ';' und fuehrenden Aufzaehlungszeichen/Nummerierungen.
+    Kommas werden NICHT getrennt (Themen enthalten oft 'Familien- und
+    Paardynamik, insb. ...'). Leerpunkte raus."""
+    if not raw or not raw.strip():
+        return []
+    parts: list[str] = []
+    for line in raw.replace(";", "\n").splitlines():
+        s = line.strip().lstrip("•-*–—").strip()
+        s = re.sub(r"^\d+[.)]\s*", "", s).strip()
+        if s:
+            parts.append(s)
+    return parts

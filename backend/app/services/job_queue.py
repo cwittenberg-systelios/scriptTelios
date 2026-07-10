@@ -813,6 +813,7 @@ class JobQueue:
                     from app.services.quality_check import (
                         combined_result_text, run_quality_check, serialize_issues,
                     )
+                    from app.services.quality_specs import split_stichpunkte
                     # Anamnese liefert Anamnese-Text + Befund-Text als zwei
                     # getrennte Felder. Der QualityCheck braucht den verketteten
                     # Text (mit ###BEFUND###-Separator) damit
@@ -834,8 +835,16 @@ class JobQueue:
                             job.source_vorantrag_text,
                         ) if s and s.strip()
                     )
+                    # v19.6: Datenschutz-Namensleck (Punkt 1) + Stichpunkt-Check
+                    # (Punkt 6) brauchen den realen Namen bzw. die Fokus-Themen.
+                    # Beide werden in jobs.py als Ad-hoc-Attribute auf dem Job
+                    # hinterlegt (in-process, kein DB-Feld). getattr -> robust,
+                    # falls nicht gesetzt (aeltere Aufrufer, Repair-Jobs).
+                    _patient_name = getattr(job, "patient_name", None)
+                    _stichpunkte = split_stichpunkte(getattr(job, "fokus_themen", None))
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
+                        stichpunkte=_stichpunkte, patient_name=_patient_name,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(

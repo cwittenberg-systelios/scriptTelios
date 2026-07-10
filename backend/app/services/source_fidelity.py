@@ -40,6 +40,12 @@ METHOD_TERMS: list[tuple[str, str]] = [
     ("Self-Leadership (untypisch)",  "self-leadership"),
     ("Exile (engl., untypisch)",     "exile"),
     ("Feuerwehr-Anteil (untypisch)", "feuerwehr"),
+    # v19.6 (#7): weitere englische IFS-Begriffe, die die sysTelios-Klinik NIE
+    # nutzt -> bei Auftreten praktisch immer aufgestuelpt. Wortgrenze schuetzt
+    # (kommen im Deutschen nicht als Teilwort vor; 'protector' != dt. 'Protektor').
+    ("Firefighter (engl., untypisch)", "firefighter"),
+    ("Protector (engl., untypisch)",   "protector"),
+    ("Manager-Part (engl., untypisch)", "manager-part"),
 ]
 
 # BEWUSST NICHT in der Liste (Stand v19.5, datengestuetzt): generische Verfahrens-/
@@ -62,6 +68,13 @@ HOMEWORK_TERMS: list[tuple[str, str]] = [
     ("Journal",                      "journal"),
     ("Achtsamkeitsuebung",           "achtsamkeitsüb"),
     ("aufschreiben/notieren",        "aufschreib"),
+    # v19.6 (#7): weitere Standard-Hausaufgaben-Artefakte, die das Modell gern
+    # erfindet. Spezifische Komposita (bewusst KEIN bare 'protokoll' -> kollidiert
+    # mit legitimer Therapie-/Verlaufsdoku).
+    ("Arbeitsblatt",                 "arbeitsblatt"),
+    ("Stimmungstagebuch",            "stimmungstagebuch"),
+    ("Gedankenprotokoll",            "gedankenprotokoll"),
+    ("Wochenprotokoll",              "wochenprotokoll"),
 ]
 
 
