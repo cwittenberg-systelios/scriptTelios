@@ -460,4 +460,60 @@ function JobModelPicker({ workflow, value, onChange }) {
   );
 }
 
-export { JobProgressBar, Dropzone, ModelSelector, InputTabs, Card, PromptEditor, Output, Tags, JobModelPicker };
+// ── copyFormatted (v19.5.6) ────────────────────────────────────────────────
+// Problem: navigator.clipboard.writeText() legt NUR text/plain in die
+// Zwischenablage. Rich-Text-Ziele (Confluence-Editor, Word, Outlook)
+// kollabieren beim Einfuegen von text/plain die \n\n-Absatztrennungen zu
+// einem einzigen Textblock - Ueberschriften kleben dann am Folgetext.
+// Loesung: zusaetzlich eine text/html-Variante mitschreiben, in der jeder
+// \n\n-Absatz ein eigenes <p> ist und Abschnitts-Ueberschriften (kurze
+// Zeile ohne Satz-Endzeichen) als <p><strong> ausgezeichnet sind.
+// text/plain bleibt unveraendert erhalten (fuer <textarea>-Ziele).
+// Fallback auf writeText, wenn ClipboardItem nicht verfuegbar ist
+// (aeltere Firefox-Versionen) oder write() scheitert.
+
+function _escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// Heuristik: eigenstaendiger Absatz aus EINER Zeile, max. 6 Woerter,
+// endet nicht auf Satzzeichen → Abschnitts-Ueberschrift
+// ("Auftragsklärung", "Relevante Gesprächsinhalte", ...).
+function _isHeading(par) {
+  if (par.includes("\n")) return false;
+  const words = par.trim().split(/\s+/);
+  if (words.length === 0 || words.length > 6) return false;
+  return !/[.:;!?]$/.test(par.trim());
+}
+
+function _textToHtml(text) {
+  const paragraphs = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  return paragraphs
+    .map((p) => {
+      const inner = _escapeHtml(p).replace(/\n/g, "<br/>");
+      return _isHeading(p)
+        ? `<p><strong>${inner}</strong></p>`
+        : `<p>${inner}</p>`;
+    })
+    .join("\n");
+}
+
+async function copyFormatted(text) {
+  const t = text || "";
+  try {
+    if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+      const item = new ClipboardItem({
+        "text/plain": new Blob([t], { type: "text/plain" }),
+        "text/html":  new Blob([_textToHtml(t)], { type: "text/html" }),
+      });
+      await navigator.clipboard.write([item]);
+      return;
+    }
+  } catch (e) {
+    // z.B. Permission-Fehler im iframe → plain-Fallback
+    console.warn("copyFormatted: HTML-Clipboard fehlgeschlagen, Fallback auf writeText", e);
+  }
+  await navigator.clipboard.writeText(t);
+}
+
+export { JobProgressBar, Dropzone, ModelSelector, InputTabs, Card, PromptEditor, Output, Tags, JobModelPicker, copyFormatted };

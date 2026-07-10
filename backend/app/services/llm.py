@@ -1368,9 +1368,36 @@ def _postprocess_text(
     import re as _re
 
     # Primer wieder voranstellen (war Teil des Outputs, vom LLM nicht
-    # nochmal mitgeneriert)
+    # nochmal mitgeneriert).
+    #
+    # v19.5.6 Primer-Echo-Detection: Gemma-Modelle behandeln den
+    # Assistant-Primer nicht zuverlaessig als Prefill (Template schliesst
+    # den Turn), sondern beginnen eine NEUE Antwort - und wiederholen dabei
+    # die Ueberschrift aus dem Prompt-Beispiel, oft als Markdown
+    # ("**Auftragsklärung**" / "## Auftragsklärung"). Das fruehere
+    # bedingungslose Voranstellen erzeugte dann
+    # "Auftragsklärung\n\nAuftragsklärung\n\n..." - und
+    # deduplicate_paragraphs griff nicht, weil es VOR
+    # strip_markdown_formatting laeuft ("auftragsklärung" !=
+    # "**auftragsklärung**"). Daher: Primer nur voranstellen, wenn der
+    # Output nicht bereits (markdown-/case-normalisiert) mit ihm beginnt.
     if assistant_primer and text:
-        text = assistant_primer + text
+        _primer_norm = " ".join(
+            strip_markdown_formatting(assistant_primer).lower().split()
+        )
+        _head_norm = " ".join(
+            strip_markdown_formatting(
+                text[: len(assistant_primer) + 32]
+            ).lower().split()
+        )
+        if _primer_norm and _head_norm.startswith(_primer_norm):
+            logger.info(
+                "Primer-Echo erkannt - Modell hat Primer selbst wiederholt, "
+                "kein erneutes Voranstellen (Primer: %r)",
+                assistant_primer.strip()[:40],
+            )
+        else:
+            text = assistant_primer + text
 
     # Qwen3 Think-Bloecke entfernen - alle Varianten
     if "<think>" in text or "</think>" in text:

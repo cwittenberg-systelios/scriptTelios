@@ -8,7 +8,7 @@ import { useJobResult } from "../hooks.jsx";
 import { P_ENTL } from "../prompt-defaults.jsx";
 import { RepairBundle, ResultVersionsTabs } from "../qa.jsx";
 import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.jsx";
-import { Card, Dropzone, InputTabs, Output, PromptEditor, JobModelPicker } from "../ui.jsx";
+import { Card, Dropzone, InputTabs, Output, PromptEditor, JobModelPicker, copyFormatted } from "../ui.jsx";
 
 
 
@@ -174,7 +174,7 @@ function P4({ toast, resumeJob, onResumed }) {
             disabled={job.repairBusy}
           />
           <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+            onCopy={() => { copyFormatted(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 

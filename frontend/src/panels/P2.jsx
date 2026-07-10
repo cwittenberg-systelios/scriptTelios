@@ -9,7 +9,7 @@ import { useDraftCache, useJobResult, useResumeWorkflowJob } from "../hooks.jsx"
 import { P_AKUT, P_ANAMNESE, P_BEFUND_VORLAGE } from "../prompt-defaults.jsx";
 import { RepairBundle, ResultVersionsTabs } from "../qa.jsx";
 import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.jsx";
-import { Card, Dropzone, InputTabs, Output, PromptEditor, Tags, JobModelPicker } from "../ui.jsx";
+import { Card, Dropzone, InputTabs, Output, PromptEditor, Tags, JobModelPicker, copyFormatted } from "../ui.jsx";
 
 
 // Sprint Draft-Persistence B1: P2 Text-Felder die in localStorage persistiert
@@ -314,7 +314,7 @@ function P2({ toast, resumeJob, onResumed }) {
               const t = job.hasRepair
                 ? (tab === "Anamnese" ? job.text : job.befundText)
                 : (tab === "Anamnese" ? out : befundOut);
-              navigator.clipboard.writeText(t);
+              copyFormatted(t);
               toast("Kopiert");
             }}
             extraButtons={hasTranscript ? [
@@ -528,7 +528,7 @@ function P2b({ toast, resumeJob, onResumed }) {
             disabled={job.repairBusy}
           />
           <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { navigator.clipboard.writeText(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+            onCopy={() => { copyFormatted(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 

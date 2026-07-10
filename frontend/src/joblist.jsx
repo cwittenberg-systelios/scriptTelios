@@ -5,7 +5,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { downloadTranscript } from "./api.jsx";
 import { RepairBundle, ResultVersionsTabs } from "./qa.jsx";
-import { Output } from "./ui.jsx";
+import { Output, copyFormatted } from "./ui.jsx";
 
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -328,7 +328,7 @@ function JobDetailPane({ job, jobOps, jobState, toast, onCancel, onDelete, onBac
       />
       <Output text={showText} loading={isLive} jobId={job?.job_id}
         onTerminal={onTerminal}
-        onCopy={() => { navigator.clipboard.writeText(showText); toast("In Zwischenablage kopiert"); }}
+        onCopy={() => { copyFormatted(showText); toast("In Zwischenablage kopiert"); }}
         extraButtons={job?.has_transcript ? [
           { label: "Transkript ↓", onClick: () => downloadTranscript(job.job_id) }
         ] : []} />
