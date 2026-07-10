@@ -141,6 +141,7 @@
   "anamnese": [
     {
       "id": "an-01-depression-lehrerin",
+      "patientenname": "Frau T.",
       "name": "Mittelgradige Depression (Frau, Lehrerin)",
       "prompt": "Nimm diesen Bericht und schreibe eine Anamnese als psychologischer Psychotherapeut.",
       "diagnosen": ["F32.1"],
@@ -160,6 +161,7 @@
     },
     {
       "id": "an-02-schulangst-jugendliche",
+      "patientenname": "Frau K.",
       "name": "Schulangst und ADS (Jugendliche 18)",
       "prompt": "Erstelle eine vollständige Anamnese und einen psychopathologischen Befund.",
       "diagnosen": ["F40.1", "F90.0"],

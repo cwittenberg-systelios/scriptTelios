@@ -283,20 +283,44 @@ def _any_indicator_present(text_lower: str, indicators: Iterable[str]) -> bool:
     return any(ind in text_lower for ind in indicators)
 
 
+# Trennbare Verben / Wendungen, die die Substring-Synonyme NICHT fangen, weil
+# Woerter dazwischenstehen - z.B. "sich vorstellen": "stellt sich [in einem
+# Zustand innerer Unruhe] vor". Als Regex geprueft, ZUSAETZLICH zu den Substring-
+# Synonymen. Generoes gehalten (Bias gegen Fehl-FAILs, nicht gegen Fehl-Passes).
+SEPARABLE_PATTERNS: dict[str, list[str]] = {
+    "vorstellungsanlass": [r"stellt sich\b.{0,60}?\bvor\b"],
+}
+
+
+def _separable_present(text_lower: str, term: str) -> bool:
+    """True wenn ein trennbares-Verb-Muster (SEPARABLE_PATTERNS) fuer den Term im
+    Text matcht. Faengt Konstruktionen, die Substring-Synonyme verfehlen."""
+    for pat in SEPARABLE_PATTERNS.get(term.lower(), ()):
+        if re.search(pat, text_lower):
+            return True
+    return False
+
+
 def keyword_present(text: str, term: str) -> bool:
-    """True wenn term ODER ein Synonym im Text vorkommt (case-insensitive)."""
+    """True wenn term ODER ein Synonym ODER ein trennbares-Verb-Muster im Text
+    vorkommt (case-insensitive)."""
     text_lower = text.lower()
     if term.lower() in text_lower:
         return True
-    return _any_indicator_present(text_lower, synonyms_for(term))
+    if _any_indicator_present(text_lower, synonyms_for(term)):
+        return True
+    return _separable_present(text_lower, term)
 
 
 def section_present(text: str, section: str) -> bool:
-    """True wenn section ODER ein Synonym im Text vorkommt (case-insensitive)."""
+    """True wenn section ODER ein Synonym ODER ein trennbares-Verb-Muster im Text
+    vorkommt (case-insensitive)."""
     text_lower = text.lower()
     if section.lower() in text_lower:
         return True
-    return _any_indicator_present(text_lower, synonyms_for(section))
+    if _any_indicator_present(text_lower, synonyms_for(section)):
+        return True
+    return _separable_present(text_lower, section)
 
 
 # ── Stichpunkte / Fokus-Themen (v19.6, Punkt 6) ────────────────────────────────

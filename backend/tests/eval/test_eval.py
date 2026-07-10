@@ -551,6 +551,7 @@ async def _generate(
     input_files: dict | None = None,
     extra_form_data: dict | None = None,
     force_transcribe: bool = False,
+    patientenname: str | None = None,
 ) -> dict:
     """
     Sendet einen Generierungs-Job und wartet auf das Ergebnis.
@@ -566,6 +567,12 @@ async def _generate(
     }
     if diagnosen and "diagnosen" not in form_data:
         form_data["diagnosen"] = ",".join(diagnosen)
+    if patientenname and patientenname.strip():
+        # v19.7: explizite Anrede+Kuerzel wie in der Praxis - sonst faellt der
+        # Backend-Pfad auf extract_patient_name zurueck, das aus einem reinen
+        # Selbstauskunft-Formular (nur Vorname, kein Nachname/Anrede) kein
+        # Geschlecht ziehen kann -> "Herr" statt "Frau".
+        form_data["patientenname"] = patientenname.strip()
     if extra_form_data:
         form_data.update(extra_form_data)
 
@@ -937,18 +944,13 @@ class EvalResult:
             self.passed.append(f"Wortanzahl OK: {self.word_count}w ({min_words}-{max_words})")
 
     def check_required_keywords(self, keywords: list[str]):
-        # v19.6 (#5): Keyword-Synonyme aus quality_specs (SoT) statt dupliziert.
-        from app.services.quality_specs import synonyms_for
-        text_lower = self.text.lower()
+        # v19.7: nutzt quality_specs.keyword_present (SoT) - inkl. Synonyme UND
+        # trennbare-Verb-Muster (z.B. "stellt sich [...] vor"). Ersetzt die
+        # bisherige eigene Substring-Schleife.
+        from app.services.quality_specs import keyword_present
         for kw in keywords:
-            kw_lower = kw.lower()
-            if kw_lower in text_lower:
+            if keyword_present(self.text, kw):
                 self.passed.append(f"Keyword vorhanden: '{kw}'")
-                continue
-            # Semantischer Match
-            synonyms = synonyms_for(kw)
-            if any(s in text_lower for s in synonyms):
-                self.passed.append(f"Keyword (semantisch) vorhanden: '{kw}'")
             else:
                 self.issues.append(f"Keyword fehlt: '{kw}'")
 
@@ -965,23 +967,13 @@ class EvalResult:
         Erlaubt Synonyme und thematische Indikatoren — passend zum Fließtext-Stil
         ohne explizite Unterueberschriften.
         """
-        # v19.6 (#5): Synonym-Sets kommen jetzt aus der EINEN Quelle
-        # (quality_specs.synonyms_for) statt aus einem hier duplizierten Dict -
-        # vorher drifteten Eval- und Produktions-Synonyme auseinander. Damit ist
-        # auch die neue Sektion 'Anliegen und Behandlungsziele' automatisch bekannt.
-        from app.services.quality_specs import synonyms_for
-
-        text_lower = self.text.lower()
+        # v19.7: nutzt quality_specs.section_present (SoT) - inkl. Synonyme UND
+        # trennbare-Verb-Muster. Damit sind auch 'Anliegen und Behandlungsziele'
+        # etc. automatisch bekannt. Ersetzt die bisherige eigene Substring-Schleife.
+        from app.services.quality_specs import section_present
         for section in sections:
-            section_lower = section.lower()
-            # Erst exakter Match (alte Logik)
-            if section_lower in text_lower:
+            if section_present(self.text, section):
                 self.passed.append(f"Sektion vorhanden: '{section}'")
-                continue
-            # Dann semantisch via Synonym-Set (aus quality_specs, SoT)
-            indicators = synonyms_for(section)
-            if any(ind in text_lower for ind in indicators):
-                self.passed.append(f"Sektion (semantisch) vorhanden: '{section}'")
             else:
                 self.issues.append(f"Sektion fehlt: '{section}' (auch keine Synonyme gefunden)")
 
@@ -1307,6 +1299,7 @@ async def test_eval_workflow(workflow, test_case, request):
             workflow, prompt, diagnosen, input_files,
             extra_form_data=extra_form_data,
             force_transcribe=request.config.getoption("--transcribe", default=False),
+            patientenname=test_case.get("patientenname"),
         )
     except (RuntimeError, TimeoutError) as e:
         pytest.fail(f"Generierung fehlgeschlagen: {e}")
