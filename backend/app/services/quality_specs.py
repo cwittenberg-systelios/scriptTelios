@@ -72,6 +72,30 @@ KEYWORD_SYNONYMS: dict[str, list[str]] = {
         "einladungen", "einladung", "wurde eingeladen",
         "keine konkrete einladung",
     ],
+    # ── entlassbericht-Einstieg (2026-07-10, siehe REQUIRED_SECTIONS) ─────────
+    # Ressourcen-/auftragsorientierter Einstieg des Verlaufs: mit welchem
+    # Veraenderungswunsch kam der Klient (Auftragsklaerung), im Gegensatz zur
+    # Defizitorientierung der Anamnese ('Vorstellungsanlass' war hier fehl am
+    # Platz und feuerte staendig falsch). Zwei Marker-Familien:
+    #   (a) Anliegen / Auftrag / Veraenderungswunsch / Ziel-Vokabular
+    #   (b) verlaufstypische Einstiegsmarker ("zu Beginn der Begleitung",
+    #       "bei Aufnahme" ...). Bare "zu beginn"/"beginn" bewusst NICHT
+    #       aufgenommen (zu haeufig -> Check wuerde faktisch immer bestehen);
+    #       nur qualifizierte Formen.
+    "anliegen und behandlungsziele": [
+        # (a) Auftrag / Anliegen / Veraenderungswunsch / Ziel
+        "anliegen", "auftrag", "veränderungswunsch", "veraenderungswunsch",
+        "wunsch nach veränderung", "wunsch nach veraenderung",
+        "behandlungsziel", "zielsetzung", "mit dem ziel",
+        "ziel des aufenthalts", "ziele des aufenthaltes", "ziel des aufenthaltes",
+        "ziel der behandlung", "ziele der behandlung",
+        "kam mit dem wunsch", "kam mit dem anliegen",
+        "wünschte sich", "wuenschte sich",
+        # (b) verlaufstypische Einstiegsmarker
+        "zu beginn der begleitung", "zu beginn der behandlung",
+        "zu beginn des aufenthalts", "zu beginn des aufenthaltes",
+        "zu behandlungsbeginn", "bei aufnahme", "eingangs", "anfangs",
+    ],
 }
 
 
@@ -120,7 +144,7 @@ REQUIRED_SECTIONS: dict[str, list[str]] = {
     "verlaengerung": ["Behandlungsverlauf"],
     "folgeverlaengerung": ["Behandlungsverlauf"],
     "akutantrag": [],
-    "entlassbericht": ["Vorstellungsanlass", "Behandlungsverlauf", "Empfehlung"],
+    "entlassbericht": ["Anliegen und Behandlungsziele", "Behandlungsverlauf", "Empfehlung"],
 }
 
 
