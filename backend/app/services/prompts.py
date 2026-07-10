@@ -500,6 +500,9 @@ dringend indiziert.\
 # Testwerte-Beispiel inkl. ehrlichem Umgang mit unguenstigem Wert (Stress).
 # Der TESTWERTE-Guard in BASE_PROMPTS["entlassbericht"] verhindert, dass die
 # Beispielzahlen in echte Berichte kopiert oder Werte erfunden werden.
+# v19.6.1: Nonverbal-Absatz ergaenzt (Kunsttherapie, Koerperarbeit) —
+# Revision Cars10 mit erneut angewendeten v19.6-Korrekturen (Dativ,
+# Absatz-4-Fassung ohne Adverb, einsatzige Stress-Einordnung).
 FEW_SHOT_ENTLASSBERICHT = """\
 BEISPIEL (reiner Fließtext, keine Überschriften):
 
@@ -520,6 +523,16 @@ auswirkte. Zunehmend gelang es ihr im Weiteren, diese inneren Ebenen voneinander
 differenzieren, ihnen aus einer erwachsenen, selbstfürsorglichen Perspektive zu \
 begegnen und damit neue Arten und Weisen des Selbstumgangs zu entdecken und zu \
 stärken.
+
+Besonders in der Kunsttherapie wurde dieses Thema sichtbar, wo [Patient/in] \
+wiederholt zwischen einem starken Ergebnisdruck und dem Wunsch, einfach spielen zu \
+dürfen, schwankte. Wir beobachteten Phasen intensiver emotionaler Berührung, in \
+denen sie Schmerz und Trauer zuließ, was zeitweise zu Zuständen innerer \
+Verschlossenheit führte; gleichzeitig berichtete sie, in der Folge mehr innere \
+Integrität, Stabilität und eine flexiblere Handlungsgestaltung zu erleben. In der \
+Körperarbeit konnte sie explizit ihrem Wunsch nach Halt und Geborgenheit nachgehen \
+und erlebbar machen und auch hier neue Arten und Weisen des Selbstumgangs entdecken \
+und stärken.
 
 In den therapeutischen Gruppen wagte sie sich schrittweise in für sie zunächst \
 ungewohntes Terrain und nutzte die Gruppe mit wachsender Sicherheit als Resonanzraum, \
@@ -751,6 +764,9 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden "
         "(IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), "
         "konkrete Wendepunkte und Entwicklungsschritte. "
+        "Den nonverbalen Therapien (Kunst-, Musik-, Körperpsychotherapie/Körperarbeit) "
+        "einen eigenen Absatz widmen, sofern sie in den Quellen dokumentiert sind – "
+        "nur die tatsächlich dokumentierten Verfahren nennen. "
         # v13: Absatzlängen-Hinweis entfernt - Längenanker steht zentral via resolve_length_anchor()
         # v13 A korrigiert: Stil folgt Vorlage. Bei Wir-Vorlage Wir-Sicht
         # ('Wir erlebten ...'), bei 3.-Person empathisch ('Sie zeigte sich ...,
