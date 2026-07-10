@@ -494,43 +494,53 @@ eine Verlängerung um weitere 14 Tage aus psychotherapeutischer Sicht für \
 dringend indiziert.\
 """
 
+# v19.6: Ressourcenorientierte Ueberarbeitung (2026-07-10, Freigabe Cars10).
+# Aenderungslogik: Patient/in als Agens der Entwicklung, Wuerdigung statt
+# Pathologisierung, Restthemen als Entwicklungsrichtung (Utilisations-Frame),
+# Testwerte-Beispiel inkl. ehrlichem Umgang mit unguenstigem Wert (Stress).
+# Der TESTWERTE-Guard in BASE_PROMPTS["entlassbericht"] verhindert, dass die
+# Beispielzahlen in echte Berichte kopiert oder Werte erfunden werden.
 FEW_SHOT_ENTLASSBERICHT = """\
 BEISPIEL (reiner Fließtext, keine Überschriften):
 
 Zu Beginn des stationären Aufenthaltes formulierte [Patient/in] als zentrales Anliegen, \
-wieder inneren Halt zu finden und sich aus einem über Jahre verfestigten Erleben von \
+wieder inneren Halt zu finden und sich aus einem verfestigten Erleben von \
 innerer Überforderung und Selbstwertzweifeln zu lösen. Wir erlebten sie zu \
 Therapiebeginn deutlich erschöpft, innerlich angespannt und in ihrem Selbstwert \
-erheblich verunsichert. Gleichzeitig war bereits früh eine differenzierte \
+erheblich verunsichert. Gleichzeitig brachte sie bereits früh eine differenzierte \
 Selbstwahrnehmung und ein grundsätzliches Vertrauen in den therapeutischen Prozess \
-erkennbar, was eine tragfähige Arbeitsbasis ermöglichte.
+mit, was eine tragfähige Arbeitsbasis ermöglichte.
 
-Im Einzelprozess stand die hypnosystemische Anteilearbeit im Zentrum. Es zeigte sich \
-eine innere Dynamik aus stark leistungsorientierten, kontrollierenden Anteilen, die \
-biographisch eng mit frühen Beziehungserfahrungen verknüpft waren. Diese Anteile \
-hatten über lange Zeit eine schützende Funktion, gingen jedoch mit massiver innerer \
-Abwertung und emotionaler Selbstentfremdung einher. Im Verlauf gelang es zunehmend, \
-diese inneren Ebenen voneinander zu differenzieren und aus einer erwachseneren, \
-selbstfürsorglicheren Perspektive in Kontakt zu bringen.
+Im Einzelprozess stand die hypnosystemische Anteilearbeit im Zentrum. In dieser \
+Arbeit begegnete [Patient/in] einer inneren Dynamik aus stark leistungsorientierten, \
+kontrollierenden Anteilen, die biographisch eng mit frühen Beziehungserfahrungen \
+verknüpft waren. So konnte sie deren frühere Sinnhaftigkeit als Schutz- und \
+Überlebensleistung würdigen, was sich bereits sehr positiv auf ihren Selbstwert \
+auswirkte. Zunehmend gelang es ihr im Weiteren, diese inneren Ebenen voneinander zu \
+differenzieren, ihnen aus einer erwachsenen, selbstfürsorglichen Perspektive zu \
+begegnen und damit neue Arten und Weisen des Selbstumgangs zu entdecken und zu \
+stärken.
 
-Die therapeutischen Gruppen stellten zunächst eine erhebliche Herausforderung dar. \
-Mit zunehmender Sicherheit nutzte sie die Gruppe als Resonanzraum, um eigene \
-Beziehungsmuster zu erkennen. Rückmeldungen der Gruppe wirkten dabei korrigierend \
-auf das kritisch verzerrte Selbstbild und unterstützten den Aufbau eines stabilen \
-Selbstwertgefühls.
+In den therapeutischen Gruppen wagte sie sich schrittweise in für sie zunächst \
+ungewohntes Terrain und nutzte die Gruppe mit wachsender Sicherheit als Resonanzraum, \
+um eigene Beziehungsmuster zu erkennen. Die wohlwollenden Rückmeldungen der Gruppe \
+konnte sie zunehmend annehmen und für ein realistischeres, freundlicheres Selbstbild \
+nutzen, das einen stabileren Zugang zu ihrem Selbstwertgefühl weiter unterstützte.
 
 Im Gesamtverlauf zeigte sich eine deutliche Entwicklung hin zu mehr innerer \
-Differenzierung, affektiver Stabilität und Selbstwirksamkeit. [Patient/in] stellte \
-sich mit [Hauptdiagnose] vor dem Hintergrund [biographischer Belastungskontext] vor. \
-Im stationären Rahmen konnte eine deutliche Symptomreduktion erreicht werden. \
-Die prämorbide Persönlichkeitsstruktur mit hoher Leistungsorientierung und \
-eingeschränkter Selbstfürsorge bleibt langfristig therapeutisch relevant.
+Differenzierung, affektiver Stabilität und Selbstwirksamkeit. So konnte über die \
+Begleitung eine deutliche Symptomreduktion erreicht werden, wie es sich auch in den \
+Prä-/Post-Messungen abbildet (Angst 3,5 → 0,5; Depression 2,5 → 1; Stress 1 → 1,5). \
+Den leichten Anstieg der Stressbelastung verstehen wir im Kontext des bevorstehenden \
+Übergangs in den Alltag. Der begonnene Weg von hoher Leistungsorientierung hin zu \
+mehr Selbstfürsorge lädt zur langfristigen Weiterentwicklung ein.
 
-Für den weiteren Verlauf ist eine kontinuierliche ambulante psychotherapeutische \
-Begleitung mit traumatherapeutischem Schwerpunkt dringend zu empfehlen. Insbesondere \
-die weitere Arbeit an Beziehungs- und Selbstwertthemen sowie die achtsame Begleitung \
-bei anstehenden Veränderungsprozessen erscheinen wesentlich, um die erreichten \
-Fortschritte nachhaltig im Alltag zu verankern.\
+Für den weiteren Verlauf empfehlen wir eine kontinuierliche ambulante \
+psychotherapeutische Begleitung mit traumatherapeutischem Schwerpunkt. Insbesondere \
+die Vertiefung der erreichten Fortschritte in der Beziehungsgestaltung und im \
+Selbstwerterleben sowie die achtsame Begleitung bei anstehenden Veränderungsprozessen \
+erscheinen wesentlich, um das Erreichte nachhaltig im Alltag zu verankern und weiter \
+auszubauen.\
 """
 
 
@@ -749,7 +759,9 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "NIE objektiv-distanzierter Berichtston ('Der Patient zeigte X').\n\n"
         "Teil 2 – EPIKRISE (kompakte Gesamtbewertung):\n"
         "Symptomatik-Entwicklung im Vergleich zu Aufnahme, entlastete Schutzanteile, "
-        "verbliebener Bedarf, Ressourcen, Prognose.\n\n"
+        "verbliebener Bedarf, Ressourcen, Prognose. "
+        "Sofern die Berichtsvorlage Prä-/Post-Testwerte enthält, diese explizit "
+        "mit den konkreten Werten referenzieren.\n\n"
         "Teil 3 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss, DARF NICHT FEHLEN):\n"
         "Konkrete Empfehlungen für die ambulante Weiterbehandlung: "
         "Therapieform, Schwerpunkte, Frequenz, Nachsorge."
@@ -1030,6 +1042,52 @@ BASE_PROMPTS: dict[str, str] = {
         "Konkret und patientenspezifisch – keine Allgemeinplätze.\n"
         # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
         "Vermeide unnötige Ausschmückungen und Wiederholungen.\n\n"
+        # v19.6: Ressourcenorientierte Tonalitaet (hypnosystemische Haltung).
+        # NUR P4 (und der Sache nach P1, dort bereits via BASE_PROMPTS
+        # ["dokumentation"] abgedeckt). P3/P3b bewusst NICHT: Verlaengerungs-
+        # antraege muessen Behandlungsbedarf gegenueber der Kasse begruenden.
+        "TONALITÄT – RESSOURCENORIENTIERT (hypnosystemische Haltung der Klinik):\n"
+        "– AGENS-REGEL: Die Patientin/der Patient ist aktives Subjekt der "
+        "Entwicklung ('konnte nachgehen', 'wandte sich zu', 'entdeckte', "
+        "'nutzte'), nicht beobachtetes Objekt ('zeigte Defizite', "
+        "'wies Auffälligkeiten auf').\n"
+        "– KEINE kausal-diagnostischen Deutungen ('was auf ein tiefes Bedürfnis "
+        "hindeutet') – Erleben würdigen statt diagnostizieren.\n"
+        "– DEFIZIT-VOKABULAR VERMEIDEN: 'Defizit'/'defizitär', 'gestört', "
+        "'dysfunktional', 'maladaptiv', 'Rückfallprävention', 'muss bearbeitet "
+        "werden'. Restthemen als nächste Entwicklungsschritte formulieren "
+        "('lädt zur Vertiefung ein', 'Weiterentwicklung von'), nicht als "
+        "Mängelliste.\n"
+        "– EIGENINITIATIVE der Patientin/des Patienten (z.B. selbständig "
+        "begonnene Lektüre, Übungen, Aktivitäten) explizit als Ressource "
+        "würdigen.\n"
+        "– Empfehlungen als Vertiefung erreichter Fortschritte rahmen, nicht "
+        "als Arbeit an Defiziten.\n\n"
+        "FORMULIERUNGS-KONTRASTE (schlecht → gut):\n"
+        "– 'Bearbeitung der interaktionellen Defizite' → 'Vertiefung der "
+        "Fortschritte in Richtung authentischer Kommunikation und "
+        "Beziehungsgestaltung'\n"
+        "– 'suchte nach Halt, was auf ein tiefes biographisches Bedürfnis "
+        "hindeutet' → 'konnte ihrem Wunsch nach Halt nachgehen und erlebbar "
+        "machen'\n"
+        "– 'Prävention depressiver Rückfälle in den Wintermonaten' → "
+        "'Aufrechterhaltung der gewonnenen Stabilität und gute Selbstfürsorge "
+        "in den Wintermonaten'\n"
+        "– 'Die Defizite in der Emotionsregulation bestehen fort' → 'Die "
+        "begonnene Entwicklung eines flexibleren Umgangs mit intensiven "
+        "Gefühlen lädt zur ambulanten Vertiefung ein'\n\n"
+        "VERFÄLSCHUNGSSCHUTZ: Ressourcenorientierung ändert die Sprache, "
+        "nicht die klinischen Fakten. Restsymptomatik, Risiken und "
+        "Behandlungsbedarf bleiben klar benannt – der Nachbehandler braucht "
+        "ein realistisches Bild. Ungünstige oder gleichbleibende Befunde und "
+        "Testwerte ehrlich benennen, nicht verschweigen; eine Einordnung nur, "
+        "wenn sie sich aus den Quellen begründen lässt, gekennzeichnet als "
+        "Einschätzung ('verstehen wir als', 'aus unserer Sicht').\n\n"
+        "TESTWERTE: Prä-/Post-Messwerte NUR übernehmen, wenn sie wörtlich in "
+        "der Antragsvorlage oder Verlaufsdokumentation stehen – Zahlen exakt "
+        "abschreiben, NIEMALS erfinden, schätzen oder runden. Enthalten die "
+        "Quellen keine Testwerte, entfällt der Satz ersatzlos. Die Zahlenwerte "
+        "aus dem BEISPIEL unten NIEMALS übernehmen – sie sind fiktiv.\n\n"
         "QUELLENREGEL: Jeder Satz MUSS auf eine konkrete Stelle in der "
         "Verlaufsdokumentation oder Antragsvorlage zurückführbar sein. "
         "Keine Therapieinhalte, Diagnosen, Methoden oder Zitate erfinden "
