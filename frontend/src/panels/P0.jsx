@@ -6,7 +6,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { apiFetch, downloadViaApi, getApiBase, getConfluenceUser } from "../api.jsx";
 import { AudioRecorder } from "../audio.jsx";
 import { _pendingLabels, _recordingsCache, offlineQueueAdd, offlineQueueList, offlineQueueRemove } from "../shared.jsx";
-import { Card } from "../ui.jsx";
+import { Card, Dropzone } from "../ui.jsx";
 
 
 function LabelEdit({ value, placeholder, onSave }) {
@@ -269,13 +269,16 @@ function P0({ toast }) {
               <div style={{fontSize:11,fontWeight:600,letterSpacing:"0.06em",textTransform:"uppercase",color:"var(--st-text-soft)",marginBottom:6,textAlign:"center"}}>
                 – oder Audiodatei hochladen –
               </div>
-              <label style={{display:"block",border:"2px dashed var(--st-gray-mid)",borderRadius:5,padding:"12px 16px",textAlign:"center",cursor:"pointer",background:"var(--st-cream)",fontSize:13,color:"var(--st-text-soft)"}}>
-                <span style={{fontSize:18,display:"block",marginBottom:4}}>&#128266;</span>
-                Audiodatei wählen
-                <div style={{fontSize:11,color:"var(--st-text-pale)",marginTop:2}}>.mp3 · .m4a · .wav · .ogg · .webm · .flac · .aac</div>
-                <input type="file" accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*" style={{display:"none"}}
-                  onChange={(e) => { const f = e.target.files && e.target.files[0]; if (f) onRecorded(f); e.target.value = ""; }} />
-              </label>
+              {/* v19.7 S3: DnD-fähige Dropzone statt plain input. file bleibt null,
+                  da P0 sofort hochlädt statt die Datei zu halten. */}
+              <Dropzone
+                label="Audiodatei wählen oder hierher ziehen"
+                hint=".mp3 · .m4a · .wav · .ogg · .webm · .flac · .aac"
+                accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*"
+                icon="&#128266;"
+                file={null}
+                onFile={(f) => { if (f) onRecorded(f); }}
+              />
             </div>
             <div style={{fontSize:11,color:"var(--st-text-pale)",marginTop:8,textAlign:"center"}}>
               Aufnahmen werden sofort hochgeladen und erscheinen in der Liste unten.

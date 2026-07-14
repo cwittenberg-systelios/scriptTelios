@@ -8,6 +8,7 @@ import { P3, P3b } from "./src/panels/P3.jsx";
 import { P4 } from "./src/panels/P4.jsx";
 import { P5 } from "./src/panels/P5.jsx";
 import { clearActiveJob, friendlyError, loadActiveJob } from "./src/shared.jsx";
+import { useDndGuard } from "./src/dnd-guard.jsx";
 import { S, useHeadStyle } from "./src/styles.jsx";
 
 
@@ -24,6 +25,7 @@ const NAVS = [
 
 export default function App() {
   useHeadStyle(S);
+  useDndGuard(); // v19.7: blockiert Confluence-Attachment-Upload per DnD seitenweit
   const [page, setPage]       = useState("p0");
   const [msg, setMsg]         = useState(null);
   const [showSettings, setShowSettings] = useState(false);

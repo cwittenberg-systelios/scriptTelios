@@ -83,13 +83,51 @@ function JobProgressBar({ jobId, onTerminal }) {
   );
 }
 
+/** Prüft eine Datei gegen ein accept-Attribut (".pdf,image/*,…"). Leer = alles. */
+function matchesAccept(file, accept) {
+  if (!accept || !accept.trim()) return true;
+  const name = (file.name || "").toLowerCase();
+  const mime = (file.type || "").toLowerCase();
+  return accept.split(",").some((raw) => {
+    const a = raw.trim().toLowerCase();
+    if (!a) return false;
+    if (a.startsWith(".")) return name.endsWith(a);
+    if (a.endsWith("/*")) return mime.startsWith(a.slice(0, -1));
+    return mime === a;
+  });
+}
+
 function Dropzone({ label, hint, accept, file, onFile, icon }) {
   const [drag, setDrag] = useState(false);
+  const [warn, setWarn] = useState(null);
+  // dragenter/dragleave feuern für jedes Kind-Element — Counter statt
+  // Boolean verhindert Flackern des Highlights (v19.7 S2).
+  const dragDepth = useRef(0);
+  const warnTimer = useRef(null);
+  useEffect(() => () => { if (warnTimer.current) clearTimeout(warnTimer.current); }, []);
+
+  function showWarn(msg) {
+    setWarn(msg);
+    if (warnTimer.current) clearTimeout(warnTimer.current);
+    warnTimer.current = setTimeout(() => setWarn(null), 4000);
+  }
+
+  function takeFile(f) {
+    if (!f) return;
+    if (!matchesAccept(f, accept)) {
+      showWarn(`Dateityp nicht unterstützt (erwartet: ${accept})`);
+      return;
+    }
+    setWarn(null);
+    onFile(f);
+  }
 
   function onDrop(e) {
-    e.preventDefault(); setDrag(false);
-    const f = e.dataTransfer.files[0];
-    if (f) onFile(f);
+    e.preventDefault();
+    e.stopPropagation(); // nie zu Confluence hochbubblen lassen
+    dragDepth.current = 0; setDrag(false);
+    // Nur die erste Datei übernehmen (Single-File-API)
+    takeFile(e.dataTransfer.files && e.dataTransfer.files[0]);
   }
 
   let cls = "dropzone";
@@ -98,8 +136,9 @@ function Dropzone({ label, hint, accept, file, onFile, icon }) {
 
   return (
     <div className={cls}
-      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-      onDragLeave={() => setDrag(false)}
+      onDragEnter={(e) => { e.preventDefault(); dragDepth.current += 1; setDrag(true); }}
+      onDragOver={(e) => { e.preventDefault(); }}
+      onDragLeave={() => { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDrag(false); }}
       onDrop={onDrop}
     >
       {file ? (
@@ -107,14 +146,19 @@ function Dropzone({ label, hint, accept, file, onFile, icon }) {
           <span>{icon}</span>
           <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
           <button className="dz-remove" onClick={(e) => { e.stopPropagation(); onFile(null); }}>&#215;</button>
+          {warn && <div className="dz-hint" style={{ color: "var(--st-red)", fontWeight: 600, flexBasis: "100%" }}>{warn}</div>}
         </div>
       ) : (
         <>
           <div className="dz-icon">{icon}</div>
           <div className="dz-label">{label}</div>
           {hint && <div className="dz-hint">{hint}</div>}
+          {warn && <div className="dz-hint" style={{ color: "var(--st-red)", fontWeight: 600 }}>{warn}</div>}
           <input type="file" accept={accept}
-            onChange={(e) => { if (e.target.files && e.target.files[0]) onFile(e.target.files[0]); }} />
+            onChange={(e) => {
+              takeFile(e.target.files && e.target.files[0]);
+              e.target.value = ""; // gleiche Datei erneut wählbar
+            }} />
         </>
       )}
     </div>
