@@ -1,10 +1,53 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// scriptTelios — RunPod Control Proxy (Cloudflare Worker)
+// ───────────────────────────────────────────────────────────────────────────
+// Rolle: EINZIGE Logik-Schicht fuer die Pod-Steuerung. Haelt die Secrets,
+// spricht mit der RunPod-GraphQL-API, fuehrt das Statusprotokoll (KV) und
+// laeuft die Zeitsteuerung (Cron). Das Confluence-Makro ist ein reiner
+// UI-Layer, der ausschliesslich diese HTTP-API aufruft — keine Duplizierung.
+//
+// HTTP-Endpunkte (alle ausser "/" erfordern HMAC-Auth):
+//   GET  /            → Ping (ohne Auth)                    "RunPod Proxy OK"
+//   GET  /state       → { podId, desiredStatus, hasGpu, anyRunning, otherRunning[] }
+//   GET  /pods        → alle Account-Pods (Doppelstart-Erkennung)
+//   POST /start       → Pod starten (podResume)
+//   POST /stop        → Pod stoppen  (podStop)
+//   POST /setPodId    → { podId }  → mutable Pod-ID in KV schreiben
+//   POST /recover     → { podId? } → optionaler ID-Swap + Resume (No-GPU-Fall)
+//   GET  /logs        → Statusprotokoll (neueste zuerst, inkl. user)
+//   GET  /debug       → Auth-Diagnose (leakt nur Metadaten)
+//   POST /testrun     → Backend-Testlauf triggern
+//
+// Auth (spiegelt backend/app/core/auth.py):
+//   Header: X-Systelios-User / X-Systelios-Timestamp / X-Systelios-Signature
+//   sig = HMAC-SHA256(CONFLUENCE_SHARED_SECRET, "<user>:<timestamp>") hex
+//   Replay-Schutz: |now - ts| <= AUTH_WINDOW_SEC
+//
+// Env / Bindings:
+//   RUNPOD_API_KEY            (Secret)  — RunPod-API-Key
+//   RUNPOD_POD_ID             (Secret)  — Seed/Fallback fuer die Pod-ID
+//   CONFLUENCE_SHARED_SECRET  (Secret)  — HMAC-Shared-Secret (== Backend)
+//   CONFLUENCE_ORIGIN         (Var)     — erlaubte CORS-Origin(s), kommagetrennt
+//                                         z.B. "https://confluence.systelios.de"
+//   TELEGRAM_BOT_TOKEN        (Secret, optional)
+//   TELEGRAM_CHAT_ID          (Secret, optional)
+//   LOGS                      (KV)      — Statusprotokoll + mutable Pod-ID
+//
+// KV-Keys im LOGS-Namespace:
+//   "<epoch_ms>"    → JSON-Log-Eintrag (Key = Date.now().toString())
+//   "state:podId"   → aktuell gesetzte Pod-ID (mutabel, per /setPodId)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const AUTH_WINDOW_SEC = 300;         // Replay-Fenster (== AUTH_TIMESTAMP_WINDOW_SEC)
+const POD_ID_KEY = "state:podId";    // KV-Key fuer die mutable Pod-ID
+
 export default {
   async scheduled(event, env, ctx) {
     try {
       const action = getAction(event.cron);
       if (!action) return;
-
-      await execute(action, env, ctx);
+      // Cron laeuft intern — keine Auth, User = "cron", kein Request-Objekt.
+      await execute(action, env, ctx, "cron", null);
     } catch (err) {
       console.log("Scheduled error:", err);
       try {
@@ -14,26 +57,50 @@ export default {
     }
   },
 
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
+    const url = new URL(req.url);
+    const cors = corsHeaders(env, req);
+
+    // CORS-Preflight immer beantworten
+    if (req.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: cors });
+    }
+
+    // Oeffentlicher Ping (ohne Auth) — kein Secret involviert
+    if (url.pathname === "/" || url.pathname === "") {
+      return new Response("RunPod Proxy OK", { status: 200, headers: cors });
+    }
+
     try {
-      const url = new URL(req.url);
+      const secrets = await getSecrets(env);
 
-      if (url.pathname === "/start") return await execute("start", env, ctx);
-      if (url.pathname === "/stop") return await execute("stop", env, ctx);
-      if (url.pathname === "/logs") return await getLogs(env);
-      if (url.pathname === "/debug") return await debugAuth(env);
-      if (url.pathname === "/testrun") return await triggerTestRun(env, ctx);
+      // Ab hier: HMAC-Pflicht fuer alle Endpunkte
+      const auth = await verifyHmac(req, secrets);
+      if (!auth.ok) {
+        return json({ error: "unauthorized", reason: auth.reason }, { status: 401, env, req });
+      }
+      const user = auth.user;
 
-      return new Response("RunPod Scheduler OK", { status: 200 });
+      if (url.pathname === "/state")    return await handleState(env, secrets, req);
+      if (url.pathname === "/pods")     return await handlePods(env, secrets, req);
+      if (url.pathname === "/start")    return await execute("start", env, ctx, user, req);
+      if (url.pathname === "/stop")     return await execute("stop", env, ctx, user, req);
+      if (url.pathname === "/setPodId") return await handleSetPodId(req, env, user);
+      if (url.pathname === "/recover")  return await handleRecover(req, env, ctx, user);
+      if (url.pathname === "/logs")     return await getLogs(env, req);
+      if (url.pathname === "/debug")    return await debugAuth(env, req);
+      if (url.pathname === "/testrun")  return await triggerTestRun(env, ctx, req);
+
+      return json({ error: "not_found", path: url.pathname }, { status: 404, env, req });
     } catch (err) {
       console.log("Fetch error:", err);
-      return new Response(err.message, { status: 500 });
+      return json({ error: err.message }, { status: 500, env, req });
     }
   }
 };
 
 // ─────────────────────────────────────────────
-// SECRETS (Cloudflare Secrets Store — async .get())
+// SECRETS (Cloudflare Secrets Store — async .get() — oder plain string)
 // ─────────────────────────────────────────────
 
 async function getSecrets(env) {
@@ -45,11 +112,12 @@ async function getSecrets(env) {
     return null;
   };
 
-  const [runpodKey, podId, telegramToken, telegramChatId] = await Promise.all([
+  const [runpodKey, podId, telegramToken, telegramChatId, confluenceSecret] = await Promise.all([
     resolve("RUNPOD_API_KEY"),
     resolve("RUNPOD_POD_ID"),
     resolve("TELEGRAM_BOT_TOKEN"),
     resolve("TELEGRAM_CHAT_ID"),
+    resolve("CONFLUENCE_SHARED_SECRET"),
   ]);
 
   return {
@@ -57,7 +125,105 @@ async function getSecrets(env) {
     podId: podId?.trim() ?? null,
     telegramToken: telegramToken?.trim() ?? null,
     telegramChatId: telegramChatId?.trim() ?? null,
+    confluenceSecret: confluenceSecret?.trim() ?? null,
   };
+}
+
+// ─────────────────────────────────────────────
+// AUTH (HMAC-SHA256, spiegelt core/auth.py)
+// ─────────────────────────────────────────────
+
+async function hmacHex(secret, msg) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(msg));
+  return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Laengengleicher Vergleich (kein Early-Exit) — Hex-Strings.
+function timingSafeEqualHex(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+async function verifyHmac(req, secrets) {
+  const user = req.headers.get("X-Systelios-User") || "";
+  const ts = req.headers.get("X-Systelios-Timestamp") || "";
+  const sig = req.headers.get("X-Systelios-Signature") || "";
+
+  if (!user || !ts || !sig) return { ok: false, reason: "missing_headers" };
+  if (!secrets.confluenceSecret) return { ok: false, reason: "server_secret_missing" };
+
+  const tsNum = parseInt(ts, 10);
+  if (!Number.isFinite(tsNum)) return { ok: false, reason: "bad_timestamp" };
+
+  const age = Math.abs(Date.now() / 1000 - tsNum);
+  if (age > AUTH_WINDOW_SEC) return { ok: false, reason: "expired" };
+
+  const expected = await hmacHex(secrets.confluenceSecret, `${user}:${ts}`);
+  if (!timingSafeEqualHex(expected, sig.toLowerCase())) return { ok: false, reason: "bad_signature" };
+
+  return { ok: true, user };
+}
+
+// ─────────────────────────────────────────────
+// CORS + JSON-Helper
+// ─────────────────────────────────────────────
+
+function corsHeaders(env, req) {
+  const reqOrigin = req ? (req.headers.get("Origin") || "") : "";
+  const configured = (env.CONFLUENCE_ORIGIN || "")
+    .split(",").map(s => s.trim()).filter(Boolean);
+
+  let allowOrigin;
+  if (configured.length === 0) {
+    allowOrigin = reqOrigin || "*";           // Dev-Fallback: Request-Origin spiegeln
+  } else if (configured.includes(reqOrigin)) {
+    allowOrigin = reqOrigin;
+  } else {
+    allowOrigin = configured[0];              // unbekannte Origin: erste erlaubte
+  }
+
+  return {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers":
+      "Content-Type, X-Systelios-User, X-Systelios-Timestamp, X-Systelios-Signature",
+    "Access-Control-Max-Age": "86400",
+    "Vary": "Origin",
+  };
+}
+
+function json(data, { status = 200, env, req } = {}) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: { "content-type": "application/json", ...corsHeaders(env, req) },
+  });
+}
+
+// ─────────────────────────────────────────────
+// POD-ID (mutabel: KV, Fallback Secret)
+// ─────────────────────────────────────────────
+
+async function getPodId(env, secrets) {
+  if (env.LOGS) {
+    try {
+      const v = await env.LOGS.get(POD_ID_KEY);
+      if (v && v.trim()) return v.trim();
+    } catch (e) {
+      console.log("getPodId KV error:", e);
+    }
+  }
+  return secrets.podId;   // Seed/Fallback aus Secret
+}
+
+function isValidPodId(id) {
+  return typeof id === "string" && /^[a-z0-9]{6,}$/i.test(id);
 }
 
 // ─────────────────────────────────────────────
@@ -71,46 +237,75 @@ function getAction(cron) {
 }
 
 // ─────────────────────────────────────────────
-// MAIN EXECUTION
+// MAIN EXECUTION (start/stop)
 // ─────────────────────────────────────────────
 
-async function execute(action, env, ctx) {
+async function execute(action, env, ctx, user, req) {
   const secrets = await getSecrets(env);
+  const podId = await getPodId(env, secrets);
 
-  const { status: stateBefore } = await getState(secrets);
+  // ── Doppelstart-Schutz ──────────────────────────────────────────────
+  // Vor jedem Start ALLE Account-Pods pruefen (nicht nur die getrackte ID).
+  // Faengt den Fall ab, dass von Hand ein Pod mit ANDERER ID gestartet wurde
+  // und Cron/UI sonst einen zweiten Pod resuemieren wuerden (doppelte GPU-Kosten).
+  if (action === "start") {
+    const podsRes = await listPods(secrets);
+    if (podsRes.ok) {
+      const running = podsRes.pods.filter(
+        p => String(p.desiredStatus).toUpperCase() === "RUNNING"
+      );
+      const foreignRunning = running.filter(p => p.id !== podId);
+      const trackedRunning = running.find(p => p.id === podId);
 
-  // Short-circuit if already in the desired state
+      if (foreignRunning.length > 0) {
+        const entry = {
+          time: new Date().toISOString(),
+          action, status: "OTHER_RUNNING", blocked: true, user, podId,
+          runningPods: foreignRunning.map(p => ({
+            id: p.id, name: p.name, desiredStatus: p.desiredStatus, hasGpu: p.hasGpu,
+          })),
+        };
+        await log(env, entry);
+        await notify(secrets,
+          `⚠️ START abgebrochen (${user}): es laeuft bereits ein anderer Pod — ` +
+          foreignRunning.map(p => `${p.name || "?"} (${p.id})`).join(", ") +
+          `. Kein zweiter Pod gestartet. Ggf. Pod-ID uebernehmen.`
+        );
+        return json(entry, { env, req });
+      }
+
+      if (trackedRunning) {
+        await notify(secrets, "ℹ️ Server is already running, nothing to do.");
+        return json({ action, status: "ALREADY_RUNNING", user, podId }, { env, req });
+      }
+    }
+    // listPods fehlgeschlagen → Best-Effort: unten greift der getState-Kurzschluss.
+  }
+
+  const { status: stateBefore } = await getState(secrets, podId);
+
+  // Kurzschluss, wenn bereits im Zielzustand
   if (action === "start" && stateBefore === "RUNNING") {
     await notify(secrets, "ℹ️ Server is already running, nothing to do.");
-    return new Response(JSON.stringify({ action, status: "ALREADY_RUNNING" }, null, 2), {
-      headers: { "content-type": "application/json" }
-    });
+    return json({ action, status: "ALREADY_RUNNING", user, podId }, { env, req });
   }
   if (action === "stop" && stateBefore === "EXITED") {
     await notify(secrets, "ℹ️ Server is already stopped, nothing to do.");
-    return new Response(JSON.stringify({ action, status: "ALREADY_STOPPED" }, null, 2), {
-      headers: { "content-type": "application/json" }
-    });
+    return json({ action, status: "ALREADY_STOPPED", user, podId }, { env, req });
   }
 
-  const result = await runPod(action, secrets);
-  const { status: stateAfter } = await getState(secrets);
+  const result = await runPod(action, secrets, podId);
+  const { status: stateAfter } = await getState(secrets, podId);
 
   if (result?.status === 401) {
     const entry = {
       time: new Date().toISOString(),
-      action,
-      status: "AUTH_FAILED",
-      stateBefore,
-      stateAfter,
-      runpod: result
+      action, status: "AUTH_FAILED", user, podId,
+      stateBefore, stateAfter, runpod: result,
     };
     await log(env, entry);
     await notify(secrets, `🚨 ${action.toUpperCase()} AUTH_FAILED\nCheck RUNPOD_API_KEY in Secrets Store`);
-    return new Response(JSON.stringify(entry, null, 2), {
-      status: 401,
-      headers: { "content-type": "application/json" }
-    });
+    return json(entry, { status: 401, env, req });
   }
 
   const isHardFailure =
@@ -126,39 +321,157 @@ async function execute(action, env, ctx) {
 
   const status = isHardFailure ? "HARD_ERROR" : success ? "SUCCESS" : "SOFT_FAIL";
 
+  // No-GPU fuer die UI ableiten: RunPod-Fehler ODER Start blieb EXITED.
+  const noGpu = !!result?.noGpu || (action === "start" && stateAfter === "EXITED");
+
   const entry = {
     time: new Date().toISOString(),
-    action,
-    status,
-    stateBefore,
-    stateAfter,
-    runpod: result
+    action, status, user, podId,
+    stateBefore, stateAfter, noGpu, runpod: result,
   };
 
   await log(env, entry);
 
   if (status === "SUCCESS" && action === "start") {
-    // Fire-and-forget health poll — runs async so HTTP response returns immediately
+    // Fire-and-forget Health-Poll — laeuft dank ctx auch bei manuellem Start.
     ctx?.waitUntil?.(waitForBackend(secrets, result));
   } else {
     await notify(secrets,
       status === "SUCCESS"
-        ? `✅ ${action.toUpperCase()} OK\n${stateBefore} → ${stateAfter}`
-        : `❌ ${action.toUpperCase()} ${status}\n${JSON.stringify(result?.data)}`
+        ? `✅ ${action.toUpperCase()} OK (${user})\n${stateBefore} → ${stateAfter}`
+        : `❌ ${action.toUpperCase()} ${status} (${user})\n${JSON.stringify(result?.data)}`
     );
   }
 
-  return new Response(JSON.stringify(entry, null, 2), {
-    headers: { "content-type": "application/json" }
+  return json(entry, { env, req });
+}
+
+// ─────────────────────────────────────────────
+// STATE-ENDPUNKT
+// ─────────────────────────────────────────────
+
+async function handleState(env, secrets, req) {
+  const podId = await getPodId(env, secrets);
+  const podsRes = await listPods(secrets);
+
+  if (podsRes.ok) {
+    const tracked = podsRes.pods.find(p => p.id === podId);
+    const running = podsRes.pods.filter(
+      p => String(p.desiredStatus).toUpperCase() === "RUNNING"
+    );
+    const otherRunning = running.filter(p => p.id !== podId);
+    const trackedRunning = String(tracked?.desiredStatus).toUpperCase() === "RUNNING";
+    return json({
+      ok: true,
+      podId,
+      desiredStatus: tracked?.desiredStatus ?? "NOT_FOUND",
+      hasGpu: !!tracked?.hasGpu,
+      trackedRunning,             // laeuft der GETRACKTE Pod?
+      anyRunning: running.length > 0,   // laeuft IRGENDEIN Pod? (UI: "Server laeuft")
+      otherRunning,               // laufende Pods mit ANDERER ID → Doppelstart-Warnung
+      podCount: podsRes.pods.length,
+    }, { env, req });
+  }
+
+  // Fallback: Einzel-Query, falls die Pod-Liste nicht abrufbar ist.
+  const st = await getState(secrets, podId);
+  const trackedRunningFb = String(st.status).toUpperCase() === "RUNNING";
+  return json({
+    ok: true,
+    podId,
+    desiredStatus: st.status,
+    hasGpu: !!st.hasGpu,
+    trackedRunning: trackedRunningFb,
+    anyRunning: trackedRunningFb,     // ohne Pod-Liste nur getrackter Pod bekannt
+    otherRunning: [],
+    podsError: podsRes.error,
+  }, { env, req });
+}
+
+// ─────────────────────────────────────────────
+// SET POD ID
+// ─────────────────────────────────────────────
+
+async function handleSetPodId(req, env, user) {
+  let body;
+  try { body = await req.json(); } catch { body = {}; }
+  const newId = (body?.podId || "").trim();
+
+  if (!isValidPodId(newId)) {
+    return json({ error: "invalid_pod_id", podId: newId }, { status: 400, env, req });
+  }
+  if (!env.LOGS) {
+    return json(
+      { error: "kv_unavailable", detail: "LOGS KV binding required to store mutable pod id" },
+      { status: 500, env, req }
+    );
+  }
+
+  const previous = await env.LOGS.get(POD_ID_KEY);
+  await env.LOGS.put(POD_ID_KEY, newId);
+
+  await log(env, {
+    time: new Date().toISOString(),
+    action: "setPodId", status: "SUCCESS", user,
+    previous: previous || null, podId: newId,
   });
+
+  const secrets = await getSecrets(env);
+  await notify(secrets, `🆔 Pod-ID gesetzt (${user}): ${previous || "—"} → ${newId}`);
+
+  return json({ ok: true, podId: newId, previous: previous || null }, { env, req });
+}
+
+// ─────────────────────────────────────────────
+// RECOVER (Variante i: optionaler ID-Swap + Resume)
+// ─────────────────────────────────────────────
+
+async function handleRecover(req, env, ctx, user) {
+  let body;
+  try { body = await req.json(); } catch { body = {}; }
+  const newId = (body?.podId || "").trim();
+
+  const secrets = await getSecrets(env);
+
+  // Optionaler Pod-ID-Swap vor dem Resume
+  if (newId) {
+    if (!isValidPodId(newId)) {
+      return json({ error: "invalid_pod_id", podId: newId }, { status: 400, env, req });
+    }
+    if (env.LOGS) await env.LOGS.put(POD_ID_KEY, newId);
+  }
+
+  const podId = await getPodId(env, secrets);
+  const result = await runPod("start", secrets, podId);
+  const { status: stateAfter } = await getState(secrets, podId);
+  const noGpu = !!result?.noGpu || stateAfter === "EXITED";
+
+  const entry = {
+    time: new Date().toISOString(),
+    action: "recover",
+    status: noGpu ? "NO_GPU" : "SUCCESS",
+    user, podId, swapped: !!newId,
+    stateAfter, runpod: result,
+  };
+  await log(env, entry);
+
+  if (!noGpu) {
+    ctx?.waitUntil?.(waitForBackend(secrets, result));
+    await notify(secrets, `🔁 Recover (${user}): Pod ${podId} → resume (${stateAfter})`);
+  } else {
+    await notify(secrets, `🚫 Recover (${user}): weiterhin keine GPU fuer Pod ${podId}.`);
+  }
+
+  // noGpu explizit fuer die UI mitliefern
+  return json({ ...entry, noGpu }, { env, req });
 }
 
 // ─────────────────────────────────────────────
 // RUNPOD CALL
 // ─────────────────────────────────────────────
 
-async function runPod(action, secrets) {
-  const { runpodKey, podId } = secrets;
+async function runPod(action, secrets, podId) {
+  const { runpodKey } = secrets;
 
   const query =
     action === "start"
@@ -207,7 +520,7 @@ async function runPod(action, secrets) {
 
   if (parsed?.errors) {
     console.log("GRAPHQL ERRORS:", parsed.errors);
-    // Detect GPU availability errors from RunPod
+    // No-GPU-Fehler von RunPod erkennen
     const gpuError = parsed.errors.some(e =>
       /no.*(gpu|avail|capacity|resource)/i.test(e.message ?? "")
     );
@@ -224,11 +537,79 @@ async function runPod(action, secrets) {
 }
 
 // ─────────────────────────────────────────────
+// POD-LISTE (Account-weit) — Doppelstart-Erkennung
+// ─────────────────────────────────────────────
+
+async function listPods(secrets) {
+  const { runpodKey } = secrets;
+
+  const query = `
+    query {
+      myself {
+        pods {
+          id
+          name
+          desiredStatus
+          runtime { gpus { id } }
+        }
+      }
+    }
+  `;
+
+  let res, text;
+  try {
+    res = await fetch(`https://api.runpod.io/graphql?api_key=${runpodKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: query.trim() })
+    });
+    text = await res.text();
+  } catch (err) {
+    console.log("LISTPODS FETCH ERROR:", err);
+    return { ok: false, error: `fetch: ${err.message}`, pods: [] };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "parse_error", pods: [] };
+  }
+
+  if (parsed?.errors) {
+    console.log("LISTPODS GRAPHQL ERRORS:", parsed.errors);
+    return { ok: false, error: "graphql_error", pods: [] };
+  }
+
+  const rawPods = parsed?.data?.myself?.pods ?? [];
+  const pods = rawPods.map(p => ({
+    id: p.id,
+    name: p.name ?? null,
+    desiredStatus: p.desiredStatus ?? "NO_STATUS",
+    hasGpu: (p.runtime?.gpus?.length ?? 0) > 0,
+  }));
+
+  return { ok: true, pods };
+}
+
+async function handlePods(env, secrets, req) {
+  const podId = await getPodId(env, secrets);
+  const podsRes = await listPods(secrets);
+  if (!podsRes.ok) {
+    return json(
+      { ok: false, error: podsRes.error, trackedPodId: podId, pods: [] },
+      { status: 502, env, req }
+    );
+  }
+  return json({ ok: true, trackedPodId: podId, pods: podsRes.pods }, { env, req });
+}
+
+// ─────────────────────────────────────────────
 // STATE
 // ─────────────────────────────────────────────
 
-async function getState(secrets) {
-  const { runpodKey, podId } = secrets;
+async function getState(secrets, podId) {
+  const { runpodKey } = secrets;
 
   const query = `
     query {
@@ -254,19 +635,19 @@ async function getState(secrets) {
     text = await res.text();
   } catch (err) {
     console.log("GETSTATE FETCH ERROR:", err);
-    return "FETCH_ERROR";
+    return { status: "FETCH_ERROR", hasGpu: false };
   }
 
   try {
     const json = JSON.parse(text);
-    if (json?.errors) return { status: "ERROR" };
+    if (json?.errors) return { status: "ERROR", hasGpu: false };
     const pod = json?.data?.pod;
     return {
       status: pod?.desiredStatus || "NO_STATUS",
       hasGpu: (pod?.runtime?.gpus?.length ?? 0) > 0,
     };
   } catch {
-    return { status: "PARSE_ERROR" };
+    return { status: "PARSE_ERROR", hasGpu: false };
   }
 }
 
@@ -274,33 +655,29 @@ async function getState(secrets) {
 // TEST RUN
 // ─────────────────────────────────────────────
 
-async function triggerTestRun(env, ctx) {
+async function triggerTestRun(env, ctx, req) {
   const secrets = await getSecrets(env);
+  const podId = await getPodId(env, secrets);
 
-  // Check pod is actually running first
-  const { status } = await getState(secrets);
+  // Erst pruefen, ob der Pod wirklich laeuft
+  const { status } = await getState(secrets, podId);
   if (status !== "RUNNING") {
     const msg = `⚠️ Cannot run tests — server is ${status}, not RUNNING.`;
     await notify(secrets, msg);
-    return new Response(JSON.stringify({ error: msg }, null, 2), {
-      status: 409,
-      headers: { "content-type": "application/json" }
-    });
+    return json({ error: msg }, { status: 409, env, req });
   }
 
   await notify(secrets, "🧪 Test run triggered, waiting for results...");
 
-  // Fire and forget so HTTP response returns immediately
+  // Fire and forget — HTTP-Antwort kommt sofort zurueck
   ctx?.waitUntil?.(runTests(secrets));
 
-  return new Response(JSON.stringify({ status: "TEST_STARTED" }, null, 2), {
-    headers: { "content-type": "application/json" }
-  });
+  return json({ status: "TEST_STARTED" }, { env, req });
 }
 
 async function runTests(secrets) {
   const TEST_URL = "https://scriptelios.win/api/testrun";
-  const TIMEOUT_MS = 300_000; // 5 minutes max for test suite
+  const TIMEOUT_MS = 300_000; // max 5 Minuten fuer die Test-Suite
 
   let res, text;
   try {
@@ -323,9 +700,8 @@ async function runTests(secrets) {
   }
 
   const output = result?.output ?? text;
-  const exitCode = result?.exitCode ?? (res.ok ? 0 : 1);
 
-  // Parse pytest summary line e.g. "5 failed, 95 passed in 12.3s"
+  // pytest-Summary parsen, z.B. "5 failed, 95 passed in 12.3s"
   const summaryMatch = output.match(/={3,}\s*(.+?)\s*={3,}\s*$/m);
   const summaryLine = summaryMatch?.[1] ?? "";
 
@@ -333,9 +709,7 @@ async function runTests(secrets) {
   const totalFailed = parseInt(summaryLine.match(/(\d+)\s+failed/)?.[1] ?? 0);
   const total = (totalPassed + totalFailed) || "?";
 
-  // Collect failed test names from "FAILED path::test_name" lines
-  const failedNames = [...output.matchAll(/^FAILED\s+\S+::(\S+)/gm)]
-    .map(m => m[1]);
+  const failedNames = [...output.matchAll(/^FAILED\s+\S+::(\S+)/gm)].map(m => m[1]);
 
   let msg;
   if (totalFailed === 0) {
@@ -349,31 +723,32 @@ async function runTests(secrets) {
 }
 
 // ─────────────────────────────────────────────
-// DEBUG
+// DEBUG (leakt nur Metadaten; hinter Auth)
 // ─────────────────────────────────────────────
 
-async function debugAuth(env) {
+async function debugAuth(env, req) {
   const results = {};
 
   let secrets;
   try {
     secrets = await getSecrets(env);
   } catch (err) {
-    return new Response(JSON.stringify({ secretsError: err.message }, null, 2), {
-      status: 500,
-      headers: { "content-type": "application/json" }
-    });
+    return json({ secretsError: err.message }, { status: 500, env, req });
   }
 
-  const { runpodKey, podId, telegramToken, telegramChatId } = secrets;
+  const { runpodKey, telegramToken, telegramChatId, confluenceSecret } = secrets;
+  const podId = await getPodId(env, secrets);
 
   results.env = {
     RUNPOD_API_KEY: runpodKey
       ? `set (${runpodKey.length} chars, starts: ${runpodKey.slice(0, 6)}...)`
       : "MISSING",
-    RUNPOD_POD_ID: podId || "MISSING",
+    RUNPOD_POD_ID_effective: podId || "MISSING",
+    CONFLUENCE_SHARED_SECRET: confluenceSecret ? `set (${confluenceSecret.length} chars)` : "MISSING",
+    CONFLUENCE_ORIGIN: env.CONFLUENCE_ORIGIN || "MISSING",
     TELEGRAM_BOT_TOKEN: telegramToken ? `set (${telegramToken.length} chars)` : "MISSING",
     TELEGRAM_CHAT_ID: telegramChatId || "MISSING",
+    LOGS_KV: env.LOGS ? "bound" : "MISSING",
   };
 
   try {
@@ -382,8 +757,7 @@ async function debugAuth(env) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: `{ __typename }` })
     });
-    const raw = await res.text();
-    results.queryParam = { status: res.status, raw };
+    results.queryParam = { status: res.status, raw: await res.text() };
   } catch (err) {
     results.queryParam = { fetchError: err.message };
   }
@@ -396,15 +770,12 @@ async function debugAuth(env) {
         query: `query { pod(input: { podId: "${podId}" }) { id desiredStatus } }`
       })
     });
-    const raw = await res.text();
-    results.podQuery = { status: res.status, raw };
+    results.podQuery = { status: res.status, raw: await res.text() };
   } catch (err) {
     results.podQuery = { fetchError: err.message };
   }
 
-  return new Response(JSON.stringify(results, null, 2), {
-    headers: { "content-type": "application/json" }
-  });
+  return json(results, { env, req });
 }
 
 // ─────────────────────────────────────────────
@@ -413,11 +784,11 @@ async function debugAuth(env) {
 
 async function waitForBackend(secrets, runpodResult) {
   const HEALTH_URL = "https://scriptelios.win/api/health";
-  const INITIAL_WAIT_MS = 60_000;   // 60s initial boot wait
-  const POLL_INTERVAL_MS = 30_000;  // 30s between attempts
-  const MAX_ATTEMPTS = 14;          // 14 × 30s = 7min polling = 8min total
+  const INITIAL_WAIT_MS = 60_000;   // 60s initialer Boot-Wait
+  const POLL_INTERVAL_MS = 30_000;  // 30s zwischen Versuchen
+  const MAX_ATTEMPTS = 14;          // 14 × 30s = 7min Polling = 8min gesamt
 
-  // Detect GPU error immediately from mutation response
+  // No-GPU sofort aus der Mutation-Antwort erkennen
   if (runpodResult?.noGpu) {
     await notify(secrets, "🚫 No GPU available — RunPod could not allocate a GPU for the pod. Try again later.");
     return false;
@@ -425,11 +796,10 @@ async function waitForBackend(secrets, runpodResult) {
 
   await notify(secrets, "⏳ Server starting up, waiting for backend...");
 
-  // Wait for initial boot
   await sleep(INITIAL_WAIT_MS);
 
-  // After initial wait, check pod state — if still EXITED, RunPod never got a GPU
-  const podState = await getState(secrets);
+  // Nach dem initialen Wait Pod-State pruefen — noch EXITED ⇒ keine GPU bekommen
+  const podState = await getState(secrets, await podIdFromSecrets(secrets));
   console.log(`Pod state after initial wait: ${JSON.stringify(podState)}`);
 
   if (podState.status === "EXITED") {
@@ -457,9 +827,9 @@ async function waitForBackend(secrets, runpodResult) {
       console.log(`Health check ${i} failed: ${err.message}`);
     }
 
-    // Every 3 attempts, re-check pod state to catch late GPU failures
+    // Alle 3 Versuche Pod-State nachpruefen (spaete GPU-Fehler abfangen)
     if (i % 3 === 0) {
-      const midState = await getState(secrets);
+      const midState = await getState(secrets, await podIdFromSecrets(secrets));
       if (midState.status === "EXITED") {
         await notify(secrets, "🚫 Pod returned to EXITED during startup — likely no GPU was available or pod crashed.");
         return false;
@@ -475,11 +845,17 @@ async function waitForBackend(secrets, runpodResult) {
     "⚠️ Backend did not respond within 8 minutes.\n" +
     "Possible causes:\n" +
     "• No GPU available on RunPod — check GPU availability\n" +
-    "• Model still loading (Qwen3:32b ~90s, longer under load)\n" +
+    "• Model still loading (grosse Modelle brauchen laenger unter Last)\n" +
     "• runpod-start.sh failed → check /workspace/backend.log\n" +
     "• Cloudflare tunnel not started → check /workspace/cloudflared.log"
   );
   return false;
+}
+
+// waitForBackend haelt kein env — Pod-ID hier nur aus dem Secret ableitbar.
+// (Der Health-Poll ist unkritisch gegenueber einem frischen KV-Swap.)
+async function podIdFromSecrets(secrets) {
+  return secrets.podId;
 }
 
 function sleep(ms) {
@@ -500,10 +876,7 @@ async function notify(secrets, text) {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: telegramChatId,
-          text
-        })
+        body: JSON.stringify({ chat_id: telegramChatId, text })
       }
     );
   } catch (e) {
@@ -512,12 +885,11 @@ async function notify(secrets, text) {
 }
 
 // ─────────────────────────────────────────────
-// LOGGING (KV)
+// LOGGING (KV) — Statusprotokoll, Single Source
 // ─────────────────────────────────────────────
 
 async function log(env, entry) {
   if (!env.LOGS) return;
-
   try {
     await env.LOGS.put(Date.now().toString(), JSON.stringify(entry));
   } catch (e) {
@@ -525,18 +897,22 @@ async function log(env, entry) {
   }
 }
 
-async function getLogs(env) {
+async function getLogs(env, req) {
   if (!env.LOGS) {
-    return new Response("KV not configured", { status: 500 });
+    return json({ error: "kv_unavailable" }, { status: 500, env, req });
   }
 
-  const list = await env.LOGS.list({ limit: 20 });
+  const list = await env.LOGS.list({ limit: 200 });
+  // Nur Timestamp-Keys (Date.now()) — die Pod-ID (state:podId) ausschliessen.
+  const logKeys = list.keys.filter(k => /^\d+$/.test(k.name));
+  logKeys.sort((a, b) => Number(b.name) - Number(a.name)); // neueste zuerst
+  const top = logKeys.slice(0, 50);
 
   const logs = await Promise.all(
-    list.keys.map(k => env.LOGS.get(k.name).then(JSON.parse))
+    top.map(k => env.LOGS.get(k.name).then(v => {
+      try { return JSON.parse(v); } catch { return null; }
+    }))
   );
 
-  return new Response(JSON.stringify(logs, null, 2), {
-    headers: { "content-type": "application/json" }
-  });
+  return json(logs.filter(Boolean), { env, req });
 }
