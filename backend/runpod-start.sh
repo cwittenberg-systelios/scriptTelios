@@ -61,6 +61,16 @@ PG_DATA="/workspace/postgres_data"
 OLLAMA_MODELS_DIR="/workspace/ollama"
 PG_USER="systelios_pg"
 
+# v19.7: HuggingFace-Cache auf das Network Volume legen (persistent).
+# Ohne HF_HOME landet der Cache in /root/.cache (ephemere Container-Disk)
+# → jeder Pod-Restart/-Replace erzwingt Re-Download von Whisper large-v3
+# (~3GB) + pyannote und macht die Transkription abhaengig von der
+# HF-Hub-Verfuegbarkeit (Live-Fund 2026-07: HfHubHTTPError 504).
+# Deckt faster-whisper UND pyannote ab (beide nutzen huggingface_hub).
+HF_CACHE_DIR="/workspace/hf-cache"
+export HF_HOME="$HF_CACHE_DIR"
+mkdir -p "$HF_CACHE_DIR"
+
 OK="[OK]    "
 GO="[.....] "
 WARN="[WARN]  "
@@ -877,6 +887,17 @@ if [ "$NEEDS_BUILD" = "true" ]; then
     cd "$BACKEND_DIR"
 fi
 
+# 5b. HF-Cache-Status (check-only, KEIN Auto-Download — Disk-full-Risiko)
+echo ""
+HF_CACHE_SIZE=$(du -sh "$HF_CACHE_DIR" 2>/dev/null | cut -f1 || echo "0")
+if [ -d "$HF_CACHE_DIR/hub" ] && ls "$HF_CACHE_DIR/hub" 2>/dev/null | grep -q "faster-whisper"; then
+    echo "${OK}HF-Cache vorhanden: $HF_CACHE_DIR (${HF_CACHE_SIZE}) – Whisper offline-faehig"
+else
+    echo "${WARN}HF-Cache leer/ohne Whisper ($HF_CACHE_DIR, ${HF_CACHE_SIZE})."
+    echo "       Erster Transkriptionsjob laedt ~3GB von HuggingFace Hub und"
+    echo "       schlaegt bei HF-Stoerung (z.B. 504 Gateway) fehl."
+fi
+
 # 6. .env pruefen
 echo ""
 if [ ! -f "$BACKEND_DIR/.env" ]; then
@@ -900,6 +921,8 @@ OLLAMA_MODEL=${MODEL_NAME}
 WHISPER_MODEL=large-v3
 WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16
+# HF-Cache auf Network Volume (persistent, deckt Whisper + pyannote ab):
+HF_HOME=/workspace/hf-cache
 DATABASE_URL=postgresql+asyncpg://systelios:systelios@127.0.0.1:5432/systelios
 SECRET_KEY=${SECRET}
 DELETE_AUDIO_AFTER_TRANSCRIPTION=false

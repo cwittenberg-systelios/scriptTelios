@@ -394,7 +394,15 @@ def _assign_speaker_from_diarization(
 
 
 def _get_model(device: str, compute_type: str):
-    """Gibt gecachtes Whisper-Modell zurueck, laed bei Bedarf neu."""
+    """Gibt gecachtes Whisper-Modell zurueck, laed bei Bedarf neu.
+
+    v19.7: Local-first-Strategie. Erst Ladeversuch ausschliesslich aus dem
+    lokalen HF-Cache (local_files_only=True → kein Netzwerkkontakt, immun
+    gegen HF-Hub-Stoerungen wie 504 Gateway Timeout). Nur wenn das Modell
+    noch nie geladen wurde, Fallback auf Online-Download. Schlaegt auch der
+    fehl, wird der rohe HfHubHTTPError in eine verstaendliche Fehlermeldung
+    uebersetzt (Silent-Failure-Prinzip: laut & diagnostizierbar).
+    """
     from faster_whisper import WhisperModel
     key = (settings.WHISPER_MODEL, device, compute_type)
     if key not in _model_cache:
@@ -402,12 +410,79 @@ def _get_model(device: str, compute_type: str):
             "Whisper-Modell laden: %s auf %s (%s)",
             settings.WHISPER_MODEL, device, compute_type,
         )
-        _model_cache[key] = WhisperModel(
-            settings.WHISPER_MODEL,
-            device=device,
-            compute_type=compute_type,
-        )
+        try:
+            _model_cache[key] = WhisperModel(
+                settings.WHISPER_MODEL,
+                device=device,
+                compute_type=compute_type,
+                local_files_only=True,
+            )
+            logger.info(
+                "Whisper '%s' aus lokalem HF-Cache geladen (offline, "
+                "kein Hub-Kontakt).", settings.WHISPER_MODEL,
+            )
+        except Exception as cache_miss:
+            logger.warning(
+                "Whisper '%s' nicht im lokalen HF-Cache (%s) – "
+                "lade von HuggingFace Hub (~3GB bei large-v3).",
+                settings.WHISPER_MODEL, cache_miss,
+            )
+            try:
+                _model_cache[key] = WhisperModel(
+                    settings.WHISPER_MODEL,
+                    device=device,
+                    compute_type=compute_type,
+                )
+            except Exception as hub_err:
+                raise RuntimeError(
+                    f"Whisper-Modell '{settings.WHISPER_MODEL}' konnte weder "
+                    f"aus dem lokalen HF-Cache noch von HuggingFace Hub "
+                    f"geladen werden. Hub-Fehler: {hub_err}. "
+                    "Wahrscheinliche Ursache: HuggingFace-Stoerung (z.B. 504 "
+                    "Gateway Timeout) oder fehlende Netzverbindung bei leerem "
+                    "Cache. Abhilfe: spaeter erneut versuchen oder Modell "
+                    "vorab in den Cache laden (HF_HOME=/workspace/hf-cache, "
+                    "siehe runpod-start.sh)."
+                ) from hub_err
     return _model_cache[key]
+
+
+async def check_whisper_model_available() -> bool:
+    """Startup-Check (analog check_summary_model_available, v19.7): prueft
+    ob das konfigurierte Whisper-Modell im lokalen HF-Cache liegt, OHNE es
+    in den VRAM zu laden. Check-only, KEIN Auto-Download (Disk-full-Risiko).
+    Laute Warnung wenn der erste Transkriptionsjob von HF Hub nachladen
+    muesste und damit von der Hub-Verfuegbarkeit abhaengt (504-Risiko)."""
+    import asyncio
+
+    def _probe() -> None:
+        # download_model mit local_files_only=True loest nur den Cache-Pfad
+        # auf (kein Netzwerkkontakt, kein VRAM); wirft wenn nicht vorhanden.
+        from faster_whisper import download_model
+        download_model(settings.WHISPER_MODEL, local_files_only=True)
+
+    try:
+        await asyncio.to_thread(_probe)
+        logger.info(
+            "Whisper-Modell '%s' im lokalen HF-Cache vorhanden "
+            "(Transkription offline-faehig).", settings.WHISPER_MODEL,
+        )
+        return True
+    except ImportError:
+        logger.warning(
+            "faster-whisper nicht installiert – Transkription nicht verfuegbar."
+        )
+        return False
+    except Exception:
+        logger.warning(
+            "Whisper-Modell '%s' NICHT im lokalen HF-Cache – erster "
+            "Transkriptionsjob laedt ~3GB von HuggingFace Hub und schlaegt "
+            "bei HF-Stoerung (z.B. 504 Gateway Timeout) fehl. Vorab-Download: "
+            "HF_HOME=/workspace/hf-cache python -c \"from faster_whisper "
+            "import download_model; download_model('%s')\"",
+            settings.WHISPER_MODEL, settings.WHISPER_MODEL,
+        )
+        return False
 
 
 def _get_duration(file_path: Path) -> float:

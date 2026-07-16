@@ -79,6 +79,15 @@ async def lifespan(app: FastAPI):
         app.state.sum_check_task = sum_check_task
     except Exception:
         pass
+    # v19.7: Whisper-Modell beim Start pruefen → laute Warnung wenn nicht im
+    # lokalen HF-Cache (erster Transkriptionsjob haengt sonst an der
+    # HF-Hub-Verfuegbarkeit; Live-Fund: HfHubHTTPError 504).
+    try:
+        from app.services.transcription import check_whisper_model_available
+        whisper_check_task = asyncio.create_task(check_whisper_model_available())
+        app.state.whisper_check_task = whisper_check_task
+    except Exception:
+        pass
     yield
     cleanup_task.cancel()
     try: p0_worker_task.cancel()
