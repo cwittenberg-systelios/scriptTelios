@@ -118,3 +118,43 @@ def test_run_ollama_unreachable_down(monkeypatch):
     res = asyncio.run(selfcheck._run_selfcheck())
     assert res["status"] == "down"
     assert not res["checks"]["models"]["ok"]
+
+
+# ── _check_disk (Backing-Store-Erkennung + Quota/du) ──
+
+import collections as _collections
+
+def _fake_du(total_gb, free_gb):
+    D = _collections.namedtuple("D", "total used free")
+    return D(int(total_gb * 1024 ** 3), 0, int(free_gb * 1024 ** 3))
+
+
+def test_disk_backing_store_is_ok_with_hint(monkeypatch):
+    monkeypatch.setattr(selfcheck, "DISK_QUOTA_GB", 0.0)
+    monkeypatch.setattr(selfcheck.shutil, "disk_usage", lambda p: _fake_du(748434.7, 748434.7))
+    r = selfcheck._check_disk()
+    assert r["ok"] is True and "Backing-Store" in r["detail"]
+
+
+def test_disk_normal_low_free_degraded(monkeypatch):
+    monkeypatch.setattr(selfcheck, "DISK_QUOTA_GB", 0.0)
+    monkeypatch.setattr(selfcheck, "DISK_MIN_GB", 10.0)
+    monkeypatch.setattr(selfcheck.shutil, "disk_usage", lambda p: _fake_du(100, 5))
+    r = selfcheck._check_disk()
+    assert r["ok"] is False and r["free_gb"] == 5.0
+
+
+def test_disk_quota_uses_du(monkeypatch):
+    monkeypatch.setattr(selfcheck, "DISK_QUOTA_GB", 70.0)
+    monkeypatch.setattr(selfcheck, "DISK_MIN_GB", 10.0)
+    monkeypatch.setattr(selfcheck, "_du_gb", lambda p: 60.0)
+    r = selfcheck._check_disk()
+    assert r["ok"] is True and r["free_gb"] == 10.0 and "von 70 GB" in r["detail"]
+
+
+def test_disk_quota_low_free_degraded(monkeypatch):
+    monkeypatch.setattr(selfcheck, "DISK_QUOTA_GB", 70.0)
+    monkeypatch.setattr(selfcheck, "DISK_MIN_GB", 10.0)
+    monkeypatch.setattr(selfcheck, "_du_gb", lambda p: 65.0)
+    r = selfcheck._check_disk()
+    assert r["ok"] is False and r["free_gb"] == 5.0

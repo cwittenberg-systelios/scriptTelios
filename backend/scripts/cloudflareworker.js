@@ -10,6 +10,7 @@
 //   GET  /            → Ping (ohne Auth)                    "RunPod Proxy OK"
 //   GET  /state       → { podId, desiredStatus, hasGpu, anyRunning, otherRunning[] }
 //   GET  /pods        → alle Account-Pods (Doppelstart-Erkennung)
+//   GET  /selfcheck   → Self-Check-Report (live vom Pod; "stopped" wenn Pod aus)
 //   POST /start       → Pod starten (podResume)
 //   POST /stop        → Pod stoppen  (podStop)
 //   POST /setPodId    → { podId }  → mutable Pod-ID in KV schreiben
@@ -45,6 +46,7 @@ export default {
   async scheduled(event, env, ctx) {
     try {
       const action = getAction(event.cron);
+      if (action === "selfcheck") { await cronSelfcheck(env, ctx); return; }
       if (!action) return;
       // Cron laeuft intern — keine Auth, User = "cron", kein Request-Objekt.
       await execute(action, env, ctx, "cron", null);
@@ -59,6 +61,7 @@ export default {
 
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
+    originCache.set(req, await resolveOrigin(env));   // Origin (Var oder Secret) aufloesen + cachen
     const cors = corsHeaders(env, req);
 
     // CORS-Preflight immer beantworten
@@ -68,6 +71,43 @@ export default {
 
     // Oeffentlicher Ping (ohne Auth) — kein Secret involviert
     if (url.pathname === "/" || url.pathname === "") {
+      if (url.searchParams.get("diag")) {
+        // Diagnose OHNE Auth: NUR Vorhandensein/Lesbarkeit der Bindings — niemals Werte.
+        const present = async (name) => {
+          const b = env[name];
+          if (!b) return false;
+          if (typeof b === "string") return b.trim().length > 0;
+          if (typeof b.get === "function") { try { const v = await b.get(); return !!(v && v.trim()); } catch { return false; } }
+          return false;
+        };
+        const diag = {
+          CONFLUENCE_SHARED_SECRET: await present("CONFLUENCE_SHARED_SECRET"),
+          CONFLUENCE_ORIGIN: await present("CONFLUENCE_ORIGIN"),
+          RUNPOD_API_KEY: await present("RUNPOD_API_KEY"),
+          RUNPOD_POD_ID: await present("RUNPOD_POD_ID"),
+          TELEGRAM_BOT_TOKEN: await present("TELEGRAM_BOT_TOKEN"),
+          LOGS: !!env.LOGS,
+        };
+        // Backend-Self-Check AUS WORKER-SICHT — genau das, was fetchBackendSelfcheck sieht.
+        let backend;
+        try {
+          const br = await fetch("https://scriptelios.win/api/selfcheck",
+            { signal: AbortSignal.timeout(8000), headers: { "Accept": "application/json" } });
+          const bt = await br.text();
+          let parsed = null; try { parsed = JSON.parse(bt); } catch {}
+          backend = {
+            httpStatus: br.status,
+            contentType: br.headers.get("content-type") || "",
+            jsonOk: !!parsed,
+            parsedStatus: parsed ? parsed.status : null,
+            bodySnippet: (bt || "").replace(/\s+/g, " ").trim().slice(0, 220),
+          };
+        } catch (e) {
+          backend = { error: String(e && e.message || e) };
+        }
+        return new Response(JSON.stringify({ ok: true, bindings: diag, backend }, null, 2),
+          { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+      }
       return new Response("RunPod Proxy OK", { status: 200, headers: cors });
     }
 
@@ -83,6 +123,7 @@ export default {
 
       if (url.pathname === "/state")    return await handleState(env, secrets, req);
       if (url.pathname === "/pods")     return await handlePods(env, secrets, req);
+      if (url.pathname === "/selfcheck") return await handleSelfcheck(env, secrets, req);
       if (url.pathname === "/start")    return await execute("start", env, ctx, user, req);
       if (url.pathname === "/stop")     return await execute("stop", env, ctx, user, req);
       if (url.pathname === "/setPodId") return await handleSetPodId(req, env, user);
@@ -175,9 +216,27 @@ async function verifyHmac(req, secrets) {
 // CORS + JSON-Helper
 // ─────────────────────────────────────────────
 
+// CONFLUENCE_ORIGIN kann plain Var (String) ODER Secrets-Store-Binding (.get()) sein.
+// Async aufgeloest und request-scoped gecacht, damit das synchrone corsHeaders() drankommt.
+const originCache = new WeakMap();
+
+async function resolveOrigin(env) {
+  const b = env.CONFLUENCE_ORIGIN;
+  if (!b) return "";
+  if (typeof b === "string") return b;
+  if (typeof b.get === "function") { try { return (await b.get()) || ""; } catch { return ""; } }
+  return "";
+}
+
 function corsHeaders(env, req) {
   const reqOrigin = req ? (req.headers.get("Origin") || "") : "";
-  const configured = (env.CONFLUENCE_ORIGIN || "")
+  // Vorab aufgeloeste Origin (Secrets Store oder Var) request-scoped aus dem Cache;
+  // Fallback fuer Cron/kein-req: nur wenn plain String.
+  const cached = req ? originCache.get(req) : undefined;
+  const rawOrigin = typeof cached === "string"
+    ? cached
+    : (typeof env.CONFLUENCE_ORIGIN === "string" ? env.CONFLUENCE_ORIGIN : "");
+  const configured = rawOrigin
     .split(",").map(s => s.trim()).filter(Boolean);
 
   let allowOrigin;
@@ -233,6 +292,7 @@ function isValidPodId(id) {
 function getAction(cron) {
   if (cron === "0 7 * * 1-5") return "start";
   if (cron === "0 18 * * 1-5") return "stop";
+  if (cron === "*/15 * * * *") return "selfcheck";
   return null;
 }
 
@@ -331,6 +391,14 @@ async function execute(action, env, ctx, user, req) {
   };
 
   await log(env, entry);
+
+  // Startzeit fuer die Startup-Erkennung tracken (getSelfcheckReport liest sie).
+  if (env.LOGS && status === "SUCCESS") {
+    try {
+      if (action === "start") await env.LOGS.put("state:podRunningSince", String(Date.now()));
+      if (action === "stop")  await env.LOGS.put("state:podRunningSince", "0");
+    } catch {}
+  }
 
   if (status === "SUCCESS" && action === "start") {
     // Fire-and-forget Health-Poll — laeuft dank ctx auch bei manuellem Start.
@@ -456,6 +524,7 @@ async function handleRecover(req, env, ctx, user) {
   await log(env, entry);
 
   if (!noGpu) {
+    if (env.LOGS) { try { await env.LOGS.put("state:podRunningSince", String(Date.now())); } catch {} }
     ctx?.waitUntil?.(waitForBackend(secrets, result));
     await notify(secrets, `🔁 Recover (${user}): Pod ${podId} → resume (${stateAfter})`);
   } else {
@@ -602,6 +671,101 @@ async function handlePods(env, secrets, req) {
     );
   }
   return json({ ok: true, trackedPodId: podId, pods: podsRes.pods }, { env, req });
+}
+
+// ─────────────────────────────────────────────
+// SELF-CHECK (Backend /api/selfcheck proxien + Cron-Reporting)
+// ─────────────────────────────────────────────
+
+async function fetchBackendSelfcheck() {
+  try {
+    const res = await fetch("https://scriptelios.win/api/selfcheck",
+      { signal: AbortSignal.timeout(8000), headers: { "Accept": "application/json" } });
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      const snippet = (text || "").replace(/\s+/g, " ").trim().slice(0, 160);
+      return { status: "down", detail: `ungueltige Antwort (HTTP ${res.status}): ${snippet || "leer"}` };
+    }
+  } catch (e) {
+    return { status: "down", detail: "Backend nicht erreichbar: " + e.message };
+  }
+}
+
+// UI: liefert den Live-Report. Pod aus → "stopped" (kein Fehlalarm).
+// Boot-Fenster: Zeit nach Pod-Start, in der ein (noch) nicht bereites Backend als
+// "starting" statt "down" gilt (uvicorn + Ollama-Modelle laden). Grosszuegig gewaehlt.
+const STARTUP_GRACE_MS = 240000;  // 4 min
+
+// Zentraler Self-Check-Report inkl. Startup-Erkennung. Von UI (/selfcheck) und Cron genutzt.
+async function getSelfcheckReport(env, secrets) {
+  const podId = await getPodId(env, secrets);
+  const { status: podStatus } = await getState(secrets, podId);
+
+  if (String(podStatus).toUpperCase() !== "RUNNING") {
+    if (env.LOGS) { try { await env.LOGS.put("state:podRunningSince", "0"); } catch {} }
+    return { status: "stopped", podStatus, detail: "Pod laeuft nicht" };
+  }
+
+  // Startzeit sicherstellen (Fallback, falls Pod ausserhalb des Workers gestartet wurde).
+  let since = 0;
+  if (env.LOGS) {
+    try { since = parseInt(await env.LOGS.get("state:podRunningSince") || "0", 10) || 0; } catch {}
+    if (!since) { since = Date.now(); try { await env.LOGS.put("state:podRunningSince", String(since)); } catch {} }
+  }
+  const elapsed = since ? Date.now() - since : Infinity;
+  const withinGrace = elapsed < STARTUP_GRACE_MS;
+
+  const report = await fetchBackendSelfcheck();
+  const hasReal = !!(report && report.checks && Object.keys(report.checks).length > 0);
+
+  // Im Boot-Fenster: Backend nicht erreichbar ODER noch nicht "ok" → "starting" statt Stoerung.
+  if (withinGrace && (!hasReal || report.status !== "ok")) {
+    return {
+      status: "starting",
+      detail: "Backend startet\u2026 (" + Math.round(elapsed / 1000) + "s)",
+      elapsedSec: Math.round(elapsed / 1000),
+      checks: hasReal ? report.checks : undefined,
+    };
+  }
+  return report;
+}
+
+// UI: liefert den Report (inkl. "starting"/"stopped").
+async function handleSelfcheck(env, secrets, req) {
+  const report = await getSelfcheckReport(env, secrets);
+  return json(report, { env, req });
+}
+
+// Cron: nur wenn Pod laeuft; Telegram nur bei Statuswechsel (De-Dup ueber KV).
+async function cronSelfcheck(env, ctx) {
+  const secrets = await getSecrets(env);
+  const rep = await getSelfcheckReport(env, secrets);
+  const newStatus = rep.status || "down";
+
+  if (newStatus === "stopped") {
+    if (env.LOGS) await env.LOGS.put("state:selfcheckStatus", "stopped");
+    return;   // Pod bewusst aus → kein Alarm
+  }
+
+  let prev = null;
+  if (env.LOGS) {
+    try { prev = await env.LOGS.get("state:selfcheckStatus"); } catch {}
+    await env.LOGS.put("state:selfcheckStatus", newStatus);
+    await env.LOGS.put("state:selfcheck", JSON.stringify(rep));
+  }
+
+  // Telegram nur bei echtem Statuswechsel; "starting"/"stopped" sind erwartet → kein Alarm.
+  if (prev && prev !== newStatus && prev !== "stopped" && prev !== "starting" && newStatus !== "starting") {
+    const emoji = newStatus === "ok" ? "✅" : (newStatus === "degraded" ? "⚠️" : "🚨");
+    let detail = "";
+    if (rep.checks) {
+      const bad = Object.keys(rep.checks).filter(k => rep.checks[k] && rep.checks[k].ok === false);
+      if (bad.length) detail = "\nBetroffen: " + bad.join(", ");
+    }
+    await notify(secrets, `${emoji} Self-Check: ${prev} → ${newStatus}${detail}`);
+  }
 }
 
 // ─────────────────────────────────────────────

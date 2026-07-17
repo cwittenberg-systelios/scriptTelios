@@ -10,6 +10,7 @@ Ergebnis wird kurz gecacht (SELFCHECK_TTL), damit Polling den Pod nicht belastet
 """
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -26,8 +27,22 @@ from app.services.embeddings import EMBEDDING_MODEL
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-DISK_PATH = "/workspace"
-DISK_MIN_GB = 10.0
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+# Disk-Prüfung konfigurierbar:
+#   SELFCHECK_DISK_PATH        Pfad, dessen Belegung geprüft wird (Default /workspace)
+#   SELFCHECK_DISK_QUOTA_GB    Volume-Quota in GB. Bei Netzwerk-Volumes meldet statvfs den
+#                              (riesigen) Backing-Store statt der Quota — mit dieser Angabe
+#                              wird stattdessen die echte Belegung (du) gegen die Quota geprüft.
+#   SELFCHECK_DISK_MIN_FREE_GB Warnschwelle freier Platz (Default 10)
+DISK_PATH = os.environ.get("SELFCHECK_DISK_PATH", "/workspace")
+DISK_QUOTA_GB = _env_float("SELFCHECK_DISK_QUOTA_GB", 0.0)      # 0 = nicht gesetzt
+DISK_MIN_GB = _env_float("SELFCHECK_DISK_MIN_FREE_GB", 10.0)
+DISK_BACKING_STORE_TB = 5.0                                    # >5 TB total ⇒ Backing-Store, Quota nötig
 SELFCHECK_TTL = 20.0  # Sekunden
 
 _CACHE: dict = {"ts": 0.0, "result": None}
@@ -88,10 +103,37 @@ async def _check_db() -> dict:
         return {"ok": False, "detail": type(e).__name__}
 
 
+def _du_gb(path: str) -> float | None:
+    """Belegter Platz eines Verzeichnisses in GB via `du -sb` (auch bei Permission-Fehlern
+    wird die Teilsumme aus stdout gelesen)."""
+    try:
+        out = subprocess.run(["du", "-sb", path], capture_output=True, text=True, timeout=20)
+        parts = (out.stdout or "").split()
+        if parts and parts[0].isdigit():
+            return int(parts[0]) / (1024 ** 3)
+        return None
+    except Exception:
+        return None
+
+
 def _check_disk() -> dict:
     try:
+        # Mit Quota: echte Belegung gegen die Quota prüfen (korrekt für Netzwerk-Volumes).
+        if DISK_QUOTA_GB > 0:
+            used_gb = _du_gb(DISK_PATH)
+            if used_gb is None:
+                return {"ok": True, "detail": f"{DISK_PATH}: Belegung nicht messbar"}
+            free_gb = round(DISK_QUOTA_GB - used_gb, 1)
+            return {"ok": free_gb >= DISK_MIN_GB, "free_gb": free_gb, "used_gb": round(used_gb, 1),
+                    "detail": f"{free_gb} GB frei von {DISK_QUOTA_GB:.0f} GB (belegt {used_gb:.1f} GB)"}
+
+        # Ohne Quota: statvfs — aber Backing-Store eines Netzwerk-Volumes erkennen.
         u = shutil.disk_usage(DISK_PATH)
+        total_gb = u.total / (1024 ** 3)
         free_gb = round(u.free / (1024 ** 3), 1)
+        if total_gb > DISK_BACKING_STORE_TB * 1024:
+            return {"ok": True, "free_gb": free_gb,
+                    "detail": f"{free_gb} GB frei (Backing-Store — SELFCHECK_DISK_QUOTA_GB setzen für echte Volume-Belegung)"}
         return {"ok": free_gb >= DISK_MIN_GB, "free_gb": free_gb, "detail": f"{free_gb} GB frei"}
     except Exception as e:
         return {"ok": False, "detail": f"{DISK_PATH}: {type(e).__name__}"}
