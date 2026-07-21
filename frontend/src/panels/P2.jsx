@@ -157,6 +157,7 @@ function P2({ toast, resumeJob, onResumed }) {
         diagnosen: dx.length ? dx.join(", ") : null,
         model:     jobModel || null,
         patientName: patientNameExplicit,
+        geschlecht:  geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
         // v18: editierbare Befund-Vorlage fuer den separaten Befund-Call
         befundVorlage: befundVorlage || null,
       });
@@ -418,6 +419,7 @@ function P2b({ toast, resumeJob, onResumed }) {
         bullets:        fokus || null,
         model:          jobModel || null,
         patientName:    patientNameExplicit,
+        geschlecht:     geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p2b");

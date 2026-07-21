@@ -1168,6 +1168,12 @@ async def create_generate_job(
     befund_vorlage:   Annotated[Optional[str], Form(description="P2 (Anamnese): editierbare AMDP-Vorlage fuer den Befund-Call. Default = BEFUND_VORLAGE.")] = None,
     therapeut_id:     Annotated[Optional[str], Form()] = None,
     patientenname:    Annotated[Optional[str], Form(description="Explizit uebergebener Patientenname (vor allem bei P1 Gespraechszusammenfassung). Format: 'Vorname Nachname' oder 'Herr/Frau Nachname'. Wird in Initiale umgewandelt fuer den Output.")] = None,
+    # v19.8 (Identitaets-Guard): strukturiertes Geschlecht aus dem UI-Toggle,
+    # unabhaengig vom Kuerzel. Vorher lebte das Geschlecht nur implizit in der
+    # Anrede des patientenname-Strings - war das Kuerzel leer, ging die
+    # Information komplett verloren (patientName=null im Frontend-Gate).
+    # Werte: "w" | "m" | "auto"/None (auto = aus Quellen ableiten, wie bisher).
+    geschlecht:       Annotated[Optional[str], Form(description="Klient-Geschlecht aus dem UI: 'w'|'m'|'auto'. Unabhaengig vom Kuerzel; ueberstimmt die Anrede-Ableitung aus Dokumenten.")] = None,
     current_user:     str = Depends(get_current_user),
     diagnosen:        Annotated[Optional[str], Form()] = None,
     transcript:       Annotated[Optional[str], Form()] = None,
@@ -1206,6 +1212,13 @@ async def create_generate_job(
     # impliziten Fallback auf den Default - sonst koennte ein verbuggtes
     # Frontend unbemerkt mit leerem Auftrag laufen.
     instructions = workflow_instructions or prompt
+
+    # v19.8: geschlecht-Whitelist. Alles ausser "w"/"m" (auch "auto", leer,
+    # Muell) wird auf None normalisiert -> Verhalten wie bisher (ableiten).
+    geschlecht_norm: Optional[str] = None
+    if geschlecht and geschlecht.strip().lower() in ("w", "m"):
+        geschlecht_norm = geschlecht.strip().lower()
+
     if not instructions or not instructions.strip():
         from fastapi import HTTPException
         raise HTTPException(
@@ -1658,11 +1671,14 @@ async def create_generate_job(
         #    d) Fallback: verlaufsdoku / vorbefunde
         from app.services.extraction import extract_patient_name, parse_explicit_patient_name
         patient_name = None
+        # v19.8: Herkunft der Anrede mitfuehren -> gender_source im Dict.
+        _pn_source: Optional[str] = None
 
         # a) Explizit uebergeben
         if patientenname and patientenname.strip():
             patient_name = parse_explicit_patient_name(patientenname.strip())
             if patient_name:
+                _pn_source = "explicit"
                 logger.info("Patientenname explizit uebergeben: %s %s.",
                             patient_name["anrede"], patient_name["initial"])
 
@@ -1672,9 +1688,35 @@ async def create_generate_job(
                 if src_text:
                     patient_name = extract_patient_name(src_text)
                     if patient_name:
+                        _pn_source = "document"
                         logger.info("Patientenname aus Unterlagen erkannt: %s %s.",
                                     patient_name["anrede"], patient_name["initial"])
                         break
+
+        # v19.8 (Identitaets-Guard, Schritt S2): strukturiertes Geschlecht aus
+        # dem UI ueberstimmt jede abgeleitete Anrede. Ist NUR das Geschlecht
+        # gesetzt (Kuerzel leer, nichts extrahiert), entsteht ein Dict OHNE
+        # initial - alle Konsumenten (substitute_patient_placeholders,
+        # build_system_prompt, _check_forbidden_names) pruefen .get("initial")
+        # bzw. nachname/vorname und bleiben dann no-op; der QualityCheck
+        # (GENDER_MISMATCH, Patch B) nutzt das gender-Feld trotzdem.
+        if geschlecht_norm and not patient_name:
+            patient_name = {"anrede": "", "vorname": "", "nachname": "", "initial": None}
+            _pn_source = None
+        if patient_name:
+            if geschlecht_norm:
+                patient_name["anrede"] = "Frau" if geschlecht_norm == "w" else "Herr"
+                patient_name["gender"] = geschlecht_norm
+                patient_name["gender_source"] = "explicit"
+            else:
+                _g = {"Frau": "w", "Herr": "m"}.get(patient_name.get("anrede") or "")
+                patient_name["gender"] = _g
+                patient_name["gender_source"] = _pn_source if _g else None
+            logger.info(
+                "Patient-Identitaet aufgeloest: initial=%s gender=%s source=%s",
+                patient_name.get("initial"), patient_name.get("gender"),
+                patient_name.get("gender_source"),
+            )
 
         if not patient_name:
             # v16 Audit: Frueher (sog. Bug-Fix #4) wurde hier ein Fallback gesetzt:
@@ -1703,6 +1745,25 @@ async def create_generate_job(
         job.patient_name = patient_name   # Datenschutz-Namensleck-Check (Punkt 1)
         job.fokus_themen = bullets        # Stichpunkt/Fokus-Themen-Check (Punkt 6)
         job.selbstauskunft_empty = selbstauskunft_empty  # v19.7: leere Selbstauskunft (P2)
+
+        # v19.8: KLIENT-GESCHLECHT-Hinweis backend-seitig anhaengen, wenn das
+        # UI-Feld gesetzt ist und das Frontend ihn NICHT schon eingebaut hat
+        # (P1/P2 haengen ihn selbst an - Duplikat-Guard ueber den Marker-String;
+        # P2b/P3/P3b/P4 taten das bisher nie -> genau deren Luecke schliesst das).
+        if geschlecht_norm and "KLIENT-GESCHLECHT" not in instructions:
+            _g_anrede = "Frau" if geschlecht_norm == "w" else "Herr"
+            _g_wort = "weiblich" if geschlecht_norm == "w" else "männlich"
+            _g_adj = "weibliche" if geschlecht_norm == "w" else "männliche"
+            _g_hint = (
+                f"\n\nKLIENT-GESCHLECHT: {_g_wort} – verwende konsequent "
+                f"{_g_adj} Pronomen und Endungen."
+            )
+            if patient_name and patient_name.get("initial"):
+                _g_hint += (
+                    f' Verwende als Namenskürzel durchgehend '
+                    f'"{patient_name["initial"]}" (z.B. "{_g_anrede} {patient_name["initial"]}").'
+                )
+            instructions = instructions + _g_hint
 
         # 5. Generieren – jede Variable hat genau eine Bedeutung
         # v18: prompt-Feld → workflow_instructions, neuer Parameter befund_vorlage.

@@ -95,6 +95,9 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   if (files.befundVorlage) fd.append("befund_vorlage", files.befundVorlage);
   if (therapeutId)       fd.append("therapeut_id",    therapeutId);
   if (files.patientName) fd.append("patientenname",   files.patientName);
+  // v19.8: strukturiertes Geschlecht - unabhaengig vom Kuerzel-Gate. Nur
+  // "w"/"m" senden; "auto" = Backend-Default (ableiten wie bisher).
+  if (files.geschlecht === "w" || files.geschlecht === "m") fd.append("geschlecht", files.geschlecht);
 
   // 1. P0-Recording → p0_recording_id immer senden; transcript nur wenn vorhanden
   // 2. Audio-Datei (Upload) → audio-Feld
@@ -167,6 +170,9 @@ async function startJob(workflow, prompt, userContent, files = {}) {
   if (files.befundVorlage) fd.append("befund_vorlage", files.befundVorlage);
   if (therapeutId)       fd.append("therapeut_id",    therapeutId);
   if (files.patientName) fd.append("patientenname",   files.patientName);
+  // v19.8: strukturiertes Geschlecht - unabhaengig vom Kuerzel-Gate. Nur
+  // "w"/"m" senden; "auto" = Backend-Default (ableiten wie bisher).
+  if (files.geschlecht === "w" || files.geschlecht === "m") fd.append("geschlecht", files.geschlecht);
 
   if (files.audio && files.audio.__p0recording) {
     fd.append("p0_recording_id", String(files.audio.id));

@@ -85,6 +85,7 @@ function P4({ toast, resumeJob, onResumed }) {
         bullets:        fokus || null,
         model:          jobModel || null,
         patientName:    patientNameExplicit,
+        geschlecht:     geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p4");
@@ -152,6 +153,42 @@ function P4({ toast, resumeJob, onResumed }) {
           </Card>
 
           <div className="action-bar">
+            {/* v19.8: Klient-Controls nachgeruestet. Der State existierte seit
+                v16 (Audit-Patch A3, "gleicher Patient-Override wie in P1+P2"),
+                wurde aber nie gerendert -> patientNameExplicit war in P4 immer
+                null und der Entlassbericht hing komplett an der Briefkopf-
+                Extraktion aus der Antragsvorlage. Primaerpfad bleibt die
+                Extraktion (Auto); das Feld ist der optionale Override. */}
+            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto", flexWrap:"wrap"}}>
+              <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
+              {[
+                { val:"w", label:"♀ weiblich" },
+                { val:"m", label:"♂ männlich" },
+                { val:"auto", label:"Auto"    },
+              ].map(({ val, label }) => (
+                <button key={val} onClick={() => setGeschlecht(val)} style={{
+                  padding:"3px 8px", fontSize:12, borderRadius:3, cursor:"pointer",
+                  border: geschlecht === val ? "1px solid var(--st-accent)" : "1px solid var(--st-gray-border)",
+                  background: geschlecht === val ? "var(--st-accent-bg)" : "var(--st-bg)",
+                  color: geschlecht === val ? "var(--st-accent)" : "var(--st-text)",
+                }}>{label}</button>
+              ))}
+              <div style={{display:"flex", alignItems:"center", gap:4, marginLeft:4}}>
+                <span style={{fontSize:11, color:"var(--st-text-soft)"}}>Kürzel</span>
+                <input
+                  type="text"
+                  value={kuerzel}
+                  onChange={e => setKuerzel(e.target.value)}
+                  placeholder="K."
+                  maxLength={8}
+                  style={{
+                    width:48, padding:"3px 6px", fontSize:12, borderRadius:3,
+                    border:"1px solid var(--st-gray-border)", background:"var(--st-bg)",
+                    color:"var(--st-text)", fontFamily:"inherit",
+                  }}
+                />
+              </div>
+            </div>
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button

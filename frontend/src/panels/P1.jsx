@@ -234,6 +234,7 @@ function P1({ toast, resumeJob, onResumed }) {
         bullets:      d.bullets || null,
         model:        jobModel || null,
         patientName:  patientNameExplicit,
+        geschlecht:   d.geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
       });
       // Submit erfolgreich. Den verbrauchten Draft durch einen frischen leeren
       // ersetzen - die Liste behaelt GENAU EINEN Entwurf (Invariante).

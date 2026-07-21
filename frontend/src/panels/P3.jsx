@@ -86,6 +86,7 @@ function P3({ toast, resumeJob, onResumed }) {
         bullets:        fokus || null,
         model:          jobModel || null,
         patientName:    patientNameExplicit,
+        geschlecht:     geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p3");
@@ -274,6 +275,7 @@ function P3b({ toast, resumeJob, onResumed }) {
         bullets:        fokus || null,
         model:          jobModel || null,
         patientName:    patientNameExplicit,
+        geschlecht:     geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
         onJobId:        setCurrentJobId,
         signal:         ac.signal,
       }, "p3b");
