@@ -777,3 +777,183 @@ class TestOrganisatorischOptional:
         assert not any(
             c.startswith(ISSUE_CODE_PREFIX_MISSING_SECTION) for c in codes
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.8 Identitaets-Guard: PATIENT_INITIAL_MISMATCH (S4)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from app.services.quality_check import (  # noqa: E402 (v19.8-Nachimport)
+    ISSUE_CODE_GENDER_MISMATCH,
+    ISSUE_CODE_PATIENT_INITIAL_MISMATCH,
+    _check_gender,
+    _check_patient_initial,
+)
+
+
+def _pn(initial=None, gender=None):
+    """Kompaktes patient_name-Dict wie es jobs.py (v19.8) baut."""
+    return {
+        "anrede": {"w": "Frau", "m": "Herr"}.get(gender, ""),
+        "vorname": "", "nachname": "",
+        "initial": initial, "gender": gender,
+        "gender_source": "explicit" if gender else None,
+    }
+
+
+class TestPatientInitialMismatch:
+
+    def test_falsches_kuerzel_mit_counts(self):
+        text = "Frau M. berichtet. Frau M. wirkt stabil. Herr S. wurde erwaehnt."
+        issues = _check_patient_initial(text, _pn(initial="K."))
+        crit = [i for i in issues if i.severity == SEVERITY_CRITICAL]
+        assert len(crit) == 1
+        assert crit[0].code == ISSUE_CODE_PATIENT_INITIAL_MISMATCH
+        assert crit[0].code_detail["expected"] == "K."
+        assert crit[0].code_detail["found"] == {"M.": 2, "S.": 1}
+        assert crit[0].code_detail["total"] == 3
+
+    def test_korrektes_kuerzel_keine_issues(self):
+        text = "Frau K. berichtet ueber ihre Woche. Frau K. wirkt stabil."
+        assert _check_patient_initial(text, _pn(initial="K.")) == []
+
+    def test_kuerzel_fehlt_komplett_warning(self):
+        text = "Die Klientin berichtet, u. a. z. B. ueber Belastungen."
+        issues = _check_patient_initial(text, _pn(initial="K."))
+        assert len(issues) == 1
+        assert issues[0].severity == SEVERITY_WARNING
+        assert issues[0].code == ISSUE_CODE_PATIENT_INITIAL_MISMATCH
+
+    def test_abkuerzungen_keine_falsch_positiven(self):
+        # "z. B.", "u. a.", "Dr." duerfen NICHT als falsches Kuerzel zaehlen
+        # (anredefrei), aber "K." anredefrei zaehlt fuer die Praesenz (Regel 2).
+        text = "K. berichtet, z. B. ueber Schlaf, u. a. mit Dr. Sommer."
+        issues = _check_patient_initial(text, _pn(initial="K."))
+        assert issues == []
+
+    def test_ohne_patient_name_keine_issues(self):
+        assert _check_patient_initial("Frau M. berichtet.", None) == []
+
+    def test_nur_gender_ohne_initial_keine_issues(self):
+        # v19.8: Dict ohne initial (nur Geschlecht gesetzt) -> no-op
+        assert _check_patient_initial("Frau M.", _pn(gender="w")) == []
+
+    def test_herrn_dativ_wird_erkannt(self):
+        text = "Wir berichten ueber Herrn M. und seine Behandlung."
+        issues = _check_patient_initial(text, _pn(initial="K."))
+        crit = [i for i in issues if i.severity == SEVERITY_CRITICAL]
+        assert crit and crit[0].code_detail["found"] == {"M.": 1}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.8 Identitaets-Guard: GENDER_MISMATCH (S5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestGenderMismatch:
+
+    def test_maennliche_marker_bei_weiblicher_klientin(self):
+        text = "Herr K. berichtete. Der Klient wirkte gefasst."
+        issues = _check_gender(text, _pn(initial="K.", gender="w"))
+        assert len(issues) == 1
+        assert issues[0].severity == SEVERITY_CRITICAL
+        assert issues[0].code == ISSUE_CODE_GENDER_MISMATCH
+        assert issues[0].code_detail["total_wrong"] == 2
+
+    def test_einzelfehler_wird_gefangen(self):
+        # Fehlerbild aus der Praxis: durchgehend "der Klient", einmal
+        # "die Klientin" zwischendrin - Any-Hit, kein Dominanz-Schwellwert.
+        text = (
+            "Der Klient berichtete zu Beginn. Im Verlauf zeigte der Klient "
+            "Fortschritte. Die Klientin nutzte die Gruppentherapie. "
+            "Abschliessend wirkte der Klient stabilisiert."
+        )
+        issues = _check_gender(text, _pn(initial="K.", gender="m"))
+        assert len(issues) == 1
+        assert issues[0].severity == SEVERITY_CRITICAL
+        assert issues[0].code_detail["total_wrong"] == 1
+        assert issues[0].code_detail["wrong"] == {"die Klientin": 1}
+
+    def test_artikel_disambiguierung_der_klientin(self):
+        # "der Klientin" (Dativ/Genitiv weiblich) darf NICHT maennlich matchen
+        text = "Frau K. kam puenktlich. Der Klientin gelang die Umsetzung."
+        assert _check_gender(text, _pn(initial="K.", gender="w")) == []
+
+    def test_dritte_personen_kein_falsch_positiv(self):
+        # Pronomen Dritter (Vater: er/sein) duerfen nicht zaehlen (F1)
+        text = "Frau K. berichtete, ihr Vater sei besorgt gewesen; er habe angerufen."
+        assert _check_gender(text, _pn(initial="K.", gender="w")) == []
+
+    def test_mitpatienten_kein_falsch_positiv(self):
+        text = "Frau K. tauschte sich mit den Mitpatienten aus."
+        assert _check_gender(text, _pn(initial="K.", gender="w")) == []
+
+    def test_dem_klienten_dativ_erkannt(self):
+        text = "Dem Klienten gelang die Umsetzung im Alltag."
+        issues = _check_gender(text, _pn(gender="w"))
+        assert len(issues) == 1
+        assert issues[0].severity == SEVERITY_CRITICAL
+
+    def test_plural_klientinnen_kein_treffer(self):
+        text = "Die Klientinnen der Gruppe arbeiteten zusammen."
+        assert _check_gender(text, _pn(gender="m")) == []
+
+    def test_gender_unbekannt_inkonsistenz_warning(self):
+        text = "Die Klientin berichtete. Spaeter wirkte der Klient muede."
+        issues = _check_gender(text, _pn())
+        assert len(issues) == 1
+        assert issues[0].severity == SEVERITY_WARNING
+
+    def test_gender_unbekannt_konsistent_keine_issues(self):
+        text = "Die Klientin berichtete. Die Klientin wirkte stabil."
+        assert _check_gender(text, _pn()) == []
+
+    def test_ohne_patient_name_keine_issues(self):
+        assert _check_gender("Der Klient berichtete.", None) == []
+
+    def test_freie_pronomen_zaehlen_nicht(self):
+        # sie/Sie/sein bleiben komplett unbewertet (Ambiguitaets-Guard)
+        text = "Sie sind angereist. Sie kamen gemeinsam. Das kann sein."
+        assert _check_gender(text, _pn(gender="m")) == []
+
+
+class TestIdentityChecksIntegration:
+
+    def test_run_quality_check_beide_checks_feuern(self):
+        text = _make_text(
+            300,
+            prefix="Herr M. berichtet ueber den Verlauf. Der Klient wirkt stabil. ",
+        )
+        issues = run_quality_check(
+            text, "entlassbericht",
+            patient_name=_pn(initial="K.", gender="w"),
+        )
+        codes = [i.code for i in issues]
+        assert ISSUE_CODE_PATIENT_INITIAL_MISMATCH in codes
+        assert ISSUE_CODE_GENDER_MISMATCH in codes
+        crit = [i for i in issues if i.severity == SEVERITY_CRITICAL]
+        assert len([i for i in crit if i.code in (
+            ISSUE_CODE_PATIENT_INITIAL_MISMATCH, ISSUE_CODE_GENDER_MISMATCH,
+        )]) == 2
+
+    def test_serialisierung_roundtrip_mit_nested_counts(self):
+        text = "Frau M. berichtet. Der Klient wirkt muede."
+        issues = run_quality_check(
+            text, "entlassbericht",
+            patient_name=_pn(initial="K.", gender="w"),
+        )
+        data = serialize_issues(issues, workflow="entlassbericht")
+        restored = deserialize_issues(data)
+        # PATIENT_INITIAL_MISMATCH kann doppelt auftreten (critical: falsches
+        # Kuerzel + warning: erwartetes fehlt) - gezielt das critical-Issue holen.
+        ini_crit = [i for i in restored
+                    if i.code == ISSUE_CODE_PATIENT_INITIAL_MISMATCH
+                    and i.severity == SEVERITY_CRITICAL]
+        assert len(ini_crit) == 1
+        assert ini_crit[0].code_detail["found"] == {"M.": 1}
+        gender = [i for i in restored if i.code == ISSUE_CODE_GENDER_MISMATCH]
+        assert len(gender) == 1
+        assert gender[0].code_detail["total_wrong"] >= 1
+
+    def test_issue_codes_regex_konform(self):
+        assert ISSUE_CODE_RE.match(ISSUE_CODE_PATIENT_INITIAL_MISMATCH)
+        assert ISSUE_CODE_RE.match(ISSUE_CODE_GENDER_MISMATCH)

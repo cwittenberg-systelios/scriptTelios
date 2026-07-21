@@ -92,6 +92,20 @@ ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED = "MODALITY_NOT_COVERED_"
 # unausgefuelltes PDF-Formular). Ohne Input baut das Modell die Anamnese frei aus
 # dem Stil-Anker -> fabrizierter Bericht. Warnung (nicht durch Repair behebbar).
 ISSUE_CODE_SELBSTAUSKUNFT_LEER = "SELBSTAUSKUNFT_LEER"
+# v19.8 (Identitaets-Guard, S4): falsches oder fehlendes Namenskuerzel im
+# Output. Anredegebundene Vorkommen ("Frau M.") mit falscher Initiale ->
+# critical; erwartete Initiale nirgends im Text -> warning. Nur aktiv, wenn
+# patient_name mit initial uebergeben wird.
+ISSUE_CODE_PATIENT_INITIAL_MISMATCH = "PATIENT_INITIAL_MISMATCH"
+# v19.8 (Identitaets-Guard, S5): Geschlecht des Outputs widerspricht dem
+# bekannten Klient-Geschlecht (patient_name["gender"], aus UI-Feld oder
+# Dokument-Anrede). Marker sind bewusst initial- und artikelgebunden -
+# freie Pronomen (er/sie/ihre/seine) bleiben aussen vor, weil jeder Bericht
+# Dritte (Partner, Eltern, Therapeut:innen) mit korrekt anderem Geschlecht
+# nennt (Entscheidung F1: keine Pronomen-Stufe). Bei unbekanntem Geschlecht
+# wird nur In-Text-Inkonsistenz (Marker beider Geschlechter) als warning
+# gemeldet.
+ISSUE_CODE_GENDER_MISMATCH = "GENDER_MISMATCH"
 
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
@@ -232,6 +246,201 @@ def _check_forbidden_names(
             code_detail={"hits": [vorname], "initial": patient_name.get("initial")},
         ))
     return issues
+
+
+# ── v19.8 Identitaets-Guard (S4/S5) ───────────────────────────────────────────
+
+# Anredegebundene Initiale: "Frau K." / "Herr K." / "Herrn K." - Herrn VOR Herr
+# in der Alternation, damit der Dativ/Akkusativ vollstaendig matcht.
+_ANREDE_INITIAL_RE = re.compile(r"\b(?:Herrn|Herr|Frau)\s+([A-ZÄÖÜ])\.")
+
+# Artikelgebundene Rollennomen. Design-Invarianten (Unit-getestet):
+#   - \b nach Klientin/Patientin schliesst Plural (Klientinnen) aus
+#   - (?:en)?\b faengt "dem Klienten"/"des Patienten" (haeufigste m-Form)
+#   - "der Klientin" (Dat/Gen f) matcht NUR die weibliche Regel - die
+#     Disambiguierung laeuft ueber das Nomen, nicht den Artikel
+#   - \b vor Klient/Patient schliesst "Mitpatient(in)" aus (kein Wortanfang)
+#   - bekannte Restluecke: "Mit-Patientin" (Bindestrich) wuerde matchen; selten
+#   - Artikel matchen gross UND klein ("Der Klient" am Satzanfang), die Nomen
+#     bleiben case-sensitiv (Grossschreibung im Deutschen fix)
+_FEM_ROLE_RE = re.compile(r"\b(?:[Dd]ie|[Dd]er)\s+(?:Klientin|Patientin)\b")
+_MASC_ROLE_RE = re.compile(r"\b(?:[Dd]er|[Dd]em|[Dd]en|[Dd]es)\s+(?:Klient|Patient)(?:en)?\b")
+
+
+def _check_patient_initial(
+    text: str, patient_name: dict | None,
+) -> list[QualityIssue]:
+    """v19.8 (S4): Kuerzel-Gegenpruefung - rein deterministisch, kein LLM.
+
+    Regel 1: anredegebundene Vorkommen ("Frau M.", "Herrn S.") mit ANDERER
+             Initiale als der erwarteten -> critical, mit Vorkommenszahlen.
+    Regel 2: erwartete Initiale taucht im gesamten Text nirgends auf ->
+             warning ("Bericht benennt die Klientin nie namentlich").
+    Anredefreie Einzelinitialen ("K." ohne Frau/Herr davor) zaehlen NUR fuer
+    Regel 2 (Praesenz), nie fuer Regel 1 - sonst Falsch-Positive durch
+    "z. B.", "u. a.", "Dr.", "ca.".
+    patient_name ohne initial (z.B. nur Geschlecht gesetzt) -> keine Issues.
+    """
+    if not patient_name or not patient_name.get("initial"):
+        return []
+    expected = (patient_name["initial"] or "").strip().rstrip(".").upper()
+    if len(expected) != 1 or not expected.isalpha():
+        # Unplausible Initiale (Defense-in-Depth, analog llm.py v16-A1) - kein Check.
+        return []
+
+    issues: list[QualityIssue] = []
+    anonym = f"{expected}."
+
+    # Regel 1: falsche Initiale hinter Anrede
+    wrong: dict[str, int] = {}
+    for m in _ANREDE_INITIAL_RE.finditer(text):
+        init = m.group(1).upper()
+        if init != expected:
+            key = f"{init}."
+            wrong[key] = wrong.get(key, 0) + 1
+    if wrong:
+        total = sum(wrong.values())
+        found_str = ", ".join(f"{k}={v}" for k, v in sorted(wrong.items()))
+        issues.append(QualityIssue(
+            code=ISSUE_CODE_PATIENT_INITIAL_MISMATCH,
+            severity=SEVERITY_CRITICAL,
+            message=(
+                f"Falsches Namenskuerzel: {total} Vorkommen ({found_str}), "
+                f"erwartet '{anonym}'."
+            ),
+            repair_hint=(
+                f"Ersetze JEDES falsche Namenskuerzel hinter Frau/Herr durch "
+                f"'{anonym}'. Der Bericht bezeichnet durchgehend dieselbe "
+                f"Person mit der Initiale '{anonym}'."
+            ),
+            code_detail={"expected": anonym, "found": wrong, "total": total},
+        ))
+
+    # Regel 2: erwartete Initiale nirgends (auch anredefrei gezaehlt)
+    if not re.search(r"\b" + re.escape(expected) + r"\.", text):
+        issues.append(QualityIssue(
+            code=ISSUE_CODE_PATIENT_INITIAL_MISMATCH,
+            severity=SEVERITY_WARNING,
+            message=(
+                f"Erwartetes Namenskuerzel '{anonym}' kommt im Text nicht vor - "
+                "der Bericht benennt die Klientin/den Klienten nie namentlich."
+            ),
+            repair_hint=(
+                f"Verwende fuer die Klientin/den Klienten durchgehend die "
+                f"anonymisierte Form '{anonym}' (z.B. 'Frau {anonym}' / "
+                f"'Herr {anonym}') statt generischer Umschreibungen."
+            ),
+            code_detail={"expected": anonym},
+        ))
+    return issues
+
+
+def _collect_gender_markers(
+    text: str, initial: str | None,
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Sammelt weibliche/maennliche Marker mit Vorkommenszahlen.
+
+    Nur Marker, die nachweislich die Index-Klient:in bezeichnen:
+    initialgebunden ("Frau K.") und artikelgebunden ("der Klientin").
+    Rueckgabe: (fem_hits, masc_hits) je als {marker_text: count}.
+    """
+    fem_pats: list[re.Pattern[str]] = []
+    masc_pats: list[re.Pattern[str]] = []
+    ini = (initial or "").strip().rstrip(".").upper()
+    if len(ini) == 1 and ini.isalpha():
+        esc = re.escape(ini)
+        fem_pats.append(re.compile(rf"\bFrau\s+{esc}\."))
+        masc_pats.append(re.compile(rf"\bHerrn?\s+{esc}\."))
+    fem_pats.append(_FEM_ROLE_RE)
+    masc_pats.append(_MASC_ROLE_RE)
+
+    def _collect(pats: list[re.Pattern[str]]) -> dict[str, int]:
+        hits: dict[str, int] = {}
+        for p in pats:
+            for m in p.finditer(text):
+                key = re.sub(r"\s+", " ", m.group(0))
+                # Artikel-Case normalisieren ("Der Klient" am Satzanfang und
+                # "der Klient" zaehlen auf denselben Key); "Frau K."/"Herr K."
+                # bleiben unveraendert.
+                first = key.split(" ", 1)[0].lower()
+                if first in ("der", "die", "dem", "den", "des"):
+                    key = key[0].lower() + key[1:]
+                hits[key] = hits.get(key, 0) + 1
+        return hits
+
+    return _collect(fem_pats), _collect(masc_pats)
+
+
+def _check_gender(
+    text: str, patient_name: dict | None,
+) -> list[QualityIssue]:
+    """v19.8 (S5): Geschlechts-Gegenpruefung - rein deterministisch, kein LLM.
+
+    gender bekannt ("w"/"m"): jeder Marker des falschen Geschlechts ->
+      critical, mit Vorkommenszahlen (Entscheidung O4). Faengt auch das
+      typische Fehlerbild "durchgehend der Klient, einmal die Klientin
+      zwischendrin" - Any-Hit, kein Dominanz-Schwellwert.
+    gender unbekannt: Marker BEIDER Geschlechter im selben Text ->
+      warning (In-Text-Inkonsistenz), sonst keine Issues.
+    """
+    if not patient_name:
+        return []
+    gender = patient_name.get("gender")
+    fem_hits, masc_hits = _collect_gender_markers(text, patient_name.get("initial"))
+
+    def _fmt(hits: dict[str, int]) -> str:
+        return ", ".join(f"{k}={v}" for k, v in sorted(hits.items()))
+
+    if gender in ("w", "m"):
+        wrong = masc_hits if gender == "w" else fem_hits
+        right = fem_hits if gender == "w" else masc_hits
+        if not wrong:
+            return []
+        total = sum(wrong.values())
+        klient_wort = "weiblicher Klientin" if gender == "w" else "maennlichem Klienten"
+        marker_wort = "maennliche" if gender == "w" else "weibliche"
+        ziel_bsp = (
+            "'Frau K.', 'die Klientin'" if gender == "w"
+            else "'Herr K.', 'der Klient'"
+        )
+        return [QualityIssue(
+            code=ISSUE_CODE_GENDER_MISMATCH,
+            severity=SEVERITY_CRITICAL,
+            message=(
+                f"Geschlecht inkonsistent: {total} {marker_wort} Marker bei "
+                f"{klient_wort} ({_fmt(wrong)})."
+            ),
+            repair_hint=(
+                f"Ersetze alle {marker_wort}n Bezeichnungen der Index-Person "
+                f"durch die korrekten Formen ({ziel_bsp}) und passe Pronomen "
+                "und Endungen im Satz an. Bezeichnungen DRITTER Personen "
+                "(Partner, Eltern, Therapeut:innen) bleiben unveraendert."
+            ),
+            code_detail={
+                "expected": gender,
+                "wrong": wrong,
+                "right": sum(right.values()),
+                "total_wrong": total,
+            },
+        )]
+
+    # gender unbekannt: nur In-Text-Inkonsistenz melden
+    if fem_hits and masc_hits:
+        return [QualityIssue(
+            code=ISSUE_CODE_GENDER_MISMATCH,
+            severity=SEVERITY_WARNING,
+            message=(
+                "Geschlecht im Text inkonsistent: weibliche "
+                f"({_fmt(fem_hits)}) und maennliche ({_fmt(masc_hits)}) "
+                "Bezeichnungen der Index-Person gemischt."
+            ),
+            repair_hint=(
+                "Pruefe das Geschlecht der Klientin/des Klienten in den "
+                "Quellen und verwende durchgehend EINE konsistente Form."
+            ),
+            code_detail={"fem": fem_hits, "masc": masc_hits},
+        )]
+    return []
 
 
 def _check_length(text: str, workflow: str) -> list[QualityIssue]:
@@ -483,6 +692,8 @@ def run_quality_check(
     Reihenfolge der Issues ist deterministisch (gut fuer Audit/Tests):
       0a. SELBSTAUSKUNFT_LEER    (nur anamnese, wenn Selbstauskunft leer war)
       0b. DATENSCHUTZ_NAME_LEAK  (nur wenn patient_name uebergeben wird)
+      0c. PATIENT_INITIAL_MISMATCH (v19.8: nur wenn patient_name.initial bekannt)
+      0d. GENDER_MISMATCH          (v19.8: nur wenn patient_name uebergeben wird)
       1. THINK_BLOCK_LEAK
       2. BEFUND_SEPARATOR_MISSING
       3. LENGTH_TOO_SHORT       (nur bei Stub < 50% des Minimums)
@@ -523,6 +734,9 @@ def run_quality_check(
     issues: list[QualityIssue] = []
     issues.extend(_check_selbstauskunft(workflow, selbstauskunft_empty))
     issues.extend(_check_forbidden_names(text, patient_name))
+    # v19.8 Identitaets-Guard (O5: alle Workflows; no-op ohne patient_name)
+    issues.extend(_check_patient_initial(text, patient_name))
+    issues.extend(_check_gender(text, patient_name))
     issues.extend(_check_think_blocks(text))
     issues.extend(_check_befund_separator(text, workflow))
     issues.extend(_check_length(text, workflow))

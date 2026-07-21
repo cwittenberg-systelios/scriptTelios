@@ -171,21 +171,35 @@ class TestExtractPatientNameMuster3:
         assert result is not None
         assert result["anrede"] == "Frau"
 
-    def test_selbstauskunft_ohne_geschlecht_fallback_aus_vorname(self):
-        # Vorname endet auf 'a' → Heuristik: weiblich
+    def test_selbstauskunft_ohne_geschlecht_keine_anrede(self):
+        # v19.8 (S3/O2): frueher riet die Heuristik aus dem Vornamen
+        # ('endet auf a -> Frau', sonst 'Herr') - stiller Gender-Coinflip,
+        # falsch bei Simone/Nicola/Luca/Sascha/Andrea(m). Jetzt: kein Raten,
+        # anrede bleibt leer; das Geschlecht kommt aus dem UI-Feld (jobs.py)
+        # oder der GENDER_MISMATCH-Check faengt Fehler im Output.
         text = "Nachname: Beispiel\nVorname: Maria\n"
         result = extract_patient_name(text)
         assert result is not None
-        assert result["anrede"] == "Frau"
+        assert result["anrede"] == ""
         assert result["initial"] == "B."
 
-    def test_selbstauskunft_nur_nachname_fallback_herr(self):
-        # Kein Vorname, kein Geschlecht → Default Herr
+    def test_selbstauskunft_ohne_geschlecht_ohne_vorname_keine_anrede(self):
+        # Regression: der alte Fallback lieferte OHNE Vorname immer "Herr".
+        # (Text > 20 Zeichen, sonst bricht extract_patient_name frueh ab.)
+        text = "Patientenanmeldung\nNachname: Beispiel\n"
+        result = extract_patient_name(text)
+        assert result is not None
+        assert result["anrede"] == ""
+        assert result["initial"] == "B."
+
+    def test_selbstauskunft_nur_nachname_keine_anrede(self):
+        # v19.8 (S3/O2): kein Vorname, kein Geschlecht -> frueher Default
+        # "Herr" (stiller Coinflip), jetzt leere Anrede. Initiale bleibt.
         # Text muss > 20 Zeichen sein damit extract_patient_name nicht früh abbricht
         text = "Patientenanmeldung\nNachname: Test\n"
         result = extract_patient_name(text)
         assert result is not None
-        assert result["anrede"] == "Herr"
+        assert result["anrede"] == ""
         assert result["nachname"] == "Test"
 
 

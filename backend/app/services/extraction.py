@@ -336,8 +336,21 @@ def extract_patient_name(text: str) -> dict | None:
         anrede = "Frau" if g.startswith("w") else "Herr"
     if nachname:
         if not anrede:
-            # Fallback: aus Vorname schliessen (sehr grobe Heuristik)
-            anrede = "Frau" if vorname and vorname.endswith("a") else "Herr"
+            # v19.8 (S3, Entscheidung O2): der fruehere Vornamen-Fallback
+            #   anrede = "Frau" if vorname.endswith("a") else "Herr"
+            # war ein stiller Gender-Coinflip (falsch bei Simone, Nicola, Luca,
+            # Sascha, Rene, Kim, Andrea (m) - und OHNE Vorname immer "Herr").
+            # Das geratene anrede wurde downstream autoritativ verwendet
+            # (substitute_patient_placeholders, build_system_prompt) und ist
+            # Primaerverdacht fuer Geschlechtsfehler im Output. Kein Raten
+            # mehr: anrede bleibt leer, das Geschlecht kommt aus dem
+            # strukturierten UI-Feld (jobs.py v19.8) oder das Modell leitet
+            # es selbst ab; der GENDER_MISMATCH-Check prueft den Output.
+            anrede = ""
+            logger.warning(
+                "extract_patient_name: Selbstauskunft ohne Geschlechtsfeld - "
+                "Anrede bleibt leer (Nachname=%s)", nachname,
+            )
         initial = nachname[0].upper() + "."
         return {
             "anrede": anrede,
