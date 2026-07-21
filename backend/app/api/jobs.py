@@ -834,12 +834,50 @@ async def repair_execute(
         "final_prompt":             final_prompt,
         "custom_final_prompt_used": custom_used,
     }
+
+    # v19.8 (S6b): Identitaets-Kontext vom Parent auf den Repair-Job
+    # uebernehmen. Ohne das lief der QualityCheck auf dem REPARIERTEN Text
+    # mit patient_name=None - PATIENT_INITIAL_MISMATCH, GENDER_MISMATCH und
+    # DATENSCHUTZ_NAME_LEAK waren auf Repair-Output stumm, man konnte also
+    # nie verifizieren dass der Repair den Namen wirklich korrigiert hat.
+    # Quelle 1: in-process Attribut auf dem gecachten Parent-JobState
+    #   (gesetzt in create_generate_job, traegt gender/gender_source).
+    # Quelle 2 (Pod-Neustart, Cache leer): Rekonstruktion aus dem
+    #   persistierten jobs.patient_kuerzel-Display-String ("Frau K.") via
+    #   parse_explicit_patient_name + Anrede->Gender-Mapping. Verliert
+    #   gender_source="document"-Faelle ohne Kuerzel - dokumentierte Luecke,
+    #   besser als gar kein Check.
+    _cached_parent = job_queue.get_job(job_id)
+    _parent_pn = getattr(_cached_parent, "patient_name", None) if _cached_parent else None
+    _parent_fokus = getattr(_cached_parent, "fokus_themen", None) if _cached_parent else None
+    if not _parent_pn:
+        _pk = parent.get("patient_kuerzel")
+        if _pk:
+            from app.services.extraction import parse_explicit_patient_name
+            _parent_pn = parse_explicit_patient_name(_pk)
+            if _parent_pn:
+                _g = {"Frau": "w", "Herr": "m"}.get(_parent_pn.get("anrede") or "")
+                _parent_pn["gender"] = _g
+                _parent_pn["gender_source"] = "explicit" if _g else None
+                logger.info(
+                    "Repair %s: patient_name aus patient_kuerzel rekonstruiert "
+                    "(initial=%s gender=%s)", job_id[:8],
+                    _parent_pn.get("initial"), _g,
+                )
+    # Audit-Snapshot: womit lief der QC des Repair-Jobs (persistiert in
+    # jobs.repair_input_json).
+    repair_input["patient_identity"] = _parent_pn
+
     job = job_queue.create_repair_job(
         parent_job_id=job_id,
         workflow=workflow,
         description=f"Repair von {job_id[:8]}",
         repair_input=repair_input,
     )
+    # In-process Kontext fuer den QualityCheck in run_job (getattr-Lesepfad
+    # in job_queue.py - identisch zum normalen Generate-Pfad).
+    job.patient_name = _parent_pn
+    job.fokus_themen = _parent_fokus
 
     # Modell: vererben aus Parent (Konsistenz: Repair laeuft mit demselben
     # Modell wie das Original). Kann durch Settings ueberschrieben werden.

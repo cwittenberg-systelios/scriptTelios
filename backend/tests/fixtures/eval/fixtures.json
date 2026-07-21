@@ -15,6 +15,8 @@
         "verlaufsdoku": "EB-FrauM/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
+        "expected_gender": "w",
+        "expected_initial": "M.",
         "min_words": 550,
         "max_words": 900,
         "required_keywords": ["Anteile", "Selbstwert", "Gruppe", "ambulant"],
@@ -34,6 +36,8 @@
         "verlaufsdoku": "EB-HerrR/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
+        "expected_gender": "m",
+        "expected_initial": "R.",
         "min_words": 550,
         "max_words": 900,
         "required_keywords": ["Anteile", "Trennung", "Gruppe", "ambulant"],
@@ -56,6 +60,7 @@
         "verlaufsdoku": "FVA-Frau-v-d-A/tpVerlaufsdokumentation.pdf"
       },
       "expected": {
+        "expected_gender": "w",
         "min_words": 350,
         "max_words": 650,
         "required_keywords": ["Anteilearbeit", "Verlängerung", "Stabilität"],
@@ -70,6 +75,7 @@
       "diagnosen": ["F40.1", "F41.0"],
       "style_therapeut": "TherapeutB",
       "expected": {
+        "expected_gender": "m",
         "min_words": 350,
         "max_words": 650,
         "required_keywords": ["Verlängerung", "ambulant"],
@@ -92,6 +98,7 @@
         "vorantrag": "FVA-Frau-v-d-A/Verlaengerung.docx"
       },
       "expected": {
+        "expected_gender": "w",
         "min_words": 350,
         "max_words": 650,
         "required_keywords": ["Verlängerung", "Verlauf"],
@@ -112,6 +119,7 @@
         "antragsvorlage": "Akut-FrauS/akutantrag.docx"
       },
       "expected": {
+        "expected_gender": "w",
         "min_words": 200,
         "max_words": 400,
         "required_keywords": ["stationär", "akut", "ambulant"],
@@ -129,6 +137,7 @@
         "antragsvorlage": "Akut-FrauM/akutantrag.docx"
       },
       "expected": {
+        "expected_gender": "w",
         "min_words": 200,
         "max_words": 400,
         "required_keywords": ["stationär", "akut"],
@@ -151,6 +160,7 @@
         "diagnosen_file": "Anamnese-FrauT/diagnosen.txt"
       },
       "expected": {
+        "expected_gender": "w",
         "min_words": 300,
         "max_words": 600,
         "required_keywords": ["Vorstellungsanlass", "Ressourcen"],
@@ -172,6 +182,7 @@
         "audio": "AnamneseFrauK/aufnahme.mp3"
       },
       "expected": {
+        "expected_gender": "w",
         "min_words": 300,
         "max_words": 600,
         "required_keywords": ["Vorstellungsanlass", "Ressourcen"],
@@ -192,6 +203,7 @@
         "audio": "Gespräch-FrauK/aufnahme.mp3"
       },
       "expected": {
+        "expected_gender": "w",
         "min_words": 200,
         "max_words": 500,
         "required_sections": ["Auftragsklärung", "Relevante Gesprächsinhalte", "Hypothesen", "Einladungen"],
@@ -207,6 +219,7 @@
         "audio": "Gespräch-HerrR/aufnahme.mp3"
       },
       "expected": {
+        "expected_gender": "m",
         "min_words": 200,
         "max_words": 500,
         "required_sections": ["Auftragsklärung", "Relevante Gesprächsinhalte", "Hypothesen", "Einladungen"],

@@ -984,6 +984,45 @@ class EvalResult:
             else:
                 self.passed.append(f"Datenschutz OK: '{name}' nicht im Text")
 
+    def check_patient_identity(
+        self,
+        expected_initial: str | None = None,
+        expected_gender: str | None = None,
+    ):
+        """v19.8 (S7): Identitaets-Check - Kuerzel + Geschlecht gegen den Output.
+
+        Nutzt EXAKT dieselben Regeln wie die Produktions-QA
+        (quality_check._check_patient_initial / _check_gender), damit Eval und
+        Produktion nie auseinanderlaufen. expected_gender: "w"|"m".
+        expected_initial: "M." (mit oder ohne Punkt).
+        """
+        if not expected_initial and not expected_gender:
+            return
+        from app.services.quality_check import (
+            SEVERITY_CRITICAL as _CRIT,
+            _check_gender,
+            _check_patient_initial,
+        )
+        pn = {
+            "anrede": {"w": "Frau", "m": "Herr"}.get(expected_gender or "", ""),
+            "vorname": "", "nachname": "",
+            "initial": expected_initial,
+            "gender": expected_gender,
+            "gender_source": "explicit" if expected_gender else None,
+        }
+        found = _check_patient_initial(self.text, pn) + _check_gender(self.text, pn)
+        if not found:
+            parts = []
+            if expected_initial:
+                parts.append(f"Kürzel '{expected_initial}'")
+            if expected_gender:
+                parts.append(f"Geschlecht '{expected_gender}'")
+            self.passed.append(f"Identität OK: {' + '.join(parts)} konsistent")
+            return
+        for i in found:
+            sev = "kritisch" if i.severity == _CRIT else "Hinweis"
+            self.issues.append(f"IDENTITÄT ({sev}): {i.message}")
+
     def check_hallucinations(self, hallucinations: list[str]):
         for h in hallucinations:
             if h.lower() in self.text.lower():
@@ -1435,6 +1474,14 @@ async def test_eval_workflow(workflow, test_case, request):
 
     if "forbidden_names" in expected:
         ev.check_forbidden_names(expected["forbidden_names"])
+
+    # v19.8 (S7): Identitaets-Check (Kuerzel + Geschlecht) - Regeln identisch
+    # zur Produktions-QA (PATIENT_INITIAL_MISMATCH / GENDER_MISMATCH).
+    if "expected_initial" in expected or "expected_gender" in expected:
+        ev.check_patient_identity(
+            expected.get("expected_initial"),
+            expected.get("expected_gender"),
+        )
 
     if "must_not_hallucinate" in expected:
         ev.check_hallucinations(expected["must_not_hallucinate"])

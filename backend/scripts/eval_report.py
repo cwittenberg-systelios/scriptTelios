@@ -325,12 +325,14 @@ def build_report(data: dict, out: Path, charts_dir: Path = None):
     # Issues
     cats = defaultdict(int)
     cm2 = {"Datenschutz":colors.HexColor("#d32f2f"),"Halluzination":colors.HexColor("#e64a19"),
+        "Identität":colors.HexColor("#c2185b"),
         "Länge":C["orange"],"Keywords":C["blue"],"Format":C["gray"],
         "Struktur":C["purple"],"Stil":C["teal"],"Sonstige":colors.HexColor("#9e9e9e")}
     for e in ae:
         for iss in e.get("issue_list",[]):
             if "DATENSCHUTZ" in iss: cats["Datenschutz"]+=1
             elif "HALLUZINATION" in iss: cats["Halluzination"]+=1
+            elif "IDENTITÄT" in iss: cats["Identität"]+=1  # v19.8 (S7)
             elif "kurz" in iss or "lang" in iss: cats["Länge"]+=1
             elif "Keyword" in iss: cats["Keywords"]+=1
             elif "Pattern" in iss: cats["Format"]+=1
