@@ -1885,12 +1885,81 @@ async def create_generate_job(
                 mid = lb[0] + (lb[1] - lb[0]) * 0.5
                 pct = mid + (lb[1] - mid) * min(1.0, n / (expected_tok * 0.4))
                 job.set_progress(int(pct), "KI-Generierung", f"Befund: {n} Wörter")
-            _log_prompt(job.job_id, workflow, "befund", befund_system, befund_user)
-            # Befund: keine max_words-Cap (Format ist fix), aber Keyword-Check sinnvoll
-            result_b = await generate_text(befund_system, befund_user, max_tokens=befund_max_tok,
-                                            model=model, workflow="befund", on_progress=_on_tok_b,
-                                            expected_keywords=v16_expected_keywords)
-            befund_text_generated = (result_b.get("text") or "").strip()
+            # ── v19.7 S2: Structured-Output-Pfad (Ollama format=JSON-Schema) ──
+            # Das Modell liefert NUR die Slot-Werte; die (editierbare) Vorlage
+            # wird deterministisch im Backend gefuellt -> Fixtext garantiert
+            # 100% wortidentisch, kein Markdown-/Praeambel-/Klebebug-Risiko im
+            # Vorlagentext. Fallback-Kette (jeweils mit lautem Log):
+            #   1. Vorlage ohne {Slots}          -> direkt Freitext-Pfad
+            #   2. JSON-Parse-Fehler / leeres Obj -> Freitext-Pfad
+            #   3. Unerwartete Exception          -> Freitext-Pfad
+            # Der Freitext-Pfad ist der bisherige Call und bleibt unveraendert.
+            befund_text_generated = None
+            result_b = None
+            _structured_used = False
+            try:
+                from app.services.prompts import (
+                    BEFUND_VORLAGE as _BEFUND_VORLAGE_DEFAULT,
+                    build_befund_structured_prompt,
+                    fill_befund_vorlage,
+                )
+                _bv = (
+                    befund_vorlage
+                    if (befund_vorlage and befund_vorlage.strip())
+                    else _BEFUND_VORLAGE_DEFAULT
+                )
+                _sys_struct, _slots, _schema = build_befund_structured_prompt(
+                    diagnosen=dx_list,
+                    befund_vorlage=_bv,
+                    source_text=_glossar_source,
+                )
+                if not _slots:
+                    logger.info(
+                        "Befund structured: Vorlage enthaelt keine {Slots} "
+                        "- nutze direkt den Freitext-Pfad."
+                    )
+                else:
+                    _log_prompt(job.job_id, workflow, "befund_structured",
+                                _sys_struct, befund_user)
+                    result_b = await generate_text(
+                        _sys_struct, befund_user, max_tokens=befund_max_tok,
+                        model=model, workflow="befund", on_progress=_on_tok_b,
+                        response_format=_schema,
+                    )
+                    _sd = result_b.get("structured_data")
+                    if (not result_b.get("structured_parse_error")
+                            and isinstance(_sd, dict) and _sd):
+                        befund_text_generated = fill_befund_vorlage(_bv, _sd).strip()
+                        _structured_used = True
+                        _empty_slots = [
+                            s for s in _slots if not str(_sd.get(s) or "").strip()
+                        ]
+                        if _empty_slots:
+                            logger.warning(
+                                "Befund structured: %d leere Slot-Werte "
+                                "(-> 'nicht erhoben' eingesetzt): %s",
+                                len(_empty_slots), _empty_slots,
+                            )
+                    else:
+                        logger.warning(
+                            "Befund structured: JSON unbrauchbar "
+                            "(parse_error=%s, type=%s) -> Freitext-Fallback.",
+                            result_b.get("structured_parse_error"),
+                            type(_sd).__name__,
+                        )
+            except Exception as _e:
+                logger.warning(
+                    "Befund structured: Pfad fehlgeschlagen (%s: %s) "
+                    "-> Freitext-Fallback.", type(_e).__name__, _e,
+                )
+
+            if not _structured_used:
+                _log_prompt(job.job_id, workflow, "befund", befund_system, befund_user)
+                # Befund: keine max_words-Cap (Format ist fix), aber Keyword-Check sinnvoll
+                result_b = await generate_text(befund_system, befund_user, max_tokens=befund_max_tok,
+                                                model=model, workflow="befund", on_progress=_on_tok_b,
+                                                expected_keywords=v16_expected_keywords)
+                befund_text_generated = (result_b.get("text") or "").strip()
             _log_output(job.job_id, workflow, "befund", befund_text_generated,
                         result_b.get("telemetry"))
 
@@ -1911,6 +1980,10 @@ async def create_generate_job(
                     "retry_used":      result_b.get("retry_used", False),
                     "degraded":        result_b.get("degraded", False),
                     "degraded_reason": result_b.get("degraded_reason"),
+                    # v19.7 S2: True = Vorlage deterministisch aus
+                    # Slot-Werten gefuellt; False = Freitext-Pfad (Fallback
+                    # oder Vorlage ohne Slots).
+                    "structured_output": _structured_used,
                 },
                 # Top-Level-Aggregate fuer das Performance-Log
                 "retry_used": result_a.get("retry_used", False) or result_b.get("retry_used", False),

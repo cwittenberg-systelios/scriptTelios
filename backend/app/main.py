@@ -79,6 +79,15 @@ async def lifespan(app: FastAPI):
         app.state.sum_check_task = sum_check_task
     except Exception:
         pass
+    # v19.7 S1: Ollama-Version beim Start pruefen → laute Warnung wenn < 0.5
+    # (format=JSON-Schema wird sonst still ignoriert; der Structured-Befund-
+    # Pfad faellt dann bei jedem Job auf den Freitext-Fallback zurueck).
+    try:
+        from app.services.llm import check_structured_output_support
+        so_check_task = asyncio.create_task(check_structured_output_support())
+        app.state.so_check_task = so_check_task
+    except Exception:
+        pass
     # v19.7: Whisper-Modell beim Start pruefen → laute Warnung wenn nicht im
     # lokalen HF-Cache (erster Transkriptionsjob haengt sonst an der
     # HF-Hub-Verfuegbarkeit; Live-Fund: HfHubHTTPError 504).

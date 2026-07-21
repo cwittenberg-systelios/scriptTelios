@@ -302,6 +302,145 @@ Anspannungszustände, Grübelneigung, Nähe-Distanz-Themen.\
 
 BEFUND_VORLAGE = """Im Gespräch offen, wach, bewusstseinsklar, zu allen Qualitäten orientiert. Konzentration subjektiv {konzentration}. Auffassung, Merkfähigkeit und Gedächtnis intakt. Formalgedanklich {formalgedanke}, keine Denkverlangsamung, {fokus_denken}. {phobien_angst}. {Zwänge}. {vermeidung}. Kein Anhalt für Wahn oder Sinnestäuschungen, keine Ich-Störungen (z.B. Depersonalisation, Derealisation, Dissoziation). Stimmungslage {stimmung}, affektive Schwingungsfähigkeit {schwingung} bei insgesamt {affektlage} Affektlage. {freud_interessen}. {erschöpfung}. Antrieb {antrieb}. {hoffnung_insuffizienz}. {schuldgefühle}. Selbstwertgefühl ist {selbstwert}. Gefühlsregulation ist {gefühlsregulation}. Impulskontrolle ist {impulskontrolle}. {ambivalenz}. {innere_unruhe}. {zirkadian}. {schlaf}. Appetenz {appetenz}. {aggressiv_selbstverletzend}. {sozialer_rückzug}. Essverhalten {essverhalten}. {suchtverhalten}. {somatisierung}. {suizidalität_vergangenheit}. Aktuelle Verneinung von lebensüberdrüssigen und suizidalen Gedanken, keine suizidale Handlungsplanung oder Handlungsvorbereitung. Zum Zeitpunkt der Aufnahme von akuter Suizidalität klar distanziert."""
 
+# ── v19.7 S2: Structured-Output-Pfad fuer den Befund-Call ────────────────────
+# Statt die Vorlage vom Modell woertlich reproduzieren zu lassen (Fehlerklassen:
+# Paraphrase-Drift, ausgelassene Saetze, Klebebugs im Fixtext, Markdown-Leakage)
+# liefert das Modell per JSON-Schema NUR die Slot-Werte; die Vorlage wird im
+# Backend deterministisch gefuellt. Der Fixtext ist damit garantiert 100%
+# wortidentisch mit der (frontend-editierbaren) Vorlage.
+#
+# Slot-Syntax: {slot_name}. Mehrfachoptionen stehen per Konvention NUR in den
+# Slots, nie im Fixtext (geklaert 2026-07). Kein .format() bei der Fuellung -
+# geschweifte Klammern im Kliniktext waeren sonst ein Crash-Risiko.
+
+_BEFUND_SLOT_RE = re.compile(r"\{([^{}\n]{1,60})\}")
+
+
+def parse_befund_slots(vorlage: str) -> list[str]:
+    """Extrahiert die {slot}-Namen aus einer Befund-Vorlage.
+
+    Reihenfolge des ersten Auftretens bleibt erhalten, Duplikate werden
+    dedupliziert (Mehrfach-Okkurrenzen desselben Slots sind erlaubt und
+    werden bei der Fuellung alle ersetzt). Unterstuetzt Umlaute und
+    Grossschreibung ({Zwänge}, {schuldgefühle}).
+
+    Leere Liste => Vorlage ohne Platzhalter => Aufrufer nutzt den
+    Freitext-Pfad.
+    """
+    seen: set[str] = set()
+    slots: list[str] = []
+    for m in _BEFUND_SLOT_RE.finditer(vorlage or ""):
+        name = m.group(1).strip()
+        if name and name not in seen:
+            seen.add(name)
+            slots.append(name)
+    return slots
+
+
+def build_befund_slot_schema(slots: list[str]) -> dict:
+    """JSON-Schema fuer Ollamas format-Parameter: ein String-Feld pro Slot,
+    alle Felder required (fehlende Werte soll das Modell als 'nicht erhoben'
+    liefern, nicht weglassen)."""
+    return {
+        "type": "object",
+        "properties": {s: {"type": "string"} for s in slots},
+        "required": list(slots),
+    }
+
+
+def fill_befund_vorlage(vorlage: str, values: dict) -> str:
+    """Fuellt die Vorlage deterministisch mit den Slot-Werten.
+
+    - Safe-Replace pro Slot (kein .format(): geschweifte Klammern im
+      Kliniktext duerfen nicht crashen).
+    - Fehlende, leere oder None-Werte -> 'nicht erhoben' (Quellenregel-
+      Default). Garantiert: kein roher {slot} bleibt im Output stehen.
+    - Unbekannte Extra-Keys im values-Dict werden ignoriert.
+    """
+    out = vorlage or ""
+    for slot in parse_befund_slots(vorlage):
+        raw = values.get(slot)
+        val = str(raw).strip() if raw is not None else ""
+        if not val:
+            val = "nicht erhoben"
+        out = out.replace("{" + slot + "}", val)
+    return out
+
+
+def build_befund_structured_prompt(
+    diagnosen: Optional[list[str]] = None,
+    befund_vorlage: Optional[str] = None,
+    source_text: Optional[str] = None,
+) -> tuple[str, list[str], dict]:
+    """Baut System-Prompt, Slot-Liste und JSON-Schema fuer den strukturierten
+    Befund-Call (P2, Call 2).
+
+    Bewusst NICHT ueber build_system_prompt: dessen Laengenanker,
+    Stilschablonen-Bloecke und der "Schreibe jetzt den Bericht"-Schluss
+    passen nicht auf eine JSON-Feldwert-Ausgabe. Glossar-Auswahl
+    (Priming-Vermeidung via source_mentions_parts_work) ist identisch zum
+    Freitext-Pfad.
+
+    Returns
+    -------
+    (system_prompt, slots, schema)
+        slots == [] => Vorlage enthaelt keine Platzhalter; der Aufrufer
+        soll direkt den Freitext-Pfad nutzen (system_prompt ist dann "").
+    """
+    vorlage = (
+        befund_vorlage
+        if (befund_vorlage and befund_vorlage.strip())
+        else BEFUND_VORLAGE
+    )
+    slots = parse_befund_slots(vorlage)
+    if not slots:
+        return ("", [], {})
+    schema = build_befund_slot_schema(slots)
+
+    diag_str = ", ".join(diagnosen) if diagnosen else "noch nicht festgelegt"
+    _parts_work = True if source_text is None else source_mentions_parts_work(source_text)
+    _glossar = (
+        (KLINISCHES_GLOSSAR if _parts_work else KLINISCHES_GLOSSAR_NEUTRAL)
+        + _render_institutionelles_glossar()
+    )
+    slot_lines = "\n".join(f"- {s}" for s in slots)
+
+    system = (
+        ROLE_PREAMBLE + _glossar
+        + "\n\nAUFGABE: Psychopathologischer Befund als STRUKTURIERTE FELDWERTE.\n"
+        "Die folgende Vorlage wird vom System automatisch mit deinen "
+        "Feldwerten befüllt. Du gibst AUSSCHLIESSLICH die Werte für die "
+        "{Platzhalter} zurück – NICHT den Vorlagentext selbst.\n\n"
+        "BEFUND-VORLAGE (nur Kontext – zeigt die Satzumgebung jedes Feldes):\n"
+        f"{vorlage}\n\n"
+        f"DIAGNOSEN gemäß ICD: {diag_str}\n\n"
+        "FELDER (genau diese Schlüssel, als JSON-Objekt):\n"
+        f"{slot_lines}\n\n"
+        "REGELN PRO FELD:\n"
+        "- Der Wert muss grammatikalisch in die Satzumgebung der Vorlage "
+        "passen. Prüfe dazu den umgebenden Satz in der Vorlage.\n"
+        "- Bei Mehrfachoptionen: NUR die zutreffende Variante als Wert, "
+        "nicht alle Optionen.\n"
+        "- QUELLENREGEL: Jeder Wert MUSS auf eine konkrete Stelle in den "
+        "Unterlagen (Selbstauskunft, Vorbefunde, Aufnahmegespräch, bereits "
+        "generierte Anamnese) zurückführbar sein. Findest du keine Quelle, "
+        "trage exakt 'nicht erhoben' ein.\n"
+        "- NIEMALS eine klinisch plausible Option raten oder erfinden.\n"
+        "- Kein Markdown, keine Anführungszeichen im Wert, den Feldnamen "
+        "nicht im Wert wiederholen, keine ganzen Vorlagensätze wiederholen.\n"
+        "- Sprache: Deutsch, AMDP-übliche knappe Formulierungen.\n\n"
+        "Antworte AUSSCHLIESSLICH mit dem JSON-Objekt."
+    )
+    # Build-Zeit-Platzhalter der Preamble/des Glossars neutral aufloesen
+    # (gleiches Sicherheitsnetz wie am Ende von build_system_prompt; der
+    # Befund enthaelt ohnehin keine Patientenreferenzen).
+    ref = "die Patientin/der Patient"
+    system = system.replace("Herr/[Patient/in]", ref)
+    system = system.replace("[Patient/in]", ref)
+    system = system.replace("[Name]", ref)
+    return (system, slots, schema)
+
+
 # ── Few-Shot-Beispiele ────────────────────────────────────────────────────────
 
 FEW_SHOT_DOKUMENTATION = """\

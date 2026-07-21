@@ -4,6 +4,7 @@ LLM-Generierungs-Service.
 Ausschliesslich Ollama (lokales Modell, On-Premise).
 Kein externer API-Aufruf – alle Daten bleiben im internen Netz.
 """
+import json
 import logging
 import re
 import time
@@ -321,6 +322,50 @@ async def check_summary_model_available() -> bool:
         configured, resolved, configured,
     )
     return False
+
+
+async def check_structured_output_support() -> bool:
+    """v19.7 S1: Startup-Check (analog check_summary_model_available).
+
+    Ollamas "format"-Parameter mit JSON-Schema (Constrained Decoding) gibt es
+    erst ab Ollama 0.5. Aeltere Versionen ignorieren das Feld STILL und liefern
+    Freitext - der Structured-Befund-Pfad (jobs.py) faellt dann via
+    Parse-Fehler automatisch auf den Freitext-Pfad zurueck, aber das soll beim
+    Boot sichtbar sein statt erst im prompts.log.
+    """
+    try:
+        client = _get_ollama_client()
+        r = await client.get("/api/version", timeout=5.0)
+        r.raise_for_status()
+        version = (r.json().get("version") or "").strip()
+    except Exception as e:
+        logger.warning(
+            "Ollama-Versionscheck fehlgeschlagen (%s) - Structured-Output-"
+            "Support ungeprueft. Bei Ollama < 0.5 faellt der Befund-Call "
+            "automatisch auf den Freitext-Pfad zurueck.", e,
+        )
+        return False
+    try:
+        parts = version.lstrip("v").split(".")
+        supported = (int(parts[0]), int(parts[1])) >= (0, 5)
+    except (ValueError, IndexError):
+        logger.warning(
+            "Ollama-Version '%s' nicht parsebar - Structured-Output-Support "
+            "ungeprueft.", version,
+        )
+        return False
+    if supported:
+        logger.info(
+            "Ollama %s: Structured Outputs (format=JSON-Schema) verfuegbar.",
+            version,
+        )
+    else:
+        logger.warning(
+            "Ollama %s < 0.5: format=JSON-Schema NICHT unterstuetzt - der "
+            "strukturierte Befund-Call faellt bei jedem Job auf den "
+            "Freitext-Pfad zurueck. Empfohlen: Ollama-Update.", version,
+        )
+    return supported
 
 
 def deduplicate_paragraphs(text: str, *, strict_mode: bool = False) -> str:
@@ -786,6 +831,7 @@ async def generate_text(
     temperature_override: Optional[float] = None,
     skip_aggressive_dedup: bool = False,
     force_hard_no_think: bool = False,
+    response_format: Optional[dict] = None,
 ) -> dict:
     """
     Generiert Text ausschliesslich via lokalem Ollama-Modell.
@@ -828,6 +874,21 @@ async def generate_text(
                          verbraucht trotz "think":False und einmaligem /no_think
                          am Ende (bekanntes Ollama/Qwen3-Verhalten, siehe
                          ollama/12907, ollama/14798).
+
+    v19.7-Parameter (S1, Structured Outputs):
+      response_format:   JSON-Schema-Dict fuer Ollamas "format"-Parameter
+                         (Constrained Decoding, Ollama >= 0.5). Wenn gesetzt:
+                         - KEIN Assistant-Primer (wuerde JSON-Decoding brechen)
+                         - _postprocess_text wird uebersprungen (Dedup,
+                           Markdown-Strip, Wortlimit gelten nicht fuer JSON)
+                         - Kein Kurz-Output-Retry (Wortzahl-Heuristiken
+                           passen nicht auf JSON)
+                         - Rueckgabe zusaetzlich: result["structured_data"]
+                           (geparstes Objekt oder None) und
+                           result["structured_parse_error"] (bool).
+                         Parse-Fehler werden LAUT geloggt
+                         (STRUCTURED_OUTPUT_PARSE_ERROR), der Aufrufer
+                         entscheidet ueber den Fallback (jobs.py: Freitext).
     """
     if len(user_content) > MAX_USER_CONTENT_CHARS:
         # v19.5: Dieser Pfad sollte mit aktivem Input-Budget-Guard (jobs.py)
@@ -940,6 +1001,56 @@ async def generate_text(
     assistant_primer = PRIMERS.get(workflow or "", "")
 
     t0 = time.time()
+
+    # ── v19.7 S1: Structured-Output-Pfad (Ollama format=JSON-Schema) ──────
+    # Eigener, kurzer Pfad: kein Primer, kein Postprocessing, kein
+    # Kurz-Output-Retry. JSON wird hier geparst und als structured_data
+    # zurueckgegeben; ueber den Fallback entscheidet der Aufrufer.
+    if response_format is not None:
+        if force_hard_no_think:
+            logger.warning(
+                "force_hard_no_think wird bei response_format ignoriert "
+                "(Primer-/Anti-Think-Retry-Pfad ist mit JSON-Constrained-"
+                "Decoding inkompatibel)."
+            )
+        result = await _generate_ollama(
+            system_prompt, user_content, max_tokens,
+            model=model,
+            assistant_primer="",  # Primer wuerde die JSON-Ausgabe brechen
+            temperature_override=temperature_override,
+            response_format=response_format,
+        )
+        raw_json = (result.get("text") or "").strip()
+        try:
+            parsed = json.loads(raw_json)
+            result["structured_data"] = parsed
+            result["structured_parse_error"] = False
+        except (json.JSONDecodeError, ValueError) as e:
+            # LAUT loggen - das ist der dominante Silent-Failure-Kandidat
+            # dieses Pfads (z.B. Ollama < 0.5 ignoriert "format" und liefert
+            # Freitext, oder num_predict hat das JSON abgeschnitten).
+            logger.error(
+                "STRUCTURED_OUTPUT_PARSE_ERROR: Ollama-Antwort ist kein "
+                "valides JSON trotz format-Schema (workflow=%s, model=%s, "
+                "%d Zeichen, tokens=%s): %s",
+                workflow, result.get("model_used"), len(raw_json),
+                result.get("token_count"), e,
+            )
+            result["structured_data"] = None
+            result["structured_parse_error"] = True
+        result["duration_s"] = round(time.time() - t0, 1)
+        _tel = result.setdefault("telemetry", {})
+        _tel["structured_output"] = True
+        _tel["input_truncated"] = input_truncated
+        _tel["output_budget_reduced"] = max_tokens < _original_max_tokens
+        logger.info(
+            "Structured-Generierung: %d Tokens in %.1fs (Modell: %s)%s",
+            result.get("token_count", 0), result["duration_s"],
+            result["model_used"],
+            " [PARSE_ERROR]" if result["structured_parse_error"] else "",
+        )
+        return result
+
     if force_hard_no_think:
         # v19.2.2: Direkt den harten Anti-Think-Pfad nutzen statt erst auf
         # Retry zu warten. Bei grossen Inputs (>10000w) verbraucht Qwen3
@@ -1580,6 +1691,7 @@ async def _generate_ollama(
     model: Optional[str] = None,
     assistant_primer: str = "",
     temperature_override: Optional[float] = None,
+    response_format: Optional[dict] = None,
 ) -> dict:
     """
     Ollama REST API (lokal, kein externer Aufruf).
@@ -1631,6 +1743,12 @@ async def _generate_ollama(
                 *([{"role": "assistant", "content": assistant_primer}] if assistant_primer else []),
             ],
         }
+        # v19.7 S1: Constrained Decoding via JSON-Schema (Ollama >= 0.5).
+        # Aeltere Ollama-Versionen ignorieren das Feld still -> der Aufrufer
+        # (generate_text) erkennt das am JSON-Parse-Fehler und der
+        # jobs.py-Fallback greift. Startup-Warnung: check_structured_output_support().
+        if response_format is not None:
+            payload["format"] = response_format
         client = _get_ollama_client()
         try:
             r = await client.post("/api/chat", json=payload)
