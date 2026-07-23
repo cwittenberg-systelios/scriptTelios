@@ -1788,7 +1788,14 @@ async def create_generate_job(
         # UI-Feld gesetzt ist und das Frontend ihn NICHT schon eingebaut hat
         # (P1/P2 haengen ihn selbst an - Duplikat-Guard ueber den Marker-String;
         # P2b/P3/P3b/P4 taten das bisher nie -> genau deren Luecke schliesst das).
-        if geschlecht_norm and "KLIENT-GESCHLECHT" not in instructions:
+        # v19.8.1 FIX: NICHT `instructions` selbst zuweisen - die Zuweisung in
+        # dieser Closure macht `instructions` fuer die GESAMTE _run()-Funktion
+        # zu einer lokalen Variable (Python-Scoping), und jeder Lesezugriff
+        # davor wirft UnboundLocalError ("cannot access local variable
+        # 'instructions' where it is not associated with a value") - ALLE
+        # Workflows waren betroffen. Lokaler Alias statt Shadowing.
+        effective_instructions = instructions
+        if geschlecht_norm and "KLIENT-GESCHLECHT" not in effective_instructions:
             _g_anrede = "Frau" if geschlecht_norm == "w" else "Herr"
             _g_wort = "weiblich" if geschlecht_norm == "w" else "männlich"
             _g_adj = "weibliche" if geschlecht_norm == "w" else "männliche"
@@ -1801,7 +1808,7 @@ async def create_generate_job(
                     f' Verwende als Namenskürzel durchgehend '
                     f'"{patient_name["initial"]}" (z.B. "{_g_anrede} {patient_name["initial"]}").'
                 )
-            instructions = instructions + _g_hint
+            effective_instructions = effective_instructions + _g_hint
 
         # 5. Generieren – jede Variable hat genau eine Bedeutung
         # v18: prompt-Feld → workflow_instructions, neuer Parameter befund_vorlage.
@@ -1815,7 +1822,7 @@ async def create_generate_job(
         ) if t)
         system = build_system_prompt(
             workflow=workflow,
-            workflow_instructions=instructions,
+            workflow_instructions=effective_instructions,
             style_context=style_context,
             style_is_example=style_is_example,
             diagnosen=dx_list,

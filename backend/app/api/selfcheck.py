@@ -43,7 +43,12 @@ DISK_PATH = os.environ.get("SELFCHECK_DISK_PATH", "/workspace")
 DISK_QUOTA_GB = _env_float("SELFCHECK_DISK_QUOTA_GB", 0.0)      # 0 = nicht gesetzt
 DISK_MIN_GB = _env_float("SELFCHECK_DISK_MIN_FREE_GB", 10.0)
 DISK_BACKING_STORE_TB = 5.0                                    # >5 TB total ⇒ Backing-Store, Quota nötig
-SELFCHECK_TTL = 20.0  # Sekunden
+# `du` über ein volles Volume dauert Sekunden bis Minuten → NIE im Antwortpfad.
+# Es läuft im Hintergrund und wird lange gecacht; die Antwort nutzt den letzten Wert.
+DISK_CACHE_TTL = _env_float("SELFCHECK_DISK_TTL", 600.0)        # 10 min
+SELFCHECK_TTL = 10.0  # Sekunden (Probes sind billig — Disk laeuft im Hintergrund)
+
+_PROCESS_START = time.time()   # Modul-Import ≈ uvicorn-Start → Uptime für Startup-Erkennung
 
 _CACHE: dict = {"ts": 0.0, "result": None}
 
@@ -105,15 +110,45 @@ async def _check_db() -> dict:
 
 def _du_gb(path: str) -> float | None:
     """Belegter Platz eines Verzeichnisses in GB via `du -sb` (auch bei Permission-Fehlern
-    wird die Teilsumme aus stdout gelesen)."""
+    wird die Teilsumme aus stdout gelesen). Laeuft nur im Hintergrund → grosszuegiger Timeout."""
     try:
-        out = subprocess.run(["du", "-sb", path], capture_output=True, text=True, timeout=20)
+        out = subprocess.run(["du", "-sb", path], capture_output=True, text=True, timeout=180)
         parts = (out.stdout or "").split()
         if parts and parts[0].isdigit():
             return int(parts[0]) / (1024 ** 3)
         return None
     except Exception:
         return None
+
+
+_DISK_CACHE: dict = {"ts": 0.0, "result": None, "running": False, "task": None}
+
+
+async def _refresh_disk() -> None:
+    """Disk-Messung im Hintergrund; blockiert nie eine Antwort."""
+    try:
+        _DISK_CACHE["result"] = await asyncio.to_thread(_check_disk)
+    except Exception as e:
+        _DISK_CACHE["result"] = {"ok": True, "detail": f"nicht messbar ({type(e).__name__})"}
+    finally:
+        _DISK_CACHE["ts"] = time.monotonic()
+        _DISK_CACHE["running"] = False
+
+
+async def _disk_cached() -> dict:
+    """Letzten bekannten Disk-Wert liefern und bei Bedarf eine Hintergrund-Aktualisierung
+    anstossen. Beim allerersten Aufruf liegt noch kein Wert vor → neutraler Platzhalter."""
+    now = time.monotonic()
+    stale = _DISK_CACHE["result"] is None or (now - _DISK_CACHE["ts"]) > DISK_CACHE_TTL
+    if stale and not _DISK_CACHE["running"]:
+        _DISK_CACHE["running"] = True
+        try:
+            _DISK_CACHE["task"] = asyncio.create_task(_refresh_disk())   # Referenz halten (GC)
+        except RuntimeError:
+            _DISK_CACHE["running"] = False
+    if _DISK_CACHE["result"] is None:
+        return {"ok": True, "detail": "wird ermittelt\u2026"}
+    return _DISK_CACHE["result"]
 
 
 def _check_disk() -> dict:
@@ -171,7 +206,13 @@ def _aggregate(checks: dict) -> str:
 
 
 async def _run_selfcheck() -> dict:
-    reachable, installed = await _tags()
+    # Alle Probes parallel → Gesamtdauer = langsamste Probe (statt Summe).
+    (reachable, installed), db, disk, gpu = await asyncio.gather(
+        _tags(),
+        _check_db(),
+        _disk_cached(),                    # blockiert nie (Hintergrund-Cache)
+        asyncio.to_thread(_check_gpu),
+    )
     ollama = {"ok": reachable, "detail": "OK" if reachable else "unerreichbar"}
 
     if reachable:
@@ -181,13 +222,15 @@ async def _run_selfcheck() -> dict:
     else:
         models = {"ok": False, "missing": [], "detail": "Ollama nicht erreichbar"}
 
-    db = await _check_db()
-    disk = await asyncio.to_thread(_check_disk)
-    gpu = await asyncio.to_thread(_check_gpu)
     whisper = {"ok": True, "detail": f"{settings.WHISPER_MODEL} / {settings.WHISPER_DEVICE}"}
 
     checks = {"ollama": ollama, "models": models, "db": db, "disk": disk, "gpu": gpu, "whisper": whisper}
-    return {"status": _aggregate(checks), "ts": datetime.now(timezone.utc).isoformat(), "checks": checks}
+    return {
+        "status": _aggregate(checks),
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "uptime_sec": round(time.time() - _PROCESS_START),   # fuer die Startup-Erkennung
+        "checks": checks,
+    }
 
 
 @router.get("/selfcheck")
@@ -195,10 +238,13 @@ async def selfcheck():
     now = time.monotonic()
     if _CACHE["result"] is None or now - _CACHE["ts"] > SELFCHECK_TTL:
         try:
-            _CACHE["result"] = await _run_selfcheck()
+            # Hartes Zeitbudget: die Antwort darf nie am haengenden Probe kleben
+            # (der Aufrufer laeuft sonst in seinen eigenen Timeout).
+            _CACHE["result"] = await asyncio.wait_for(_run_selfcheck(), timeout=8.0)
         except Exception as e:
             logger.exception("selfcheck failed")
             _CACHE["result"] = {"status": "down", "ts": datetime.now(timezone.utc).isoformat(),
+                                "uptime_sec": round(time.time() - _PROCESS_START),
                                 "checks": {}, "error": type(e).__name__}
         _CACHE["ts"] = now
     return _CACHE["result"]

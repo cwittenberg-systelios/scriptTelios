@@ -92,7 +92,7 @@ export default {
         let backend;
         try {
           const br = await fetch("https://scriptelios.win/api/selfcheck",
-            { signal: AbortSignal.timeout(8000), headers: { "Accept": "application/json" } });
+            { signal: AbortSignal.timeout(15000), headers: { "Accept": "application/json" } });
           const bt = await br.text();
           let parsed = null; try { parsed = JSON.parse(bt); } catch {}
           backend = {
@@ -336,7 +336,9 @@ async function execute(action, env, ctx, user, req) {
 
       if (trackedRunning) {
         await notify(secrets, "ℹ️ Server is already running, nothing to do.");
-        return json({ action, status: "ALREADY_RUNNING", user, podId }, { env, req });
+        const e = { action, status: "ALREADY_RUNNING", user, podId };
+        await log(env, e);
+        return json(e, { env, req });
       }
     }
     // listPods fehlgeschlagen → Best-Effort: unten greift der getState-Kurzschluss.
@@ -347,11 +349,15 @@ async function execute(action, env, ctx, user, req) {
   // Kurzschluss, wenn bereits im Zielzustand
   if (action === "start" && stateBefore === "RUNNING") {
     await notify(secrets, "ℹ️ Server is already running, nothing to do.");
-    return json({ action, status: "ALREADY_RUNNING", user, podId }, { env, req });
+    const e = { action, status: "ALREADY_RUNNING", user, podId };
+    await log(env, e);
+    return json(e, { env, req });
   }
   if (action === "stop" && stateBefore === "EXITED") {
     await notify(secrets, "ℹ️ Server is already stopped, nothing to do.");
-    return json({ action, status: "ALREADY_STOPPED", user, podId }, { env, req });
+    const e = { action, status: "ALREADY_STOPPED", user, podId };
+    await log(env, e);
+    return json(e, { env, req });
   }
 
   const result = await runPod(action, secrets, podId);
@@ -395,8 +401,8 @@ async function execute(action, env, ctx, user, req) {
   // Startzeit fuer die Startup-Erkennung tracken (getSelfcheckReport liest sie).
   if (env.LOGS && status === "SUCCESS") {
     try {
-      if (action === "start") await env.LOGS.put("state:podRunningSince", String(Date.now()));
-      if (action === "stop")  await env.LOGS.put("state:podRunningSince", "0");
+      if (action === "start") { sinceMemo = Date.now(); await env.LOGS.put("state:podRunningSince", String(sinceMemo)); }
+      if (action === "stop")  { sinceMemo = 0; await env.LOGS.put("state:podRunningSince", "0"); }
     } catch {}
   }
 
@@ -524,7 +530,8 @@ async function handleRecover(req, env, ctx, user) {
   await log(env, entry);
 
   if (!noGpu) {
-    if (env.LOGS) { try { await env.LOGS.put("state:podRunningSince", String(Date.now())); } catch {} }
+    sinceMemo = Date.now();
+    if (env.LOGS) { try { await env.LOGS.put("state:podRunningSince", String(sinceMemo)); } catch {} }
     ctx?.waitUntil?.(waitForBackend(secrets, result));
     await notify(secrets, `🔁 Recover (${user}): Pod ${podId} → resume (${stateAfter})`);
   } else {
@@ -680,7 +687,7 @@ async function handlePods(env, secrets, req) {
 async function fetchBackendSelfcheck() {
   try {
     const res = await fetch("https://scriptelios.win/api/selfcheck",
-      { signal: AbortSignal.timeout(8000), headers: { "Accept": "application/json" } });
+      { signal: AbortSignal.timeout(15000), headers: { "Accept": "application/json" } });
     const text = await res.text();
     try {
       return JSON.parse(text);
@@ -698,27 +705,49 @@ async function fetchBackendSelfcheck() {
 // "starting" statt "down" gilt (uvicorn + Ollama-Modelle laden). Grosszuegig gewaehlt.
 const STARTUP_GRACE_MS = 240000;  // 4 min
 
+// KV ist eventually consistent: ein get() direkt nach put() kann noch den alten Wert
+// liefern. Ohne dieses Isolate-Memo wuerde podRunningSince bei jedem Poll neu auf
+// "jetzt" gesetzt → das Grace-Fenster liefe nie ab ("Startup (0s)" fuer immer).
+let sinceMemo = 0;
+
+async function getRunningSince(env) {
+  let since = 0;
+  if (env.LOGS) { try { since = parseInt(await env.LOGS.get("state:podRunningSince") || "0", 10) || 0; } catch {} }
+  if (!since && sinceMemo) since = sinceMemo;          // stale KV-Lesung → Memo gewinnt
+  if (!since) {
+    since = Date.now();                                // erstmals laufend gesehen
+    if (env.LOGS) { try { await env.LOGS.put("state:podRunningSince", String(since)); } catch {} }
+  }
+  sinceMemo = since;
+  return since;
+}
+
 // Zentraler Self-Check-Report inkl. Startup-Erkennung. Von UI (/selfcheck) und Cron genutzt.
 async function getSelfcheckReport(env, secrets) {
   const podId = await getPodId(env, secrets);
   const { status: podStatus } = await getState(secrets, podId);
 
   if (String(podStatus).toUpperCase() !== "RUNNING") {
+    sinceMemo = 0;
     if (env.LOGS) { try { await env.LOGS.put("state:podRunningSince", "0"); } catch {} }
     return { status: "stopped", podStatus, detail: "Pod laeuft nicht" };
   }
 
-  // Startzeit sicherstellen (Fallback, falls Pod ausserhalb des Workers gestartet wurde).
-  let since = 0;
-  if (env.LOGS) {
-    try { since = parseInt(await env.LOGS.get("state:podRunningSince") || "0", 10) || 0; } catch {}
-    if (!since) { since = Date.now(); try { await env.LOGS.put("state:podRunningSince", String(since)); } catch {} }
-  }
-  const elapsed = since ? Date.now() - since : Infinity;
-  const withinGrace = elapsed < STARTUP_GRACE_MS;
-
   const report = await fetchBackendSelfcheck();
   const hasReal = !!(report && report.checks && Object.keys(report.checks).length > 0);
+
+  // Startup-Signal: bevorzugt die echte Backend-Uptime (zuverlaessig), sonst der
+  // KV-Zeitstempel (noetig, solange das Backend gar nicht antwortet).
+  let elapsed, source;
+  if (report && typeof report.uptime_sec === "number") {
+    elapsed = report.uptime_sec * 1000;
+    source = "uptime";
+    sinceMemo = Date.now() - elapsed;                  // Memo mit der echten Uptime synchronisieren
+  } else {
+    elapsed = Date.now() - (await getRunningSince(env));
+    source = "kv";
+  }
+  const withinGrace = elapsed < STARTUP_GRACE_MS;
 
   // Im Boot-Fenster: Backend nicht erreichbar ODER noch nicht "ok" → "starting" statt Stoerung.
   if (withinGrace && (!hasReal || report.status !== "ok")) {
@@ -726,6 +755,7 @@ async function getSelfcheckReport(env, secrets) {
       status: "starting",
       detail: "Backend startet\u2026 (" + Math.round(elapsed / 1000) + "s)",
       elapsedSec: Math.round(elapsed / 1000),
+      graceSource: source,
       checks: hasReal ? report.checks : undefined,
     };
   }
@@ -1052,10 +1082,19 @@ async function notify(secrets, text) {
 // LOGGING (KV) — Statusprotokoll, Single Source
 // ─────────────────────────────────────────────
 
+const LOG_KEY = "state:log";
+const LOG_MAX = 100;
+
 async function log(env, entry) {
   if (!env.LOGS) return;
   try {
-    await env.LOGS.put(Date.now().toString(), JSON.stringify(entry));
+    if (!entry.time) entry.time = new Date().toISOString();
+    let arr = [];
+    try { const raw = await env.LOGS.get(LOG_KEY); if (raw) arr = JSON.parse(raw) || []; } catch {}
+    if (!Array.isArray(arr)) arr = [];
+    arr.unshift(entry);                              // neueste zuerst
+    if (arr.length > LOG_MAX) arr = arr.slice(0, LOG_MAX);
+    await env.LOGS.put(LOG_KEY, JSON.stringify(arr));
   } catch (e) {
     console.log("Log error:", e);
   }
@@ -1065,18 +1104,8 @@ async function getLogs(env, req) {
   if (!env.LOGS) {
     return json({ error: "kv_unavailable" }, { status: 500, env, req });
   }
-
-  const list = await env.LOGS.list({ limit: 200 });
-  // Nur Timestamp-Keys (Date.now()) — die Pod-ID (state:podId) ausschliessen.
-  const logKeys = list.keys.filter(k => /^\d+$/.test(k.name));
-  logKeys.sort((a, b) => Number(b.name) - Number(a.name)); // neueste zuerst
-  const top = logKeys.slice(0, 50);
-
-  const logs = await Promise.all(
-    top.map(k => env.LOGS.get(k.name).then(v => {
-      try { return JSON.parse(v); } catch { return null; }
-    }))
-  );
-
-  return json(logs.filter(Boolean), { env, req });
+  let arr = [];
+  try { const raw = await env.LOGS.get(LOG_KEY); if (raw) arr = JSON.parse(raw) || []; } catch {}
+  if (!Array.isArray(arr)) arr = [];
+  return json(arr.slice(0, 50), { env, req });   // neueste 50 (bereits neueste zuerst)
 }

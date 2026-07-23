@@ -3,6 +3,7 @@
 Die realen Probes (Ollama/DB/Disk/GPU) werden gemockt; getestet wird die Logik.
 Läuft auf dem Pod (echte App-Imports)."""
 import asyncio
+import time
 
 import pytest
 
@@ -81,8 +82,13 @@ def _patch(monkeypatch, *, tags_ok=True, installed=None, db_ok=True, disk_ok=Tru
 
     monkeypatch.setattr(selfcheck, "_tags", fake_tags)
     monkeypatch.setattr(selfcheck, "_check_db", fake_db)
-    monkeypatch.setattr(selfcheck, "_check_disk", lambda: {"ok": disk_ok, "free_gb": 50.0, "detail": "50 GB frei"})
     monkeypatch.setattr(selfcheck, "_check_gpu", lambda: {"ok": gpu_ok, "detail": "RTX – frei 30000/32000 MB" if gpu_ok else "nvidia-smi nicht gefunden"})
+    # Disk läuft im Hintergrund → Cache direkt vorbelegen (frisch, damit kein Task startet).
+    monkeypatch.setattr(selfcheck, "_DISK_CACHE", {
+        "ts": time.monotonic(),
+        "result": {"ok": disk_ok, "free_gb": 50.0, "detail": "50 GB frei"},
+        "running": False, "task": None,
+    })
 
 
 def test_run_all_ok(monkeypatch):
@@ -158,3 +164,35 @@ def test_disk_quota_low_free_degraded(monkeypatch):
     monkeypatch.setattr(selfcheck, "_du_gb", lambda p: 65.0)
     r = selfcheck._check_disk()
     assert r["ok"] is False and r["free_gb"] == 5.0
+
+
+# ── Nicht-blockierende Disk-Messung + Uptime ──
+
+def test_disk_cached_does_not_block_and_uses_placeholder(monkeypatch):
+    """Erster Aufruf darf nicht auf `du` warten (sonst laeuft der Worker in den Timeout)."""
+    monkeypatch.setattr(selfcheck, "_DISK_CACHE", {"ts": 0.0, "result": None, "running": False, "task": None})
+
+    def slow_disk():
+        time.sleep(2.0)
+        return {"ok": True, "detail": "12 GB frei von 70 GB"}
+
+    monkeypatch.setattr(selfcheck, "_check_disk", slow_disk)
+
+    async def go():
+        t0 = time.monotonic()
+        first = await selfcheck._disk_cached()
+        elapsed = time.monotonic() - t0
+        await asyncio.sleep(2.4)                       # Hintergrundlauf abwarten
+        second = await selfcheck._disk_cached()
+        return elapsed, first, second
+
+    elapsed, first, second = asyncio.run(go())
+    assert elapsed < 0.5                                # blockiert nicht
+    assert "wird ermittelt" in first["detail"]
+    assert "70 GB" in second["detail"]                  # Hintergrundwert liegt vor
+
+
+def test_run_includes_uptime(monkeypatch):
+    _patch(monkeypatch)
+    res = asyncio.run(selfcheck._run_selfcheck())
+    assert isinstance(res["uptime_sec"], int) and res["uptime_sec"] >= 0
