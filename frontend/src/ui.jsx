@@ -3,6 +3,7 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { apiFetch, getApiBase } from "./api.jsx";
 
 
@@ -560,4 +561,112 @@ async function copyFormatted(text) {
   await navigator.clipboard.writeText(t);
 }
 
-export { JobProgressBar, Dropzone, ModelSelector, InputTabs, Card, PromptEditor, Output, Tags, JobModelPicker, copyFormatted };
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// Sprint F1 (2026-07-21): Feedback zu generierten Ausgaben.
+// Button unter jeder Ausgabe → Modal (5-Sterne-Rating Pflicht, Freitext
+// optional) → POST /feedback (HMAC-signiert; Nutzer ermittelt der Server aus
+// dem verifizierten Auth-Header). Rendert nichts ohne jobId, da das Feedback
+// serverseitig über die Job-ID mit prompts.log verlinkt wird.
+// Modal via createPortal (Muster: RepairPreviewModal/Settings) — position:fixed
+// funktioniert im Confluence-DOM sonst nicht zuverlässig.
+// ────────────────────────────────────────────────────────────────────────────
+function FeedbackModal({ jobId, workflow, context, toast, onClose }) {
+  const [rating, setRating] = useState(0);
+  const [hover, setHover]   = useState(0);
+  const [text, setText]     = useState("");
+  const [busy, setBusy]     = useState(false);
+
+  async function send() {
+    setBusy(true);
+    try {
+      const res = await apiFetch(`${getApiBase()}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: jobId, rating, text, context: context || "" }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast("Danke für dein Feedback!");
+      onClose();
+    } catch (e) {
+      toast("Feedback konnte nicht gesendet werden: " + (e.message || e));
+      setBusy(false);
+    }
+  }
+
+  const shown = hover || rating;
+  return createPortal(
+    <div className="qc-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="qc-modal" style={{ maxWidth: 460 }}>
+        <div className="qc-modal-head">
+          <div className="qc-modal-title">Feedback zur Ausgabe</div>
+          <button className="qc-modal-x" onClick={onClose} disabled={busy}>&#215;</button>
+        </div>
+        <div className="qc-modal-body">
+          <div style={{ fontSize: 12, color: "var(--st-text-soft)", marginBottom: 12 }}>
+            {workflow}{context ? ` · ${context}` : ""} · Job {String(jobId).slice(0, 8)}
+          </div>
+          <div style={{ display: "flex", gap: 4, justifyContent: "center", marginBottom: 4 }}
+               onMouseLeave={() => setHover(0)}>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button key={n}
+                onClick={() => setRating(n)}
+                onMouseEnter={() => setHover(n)}
+                aria-label={`${n} von 5 Sternen`}
+                style={{
+                  background: "none", border: "none", cursor: "pointer",
+                  fontSize: 30, lineHeight: 1, padding: "2px 3px",
+                  color: n <= shown ? "#e8a512" : "var(--st-gray-border)",
+                  transition: "color 0.1s, transform 0.1s",
+                  transform: n <= hover ? "scale(1.12)" : "none",
+                }}>&#9733;</button>
+            ))}
+          </div>
+          <div style={{ textAlign: "center", fontSize: 11, color: "var(--st-text-pale)", marginBottom: 14, minHeight: 14 }}>
+            {rating ? `${rating} von 5 Sternen` : "Bewertung wählen (Pflicht)"}
+          </div>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Was war gut, was fehlte, was war falsch? (optional)"
+            rows={5}
+            maxLength={10000}
+            style={{
+              width: "100%", boxSizing: "border-box", resize: "vertical",
+              border: "1px solid var(--st-gray-border)", borderRadius: 4,
+              padding: "8px 10px", fontSize: 13, fontFamily: "inherit",
+            }} />
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 14 }}>
+            <button className="btn-secondary" onClick={onClose} disabled={busy}>Abbrechen</button>
+            <button className="btn-primary" onClick={send} disabled={busy || !rating}>
+              {busy ? "Sende…" : "Feedback senden"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+function FeedbackButton({ jobId, workflow, context, toast }) {
+  const [open, setOpen] = useState(false);
+  if (!jobId) return null;
+  return (
+    <>
+      <div style={{ marginTop: 10, textAlign: "right" }}>
+        <button className="btn-secondary" onClick={() => setOpen(true)}
+          style={{ fontSize: 12 }}>
+          &#9733; Feedback zur Ausgabe
+        </button>
+      </div>
+      {open && (
+        <FeedbackModal jobId={jobId} workflow={workflow} context={context}
+          toast={toast} onClose={() => setOpen(false)} />
+      )}
+    </>
+  );
+}
+
+export { JobProgressBar, Dropzone, ModelSelector, InputTabs, Card, PromptEditor, Output, Tags, JobModelPicker, copyFormatted, FeedbackButton };

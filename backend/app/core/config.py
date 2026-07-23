@@ -140,6 +140,17 @@ class Settings(BaseSettings):
     CONFLUENCE_SHARED_SECRET:      str  = "CHANGE-ME-USE-secrets.token_urlsafe-32"
     AUTH_TIMESTAMP_WINDOW_SEC:     int  = 300
 
+    # ── Feedback-Push (Sprint F1, 2026-07-21) ────────────────────
+    # Kanal für Push-Benachrichtigung bei neuem Nutzerfeedback:
+    #   "off" (Default) | "telegram"
+    # Telegram nutzt denselben Bot wie die Selfcheck-Alerts des Cloudflare
+    # Workers; Token/Chat-ID müssen dafür zusätzlich im RUNPOD_STARTCOMMAND
+    # exportiert werden. Push enthält NIE Feedback-Freitext (DSGVO —
+    # siehe app/services/feedback_notify.py).
+    FEEDBACK_NOTIFY:    str = "off"
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID:   str = ""
+
     # ── Datenschutz: CORS-Härtung (K3) ───────────────────────────
     # Komma-Liste erlaubter Origins, z.B. "http://intranet.systelios.local"
     # Wenn leer: Fallback auf CORS_ORIGINS (siehe unten)

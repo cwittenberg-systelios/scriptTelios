@@ -277,7 +277,15 @@ function P0({ toast }) {
                 accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*"
                 icon="&#128266;"
                 file={null}
-                onFile={(f) => { if (f) onRecorded(f); }}
+                onFile={(f) => {
+                  if (!f) return;
+                  // v19.9.1: sofortiges Feedback direkt an der Dropzone. Da die
+                  // Datei nicht gehalten wird (file={null}, Sofort-Upload),
+                  // war der einzige Hinweis der Eintrag in der Liste unten -
+                  // leicht zu uebersehen.
+                  toast(`Upload gestartet: ${f.name}`);
+                  onRecorded(f);
+                }}
               />
             </div>
             <div style={{fontSize:11,color:"var(--st-text-pale)",marginTop:8,textAlign:"center"}}>

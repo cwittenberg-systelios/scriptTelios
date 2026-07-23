@@ -239,14 +239,22 @@ export default function App() {
             }}>Abbrechen</button>
           </div>
         )}
-        {page === "p0"  && <P0 toast={toast} />}
-        {page === "p1"  && <P1  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
-        {page === "p2"  && <P2  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
-        {page === "p2b" && <P2b toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
-        {page === "p3"  && <P3  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
-        {page === "p3b" && <P3b toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
-        {page === "p4"  && <P4  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} />}
-        {page === "p5" && <P5
+        {/* Sprint B2 (S1): Keep-Mounted. Alle Panels bleiben dauerhaft
+            gemountet, inaktive werden nur per display:none versteckt. Damit
+            ueberlebt SAEMTLICHER Panel-State (Textfelder, File-Uploads in
+            Dropzones, Output, Repair-State, Scroll) den Tab-Wechsel - vorher
+            fuehrte das conditional Rendering zum Unmount + Totalverlust.
+            F5-Persistenz fuer Textfelder liefert zusaetzlich useDraftCache
+            in den Panels. Mount-Nebeneffekte geprueft: getUserMedia nur
+            on-click, P0-Polling nur bei pending Items. */}
+        <div style={{display: page === "p0"  ? "" : "none"}}><P0 toast={toast} /></div>
+        <div style={{display: page === "p1"  ? "" : "none"}}><P1  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
+        <div style={{display: page === "p2"  ? "" : "none"}}><P2  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
+        <div style={{display: page === "p2b" ? "" : "none"}}><P2b toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
+        <div style={{display: page === "p3"  ? "" : "none"}}><P3  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
+        <div style={{display: page === "p3b" ? "" : "none"}}><P3b toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
+        <div style={{display: page === "p4"  ? "" : "none"}}><P4  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
+        <div style={{display: page === "p5" ? "" : "none"}}><P5
           toast={toast}
           liste={stilListe}
           ladebusy={stilLadebusy}
@@ -255,7 +263,7 @@ export default function App() {
             try { await loeschenStil(id); toast("Beispiel gelöscht"); }
             catch (e) { toast("Fehler: " + friendlyError(e)); }
           }}
-        />}
+        /></div>
       </main>
 
       {/* Settings Modal – via Portal damit position:fixed korrekt funktioniert */}

@@ -3,13 +3,13 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, downloadTranscript, generate, getApiBase, pollJob, startJob } from "../api.jsx";
+import { apiFetch, downloadTranscript, getApiBase, pollJob, startJob } from "../api.jsx";
 import { AudioInput } from "../audio.jsx";
 import { useDraftCache, useJobResult, useResumeWorkflowJob } from "../hooks.jsx";
 import { P_AKUT, P_ANAMNESE, P_BEFUND_VORLAGE } from "../prompt-defaults.jsx";
 import { RepairBundle, ResultVersionsTabs } from "../qa.jsx";
 import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.jsx";
-import { Card, Dropzone, InputTabs, Output, PromptEditor, Tags, JobModelPicker, copyFormatted } from "../ui.jsx";
+import { Card, Dropzone, InputTabs, Output, PromptEditor, Tags, JobModelPicker, copyFormatted, FeedbackButton } from "../ui.jsx";
 
 
 // Sprint Draft-Persistence B1: P2 Text-Felder die in localStorage persistiert
@@ -43,6 +43,13 @@ function P2({ toast, resumeJob, onResumed }) {
   const setBefundVorlage = useCallback(v => updateDraft({ befundVorlage: v }), [updateDraft]);
   const setGeschlecht    = useCallback(v => updateDraft({ geschlecht: v }),    [updateDraft]);
   const setKuerzel       = useCallback(v => updateDraft({ kuerzel: v }),       [updateDraft]);
+
+  // B2 (S5): Reset-Button auch ohne Output anbieten sobald der Draft
+  // vom Default abweicht.
+  const draftDirty = useMemo(
+    () => JSON.stringify(draft) !== JSON.stringify(P2_DRAFT_DEFAULT),
+    [draft]
+  );
 
   // Job-Output-State (nicht persistiert - kommt vom Backend bei Bedarf)
   const [out, setOut]             = useState("");
@@ -324,7 +331,9 @@ function P2({ toast, resumeJob, onResumed }) {
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 
-          {(out || befundOut) && (
+          <FeedbackButton jobId={lastJobId} workflow="anamnese" context={tab === "Anamnese" ? "anamnese" : "befund"} toast={toast} />
+
+          {(out || befundOut || draftDirty || selbst || befunde || audio || txtFile || style) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setSelbst(null); setBefunde(null); setAudio(null);
@@ -352,42 +361,69 @@ function P2({ toast, resumeJob, onResumed }) {
 // Inputs: Antragsvorlage (req), Stilvorlage (opt), Fokus (opt), Prompt (opt)
 // Backend-Workflow: "akutantrag"
 // ─────────────────────────────────────────────────────────────────
+// Sprint B2: persistierte Text-Felder P2b (Files bleiben aussen vor)
+const P2B_DRAFT_DEFAULT = {
+  styleText: "", fokus: "", prompt: P_AKUT,
+  geschlecht: "auto", kuerzel: "",
+};
+
 function P2b({ toast, resumeJob, onResumed }) {
   // Modellwahl fuer DIESEN Job (JobModelPicker); leer = globaler Fallback
   const [jobModel, setJobModel] = useState("");
   const [antrag, setAntrag]       = useState(null);
   const [style, setStyle]         = useState(null);
-  const [styleText, setStyleText] = useState("");
-  const [fokus, setFokus]         = useState("");
-  const [prompt, setPrompt]       = useState(P_AKUT);
-  const [geschlecht, setGeschlecht] = useState("auto");
-  const [kuerzel, setKuerzel]       = useState("");
+
+  // B2: Text-Felder ueber useDraftCache (Pattern aus P2/B1)
+  const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p2b", P2B_DRAFT_DEFAULT);
+  const { styleText, fokus, prompt, geschlecht, kuerzel } = draft;
+  const setStyleText  = useCallback(v => updateDraft({ styleText: v }),  [updateDraft]);
+  const setFokus      = useCallback(v => updateDraft({ fokus: v }),      [updateDraft]);
+  const setPrompt     = useCallback(v => updateDraft({ prompt: v }),     [updateDraft]);
+  const setGeschlecht = useCallback(v => updateDraft({ geschlecht: v }), [updateDraft]);
+  const setKuerzel    = useCallback(v => updateDraft({ kuerzel: v }),    [updateDraft]);
+
+  const draftDirty = useMemo(
+    () => JSON.stringify(draft) !== JSON.stringify(P2B_DRAFT_DEFAULT),
+    [draft]
+  );
+
   const [out, setOut]             = useState("");
   const [outWarn, setOutWarn]       = useState(null);
   const [job, jobOps]               = useJobResult();
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
-  const abortRef = useRef(null);
+
+  // B2: attach-Pattern (wie P2 oben). attachedRef verhindert Doppel-Attach
+  // im Race zwischen Resume-Banner und Auto-Resume.
+  const attachedRef = useRef(null);
+  function attach(jobId) {
+    if (attachedRef.current === jobId) return;
+    attachedRef.current = jobId;
+    setBusy(true);
+    setCurrentJobId(jobId);
+    pollJob(jobId, 1200)
+      .then(j => {
+        if (!j) return;  // cancelled
+        setOut(j.result_text || "");
+        setOutWarn(getEmptyWarning(j.result_text));
+        jobOps.applyOriginal(j);
+        setLastJobId(jobId);
+      })
+      .catch(e => { setOut("Fehler: " + friendlyError(e)); })
+      .finally(() => { setBusy(false); setCurrentJobId(null); });
+  }
 
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p2b") return;
-    setBusy(true);
-    setCurrentJobId(resumeJob.jobId);
-    pollJob(resumeJob.jobId, 1200)
-      .then(job => {
-        if (!job) { setBusy(false); onResumed(); return; }
-        setOut(job.result_text || "");
-        jobOps.applyOriginal(job);
-        setLastJobId(resumeJob.jobId);
-        onResumed();
-      })
-      .catch(e => { setOut("Fehler: " + friendlyError(e)); onResumed(); })
-      .finally(() => setBusy(false));
+    attach(resumeJob.jobId);
+    onResumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumeJob]);
 
+  useResumeWorkflowJob("akutantrag", attach, !resumeJob);
+
   function cancelRun() {
-    if (abortRef.current) abortRef.current.abort();
     const jobId = currentJobId || loadActiveJob()?.jobId;
     if (jobId) {
       apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
@@ -395,15 +431,16 @@ function P2b({ toast, resumeJob, onResumed }) {
     clearActiveJob();
     setBusy(false);
     setCurrentJobId(null);
+    attachedRef.current = null;
   }
 
   async function run() {
-    const ac = new AbortController();
-    abortRef.current = ac;
+    // B2: non-blocking Pfad (startJob -> attach) wie in P2
     setBusy(true);
     setOut(""); setOutWarn(null);
     jobOps.reset();
     setLastJobId(null);
+    attachedRef.current = null;
     try {
       let patientNameExplicit = null;
       if (kuerzel.trim()) {
@@ -412,7 +449,7 @@ function P2b({ toast, resumeJob, onResumed }) {
         else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
         else                          patientNameExplicit = kurz;
       }
-      const result = await generate("akutantrag", prompt, "", {
+      const jobId = await startJob("akutantrag", prompt, "", {
         antragsvorlage: antrag,   // Pflicht: Anamnese, Befund, Diagnosen
         style:          style,
         styleText:      styleText || null,
@@ -420,18 +457,14 @@ function P2b({ toast, resumeJob, onResumed }) {
         model:          jobModel || null,
         patientName:    patientNameExplicit,
         geschlecht:     geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
-        onJobId:        setCurrentJobId,
-        signal:         ac.signal,
-      }, "p2b");
-      if (!result) { setBusy(false); setCurrentJobId(null); return; }
-      setOut(result.text || "");
-      setOutWarn(getEmptyWarning(result.text));
-      jobOps.applyOriginal(result);
-      setLastJobId(result.jobId);
+      });
+      attach(jobId);
     }
-    catch (e) { setOut("Fehler: " + friendlyError(e)); }
-    setBusy(false);
-    setCurrentJobId(null);
+    catch (e) {
+      setOut("Fehler: " + friendlyError(e));
+      setBusy(false);
+      setCurrentJobId(null);
+    }
   }
 
   return (
@@ -490,10 +523,15 @@ function P2b({ toast, resumeJob, onResumed }) {
                 { val:"auto", label:"Auto"    },
               ].map(({ val, label }) => (
                 <button key={val} onClick={() => setGeschlecht(val)} style={{
-                  padding:"3px 8px", fontSize:12, borderRadius:3, cursor:"pointer",
-                  border: geschlecht === val ? "1px solid var(--st-accent)" : "1px solid var(--st-gray-border)",
-                  background: geschlecht === val ? "var(--st-accent-bg)" : "var(--st-bg)",
-                  color: geschlecht === val ? "var(--st-accent)" : "var(--st-text)",
+                  // v19.9.1: var(--st-accent)/--st-accent-bg/--st-bg waren nie in
+                  // styles.jsx definiert -> Selected-State war unsichtbar.
+                  // Design aus P1 uebernommen (gewaehlt = gefuelltes Klinikrot).
+                  padding:"4px 10px", borderRadius:3, cursor:"pointer",
+                  fontSize:12, fontWeight: geschlecht === val ? 700 : 400,
+                  background: geschlecht === val ? "var(--st-red)" : "var(--st-gray-light)",
+                  color: geschlecht === val ? "white" : "var(--st-text-soft)",
+                  border: geschlecht === val ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+                  transition:"all 0.12s",
                 }}>{label}</button>
               ))}
               <div style={{display:"flex", alignItems:"center", gap:4, marginLeft:4}}>
@@ -534,12 +572,16 @@ function P2b({ toast, resumeJob, onResumed }) {
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 
-          {out && (
+          <FeedbackButton jobId={lastJobId} workflow="akutantrag" toast={toast} />
+
+          {(out || draftDirty || antrag || style) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
-                setAntrag(null); setStyle(null); setStyleText("");
-                setFokus(""); setPrompt(P_AKUT); setOut(""); setOutWarn(null); setLastJobId(null);
+                setAntrag(null); setStyle(null);
+                clearDraft();  // B2: setzt ALLE Text-Felder auf Default + raeumt localStorage
+                setOut(""); setOutWarn(null); setLastJobId(null);
                 jobOps.reset();
+                attachedRef.current = null;
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Akutantrag</button>
             </div>

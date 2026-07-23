@@ -122,6 +122,24 @@ function P1({ toast, resumeJob, onResumed }) {
     return () => clearInterval(id);
   }, [reloadJobs]);
 
+  // ── B2 (F2): Auto-Selektion eines laufenden Jobs nach F5/Neustart ────
+  // Pendant zum useResumeWorkflowJob-Auto-Resume der anderen Panels - P1
+  // hat stattdessen die Job-Liste, daher hier nur Selektion statt attach().
+  // Entscheidet einmalig beim ersten erfolgreichen Listen-Load und greift
+  // NUR wenn der User nicht bereits an einem (aus dem Draft-Cache
+  // wiederhergestellten) Entwurf arbeitet.
+  const autoSelectedRef = useRef(false);
+  useEffect(() => {
+    if (autoSelectedRef.current || listLoading) return;
+    autoSelectedRef.current = true;  // nur der erste Listen-Load entscheidet
+    const running = jobs.find(j => j.status === "pending" || j.status === "running");
+    if (!running) return;
+    const d = selected?.type === "draft" ? drafts.find(x => x.id === selected.id) : null;
+    const draftLeer = d && !d.text && !d.bullets && !d.audio && !d.txtFile;
+    if (draftLeer) setSelected({ type: "job", id: running.job_id });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs, listLoading]);
+
   // ── Resume: Banner verbrauchen, Job direkt selektieren ──────────────
   // Mit Multi-Job-P1 brauchen wir den Resume-Mechanismus nicht mehr fuer
   // Polling - der Job ist in der Liste sichtbar. Den Banner-State verbrauchen

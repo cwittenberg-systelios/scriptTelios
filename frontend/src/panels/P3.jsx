@@ -3,14 +3,21 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, generate, getApiBase, pollJob } from "../api.jsx";
-import { useJobResult } from "../hooks.jsx";
+import { apiFetch, getApiBase, pollJob, startJob } from "../api.jsx";
+import { useDraftCache, useJobResult, useResumeWorkflowJob } from "../hooks.jsx";
 import { P_VERL, P_VERL_FOLGE } from "../prompt-defaults.jsx";
 import { RepairBundle, ResultVersionsTabs } from "../qa.jsx";
 import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.jsx";
-import { Card, Dropzone, InputTabs, Output, PromptEditor, JobModelPicker, copyFormatted } from "../ui.jsx";
+import { Card, Dropzone, InputTabs, Output, PromptEditor, JobModelPicker, copyFormatted, FeedbackButton } from "../ui.jsx";
 
 
+// Sprint B2: Text-Felder die in localStorage persistiert werden - ueberleben
+// Tab-Wechsel (via Keep-Mounted ohnehin) UND F5/Reload. Files (verlauf,
+// antrag, style) bleiben in-memory only (localStorage-Quota).
+const P3_DRAFT_DEFAULT = {
+  styleText: "", fokus: "", prompt: P_VERL,
+  geschlecht: "auto", kuerzel: "",
+};
 
 function P3({ toast, resumeJob, onResumed }) {
   // Modellwahl fuer DIESEN Job (JobModelPicker); leer = globaler Fallback
@@ -18,40 +25,66 @@ function P3({ toast, resumeJob, onResumed }) {
   const [antrag, setAntrag]       = useState(null);
   const [verlauf, setVerlauf]     = useState(null);
   const [style, setStyle]         = useState(null);
-  const [styleText, setStyleText] = useState("");
-  const [fokus, setFokus]         = useState("");
-  // v18: Workflow-Anweisungen als editierbares Feld (advanced option)
-  const [prompt, setPrompt]       = useState(P_VERL);
-  // v16 Audit-Patch A3: gleicher Patient-Override wie in P1+P2
-  const [geschlecht, setGeschlecht] = useState("auto");
-  const [kuerzel, setKuerzel]       = useState("");
+
+  // B2: Text-Felder ueber useDraftCache (Pattern aus P2/B1). Adapter-Setter
+  // halten die JSX-Aufrufseite kompatibel.
+  const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p3", P3_DRAFT_DEFAULT);
+  const { styleText, fokus, prompt, geschlecht, kuerzel } = draft;
+  const setStyleText  = useCallback(v => updateDraft({ styleText: v }),  [updateDraft]);
+  const setFokus      = useCallback(v => updateDraft({ fokus: v }),      [updateDraft]);
+  const setPrompt     = useCallback(v => updateDraft({ prompt: v }),     [updateDraft]);
+  const setGeschlecht = useCallback(v => updateDraft({ geschlecht: v }), [updateDraft]);
+  const setKuerzel    = useCallback(v => updateDraft({ kuerzel: v }),    [updateDraft]);
+
+  // B2 (S5): Reset-Button auch ohne Output anbieten sobald der Draft
+  // vom Default abweicht (JSON-Compare - Keyreihenfolge ist stabil, da
+  // useDraftCache Defaults zuerst spreadet).
+  const draftDirty = useMemo(
+    () => JSON.stringify(draft) !== JSON.stringify(P3_DRAFT_DEFAULT),
+    [draft]
+  );
+
   const [out, setOut]             = useState("");
   const [outWarn, setOutWarn]       = useState(null);
   const [job, jobOps]               = useJobResult();
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
-  const abortRef = useRef(null);
 
-  // Resume: laufenden Job nach Reload wieder aufnehmen
+  // B2: zentrale attach-Funktion (Pattern aus P2/B1). attachedRef verhindert
+  // Doppel-Attach im Race zwischen Resume-Banner (resumeJob-Prop) und
+  // Auto-Resume (useResumeWorkflowJob) - beide koennen beim Mount denselben
+  // laufenden Job finden.
+  const attachedRef = useRef(null);
+  function attach(jobId) {
+    if (attachedRef.current === jobId) return;
+    attachedRef.current = jobId;
+    setBusy(true);
+    setCurrentJobId(jobId);
+    pollJob(jobId, 1200)
+      .then(j => {
+        if (!j) return;  // cancelled
+        setOut(j.result_text || "");
+        setOutWarn(getEmptyWarning(j.result_text));
+        jobOps.applyOriginal(j);
+        setLastJobId(jobId);
+      })
+      .catch(e => { setOut("Fehler: " + friendlyError(e)); })
+      .finally(() => { setBusy(false); setCurrentJobId(null); });
+  }
+
+  // Resume-Banner-Prop (App-Root nach F5). Hoehere Prioritaet als Auto-Resume.
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p3") return;
-    setBusy(true);
-    setCurrentJobId(resumeJob.jobId);
-    pollJob(resumeJob.jobId, 1200)
-      .then(job => {
-        if (!job) { setBusy(false); onResumed(); return; } // cancelled
-        setOut(job.result_text || "");
-        jobOps.applyOriginal(job);
-        setLastJobId(resumeJob.jobId);
-        onResumed();
-      })
-      .catch(e => { setOut("Fehler: " + friendlyError(e)); onResumed(); })
-      .finally(() => setBusy(false));
+    attach(resumeJob.jobId);
+    onResumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumeJob]);
 
+  // Auto-Resume beim Mount: laufenden verlaengerung-Job wiederfinden.
+  useResumeWorkflowJob("verlaengerung", attach, !resumeJob);
+
   function cancelRun() {
-    if (abortRef.current) abortRef.current.abort();
     const jobId = currentJobId || loadActiveJob()?.jobId;
     if (jobId) {
       apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
@@ -59,15 +92,18 @@ function P3({ toast, resumeJob, onResumed }) {
     clearActiveJob();
     setBusy(false);
     setCurrentJobId(null);
+    attachedRef.current = null;
   }
 
   async function run() {
-    const ac = new AbortController();
-    abortRef.current = ac;
+    // B2: non-blocking Pfad (startJob -> attach) wie in P2. Der Job laeuft
+    // im Backend weiter, auch wenn der Tab gewechselt oder F5 gedrueckt wird;
+    // useResumeWorkflowJob findet ihn dann wieder.
     setBusy(true);
     setOut(""); setOutWarn(null);
     jobOps.reset();
     setLastJobId(null);
+    attachedRef.current = null;
     try {
       // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
       // (vorher fehlte das in P3/P4 - Bug entdeckt im Audit)
@@ -78,7 +114,7 @@ function P3({ toast, resumeJob, onResumed }) {
         else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
         else                          patientNameExplicit = kurz;
       }
-      const result = await generate("verlaengerung", prompt, "", {
+      const jobId = await startJob("verlaengerung", prompt, "", {
         antragsvorlage: antrag,   // Antragsvorlage → Diagnosen/Anamnese/Name
         verlauf:        verlauf,  // Verlaufsdokumentation
         style:          style,
@@ -87,18 +123,14 @@ function P3({ toast, resumeJob, onResumed }) {
         model:          jobModel || null,
         patientName:    patientNameExplicit,
         geschlecht:     geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
-        onJobId:        setCurrentJobId,
-        signal:         ac.signal,
-      }, "p3");
-      if (!result) { setBusy(false); setCurrentJobId(null); return; }
-      setOut(result.text || "");
-      setOutWarn(getEmptyWarning(result.text));
-      jobOps.applyOriginal(result);
-      setLastJobId(result.jobId);
+      });
+      attach(jobId);
     }
-    catch (e) { setOut("Fehler: " + friendlyError(e)); }
-    setBusy(false);
-    setCurrentJobId(null);
+    catch (e) {
+      setOut("Fehler: " + friendlyError(e));
+      setBusy(false);
+      setCurrentJobId(null);
+    }
   }
 
   return (
@@ -180,12 +212,16 @@ function P3({ toast, resumeJob, onResumed }) {
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 
-          {out && (
+          <FeedbackButton jobId={lastJobId} workflow="verlaengerung" toast={toast} />
+
+          {(out || draftDirty || verlauf || antrag || style) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
-                setVerlauf(null); setAntrag(null); setStyle(null); setStyleText("");
-                setFokus(""); setPrompt(P_VERL); setOut(""); setOutWarn(null); setLastJobId(null);
+                setVerlauf(null); setAntrag(null); setStyle(null);
+                clearDraft();  // B2: setzt ALLE Text-Felder auf Default + raeumt localStorage
+                setOut(""); setOutWarn(null); setLastJobId(null);
                 jobOps.reset();
+                attachedRef.current = null;
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Verlängerungsantrag</button>
             </div>
@@ -204,6 +240,12 @@ function P3({ toast, resumeJob, onResumed }) {
 //          Stilvorlage (opt), Fokus (opt), Prompt (opt)
 // Backend-Workflow: "folgeverlaengerung"
 // ─────────────────────────────────────────────────────────────────
+// Sprint B2: persistierte Text-Felder P3b (Files bleiben aussen vor)
+const P3B_DRAFT_DEFAULT = {
+  styleText: "", fokus: "", prompt: P_VERL_FOLGE,
+  geschlecht: "auto", kuerzel: "",
+};
+
 function P3b({ toast, resumeJob, onResumed }) {
   // Modellwahl fuer DIESEN Job (JobModelPicker); leer = globaler Fallback
   const [jobModel, setJobModel] = useState("");
@@ -211,37 +253,57 @@ function P3b({ toast, resumeJob, onResumed }) {
   const [antrag, setAntrag]       = useState(null);
   const [vorantrag, setVorantrag] = useState(null);
   const [style, setStyle]         = useState(null);
-  const [styleText, setStyleText] = useState("");
-  const [fokus, setFokus]         = useState("");
-  const [prompt, setPrompt]       = useState(P_VERL_FOLGE);
-  const [geschlecht, setGeschlecht] = useState("auto");
-  const [kuerzel, setKuerzel]       = useState("");
+
+  // B2: Text-Felder ueber useDraftCache (Pattern aus P2/B1)
+  const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p3b", P3B_DRAFT_DEFAULT);
+  const { styleText, fokus, prompt, geschlecht, kuerzel } = draft;
+  const setStyleText  = useCallback(v => updateDraft({ styleText: v }),  [updateDraft]);
+  const setFokus      = useCallback(v => updateDraft({ fokus: v }),      [updateDraft]);
+  const setPrompt     = useCallback(v => updateDraft({ prompt: v }),     [updateDraft]);
+  const setGeschlecht = useCallback(v => updateDraft({ geschlecht: v }), [updateDraft]);
+  const setKuerzel    = useCallback(v => updateDraft({ kuerzel: v }),    [updateDraft]);
+
+  const draftDirty = useMemo(
+    () => JSON.stringify(draft) !== JSON.stringify(P3B_DRAFT_DEFAULT),
+    [draft]
+  );
+
   const [out, setOut]             = useState("");
   const [outWarn, setOutWarn]       = useState(null);
   const [job, jobOps]               = useJobResult();
   const [lastJobId, setLastJobId] = useState(null);
   const [busy, setBusy]           = useState(false);
   const [currentJobId, setCurrentJobId] = useState(null);
-  const abortRef = useRef(null);
+
+  // B2: attach-Pattern (siehe P3-Kommentar)
+  const attachedRef = useRef(null);
+  function attach(jobId) {
+    if (attachedRef.current === jobId) return;
+    attachedRef.current = jobId;
+    setBusy(true);
+    setCurrentJobId(jobId);
+    pollJob(jobId, 1200)
+      .then(j => {
+        if (!j) return;  // cancelled
+        setOut(j.result_text || "");
+        setOutWarn(getEmptyWarning(j.result_text));
+        jobOps.applyOriginal(j);
+        setLastJobId(jobId);
+      })
+      .catch(e => { setOut("Fehler: " + friendlyError(e)); })
+      .finally(() => { setBusy(false); setCurrentJobId(null); });
+  }
 
   useEffect(() => {
     if (!resumeJob || resumeJob.page !== "p3b") return;
-    setBusy(true);
-    setCurrentJobId(resumeJob.jobId);
-    pollJob(resumeJob.jobId, 1200)
-      .then(job => {
-        if (!job) { setBusy(false); onResumed(); return; }
-        setOut(job.result_text || "");
-        jobOps.applyOriginal(job);
-        setLastJobId(resumeJob.jobId);
-        onResumed();
-      })
-      .catch(e => { setOut("Fehler: " + friendlyError(e)); onResumed(); })
-      .finally(() => setBusy(false));
+    attach(resumeJob.jobId);
+    onResumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resumeJob]);
 
+  useResumeWorkflowJob("folgeverlaengerung", attach, !resumeJob);
+
   function cancelRun() {
-    if (abortRef.current) abortRef.current.abort();
     const jobId = currentJobId || loadActiveJob()?.jobId;
     if (jobId) {
       apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
@@ -249,15 +311,16 @@ function P3b({ toast, resumeJob, onResumed }) {
     clearActiveJob();
     setBusy(false);
     setCurrentJobId(null);
+    attachedRef.current = null;
   }
 
   async function run() {
-    const ac = new AbortController();
-    abortRef.current = ac;
+    // B2: non-blocking Pfad (startJob -> attach) wie in P2/P3
     setBusy(true);
     setOut(""); setOutWarn(null);
     jobOps.reset();
     setLastJobId(null);
+    attachedRef.current = null;
     try {
       let patientNameExplicit = null;
       if (kuerzel.trim()) {
@@ -266,7 +329,7 @@ function P3b({ toast, resumeJob, onResumed }) {
         else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
         else                          patientNameExplicit = kurz;
       }
-      const result = await generate("folgeverlaengerung", prompt, "", {
+      const jobId = await startJob("folgeverlaengerung", prompt, "", {
         verlauf:        verlauf,
         antragsvorlage: antrag,
         vorantrag:      vorantrag,
@@ -276,18 +339,14 @@ function P3b({ toast, resumeJob, onResumed }) {
         model:          jobModel || null,
         patientName:    patientNameExplicit,
         geschlecht:     geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
-        onJobId:        setCurrentJobId,
-        signal:         ac.signal,
-      }, "p3b");
-      if (!result) { setBusy(false); setCurrentJobId(null); return; }
-      setOut(result.text || "");
-      setOutWarn(getEmptyWarning(result.text));
-      jobOps.applyOriginal(result);
-      setLastJobId(result.jobId);
+      });
+      attach(jobId);
     }
-    catch (e) { setOut("Fehler: " + friendlyError(e)); }
-    setBusy(false);
-    setCurrentJobId(null);
+    catch (e) {
+      setOut("Fehler: " + friendlyError(e));
+      setBusy(false);
+      setCurrentJobId(null);
+    }
   }
 
   return (
@@ -356,10 +415,15 @@ function P3b({ toast, resumeJob, onResumed }) {
                 { val:"auto", label:"Auto"    },
               ].map(({ val, label }) => (
                 <button key={val} onClick={() => setGeschlecht(val)} style={{
-                  padding:"3px 8px", fontSize:12, borderRadius:3, cursor:"pointer",
-                  border: geschlecht === val ? "1px solid var(--st-accent)" : "1px solid var(--st-gray-border)",
-                  background: geschlecht === val ? "var(--st-accent-bg)" : "var(--st-bg)",
-                  color: geschlecht === val ? "var(--st-accent)" : "var(--st-text)",
+                  // v19.9.1: var(--st-accent)/--st-accent-bg/--st-bg waren nie in
+                  // styles.jsx definiert -> Selected-State war unsichtbar.
+                  // Design aus P1 uebernommen (gewaehlt = gefuelltes Klinikrot).
+                  padding:"4px 10px", borderRadius:3, cursor:"pointer",
+                  fontSize:12, fontWeight: geschlecht === val ? 700 : 400,
+                  background: geschlecht === val ? "var(--st-red)" : "var(--st-gray-light)",
+                  color: geschlecht === val ? "white" : "var(--st-text-soft)",
+                  border: geschlecht === val ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+                  transition:"all 0.12s",
                 }}>{label}</button>
               ))}
               <div style={{display:"flex", alignItems:"center", gap:4, marginLeft:4}}>
@@ -400,13 +464,17 @@ function P3b({ toast, resumeJob, onResumed }) {
 
           <RepairBundle job={job} ops={jobOps} toast={toast} />
 
-          {out && (
+          <FeedbackButton jobId={lastJobId} workflow="folgeverlaengerung" toast={toast} />
+
+          {(out || draftDirty || verlauf || antrag || vorantrag || style) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setAntrag(null); setVorantrag(null);
-                setStyle(null); setStyleText("");
-                setFokus(""); setPrompt(P_VERL_FOLGE); setOut(""); setOutWarn(null); setLastJobId(null);
+                setStyle(null);
+                clearDraft();  // B2: setzt ALLE Text-Felder auf Default + raeumt localStorage
+                setOut(""); setOutWarn(null); setLastJobId(null);
                 jobOps.reset();
+                attachedRef.current = null;
                 toast("Formular zurückgesetzt");
               }}>+ Neue Folgeverlängerung</button>
             </div>

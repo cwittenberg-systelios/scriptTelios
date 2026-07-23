@@ -5,7 +5,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { downloadTranscript } from "./api.jsx";
 import { RepairBundle, ResultVersionsTabs } from "./qa.jsx";
-import { Output, copyFormatted } from "./ui.jsx";
+import { Output, copyFormatted, FeedbackButton } from "./ui.jsx";
 
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -334,6 +334,14 @@ function JobDetailPane({ job, jobOps, jobState, toast, onCancel, onDelete, onBac
         ] : []} />
 
       <RepairBundle job={jobState} ops={jobOps} toast={toast} />
+
+      {/* Sprint F1: Feedback erst wenn der Job nicht mehr laeuft — auf ein
+          halbfertiges Ergebnis kann man sinnvoll kein Rating abgeben. Auch
+          failed/cancelled bleiben bewertbar (gerade Fehlschlaege sind
+          wertvolles Feedback). */}
+      {job && job.status !== "pending" && job.status !== "running" && (
+        <FeedbackButton jobId={job.job_id} workflow="dokumentation" toast={toast} />
+      )}
     </div>
   );
 }
