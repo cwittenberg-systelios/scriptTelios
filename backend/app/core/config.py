@@ -150,6 +150,10 @@ class Settings(BaseSettings):
     # Push enthält NIE Feedback-Freitext (DSGVO —
     # siehe app/services/feedback_notify.py).
     FEEDBACK_NOTIFY:    str = "off"
+    # Ziel-URL des Cloudflare Workers fuer FEEDBACK_NOTIFY=worker,
+    # inkl. Pfad, z.B. "https://control.scriptelios.win/notify".
+    # Nicht geheim - authentifiziert wird per HMAC mit CONFLUENCE_SHARED_SECRET.
+    WORKER_NOTIFY_URL:  str = ""
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID:   str = ""
 

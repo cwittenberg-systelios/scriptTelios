@@ -3,8 +3,18 @@ backend/app/services/feedback_notify.py — Push-Benachrichtigung bei Feedback (
 
 Konfigurierbarer Notifier mit Kanal-Abstraktion:
   FEEDBACK_NOTIFY = "off"      → keine Benachrichtigung (Default)
-  FEEDBACK_NOTIFY = "telegram" → Telegram-Bot-Nachricht
-                                 (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID nötig)
+  FEEDBACK_NOTIFY = "worker"   → EMPFOHLEN: der Cloudflare Worker versendet.
+                                 Der Pod meldet nur "es gab ein Feedback";
+                                 die Telegram-Credentials bleiben ausschliesslich
+                                 im Cloudflare Secrets Store. Kein neues Secret
+                                 auf dem Pod - signiert wird mit dem ohnehin
+                                 vorhandenen CONFLUENCE_SHARED_SECRET.
+                                 Braucht nur WORKER_NOTIFY_URL (nicht geheim).
+  FEEDBACK_NOTIFY = "telegram" → Fallback: Pod sendet direkt an Telegram
+                                 (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID nötig).
+                                 Nur sinnvoll wenn der Worker nicht erreichbar
+                                 sein soll - dupliziert den Bot-Token auf die
+                                 Maschine mit den Klientendaten.
 
 Konfigurationsort: /workspace/.env auf dem Pod. runpod-start.sh sourct diese
 Datei mit "set -a", die Werte landen also in der Prozessumgebung von uvicorn.
@@ -28,7 +38,10 @@ geloggt, aber niemals propagiert. Die Feedback-Speicherung darf nie am
 Push scheitern.
 """
 import asyncio
+import hashlib
+import hmac
 import logging
+import time
 
 import httpx
 
@@ -37,6 +50,13 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_TIMEOUT_S = 10
+_WORKER_TIMEOUT_S = 10
+# Kennung, unter der das Backend beim Worker signiert (taucht im KV-Log des
+# Workers auf). Kein Confluence-Login - macht Backend-Aufrufe unterscheidbar.
+_NOTIFY_USER = "backend"
+# Hinweis: Kanaele bekommen sowohl den fertigen Text als auch die
+# strukturierten Felder uebergeben. Kein Modul-Zwischenspeicher - der waere
+# bei zwei gleichzeitigen Feedbacks eine Race Condition.
 
 
 def _build_message(rating: int, workflow: str, job_id: str, user: str) -> str:
@@ -51,7 +71,7 @@ def _build_message(rating: int, workflow: str, job_id: str, user: str) -> str:
     )
 
 
-async def _send_telegram(text: str) -> None:
+async def _send_telegram(text: str, payload: dict) -> None:
     token = (settings.TELEGRAM_BOT_TOKEN or "").strip()
     chat_id = (settings.TELEGRAM_CHAT_ID or "").strip()
     missing = [n for n, v in (("TELEGRAM_BOT_TOKEN", token),
@@ -72,8 +92,52 @@ async def _send_telegram(text: str) -> None:
         r.raise_for_status()
 
 
+async def _send_worker(text: str, payload: dict) -> None:
+    """
+    Meldet die Benachrichtigung an den Cloudflare Worker, der sie versendet.
+
+    Der Worker baut den Nachrichtentext selbst aus den strukturierten Feldern
+    neu — er ist bewusst kein Freitext-Relay (siehe handleNotify() in
+    cloudflareworker.js). Deshalb wird hier ``payload`` uebergeben und
+    ``text`` gar nicht erst mitgeschickt.
+    """
+    url = (settings.WORKER_NOTIFY_URL or "").strip()
+    if not url:
+        logger.warning(
+            "Feedback-Push übersprungen: WORKER_NOTIFY_URL ist nicht gesetzt. "
+            "In /workspace/.env eintragen (z.B. https://control.example.tld/notify) "
+            "und Pod neu starten."
+        )
+        return
+    async with httpx.AsyncClient(timeout=_WORKER_TIMEOUT_S) as client:
+        r = await client.post(url, json={"kind": "feedback", **payload},
+                              headers=_signed_headers())
+        r.raise_for_status()
+
+
+def _signed_headers() -> dict:
+    """
+    HMAC-Header im Schema aus core/auth.py — dasselbe, das der Worker prueft.
+    Kein neues Secret noetig: CONFLUENCE_SHARED_SECRET liegt ohnehin auf dem Pod.
+    """
+    ts = str(int(time.time()))
+    user = _NOTIFY_USER
+    sig = hmac.new(
+        settings.CONFLUENCE_SHARED_SECRET.encode("utf-8"),
+        f"{user}:{ts}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-Systelios-User": user,
+        "X-Systelios-Timestamp": ts,
+        "X-Systelios-Signature": sig,
+        "Content-Type": "application/json",
+    }
+
+
 # Kanal-Registry — neue Kanäle hier eintragen.
 _CHANNELS = {
+    "worker": _send_worker,
     "telegram": _send_telegram,
 }
 
@@ -92,7 +156,11 @@ async def notify_feedback(rating: int, workflow: str, job_id: str, user: str) ->
                        channel, ", ".join(sorted(_CHANNELS)))
         return
     try:
-        await sender(_build_message(rating, workflow, job_id, user))
+        await sender(
+            _build_message(rating, workflow, job_id, user),
+            {"rating": rating, "workflow": workflow,
+             "jobId": (job_id or "")[:8], "user": user},
+        )
         logger.info("Feedback-Push via %s versendet (Job %s).", channel, (job_id or "?")[:8])
     except Exception as e:  # noqa: BLE001 — bewusst breit: Push darf nie durchschlagen
         logger.warning("Feedback-Push via %s fehlgeschlagen: %s", channel, e)
@@ -137,6 +205,16 @@ def log_effective_config() -> None:
                        "(bekannt: %s) — es wird nichts versendet.",
                        raw, ", ".join(sorted(_CHANNELS)))
         return
+    if channel == "worker":
+        if not (settings.WORKER_NOTIFY_URL or "").strip():
+            logger.warning(
+                "Feedback-Push: FEEDBACK_NOTIFY=worker, aber WORKER_NOTIFY_URL fehlt "
+                "— es wird NICHTS versendet. In /workspace/.env eintragen.")
+            return
+        if not (settings.CONFLUENCE_SHARED_SECRET or "").strip():
+            logger.warning("Feedback-Push: CONFLUENCE_SHARED_SECRET fehlt — der "
+                           "Worker wird die Signatur ablehnen (401).")
+            return
     if channel == "telegram":
         missing = [n for n, v in (("TELEGRAM_BOT_TOKEN", settings.TELEGRAM_BOT_TOKEN),
                                   ("TELEGRAM_CHAT_ID", settings.TELEGRAM_CHAT_ID))

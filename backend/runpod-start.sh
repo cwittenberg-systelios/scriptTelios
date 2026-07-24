@@ -1025,7 +1025,10 @@ echo ""
 echo "${GO}Cloudflare Named Tunnel pruefen..."
 
 CLOUDFLARED_BIN="/workspace/bin/cloudflared"
-TUNNEL_HOSTNAME="scriptelios.win"
+# Aus /workspace/.env ueberschreibbar (Default = bisheriger Wert), damit ein
+# Hostname-Wechsel keine Code-Aenderung mehr braucht. Rein kosmetisch: das
+# echte Routing steht in der Public-Hostname-Konfiguration des Tunnels.
+TUNNEL_HOSTNAME="${TUNNEL_HOSTNAME:-scriptelios.win}"
 TUNNEL_URL="https://${TUNNEL_HOSTNAME}"
 
 # cloudflared installieren falls nicht vorhanden

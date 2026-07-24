@@ -18,6 +18,7 @@
 //   GET  /logs        → Statusprotokoll (neueste zuerst, inkl. user)
 //   GET  /debug       → Auth-Diagnose (leakt nur Metadaten)
 //   POST /testrun     → Backend-Testlauf triggern
+//   POST /notify      → Benachrichtigung ausloesen (Backend meldet Feedback)
 //
 // Auth (spiegelt backend/app/core/auth.py):
 //   Header: X-Systelios-User / X-Systelios-Timestamp / X-Systelios-Signature
@@ -34,10 +35,20 @@
 //   TELEGRAM_CHAT_ID          (Secret, optional)
 //   LOGS                      (KV)      — Statusprotokoll + mutable Pod-ID
 //
+// Backend-Hostname: Konstante BACKEND_BASE (siehe unten) — nicht mehrfach
+// hartcodiert. Muss zum Public Hostname des Named Tunnels passen.
+//
 // KV-Keys im LOGS-Namespace:
 //   "<epoch_ms>"    → JSON-Log-Eintrag (Key = Date.now().toString())
 //   "state:podId"   → aktuell gesetzte Pod-ID (mutabel, per /setPodId)
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Basis-URL des Pod-Backends (Cloudflare Named Tunnel). EINZIGE Stelle -
+// vorher stand der Hostname an vier Stellen hartcodiert, ein Hostname-Wechsel
+// haette Selfcheck, Testrun und Health-Warteschleife stillschweigend gebrochen.
+// Bei Umzug auf eine andere Subdomain nur hier aendern (und den Public
+// Hostname des Tunnels im Zero-Trust-Dashboard nachziehen).
+const BACKEND_BASE = "https://scriptelios.win";
 
 const AUTH_WINDOW_SEC = 300;         // Replay-Fenster (== AUTH_TIMESTAMP_WINDOW_SEC)
 const POD_ID_KEY = "state:podId";    // KV-Key fuer die mutable Pod-ID
@@ -91,7 +102,7 @@ export default {
         // Backend-Self-Check AUS WORKER-SICHT — genau das, was fetchBackendSelfcheck sieht.
         let backend;
         try {
-          const br = await fetch("https://scriptelios.win/api/selfcheck",
+          const br = await fetch(`${BACKEND_BASE}/api/selfcheck`,
             { signal: AbortSignal.timeout(15000), headers: { "Accept": "application/json" } });
           const bt = await br.text();
           let parsed = null; try { parsed = JSON.parse(bt); } catch {}
@@ -131,6 +142,7 @@ export default {
       if (url.pathname === "/logs")     return await getLogs(env, req);
       if (url.pathname === "/debug")    return await debugAuth(env, req);
       if (url.pathname === "/testrun")  return await triggerTestRun(env, ctx, req);
+      if (url.pathname === "/notify")   return await handleNotify(req, env, secrets, user);
 
       return json({ error: "not_found", path: url.pathname }, { status: 404, env, req });
     } catch (err) {
@@ -686,7 +698,7 @@ async function handlePods(env, secrets, req) {
 
 async function fetchBackendSelfcheck() {
   try {
-    const res = await fetch("https://scriptelios.win/api/selfcheck",
+    const res = await fetch(`${BACKEND_BASE}/api/selfcheck`,
       { signal: AbortSignal.timeout(15000), headers: { "Accept": "application/json" } });
     const text = await res.text();
     try {
@@ -870,7 +882,7 @@ async function triggerTestRun(env, ctx, req) {
 }
 
 async function runTests(secrets) {
-  const TEST_URL = "https://scriptelios.win/api/testrun";
+  const TEST_URL = `${BACKEND_BASE}/api/testrun`;
   const TIMEOUT_MS = 300_000; // max 5 Minuten fuer die Test-Suite
 
   let res, text;
@@ -977,7 +989,7 @@ async function debugAuth(env, req) {
 // ─────────────────────────────────────────────
 
 async function waitForBackend(secrets, runpodResult) {
-  const HEALTH_URL = "https://scriptelios.win/api/health";
+  const HEALTH_URL = `${BACKEND_BASE}/api/health`;
   const INITIAL_WAIT_MS = 60_000;   // 60s initialer Boot-Wait
   const POLL_INTERVAL_MS = 30_000;  // 30s zwischen Versuchen
   const MAX_ATTEMPTS = 14;          // 14 × 30s = 7min Polling = 8min gesamt
@@ -1054,6 +1066,66 @@ async function podIdFromSecrets(secrets) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ─────────────────────────────────────────────
+// NOTIFY — Benachrichtigungen im Auftrag des Backends (Sprint F2)
+// ─────────────────────────────────────────────
+//
+// Warum ueber den Worker statt direkt vom Pod: die Telegram-Credentials
+// bleiben ausschliesslich hier im Secrets Store. Der Pod - die Maschine mit
+// den Klientendaten - haelt kein Telegram-Secret; er signiert nur mit dem
+// ohnehin vorhandenen CONFLUENCE_SHARED_SECRET.
+//
+// SICHERHEIT - bewusst KEIN Freitext-Relay:
+// Das Confluence-Makro signiert im Browser, das Shared Secret steht also im
+// Seitenquelltext. Wer es liest, kann jeden Endpunkt hier aufrufen (gilt
+// ebenso fuer /start und /stop - das Bedrohungsmodell aendert sich nicht).
+// Damit daraus kein beliebiger Nachrichtenkanal in den Admin-Chat wird,
+// baut der Worker den Text SELBST aus strukturierten, validierten Feldern.
+// Ein "text"-Feld im Body wird ignoriert.
+//
+// DSGVO: der Feedback-Freitext verlaesst den Pod nie - er steht nur in
+// feedback.log auf EU-Infrastruktur. Hier kommen ausschliesslich Rating,
+// Workflow, Job-ID und Login an.
+
+async function handleNotify(req, env, secrets, user) {
+  if (req.method !== "POST") {
+    return json({ error: "method_not_allowed" }, { status: 405, env, req });
+  }
+
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "invalid_json" }, { status: 400, env, req });
+  }
+
+  const kind = String(body?.kind || "");
+  if (kind !== "feedback") {
+    return json({ error: "unknown_kind", kind }, { status: 400, env, req });
+  }
+
+  const rating = Number(body?.rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return json({ error: "invalid_rating" }, { status: 400, env, req });
+  }
+
+  // Freitextfelder werden NICHT uebernommen; nur kurze Kennungen, hart
+  // begrenzt und auf unverdaechtige Zeichen reduziert.
+  const clean = (v, max) => String(v ?? "").replace(/[^\w.\-:@]/g, "").slice(0, max);
+  const workflow = clean(body?.workflow, 40) || "?";
+  const jobId    = clean(body?.jobId, 8) || "?";
+  const from     = clean(body?.user, 64) || clean(user, 64) || "?";
+
+  const stars = "\u2b50".repeat(rating);
+  await notify(secrets,
+    `${stars} ${rating}/5 Feedback\nWorkflow: ${workflow}\nJob: ${jobId}\nVon: ${from}`);
+
+  await log(env, { action: "notify", status: "SUCCESS", user,
+                   detail: `feedback ${rating}/5 (${workflow})` });
+
+  return json({ ok: true }, { env, req });
 }
 
 // ─────────────────────────────────────────────
