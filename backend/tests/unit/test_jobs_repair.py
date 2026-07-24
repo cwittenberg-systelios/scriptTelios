@@ -451,7 +451,13 @@ class TestRunRepairCoroutine:
 
 class TestCreateRepairJob:
 
-    def test_create_repair_job_sets_parent_and_input(self):
+    # v19.13: async statt sync. create_job() -> _spawn_db_task() braucht
+    # einen laufenden Event-Loop (wie in Produktion, wo ausschliesslich
+    # async FastAPI-Handler aufrufen). Als Sync-Test hing das Ergebnis an
+    # der Testreihenfolge: allein gruen, nach einem asyncio.run()-Test rot,
+    # weil der geschlossene Loop das Thread-lokale get_event_loop() leer
+    # zuruecklaesst. Mit async laeuft der Test deterministisch im Loop.
+    async def test_create_repair_job_sets_parent_and_input(self):
         from app.services.job_queue import job_queue
 
         state = job_queue.create_repair_job(
@@ -470,4 +476,38 @@ class TestCreateRepairJob:
             assert d["repair_input"]["accepted_issue_codes"] == ["X"]
         finally:
             # Cleanup damit Cache nicht waechst zwischen Tests
+            job_queue._cache.pop(state.job_id, None)
+
+    async def test_create_job_persistiert_im_laufenden_loop(self):
+        """Positivfall: mit Loop wird der DB-Task tatsaechlich gestartet."""
+        from app.services.job_queue import job_queue
+
+        with patch.object(job_queue, "_db_insert_job",
+                          new_callable=AsyncMock) as insert_mock:
+            state = job_queue.create_job("anamnese", "test")
+            try:
+                assert insert_mock.called
+                # Task wurde im Loop registriert (Referenz gehalten)
+                assert job_queue._bg_tasks
+                await asyncio.sleep(0)
+            finally:
+                job_queue._cache.pop(state.job_id, None)
+
+    def test_create_job_ohne_event_loop_bricht_nicht_ab(self):
+        """v19.13-Regression: ohne laufenden Loop darf create_job() NICHT
+        werfen. Vorher schlug asyncio.ensure_future() mit RuntimeError fehl,
+        nachdem der Job schon im Cache lag. Jetzt: Job wird zurueckgegeben,
+        der DB-Task entfaellt und wird geloggt."""
+        from app.services.job_queue import job_queue
+
+        # Bewusst SYNC (kein Loop im Thread) - genau der Fall, der vorher
+        # die Testreihenfolge-Abhaengigkeit erzeugt hat.
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+
+        state = job_queue.create_job("anamnese", "ohne loop")
+        try:
+            assert state.job_id
+            assert state.workflow == "anamnese"
+        finally:
             job_queue._cache.pop(state.job_id, None)

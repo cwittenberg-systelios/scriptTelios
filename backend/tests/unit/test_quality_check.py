@@ -162,12 +162,17 @@ class TestLengthCheck:
         codes = {i.code for i in issues}
         assert ISSUE_CODE_LENGTH_TOO_SHORT in codes
 
-    def test_too_long_akutantrag(self):
-        # Akutantrag-Max ist 350 (workflows.py); 800w klar darueber
-        text = _make_text(800)
+    def test_zu_lang_erzeugt_bewusst_kein_issue(self):
+        # Laenge ist KEIN Ko-Kriterium mehr (_check_length, Eval-Framework
+        # Punkt 3): Ueberschreitungen feuerten nur unnoetige Repair-Prompts.
+        # Ein Issue gibt es ausschliesslich bei EXTREMER Kuerze (< 50% des
+        # Minimums, Stub-/Abbruchverdacht). Der Test sichert ab, dass
+        # LENGTH_TOO_LONG nicht versehentlich reaktiviert wird - der Code
+        # existiert noch fuer Alt-Jobs in der DB.
+        text = _make_text(800)   # Akutantrag-Richtwert ist 350
         issues = run_quality_check(text, "akutantrag")
         codes = {i.code for i in issues}
-        assert ISSUE_CODE_LENGTH_TOO_LONG in codes
+        assert ISSUE_CODE_LENGTH_TOO_LONG not in codes
 
     def test_in_range_no_length_issue(self):
         # 400w fuer anamnese ist im Range 280-650
@@ -223,10 +228,21 @@ class TestKeywordCheck:
 class TestSectionCheck:
 
     def test_entlassbericht_required_sections(self):
+        # "Vorstellungsanlass" wurde fuer den Entlassbericht durch
+        # "Anliegen und Behandlungsziele" ersetzt (ressourcenorientierte
+        # Tonalitaet, v19.6.1) - problemzentrierte Sektionsnamen gehoeren
+        # dort nicht mehr hin. Fuer die Anamnese bleibt der Begriff
+        # bestehen (siehe test_anamnese_behaelt_vorstellungsanlass).
         secs = required_sections_for("entlassbericht")
-        assert "Vorstellungsanlass" in secs
+        assert "Anliegen und Behandlungsziele" in secs
         assert "Behandlungsverlauf" in secs
+        assert "Gesamtbewertung" in secs
         assert "Empfehlung" in secs
+        assert "Vorstellungsanlass" not in secs
+
+    def test_anamnese_behaelt_vorstellungsanlass(self):
+        # Gegenprobe: die Umbenennung betrifft NUR den Entlassbericht.
+        assert "Vorstellungsanlass" in required_sections_for("anamnese")
 
     def test_missing_section_entlassbericht(self):
         # Text ohne 'Empfehlung'/'empfohlen'/'ambulant'/...

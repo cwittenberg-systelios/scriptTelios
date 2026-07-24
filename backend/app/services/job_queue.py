@@ -282,8 +282,32 @@ class JobQueue:
           2. done_callback loggt Exceptions, die sonst nur beim
              Interpreter-Shutdown als 'Task exception was never retrieved'
              auftauchen wuerden.
+          3. v19.13: expliziter get_running_loop() statt ensure_future().
+             ensure_future() faellt ohne laufenden Loop auf das seit
+             Python 3.10 deprecatete get_event_loop() zurueck, das unter
+             3.12 RuntimeError wirft. create_job() ist SYNCHRON - der
+             Fehler flog dem Aufrufer entgegen, nachdem der Job bereits
+             im Cache lag (inkonsistenter Zustand: Job im Speicher, aber
+             Request abgebrochen). Alle Produktions-Aufrufer sind
+             async-Handler (jobs.py create_generate_job / repair_execute /
+             cancel), dort gibt es immer einen laufenden Loop. Ohne Loop
+             (reiner Sync-Kontext, Unit-Tests) wird der DB-Task jetzt
+             uebersprungen und laut geloggt statt den Aufrufer zu sprengen.
         """
-        task = asyncio.ensure_future(coro)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Coroutine explizit schliessen, sonst RuntimeWarning
+            # "coroutine ... was never awaited" beim naechsten GC-Lauf.
+            coro.close()
+            logger.error(
+                "Kein laufender Event-Loop - Hintergrund-DB-Task (%s) "
+                "uebersprungen. Der Job existiert nur im Cache, NICHT in "
+                "der DB.", what,
+            )
+            return
+
+        task = loop.create_task(coro)
         self._bg_tasks.add(task)
 
         def _done(t: asyncio.Task, _what=what) -> None:
