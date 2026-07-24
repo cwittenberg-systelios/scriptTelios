@@ -144,8 +144,10 @@ class Settings(BaseSettings):
     # Kanal für Push-Benachrichtigung bei neuem Nutzerfeedback:
     #   "off" (Default) | "telegram"
     # Telegram nutzt denselben Bot wie die Selfcheck-Alerts des Cloudflare
-    # Workers; Token/Chat-ID müssen dafür zusätzlich im RUNPOD_STARTCOMMAND
-    # exportiert werden. Push enthält NIE Feedback-Freitext (DSGVO —
+    # Workers. Dessen Secrets-Store-Bindings sind für das Backend NICHT
+    # sichtbar — Token/Chat-ID gehören in /workspace/.env auf dem Pod
+    # (runpod-start.sh sourct sie mit "set -a" in die Prozessumgebung).
+    # Push enthält NIE Feedback-Freitext (DSGVO —
     # siehe app/services/feedback_notify.py).
     FEEDBACK_NOTIFY:    str = "off"
     TELEGRAM_BOT_TOKEN: str = ""

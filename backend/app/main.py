@@ -50,6 +50,11 @@ async def _cleanup_old_uploads():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("sysTelios Backend startet (Modell: %s)", settings.LLM_MODEL)
+    # Sprint F1: Feedback-Push-Konfiguration beim Start pruefen und loggen -
+    # sonst faellt eine fehlende TELEGRAM_*-Variable erst dann auf, wenn ein
+    # Feedback abgegeben wurde und die Nachricht ausbleibt.
+    from app.services.feedback_notify import log_effective_config as _fb_cfg
+    _fb_cfg()
     await init_db()
     # Recordings-Verzeichnis sicherstellen (P0-Aufnahmen)
     from app.core.files import recordings_dir

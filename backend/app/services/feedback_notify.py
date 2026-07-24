@@ -4,10 +4,15 @@ backend/app/services/feedback_notify.py — Push-Benachrichtigung bei Feedback (
 Konfigurierbarer Notifier mit Kanal-Abstraktion:
   FEEDBACK_NOTIFY = "off"      → keine Benachrichtigung (Default)
   FEEDBACK_NOTIFY = "telegram" → Telegram-Bot-Nachricht
-                                 (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID nötig;
-                                  gleicher Bot wie die Selfcheck-Alerts des
-                                  Cloudflare Workers — Vars müssen zusätzlich
-                                  im RUNPOD_STARTCOMMAND exportiert werden)
+                                 (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID nötig)
+
+Konfigurationsort: /workspace/.env auf dem Pod. runpod-start.sh sourct diese
+Datei mit "set -a", die Werte landen also in der Prozessumgebung von uvicorn.
+Sie liegt auf dem persistenten Network Volume und überlebt Stop/Resume.
+Der gleiche Bot bedient die Selfcheck-Alerts des Cloudflare Workers — dessen
+Secrets-Store-Bindings sind für das Backend aber NICHT sichtbar (der Worker
+versendet seine Alerts selbst und startet den Pod nur per podResume, ohne
+Env-Übergabe). Die Werte müssen daher separat auf dem Pod stehen.
 
 Weitere Kanäle (z.B. SMTP) können als _send_<kanal>() ergänzt und in
 _CHANNELS registriert werden.
@@ -49,10 +54,16 @@ def _build_message(rating: int, workflow: str, job_id: str, user: str) -> str:
 async def _send_telegram(text: str) -> None:
     token = (settings.TELEGRAM_BOT_TOKEN or "").strip()
     chat_id = (settings.TELEGRAM_CHAT_ID or "").strip()
-    if not token or not chat_id:
+    missing = [n for n, v in (("TELEGRAM_BOT_TOKEN", token),
+                              ("TELEGRAM_CHAT_ID", chat_id)) if not v]
+    if missing:
         logger.warning(
-            "FEEDBACK_NOTIFY=telegram, aber TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID "
-            "fehlen — Push übersprungen."
+            "Feedback-Push übersprungen: %s fehlt/fehlen in der Pod-Umgebung. "
+            "Achtung: die gleichnamigen Cloudflare-Worker-Secrets zählen NICHT — "
+            "der Worker versendet seine Selfcheck-Alerts selbst, das Backend hat "
+            "keinen Zugriff darauf. Werte in /workspace/.env eintragen "
+            "(wird von runpod-start.sh mit 'set -a' exportiert) und Pod neu starten.",
+            ", ".join(missing),
         )
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -87,15 +98,54 @@ async def notify_feedback(rating: int, workflow: str, job_id: str, user: str) ->
         logger.warning("Feedback-Push via %s fehlgeschlagen: %s", channel, e)
 
 
+# RUF006: referenzlose Tasks darf der GC jederzeit einsammeln — asyncio haelt
+# selbst nur schwache Referenzen. Ohne dieses Set kann ein Push mitten im
+# HTTP-Call verschwinden (still, ohne Logzeile). Gleiche Konvention wie die
+# Task-Referenzen im lifespan von main.py.
+_background_tasks: set[asyncio.Task] = set()
+
+
 def notify_feedback_background(rating: int, workflow: str, job_id: str, user: str) -> None:
     """Startet notify_feedback als Hintergrund-Task (nicht awaiten)."""
     try:
-        asyncio.get_running_loop().create_task(
+        task = asyncio.get_running_loop().create_task(
             notify_feedback(rating, workflow, job_id, user)
         )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
     except RuntimeError:
         # Kein laufender Loop (z.B. Sync-Testkontext) — dann synchron best effort.
         try:
             asyncio.run(notify_feedback(rating, workflow, job_id, user))
         except Exception as e:  # noqa: BLE001
             logger.warning("Feedback-Push (sync-Fallback) fehlgeschlagen: %s", e)
+
+
+def log_effective_config() -> None:
+    """
+    Beim Start aufgerufen (lifespan in main.py). Macht eine Fehlkonfiguration
+    sofort im Log sichtbar, statt sie erst beim ersten Feedback aufzudecken —
+    bis dahin sieht der Nutzer nur "kein Push kommt an".
+    """
+    raw = settings.FEEDBACK_NOTIFY or "off"
+    channel = raw.strip().lower()
+    if channel in ("", "off", "none", "0", "false"):
+        logger.info("Feedback-Push: deaktiviert (FEEDBACK_NOTIFY=%r).", raw)
+        return
+    if channel not in _CHANNELS:
+        logger.warning("Feedback-Push: FEEDBACK_NOTIFY=%r ist kein bekannter Kanal "
+                       "(bekannt: %s) — es wird nichts versendet.",
+                       raw, ", ".join(sorted(_CHANNELS)))
+        return
+    if channel == "telegram":
+        missing = [n for n, v in (("TELEGRAM_BOT_TOKEN", settings.TELEGRAM_BOT_TOKEN),
+                                  ("TELEGRAM_CHAT_ID", settings.TELEGRAM_CHAT_ID))
+                   if not (v or "").strip()]
+        if missing:
+            logger.warning(
+                "Feedback-Push: FEEDBACK_NOTIFY=telegram, aber %s fehlt/fehlen in der "
+                "Pod-Umgebung — es wird NICHTS versendet. Die gleichnamigen "
+                "Cloudflare-Worker-Secrets zaehlen nicht; Werte gehoeren in "
+                "/workspace/.env.", ", ".join(missing))
+            return
+    logger.info("Feedback-Push aktiv (Kanal: %s).", channel)
