@@ -3,7 +3,7 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { clearActiveJob, saveActiveJob } from "./shared.jsx";
+import { clearActiveJob, saveActiveJob } from "./shared.js";
 
 
 // sysTelios CI – angepasst an Confluence-Intranet-Screenshot:
@@ -96,7 +96,8 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
   if (therapeutId)       fd.append("therapeut_id",    therapeutId);
   if (files.patientName) fd.append("patientenname",   files.patientName);
   // v19.8: strukturiertes Geschlecht - unabhaengig vom Kuerzel-Gate. Nur
-  // "w"/"m" senden; "auto" = Backend-Default (ableiten wie bisher).
+  // "w"/"m" senden. v19.12: "auto" existiert nicht mehr - ohne Wahl ("")
+  // extrahiert das Backend Geschlecht+Name aus der Antragsvorlage.
   if (files.geschlecht === "w" || files.geschlecht === "m") fd.append("geschlecht", files.geschlecht);
 
   // 1. P0-Recording → p0_recording_id immer senden; transcript nur wenn vorhanden
@@ -171,7 +172,8 @@ async function startJob(workflow, prompt, userContent, files = {}) {
   if (therapeutId)       fd.append("therapeut_id",    therapeutId);
   if (files.patientName) fd.append("patientenname",   files.patientName);
   // v19.8: strukturiertes Geschlecht - unabhaengig vom Kuerzel-Gate. Nur
-  // "w"/"m" senden; "auto" = Backend-Default (ableiten wie bisher).
+  // "w"/"m" senden. v19.12: "auto" existiert nicht mehr - ohne Wahl ("")
+  // extrahiert das Backend Geschlecht+Name aus der Antragsvorlage.
   if (files.geschlecht === "w" || files.geschlecht === "m") fd.append("geschlecht", files.geschlecht);
 
   if (files.audio && files.audio.__p0recording) {

@@ -3,12 +3,12 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, downloadTranscript, getApiBase, pollJob, startJob } from "../api.jsx";
+import { apiFetch, downloadTranscript, getApiBase, pollJob, startJob } from "../api.js";
 import { AudioInput } from "../audio.jsx";
 import { useDraftCache, useJobResult, useResumeWorkflowJob } from "../hooks.jsx";
 import { P_AKUT, P_ANAMNESE, P_BEFUND_VORLAGE } from "../prompt-defaults.jsx";
 import { RepairBundle, ResultVersionsTabs } from "../qa.jsx";
-import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.jsx";
+import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.js";
 import { Card, Dropzone, InputTabs, Output, PromptEditor, Tags, JobModelPicker, copyFormatted, FeedbackButton } from "../ui.jsx";
 
 
@@ -18,7 +18,7 @@ const P2_DRAFT_DEFAULT = {
   text: "", dx: [], styleText: "",
   prompt: P_ANAMNESE,
   befundVorlage: P_BEFUND_VORLAGE,
-  geschlecht: "auto", kuerzel: "",
+  geschlecht: "", kuerzel: "",
 };
 
 function P2({ toast, resumeJob, onResumed }) {
@@ -36,6 +36,11 @@ function P2({ toast, resumeJob, onResumed }) {
   // (value={text}/onChange={setText} bleibt unveraendert).
   const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p2", P2_DRAFT_DEFAULT);
   const { text, dx, styleText, prompt, befundVorlage, geschlecht, kuerzel } = draft;
+
+  // v19.12: einmalige Migration persistierter Drafts ("auto" entfaellt).
+  useEffect(() => {
+    if (draft.geschlecht === "auto") updateDraft({ geschlecht: "" });
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
   const setText          = useCallback(v => updateDraft({ text: v }),          [updateDraft]);
   const setDx            = useCallback(v => updateDraft({ dx: v }),            [updateDraft]);
   const setStyleText     = useCallback(v => updateDraft({ styleText: v }),     [updateDraft]);
@@ -124,18 +129,11 @@ function P2({ toast, resumeJob, onResumed }) {
     jobOps.reset();
     const dxStr = dx.length ? dx.join(", ") : "noch nicht festgelegt";
 
+    // v19.12 (F2a): KLIENT-GESCHLECHT-Hinweis kommt jetzt ausschliesslich
+    // vom Backend (jobs.py v19.8, Marker-Guard) - siehe P1.
     const k = kuerzel.trim().replace(/\.?$/, ".");
-    // v15 Bug F2: Konsistent mit P1 - "konsequent ... Pronomen und Endungen"
-    const nameHinweis = kuerzel.trim()
-      ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}" oder "Herr ${k}").`
-      : "";
-    const geschlechtHinweis = {
-      "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende konsequent weibliche Pronomen und Endungen.${nameHinweis}`,
-      "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende konsequent männliche Pronomen und Endungen.${nameHinweis}`,
-      "auto": `\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus den Unterlagen ab. Falls nicht erkennbar, neutrale Formen verwenden.${nameHinweis}`,
-    }[geschlecht];
 
-    const sys = prompt.replace("{diagnosen}", dxStr) + geschlechtHinweis;
+    const sys = prompt.replace("{diagnosen}", dxStr);
 
     // Expliziten Patientennamen fuer Backend zusammensetzen (P2)
     let patientNameExplicit = null;
@@ -275,7 +273,6 @@ function P2({ toast, resumeJob, onResumed }) {
               {[
                 { val:"w", label:"♀ weiblich" },
                 { val:"m", label:"♂ männlich" },
-                { val:"auto", label:"Auto"    },
               ].map(({ val, label }) => (
                 <button key={val} onClick={() => setGeschlecht(val)} style={{
                   padding:"4px 10px", borderRadius:3, cursor:"pointer",
@@ -364,7 +361,8 @@ function P2({ toast, resumeJob, onResumed }) {
 // Sprint B2: persistierte Text-Felder P2b (Files bleiben aussen vor)
 const P2B_DRAFT_DEFAULT = {
   styleText: "", fokus: "", prompt: P_AKUT,
-  geschlecht: "auto", kuerzel: "",
+  // v19.12: geschlecht/kuerzel entfernt - beides kommt aus der
+  // Antragsvorlage (Backend-Extraktion, Kandidaten-Konsens).
 };
 
 function P2b({ toast, resumeJob, onResumed }) {
@@ -375,12 +373,10 @@ function P2b({ toast, resumeJob, onResumed }) {
 
   // B2: Text-Felder ueber useDraftCache (Pattern aus P2/B1)
   const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p2b", P2B_DRAFT_DEFAULT);
-  const { styleText, fokus, prompt, geschlecht, kuerzel } = draft;
+  const { styleText, fokus, prompt } = draft;
   const setStyleText  = useCallback(v => updateDraft({ styleText: v }),  [updateDraft]);
   const setFokus      = useCallback(v => updateDraft({ fokus: v }),      [updateDraft]);
   const setPrompt     = useCallback(v => updateDraft({ prompt: v }),     [updateDraft]);
-  const setGeschlecht = useCallback(v => updateDraft({ geschlecht: v }), [updateDraft]);
-  const setKuerzel    = useCallback(v => updateDraft({ kuerzel: v }),    [updateDraft]);
 
   const draftDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(P2B_DRAFT_DEFAULT),
@@ -442,21 +438,14 @@ function P2b({ toast, resumeJob, onResumed }) {
     setLastJobId(null);
     attachedRef.current = null;
     try {
-      let patientNameExplicit = null;
-      if (kuerzel.trim()) {
-        const kurz = kuerzel.trim().replace(/\.?$/, ".");
-        if (geschlecht === "w")      patientNameExplicit = `Frau ${kurz}`;
-        else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
-        else                          patientNameExplicit = kurz;
-      }
+      // v19.12: patientName/geschlecht kommen aus der Antragsvorlage
+      // (Backend-Extraktion) - kein manueller Override mehr.
       const jobId = await startJob("akutantrag", prompt, "", {
         antragsvorlage: antrag,   // Pflicht: Anamnese, Befund, Diagnosen
         style:          style,
         styleText:      styleText || null,
         bullets:        fokus || null,
         model:          jobModel || null,
-        patientName:    patientNameExplicit,
-        geschlecht:     geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
       });
       attach(jobId);
     }
@@ -515,41 +504,12 @@ function P2b({ toast, resumeJob, onResumed }) {
           </Card>
 
           <div className="action-bar">
-            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto", flexWrap:"wrap"}}>
-              <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
-              {[
-                { val:"w", label:"♀ weiblich" },
-                { val:"m", label:"♂ männlich" },
-                { val:"auto", label:"Auto"    },
-              ].map(({ val, label }) => (
-                <button key={val} onClick={() => setGeschlecht(val)} style={{
-                  // v19.9.1: var(--st-accent)/--st-accent-bg/--st-bg waren nie in
-                  // styles.jsx definiert -> Selected-State war unsichtbar.
-                  // Design aus P1 uebernommen (gewaehlt = gefuelltes Klinikrot).
-                  padding:"4px 10px", borderRadius:3, cursor:"pointer",
-                  fontSize:12, fontWeight: geschlecht === val ? 700 : 400,
-                  background: geschlecht === val ? "var(--st-red)" : "var(--st-gray-light)",
-                  color: geschlecht === val ? "white" : "var(--st-text-soft)",
-                  border: geschlecht === val ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
-                  transition:"all 0.12s",
-                }}>{label}</button>
-              ))}
-              <div style={{display:"flex", alignItems:"center", gap:4, marginLeft:4}}>
-                <span style={{fontSize:11, color:"var(--st-text-soft)"}}>Kürzel</span>
-                <input
-                  type="text"
-                  value={kuerzel}
-                  onChange={e => setKuerzel(e.target.value)}
-                  placeholder="K."
-                  maxLength={8}
-                  style={{
-                    width:48, padding:"3px 6px", fontSize:12, borderRadius:3,
-                    border:"1px solid var(--st-gray-border)", background:"var(--st-bg)",
-                    color:"var(--st-text)", fontFamily:"inherit",
-                  }}
-                />
-              </div>
-            </div>
+            {/* v19.12: Klient-Controls (Geschlecht + Kuerzel) entfernt.
+                Beides wird backend-seitig aus der Antragsvorlage extrahiert
+                (Kandidaten-Konsens ueber Adressblock + "wir berichten ueber",
+                Kreuzcheck gegen den Verlaufsdoku-Kopf). Spacer erhaelt das
+                Button-Layout der action-bar. */}
+            <div style={{marginRight:"auto"}} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button

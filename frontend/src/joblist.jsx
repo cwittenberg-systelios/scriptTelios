@@ -3,7 +3,7 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { downloadTranscript } from "./api.jsx";
+import { downloadTranscript } from "./api.js";
 import { RepairBundle, ResultVersionsTabs } from "./qa.jsx";
 import { Output, copyFormatted, FeedbackButton } from "./ui.jsx";
 

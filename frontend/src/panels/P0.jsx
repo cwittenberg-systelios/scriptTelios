@@ -3,9 +3,9 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, downloadViaApi, getApiBase, getConfluenceUser } from "../api.jsx";
+import { apiFetch, downloadViaApi, getApiBase, getConfluenceUser } from "../api.js";
 import { AudioRecorder } from "../audio.jsx";
-import { _pendingLabels, _recordingsCache, offlineQueueAdd, offlineQueueList, offlineQueueRemove } from "../shared.jsx";
+import { _pendingLabels, _recordingsCache, offlineQueueAdd, offlineQueueList, offlineQueueRemove } from "../shared.js";
 import { Card, Dropzone } from "../ui.jsx";
 
 

@@ -3,18 +3,19 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, getApiBase, pollJob, startJob } from "../api.jsx";
+import { apiFetch, getApiBase, pollJob, startJob } from "../api.js";
 import { useDraftCache, useJobResult, useResumeWorkflowJob } from "../hooks.jsx";
 import { P_ENTL } from "../prompt-defaults.jsx";
 import { RepairBundle, ResultVersionsTabs } from "../qa.jsx";
-import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.jsx";
+import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.js";
 import { Card, Dropzone, InputTabs, Output, PromptEditor, JobModelPicker, copyFormatted, FeedbackButton } from "../ui.jsx";
 
 
 // Sprint B2: persistierte Text-Felder P4 (Files bleiben aussen vor)
 const P4_DRAFT_DEFAULT = {
   styleText: "", fokus: "", prompt: P_ENTL,
-  geschlecht: "auto", kuerzel: "",
+  // v19.12: geschlecht/kuerzel entfernt - beides kommt aus der
+  // Antragsvorlage (Backend-Extraktion, Kandidaten-Konsens).
 };
 
 function P4({ toast, resumeJob, onResumed }) {
@@ -26,12 +27,10 @@ function P4({ toast, resumeJob, onResumed }) {
 
   // B2: Text-Felder ueber useDraftCache (Pattern aus P2/B1)
   const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p4", P4_DRAFT_DEFAULT);
-  const { styleText, fokus, prompt, geschlecht, kuerzel } = draft;
+  const { styleText, fokus, prompt } = draft;
   const setStyleText  = useCallback(v => updateDraft({ styleText: v }),  [updateDraft]);
   const setFokus      = useCallback(v => updateDraft({ fokus: v }),      [updateDraft]);
   const setPrompt     = useCallback(v => updateDraft({ prompt: v }),     [updateDraft]);
-  const setGeschlecht = useCallback(v => updateDraft({ geschlecht: v }), [updateDraft]);
-  const setKuerzel    = useCallback(v => updateDraft({ kuerzel: v }),    [updateDraft]);
 
   const draftDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(P4_DRAFT_DEFAULT),
@@ -92,14 +91,8 @@ function P4({ toast, resumeJob, onResumed }) {
     setLastJobId(null);
     attachedRef.current = null;
     try {
-      // v16 Audit-Patch A3: patientName-Override ans Backend durchreichen
-      let patientNameExplicit = null;
-      if (kuerzel.trim()) {
-        const kurz = kuerzel.trim().replace(/\.?$/, ".");
-        if (geschlecht === "w")      patientNameExplicit = `Frau ${kurz}`;
-        else if (geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
-        else                          patientNameExplicit = kurz;
-      }
+      // v19.12: patientName/geschlecht kommen aus der Antragsvorlage
+      // (Backend-Extraktion, Kandidaten-Konsens) - kein manueller Override.
       const jobId = await startJob("entlassbericht", prompt, "", {
         antragsvorlage: bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund/Name
         verlauf:        verlauf,  // Verlaufsdokumentation
@@ -107,8 +100,6 @@ function P4({ toast, resumeJob, onResumed }) {
         styleText:      styleText || null,
         bullets:        fokus || null,
         model:          jobModel || null,
-        patientName:    patientNameExplicit,
-        geschlecht:     geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
       });
       attach(jobId);
     }
@@ -172,47 +163,12 @@ function P4({ toast, resumeJob, onResumed }) {
           </Card>
 
           <div className="action-bar">
-            {/* v19.8: Klient-Controls nachgeruestet. Der State existierte seit
-                v16 (Audit-Patch A3, "gleicher Patient-Override wie in P1+P2"),
-                wurde aber nie gerendert -> patientNameExplicit war in P4 immer
-                null und der Entlassbericht hing komplett an der Briefkopf-
-                Extraktion aus der Antragsvorlage. Primaerpfad bleibt die
-                Extraktion (Auto); das Feld ist der optionale Override. */}
-            <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto", flexWrap:"wrap"}}>
-              <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
-              {[
-                { val:"w", label:"♀ weiblich" },
-                { val:"m", label:"♂ männlich" },
-                { val:"auto", label:"Auto"    },
-              ].map(({ val, label }) => (
-                <button key={val} onClick={() => setGeschlecht(val)} style={{
-                  // v19.9.1: var(--st-accent)/--st-accent-bg/--st-bg waren nie in
-                  // styles.jsx definiert -> Selected-State war unsichtbar.
-                  // Design aus P1 uebernommen (gewaehlt = gefuelltes Klinikrot).
-                  padding:"4px 10px", borderRadius:3, cursor:"pointer",
-                  fontSize:12, fontWeight: geschlecht === val ? 700 : 400,
-                  background: geschlecht === val ? "var(--st-red)" : "var(--st-gray-light)",
-                  color: geschlecht === val ? "white" : "var(--st-text-soft)",
-                  border: geschlecht === val ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
-                  transition:"all 0.12s",
-                }}>{label}</button>
-              ))}
-              <div style={{display:"flex", alignItems:"center", gap:4, marginLeft:4}}>
-                <span style={{fontSize:11, color:"var(--st-text-soft)"}}>Kürzel</span>
-                <input
-                  type="text"
-                  value={kuerzel}
-                  onChange={e => setKuerzel(e.target.value)}
-                  placeholder="K."
-                  maxLength={8}
-                  style={{
-                    width:48, padding:"3px 6px", fontSize:12, borderRadius:3,
-                    border:"1px solid var(--st-gray-border)", background:"var(--st-bg)",
-                    color:"var(--st-text)", fontFamily:"inherit",
-                  }}
-                />
-              </div>
-            </div>
+            {/* v19.12: Klient-Controls (v19.8 nachgeruestet) wieder entfernt.
+                Geschlecht + Kuerzel werden backend-seitig aus der
+                Antragsvorlage extrahiert (Kandidaten-Konsens ueber
+                Adressblock + "wir berichten ueber", Kreuzcheck gegen den
+                Verlaufsdoku-Kopf). Spacer erhaelt das Button-Layout. */}
+            <div style={{marginRight:"auto"}} />
             {busy
               ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
               : <button

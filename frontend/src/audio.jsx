@@ -3,8 +3,8 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, getApiBase } from "./api.jsx";
-import { MAX_UPLOAD_MB, _pendingLabels, fmtMB, fmtSec } from "./shared.jsx";
+import { apiFetch, getApiBase } from "./api.js";
+import { MAX_UPLOAD_MB, _pendingLabels, fmtMB, fmtSec } from "./shared.js";
 
 function AudioRecorder({ onRecorded, onError }) {
   const [state, setState] = useState("idle"); // idle | recording | paused | finalizing

@@ -63,17 +63,18 @@ class TestExtractPatientNameMuster1:
         assert result["nachname"] == "Müller-Schmidt"
         assert result["initial"] == "M."
 
-    def test_adelig_von_mit_initiale_vom_letzten_teil(self):
-        # "Ludwig von Beethoven" - Regex captured nur "Beethoven" als Nachname
-        # (das "von" wird vom Regex nicht erfasst). Initiale ist daher "B."
-        # Wenn der Code "van/von/de/der/zu" Special-Casing hat, greift es nur
-        # wenn beide Worte im Nachname-Match landen.
+    def test_adelig_von_initiale_nach_hauskonvention(self):
+        # v19.12: Initiale folgt der Hauskonvention der Klinik-Vorlagen
+        # (Folgeverlaengerung: "Christina von Musterberg" wird im Text
+        # durchgehend "Frau v.M." genannt): Partikel abgekuerzt + Stamm.
+        # Vorher lieferte der Code "B." - das wich vom Hausstil ab.
         text = "Wir berichten über Herrn Ludwig von Beethoven, der..."
         result = extract_patient_name(text)
         assert result is not None
         assert result["anrede"] == "Herr"
-        # Initiale sollte vom echten Nachnamen sein (nicht "v.")
-        assert result["initial"] == "B."
+        assert result["nachname"] == "von Beethoven"
+        assert result["nachname_stamm"] == "Beethoven"
+        assert result["initial"] == "v.B."
 
     def test_grossschreibung_egal(self):
         # "wir" oder "Wir" — beide sollten matchen
@@ -98,7 +99,12 @@ class TestExtractPatientNameMuster1:
 class TestExtractPatientNameMuster2:
     """Briefkopf-Block: 'Frau\\nSabine Schuster' auf separaten Zeilen."""
 
-    def test_frau_block_mit_nachname(self):
+    def test_frau_block_allein_wird_nicht_akzeptiert(self):
+        # v19.12 (F3a): Ein Einzelkandidat aus dem Adressblock reicht NICHT.
+        # Der reine Zeilenblock "Frau\\nName" traf frueher auch die
+        # Sachbearbeiterin der Kasse im Briefkopf (stiller
+        # Personenverwechsler, reproduziert im v19.12-Audit). Ohne
+        # bestaetigenden "wir berichten ueber"-Anker: keine Erkennung.
         text = (
             "AKUTAUFNAHME\n"
             "Antrag auf Kostenübernahme\n"
@@ -106,24 +112,31 @@ class TestExtractPatientNameMuster2:
             "Sabine Schuster\n"
             "Musterweg 89\n"
         )
+        assert extract_patient_name(text) is None
+
+    def test_block_plus_berichten_satz_wird_akzeptiert(self):
+        # Der Normalfall der echten Vorlagen: Adressblock + berichten-Satz
+        # stimmen ueberein -> Konsens aus zwei Ankern.
+        text = (
+            "AKUTAUFNAHME\n"
+            "Antrag auf Kostenübernahme\n"
+            "Frau\n"
+            "Sabine Schuster\n"
+            "Musterweg 89\n"
+            "12346 Musterstadt\n"
+            "geb. 08.09.1982\n"
+            "Sehr geehrte Damen und Herren,\n"
+            "wir berichten über Frau Sabine Schuster, die sich seit dem "
+            "29.01.2026 in unserer stationären Krankenhausbehandlung befindet.\n"
+        )
         result = extract_patient_name(text)
         assert result is not None
         assert result["anrede"] == "Frau"
         assert result["vorname"] == "Sabine"
         assert result["nachname"] == "Schuster"
         assert result["initial"] == "S."
-
-    def test_herr_block_mit_nachname(self):
-        text = (
-            "ENTLASSBERICHT\n"
-            "Herr\n"
-            "Peter Mueller\n"
-            "12345 Musterstadt\n"
-        )
-        result = extract_patient_name(text)
-        assert result is not None
-        assert result["anrede"] == "Herr"
-        assert result["vorname"] == "Peter"
+        assert result["quelle"] == "konsens"
+        assert set(result["anker"]) == {"a1_berichten_ueber", "a2_adressblock"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -337,7 +350,9 @@ class TestPatientNameContract:
         text = "Wir berichten über Frau Test Patient, die..."
         result = extract_patient_name(text)
         assert result is not None
-        assert set(result.keys()) == self.REQUIRED_KEYS
+        # v19.12: Pflicht-Keys als Teilmenge - extract liefert zusaetzlich
+        # nachname_stamm, quelle, anker (Telemetrie + Kreuzcheck).
+        assert self.REQUIRED_KEYS <= set(result.keys())
 
     def test_parse_explicit_dict_schema(self):
         # 'Test Patient' wird (korrekt!) von der Blacklist abgelehnt -

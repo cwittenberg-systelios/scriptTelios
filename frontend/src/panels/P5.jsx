@@ -3,9 +3,9 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, getApiBase, getConfluenceUser } from "../api.jsx";
+import { apiFetch, getApiBase, getConfluenceUser } from "../api.js";
 import { useWorkflowManifest } from "../hooks.jsx";
-import { friendlyError } from "../shared.jsx";
+import { friendlyError } from "../shared.js";
 import { Card, Dropzone, InputTabs } from "../ui.jsx";
 
 

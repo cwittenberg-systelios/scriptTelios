@@ -3,8 +3,8 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, getApiBase } from "./api.jsx";
-import { pickQualityCheck } from "./shared.jsx";
+import { apiFetch, getApiBase } from "./api.js";
+import { pickQualityCheck } from "./shared.js";
 
 
 // ── useDraftCache (Sprint Draft-Persistence B0) ─────────────────────────────
@@ -41,7 +41,14 @@ function useDraftCache(localStorageKey, defaultDraft) {
       const raw = localStorage.getItem(localStorageKey);
       if (!raw) return { ...defaultDraft };
       const cached = JSON.parse(raw);
-      return { ...defaultDraft, ...cached };
+      // v19.12: nur Keys mergen, die der aktuelle Default kennt. Entfernte
+      // Felder (z.B. geschlecht/kuerzel in P2b/P3/P3b/P4) bleiben sonst als
+      // verwaiste Cache-Keys im Draft und halten draftDirty dauerhaft an.
+      const merged = { ...defaultDraft };
+      for (const k of Object.keys(defaultDraft)) {
+        if (k in cached) merged[k] = cached[k];
+      }
+      return merged;
     } catch (_) {
       return { ...defaultDraft };
     }

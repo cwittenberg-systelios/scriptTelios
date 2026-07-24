@@ -3,12 +3,12 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, getApiBase, startJob } from "../api.jsx";
+import { apiFetch, getApiBase, startJob } from "../api.js";
 import { AudioInput } from "../audio.jsx";
 import { useDraftCache, useJobResult } from "../hooks.jsx";
 import { JobDetailPane, JobListPane } from "../joblist.jsx";
 import { P_DOKU } from "../prompt-defaults.jsx";
-import { clearActiveJob, friendlyError } from "../shared.jsx";
+import { clearActiveJob, friendlyError } from "../shared.js";
 import { Card, Dropzone, InputTabs, PromptEditor, JobModelPicker } from "../ui.jsx";
 
 
@@ -27,7 +27,7 @@ function _emptyDraft() {
     style: null,
     styleText: "",
     prompt: P_DOKU,
-    geschlecht: "auto",
+    geschlecht: "",
     kuerzel: "",
     starting: false,
     createdAt: Date.now(),
@@ -39,7 +39,7 @@ function _emptyDraft() {
 // dafuer, dass File-Felder (audio, txtFile, style) und transiente Flags
 // (id, starting, createdAt) NICHT ins localStorage gelangen.
 const P1_DRAFT_TEXT_DEFAULT = {
-  text: "", bullets: "", kuerzel: "", geschlecht: "auto",
+  text: "", bullets: "", kuerzel: "", geschlecht: "",
   prompt: P_DOKU, styleText: "",
 };
 const P1_TEXT_FIELDS = Object.keys(P1_DRAFT_TEXT_DEFAULT);
@@ -58,6 +58,12 @@ function P1({ toast, resumeJob, onResumed }) {
   // Draft-Bau eingemerget, sodass halbausgefuellte Formulare F5 ueberleben.
   const [textCache, updateTextCache, clearTextCache] =
     useDraftCache("st_draft_p1", P1_DRAFT_TEXT_DEFAULT);
+
+  // v19.12: einmalige Migration persistierter Drafts - "auto" existiert
+  // nicht mehr als Option, alter Cache-Wert wird auf "" normalisiert.
+  useEffect(() => {
+    if (textCache.geschlecht === "auto") updateTextCache({ geschlecht: "" });
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // initialDraft wird einmalig beim Mount aus _emptyDraft() + textCache gebaut.
   // Wichtig: useMemo mit [] - textCache wird nur beim ersten Render konsumiert,
@@ -222,18 +228,12 @@ function P1({ toast, resumeJob, onResumed }) {
     if (!d) return;
     updateDraft(d.id, { starting: true });
 
+    // v19.12 (F2a): Der KLIENT-GESCHLECHT-Hinweis wird nicht mehr im
+    // Frontend an den Prompt gehaengt. Das Backend haengt ihn selbst an
+    // (jobs.py v19.8, Marker-Guard) - mit korrektem, geschlechtskonsistentem
+    // Kuerzel-Beispiel. Die Frontend-Strings schalteten den besseren
+    // Backend-Pfad ueber den Marker-Guard aus.
     const k = d.kuerzel.trim().replace(/\.?$/, ".");
-    // v15 Bug F2: Keine Beispieltexte wie "die Klientin/Klient" mehr
-    const nameHinweis = d.kuerzel.trim()
-      ? ` Verwende als Namenskürzel durchgehend "${k}" (z.B. "Frau ${k}" oder "Herr ${k}").`
-      : "";
-    const geschlechtHinweis = {
-      "w":    `\n\nKLIENT-GESCHLECHT: weiblich – verwende konsequent weibliche Pronomen und Endungen.${nameHinweis}`,
-      "m":    `\n\nKLIENT-GESCHLECHT: männlich – verwende konsequent männliche Pronomen und Endungen.${nameHinweis}`,
-      "auto": `\n\nKLIENT-GESCHLECHT: Leite das Geschlecht aus dem Transkript ab (Namen, Pronomen, Anreden). Falls nicht erkennbar, verwende neutrale Formen.${nameHinweis}`,
-    }[d.geschlecht];
-
-    const promptMitGeschlecht = d.prompt + geschlechtHinweis;
 
     let patientNameExplicit = null;
     if (d.kuerzel.trim()) {
@@ -244,7 +244,7 @@ function P1({ toast, resumeJob, onResumed }) {
     }
 
     try {
-      const jobId = await startJob("dokumentation", promptMitGeschlecht, d.text || "", {
+      const jobId = await startJob("dokumentation", d.prompt, d.text || "", {
         audio:        d.audio,
         txtFile:      d.txtFile || null,
         style:        d.style,
@@ -394,7 +394,6 @@ function P1({ toast, resumeJob, onResumed }) {
           {[
             { val:"w", label:"♀ weiblich" },
             { val:"m", label:"♂ männlich" },
-            { val:"auto", label:"Auto"    },
           ].map(({ val, label }) => (
             <button key={val} onClick={() => updateDraft(currentDraft.id, { geschlecht: val })} style={{
               padding:"4px 10px", borderRadius:3, cursor:"pointer",

@@ -1,7 +1,15 @@
 /**
- * scriptTelios Frontend – Unit-Tests für api.js
+ * scriptTelios Frontend – Unit-Tests für src/api.js (v19.12)
  *
- * Testet die reinen Logik-Funktionen ohne React-Overhead.
+ * Läuft gegen das LIVE-Modul (bis v19.11: Test-Duplikat utils/api.js, das
+ * von der App nie importiert wurde und architektonisch abgedriftet war —
+ * u.a. testete es ein blockierendes repair(), das v19.4 C-1 durch
+ * repairStart() + fetchRepairResult() ersetzt hat).
+ *
+ * Mock-Strategie: apiFetch() delegiert an window.signedFetch (Confluence-
+ * HMAC) mit Fallback auf fetch. Die Tests mocken window.signedFetch —
+ * die Produktionssignaturen brauchen keinen _fetch-Injektionsparameter.
+ *
  * Ausführen: npm test (im frontend/-Verzeichnis)
  */
 
@@ -9,182 +17,86 @@ import { jest } from "@jest/globals";
 import {
   getApiBase,
   getConfluenceUser,
-  saveActiveJob,
-  loadActiveJob,
-  clearActiveJob,
   pollJob,
   generate,
-  buildGeschlechtHinweis,
   repairPreview,
-  repair,
-  JOB_STORAGE_KEY,
-} from "../utils/api.js";
+  repairStart,
+  fetchRepairResult,
+} from "../src/api.js";
+import { JOB_STORAGE_KEY } from "../src/shared.js";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Baut einen fetch-Mock der eine Sequenz von Responses liefert */
-function mockFetchSequence(...responses) {
-  let i = 0;
-  return jest.fn(() => {
-    const res = responses[i] ?? responses.at(-1);
-    i++;
-    return Promise.resolve(res);
-  });
-}
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function jsonResponse(body, ok = true, status = 200) {
-  return { ok, status, json: () => Promise.resolve(body) };
+  return { ok, status, statusText: ok ? "OK" : "Error", json: () => Promise.resolve(body) };
 }
 
-// ── getApiBase ────────────────────────────────────────────────────────────────
+/** window.signedFetch-Mock mit Response-Sequenz (letzte wiederholt sich). */
+function mockSignedFetch(...responses) {
+  let i = 0;
+  const fn = jest.fn(() => Promise.resolve(responses[Math.min(i++, responses.length - 1)]));
+  window.signedFetch = fn;
+  return fn;
+}
+
+afterEach(() => {
+  delete window.signedFetch;
+  delete window.SYSTELIOS_API_BASE;
+  delete window.SYSTELIOS_USER;
+  localStorage.clear();
+  jest.useRealTimers();
+});
+
+// ── getApiBase ───────────────────────────────────────────────────────────────
 
 describe("getApiBase()", () => {
-  beforeEach(() => localStorage.clear());
-
   test("gibt Standard-URL zurück wenn nichts konfiguriert", () => {
     expect(getApiBase()).toBe("http://localhost:8000/api");
   });
 
+  test("window.SYSTELIOS_API_BASE hat Vorrang vor localStorage", () => {
+    window.SYSTELIOS_API_BASE = "https://macro.example.com";
+    localStorage.setItem("systelios_backend_url", "https://stored.example.com");
+    expect(getApiBase()).toBe("https://macro.example.com/api");
+  });
+
   test("liest gespeicherte Backend-URL aus localStorage", () => {
-    localStorage.setItem("systelios_backend_url", "https://xyz.trycloudflare.com");
-    expect(getApiBase()).toBe("https://xyz.trycloudflare.com/api");
+    localStorage.setItem("systelios_backend_url", "https://pod.example.com");
+    expect(getApiBase()).toBe("https://pod.example.com/api");
   });
 
   test("entfernt doppeltes /api am Ende", () => {
-    localStorage.setItem("systelios_backend_url", "https://xyz.trycloudflare.com/api");
-    expect(getApiBase()).toBe("https://xyz.trycloudflare.com/api");
+    localStorage.setItem("systelios_backend_url", "https://pod.example.com/api");
+    expect(getApiBase()).toBe("https://pod.example.com/api");
   });
 
   test("entfernt trailing slash", () => {
-    localStorage.setItem("systelios_backend_url", "https://xyz.trycloudflare.com/");
-    expect(getApiBase()).toBe("https://xyz.trycloudflare.com/api");
+    localStorage.setItem("systelios_backend_url", "https://pod.example.com/");
+    expect(getApiBase()).toBe("https://pod.example.com/api");
   });
 });
 
-// ── getConfluenceUser ─────────────────────────────────────────────────────────
+// ── getConfluenceUser ────────────────────────────────────────────────────────
 
 describe("getConfluenceUser()", () => {
-  afterEach(() => { delete window.SYSTELIOS_USER; });
-
   test("gibt leeren String zurück wenn nicht gesetzt", () => {
     expect(getConfluenceUser()).toBe("");
   });
 
   test("gibt window.SYSTELIOS_USER zurück wenn gesetzt", () => {
-    window.SYSTELIOS_USER = "dr.mueller";
-    expect(getConfluenceUser()).toBe("dr.mueller");
+    window.SYSTELIOS_USER = "c.wittenberg";
+    expect(getConfluenceUser()).toBe("c.wittenberg");
   });
 });
 
-// ── Job-Persistenz ────────────────────────────────────────────────────────────
-
-describe("Job-Persistenz (localStorage)", () => {
-  beforeEach(() => localStorage.clear());
-
-  test("saveActiveJob speichert jobId und page", () => {
-    saveActiveJob("job-123", "p1");
-    const raw = JSON.parse(localStorage.getItem(JOB_STORAGE_KEY));
-    expect(raw.jobId).toBe("job-123");
-    expect(raw.page).toBe("p1");
-    expect(raw.startedAt).toBeGreaterThan(0);
-  });
-
-  test("loadActiveJob gibt null zurück wenn kein Job gespeichert", () => {
-    expect(loadActiveJob()).toBeNull();
-  });
-
-  test("loadActiveJob gibt gespeicherten Job zurück", () => {
-    saveActiveJob("job-456", "p2");
-    const job = loadActiveJob();
-    expect(job.jobId).toBe("job-456");
-    expect(job.page).toBe("p2");
-  });
-
-  test("clearActiveJob entfernt gespeicherten Job", () => {
-    saveActiveJob("job-789", "p1");
-    clearActiveJob();
-    expect(loadActiveJob()).toBeNull();
-  });
-
-  test("loadActiveJob gibt null zurück bei korruptem JSON", () => {
-    localStorage.setItem(JOB_STORAGE_KEY, "kein-json{{{");
-    expect(loadActiveJob()).toBeNull();
-  });
-});
-
-// ── buildGeschlechtHinweis ────────────────────────────────────────────────────
-
-describe("buildGeschlechtHinweis()", () => {
-  test("weiblich enthält 'Klientin' und weibliche Pronomen", () => {
-    const h = buildGeschlechtHinweis("w");
-    expect(h).toContain("weiblich");
-    expect(h).toContain("Klientin");
-    expect(h).toContain("sie");
-  });
-
-  test("männlich enthält 'Klient' und männliche Pronomen", () => {
-    const h = buildGeschlechtHinweis("m");
-    expect(h).toContain("männlich");
-    expect(h).toContain("Klient");
-    expect(h).toContain("er");
-  });
-
-  test("auto enthält Anweisung zur Ableitung aus Transkript", () => {
-    const h = buildGeschlechtHinweis("auto");
-    expect(h).toContain("Leite das Geschlecht");
-    expect(h).toContain("Transkript");
-  });
-
-  test("unbekannter Wert gibt leeren String zurück", () => {
-    expect(buildGeschlechtHinweis("unbekannt")).toBe("");
-  });
-
-  test("alle drei Optionen beginnen mit Newlines (kein unbeabsichtigtes Zusammenkleben)", () => {
-    for (const g of ["w", "m", "auto"]) {
-      expect(buildGeschlechtHinweis(g)).toMatch(/^\n\n/);
-    }
-  });
-
-  test("kuerzel wird als Namenskürzel in den Hinweis eingebaut", () => {
-    const h = buildGeschlechtHinweis("w", "K");
-    expect(h).toContain("K.");
-    expect(h).toContain("Frau K.");
-    expect(h).toContain("Namenskürzel");
-  });
-
-  test("kuerzel mit Punkt am Ende wird nicht doppelt punktiert", () => {
-    const h = buildGeschlechtHinweis("m", "M.");
-    expect(h).toContain("Herr M.");
-    expect(h).not.toContain("M..");
-  });
-
-  test("leeres kuerzel erzeugt keinen Namenshinweis", () => {
-    const h = buildGeschlechtHinweis("w", "");
-    expect(h).not.toContain("Namenskürzel");
-    expect(h).not.toContain("Frau");
-  });
-
-  test("kuerzel funktioniert auch mit auto-Modus", () => {
-    const h = buildGeschlechtHinweis("auto", "S");
-    expect(h).toContain("S.");
-    expect(h).toContain("Klient S.");
-  });
-});
-
-// ── pollJob ───────────────────────────────────────────────────────────────────
+// ── pollJob ──────────────────────────────────────────────────────────────────
 
 describe("pollJob()", () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    localStorage.clear();
-  });
-  afterEach(() => jest.useRealTimers());
+  beforeEach(() => jest.useFakeTimers());
 
   test("gibt Job-Objekt zurück wenn status=done", async () => {
-    const mockFetch = jest.fn().mockResolvedValue(
-      jsonResponse({ status: "done", result_text: "Notiz fertig.", has_transcript: true })
-    );
-    const p = pollJob("job-1", 10, mockFetch);
+    mockSignedFetch(jsonResponse({ status: "done", result_text: "Notiz fertig.", has_transcript: true }));
+    const p = pollJob("job-1", 10);
     await jest.runAllTimersAsync();
     const job = await p;
     expect(job.result_text).toBe("Notiz fertig.");
@@ -192,380 +104,281 @@ describe("pollJob()", () => {
   });
 
   test("gibt null zurück bei status=cancelled", async () => {
-    const mockFetch = jest.fn().mockResolvedValue(
-      jsonResponse({ status: "cancelled" })
-    );
-    const p = pollJob("job-cancelled", 10, mockFetch);
+    mockSignedFetch(jsonResponse({ status: "cancelled" }));
+    const p = pollJob("job-cancelled", 10);
     await jest.runAllTimersAsync();
-    const result = await p;
-    expect(result).toBeNull();
+    expect(await p).toBeNull();
   });
 
   test("wirft Fehler bei status=error", async () => {
-    const mockFetch = jest.fn().mockResolvedValue(
-      jsonResponse({ status: "error", error_msg: "VRAM erschöpft" })
-    );
-    const p = pollJob("job-2", 10, mockFetch);
+    mockSignedFetch(jsonResponse({ status: "error", error_msg: "VRAM erschöpft" }));
+    const p = pollJob("job-err", 10);
+    // rejects-Expectation VOR dem Timer-Lauf anhängen — sonst meldet Jest
+    // unter --experimental-vm-modules eine unhandled rejection.
+    const expectation = expect(p).rejects.toThrow("VRAM erschöpft");
     await jest.runAllTimersAsync();
-    await expect(p).rejects.toThrow("VRAM erschöpft");
+    await expectation;
   });
 
   test("pollt weiter solange status=running", async () => {
-    const mockFetch = mockFetchSequence(
+    const fetchMock = mockSignedFetch(
       jsonResponse({ status: "running" }),
       jsonResponse({ status: "running" }),
-      jsonResponse({ status: "done", result_text: "Fertig nach 3 Polls." })
+      jsonResponse({ status: "done", result_text: "fertig" }),
     );
-    const p = pollJob("job-3", 20, mockFetch);
+    const p = pollJob("job-slow", 60);
     await jest.runAllTimersAsync();
     const job = await p;
-    expect(mockFetch).toHaveBeenCalledTimes(3);
-    expect(job.result_text).toBe("Fertig nach 3 Polls.");
+    expect(job.result_text).toBe("fertig");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   test("wirft Timeout-Fehler wenn maxWaitSeconds überschritten", async () => {
-    const mockFetch = jest.fn().mockResolvedValue(
-      jsonResponse({ status: "running" })
-    );
-    const p = pollJob("job-4", 4, mockFetch); // 4s max, interval=2s → 2 Versuche
+    mockSignedFetch(jsonResponse({ status: "running" }));
+    const p = pollJob("job-hang", 3);  // 1 Iteration bei interval=3
+    const expectation = expect(p).rejects.toThrow("Timeout");
     await jest.runAllTimersAsync();
-    await expect(p).rejects.toThrow("Timeout");
+    await expectation;
   });
 
   test("ignoriert fehlerhafte Poll-Responses (nicht-ok) und versucht weiter", async () => {
-    const mockFetch = mockFetchSequence(
-      { ok: false, status: 503, json: () => Promise.resolve({}) },
-      jsonResponse({ status: "done", result_text: "Trotz Fehler fertig." })
+    mockSignedFetch(
+      jsonResponse({}, false, 502),
+      jsonResponse({ status: "done", result_text: "doch noch" }),
     );
-    const p = pollJob("job-5", 10, mockFetch);
+    const p = pollJob("job-flaky", 60);
     await jest.runAllTimersAsync();
-    const job = await p;
-    expect(job.result_text).toBe("Trotz Fehler fertig.");
+    expect((await p).result_text).toBe("doch noch");
+  });
+
+  test("AbortSignal beendet Polling mit null", async () => {
+    mockSignedFetch(jsonResponse({ status: "running" }));
+    const ctl = new AbortController();
+    const p = pollJob("job-abort", 60, ctl.signal);
+    ctl.abort();
+    await jest.runAllTimersAsync();
+    expect(await p).toBeNull();
   });
 });
 
-// ── generate() ───────────────────────────────────────────────────────────────
+// ── generate ─────────────────────────────────────────────────────────────────
 
 describe("generate()", () => {
-  beforeEach(() => {
-    jest.useFakeTimers();
-    localStorage.clear();
-  });
-  afterEach(() => jest.useRealTimers());
+  beforeEach(() => jest.useFakeTimers());
 
-  test("schickt workflow, prompt und transcript als FormData-Felder", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({ job_id: "job-gen-1" }),           // POST /jobs/generate
-      jsonResponse({ status: "done", result_text: "OK", has_transcript: false })
+  /** POST + sofortiges done-Polling. */
+  function mockGenerateFlow(jobBody = { status: "done", result_text: "Text." }) {
+    return mockSignedFetch(
+      jsonResponse({ job_id: "gen-1" }),
+      jsonResponse(jobBody),
     );
-    const p = generate("dokumentation", "Erstelle Notiz.", "Transkript-Inhalt", {}, null, mockFetch);
+  }
+
+  function sentFormData(fetchMock, callIdx = 0) {
+    return fetchMock.mock.calls[callIdx][1].body;
+  }
+
+  test("schickt workflow, workflow_instructions und transcript als FormData-Felder", async () => {
+    const fetchMock = mockGenerateFlow();
+    const p = generate("dokumentation", "PROMPT", "Transkripttext");
     await jest.runAllTimersAsync();
     await p;
-
-    const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toContain("/jobs/generate");
-    expect(opts.method).toBe("POST");
-    const fd = opts.body;
+    const fd = sentFormData(fetchMock);
     expect(fd.get("workflow")).toBe("dokumentation");
-    expect(fd.get("prompt")).toBe("Erstelle Notiz.");
-    expect(fd.get("transcript")).toBe("Transkript-Inhalt");
+    expect(fd.get("workflow_instructions")).toBe("PROMPT");
+    expect(fd.get("transcript")).toBe("Transkripttext");
   });
 
   test("schickt bullets als separates Feld – nicht in transcript eingebaut", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({ job_id: "job-gen-2" }),
-      jsonResponse({ status: "done", result_text: "OK", has_transcript: false })
-    );
-    const p = generate(
-      "dokumentation", "Prompt", "Transkript-Text",
-      { bullets: "- IFS\n- innerer Löwe" }, null, mockFetch
-    );
+    const fetchMock = mockGenerateFlow();
+    const p = generate("dokumentation", "P", "Haupttext", { bullets: "• Punkt 1" });
     await jest.runAllTimersAsync();
     await p;
-
-    const fd = mockFetch.mock.calls[0][1].body;
-    // Bullets als eigenes Feld vorhanden
-    expect(fd.get("bullets")).toBe("- IFS\n- innerer Löwe");
-    // Transkript enthält NICHT die Stichpunkte (der alte Bug)
-    expect(fd.get("transcript")).not.toContain("STICHPUNKTE");
-    expect(fd.get("transcript")).not.toContain("innerer Löwe");
+    const fd = sentFormData(fetchMock);
+    expect(fd.get("bullets")).toBe("• Punkt 1");
+    expect(fd.get("transcript")).toBe("Haupttext");
   });
 
-  test("gibt { text, jobId, hasTranscript } zurück", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({ job_id: "job-gen-3" }),
-      jsonResponse({ status: "done", result_text: "Notiztext", has_transcript: true })
-    );
-    const p = generate("dokumentation", "p", "t", {}, null, mockFetch);
+  test("geschlecht wird nur bei w/m gesendet — leer bleibt draussen (v19.12)", async () => {
+    let fetchMock = mockGenerateFlow();
+    let p = generate("dokumentation", "P", "T", { geschlecht: "w" });
     await jest.runAllTimersAsync();
-    const result = await p;
-    expect(result.text).toBe("Notiztext");
-    expect(result.jobId).toBe("job-gen-3");
-    expect(result.hasTranscript).toBe(true);
+    await p;
+    expect(sentFormData(fetchMock).get("geschlecht")).toBe("w");
+
+    fetchMock = mockGenerateFlow();
+    p = generate("dokumentation", "P", "T", { geschlecht: "" });
+    await jest.runAllTimersAsync();
+    await p;
+    expect(sentFormData(fetchMock).get("geschlecht")).toBeNull();
   });
 
-  test("reicht quality_check aus Backend-Job-Response als qualityCheck durch", async () => {
-    // v19 Phase 1: Backend liefert quality_check (snake_case), generate()
-    // exponiert es als qualityCheck (camelCase, konsistent mit hasTranscript/jobId).
-    const qc = {
-      version: 1,
-      workflow: "anamnese",
-      issues: [
-        { code: "LENGTH_TOO_SHORT", severity: "warning",
-          message: "zu kurz", repair_hint: "erweitern" },
-      ],
-      summary: { critical: 0, warning: 1, info: 0, total: 1 },
-    };
-    const mockFetch = mockFetchSequence(
-      jsonResponse({ job_id: "job-qc-1" }),
-      jsonResponse({
-        status: "done",
-        result_text: "kurzer Text",
-        has_transcript: false,
-        quality_check: qc,
-      })
-    );
-    const p = generate("anamnese", "p", "t", {}, null, mockFetch);
+  test("gibt { text, jobId, hasTranscript, qualityCheck } zurück", async () => {
+    mockGenerateFlow({
+      status: "done", result_text: "Ergebnis.", has_transcript: true,
+      quality_check: { issues: [] },
+    });
+    const p = generate("dokumentation", "P", "T");
     await jest.runAllTimersAsync();
-    const result = await p;
-    expect(result.qualityCheck).toEqual(qc);
+    const r = await p;
+    expect(r.text).toBe("Ergebnis.");
+    expect(r.jobId).toBe("gen-1");
+    expect(r.hasTranscript).toBe(true);
+    expect(r.qualityCheck).toEqual({ issues: [] });
   });
 
   test("liefert qualityCheck=null wenn Backend kein quality_check hat", async () => {
-    // Defensive: Pre-v19-Jobs oder QC-Hook-Fehler liefern kein Feld.
-    const mockFetch = mockFetchSequence(
-      jsonResponse({ job_id: "job-qc-2" }),
-      jsonResponse({ status: "done", result_text: "X", has_transcript: false })
-    );
-    const p = generate("dokumentation", "p", "t", {}, null, mockFetch);
+    mockGenerateFlow({ status: "done", result_text: "x" });
+    const p = generate("dokumentation", "P", "T");
     await jest.runAllTimersAsync();
-    const result = await p;
-    expect(result.qualityCheck).toBeNull();
+    expect((await p).qualityCheck).toBeNull();
   });
 
   test("speichert Job-ID in localStorage während Polling läuft", async () => {
-    let resolveJob;
-    const jobDone = new Promise(res => { resolveJob = res; });
-
-    const mockFetch = jest.fn()
-      .mockResolvedValueOnce(jsonResponse({ job_id: "job-persist-1" }))
-      .mockImplementationOnce(async () => {
-        await jobDone;
-        return jsonResponse({ status: "done", result_text: "Fertig." });
-      });
-
-    const p = generate("dokumentation", "p", "t", {}, "p1", mockFetch);
-
-    // Kurz nach dem Start: Job muss in localStorage sein
-    await Promise.resolve();
-    await Promise.resolve();
-    const saved = loadActiveJob();
-    expect(saved?.jobId).toBe("job-persist-1");
-    expect(saved?.page).toBe("p1");
-
-    resolveJob();
+    mockSignedFetch(
+      jsonResponse({ job_id: "gen-persist" }),
+      jsonResponse({ status: "running" }),
+      jsonResponse({ status: "done", result_text: "x" }),
+    );
+    const p = generate("dokumentation", "P", "T", {}, "p1");
+    // Nach dem POST, vor Abschluss: Job muss persistiert sein
+    await jest.advanceTimersByTimeAsync(3000);
+    const saved = JSON.parse(localStorage.getItem(JOB_STORAGE_KEY));
+    expect(saved.jobId).toBe("gen-persist");
+    expect(saved.page).toBe("p1");
     await jest.runAllTimersAsync();
     await p;
   });
 
   test("löscht Job-ID aus localStorage nach erfolgreichem Abschluss", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({ job_id: "job-clear-1" }),
-      jsonResponse({ status: "done", result_text: "Fertig." })
-    );
-    const p = generate("dokumentation", "p", "t", {}, "p1", mockFetch);
+    mockGenerateFlow();
+    const p = generate("dokumentation", "P", "T");
     await jest.runAllTimersAsync();
     await p;
-    expect(loadActiveJob()).toBeNull();
+    expect(localStorage.getItem(JOB_STORAGE_KEY)).toBeNull();
   });
 
   test("löscht Job-ID auch bei Fehler (kein verwaister localStorage-Eintrag)", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({ job_id: "job-err-1" }),
-      jsonResponse({ status: "error", error_msg: "LLM-Fehler" })
+    mockSignedFetch(
+      jsonResponse({ job_id: "gen-fail" }),
+      jsonResponse({ status: "error", error_msg: "kaputt" }),
     );
-    const p = generate("dokumentation", "p", "t", {}, "p1", mockFetch);
+    const p = generate("dokumentation", "P", "T");
+    const expectation = expect(p).rejects.toThrow("kaputt");
     await jest.runAllTimersAsync();
-    await expect(p).rejects.toThrow("LLM-Fehler");
-    expect(loadActiveJob()).toBeNull();
+    await expectation;
+    expect(localStorage.getItem(JOB_STORAGE_KEY)).toBeNull();
   });
 
   test("wirft Fehler wenn Backend nicht erreichbar (non-ok POST)", async () => {
-    const mockFetch = jest.fn().mockResolvedValue(
-      jsonResponse({ detail: "Service Unavailable" }, false, 503)
-    );
-    const p = generate("dokumentation", "p", "t", {}, null, mockFetch);
+    mockSignedFetch(jsonResponse({ detail: "Service Unavailable" }, false, 503));
+    const p = generate("dokumentation", "P", "T");
+    const expectation = expect(p).rejects.toThrow("Service Unavailable");
     await jest.runAllTimersAsync();
-    await expect(p).rejects.toThrow("Service Unavailable");
+    await expectation;
   });
 });
 
-// ── repairPreview() (v19 Phase C) ─────────────────────────────────────────────
+// ── repairPreview (v19 Phase C) ──────────────────────────────────────────────
 
 describe("repairPreview()", () => {
   test("POSTet codes + hint, gibt final_prompt zurueck", async () => {
-    const mockFetch = jest.fn(() => Promise.resolve(jsonResponse({
-      final_prompt: "Repair Prompt Body",
-      accepted_issues: [
-        { code: "LENGTH_TOO_SHORT", severity: "warning",
-          message: "zu kurz", repair_hint: "erweitern" },
-      ],
-      user_hint_sanitized: "Bitte besser.",
-    })));
-    const r = await repairPreview(
-      "parent-1", ["LENGTH_TOO_SHORT"], "Bitte besser.", mockFetch,
-    );
-    expect(r.final_prompt).toBe("Repair Prompt Body");
-    expect(r.accepted_issues).toHaveLength(1);
-
-    // Body wurde korrekt gebaut
-    const call = mockFetch.mock.calls[0];
-    expect(call[0]).toMatch(/\/jobs\/parent-1\/repair\/preview$/);
-    expect(call[1].method).toBe("POST");
-    const body = JSON.parse(call[1].body);
-    expect(body.accepted_issue_codes).toEqual(["LENGTH_TOO_SHORT"]);
-    expect(body.user_hint).toBe("Bitte besser.");
+    const fetchMock = mockSignedFetch(jsonResponse({ final_prompt: "REPARIERE X" }));
+    const d = await repairPreview("job-1", ["NAME_LEAK"], "bitte anonymisieren");
+    expect(d.final_prompt).toBe("REPARIERE X");
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/jobs\/job-1\/repair\/preview$/);
+    expect(JSON.parse(opts.body)).toEqual({
+      accepted_issue_codes: ["NAME_LEAK"],
+      user_hint: "bitte anonymisieren",
+    });
   });
 
   test("wirft Fehler bei 404", async () => {
-    const mockFetch = jest.fn(() => Promise.resolve({
-      ok: false, status: 404, statusText: "Not Found",
-      json: () => Promise.resolve({ detail: "Job 'x' nicht gefunden" }),
-    }));
-    await expect(
-      repairPreview("missing", [], "", mockFetch)
-    ).rejects.toThrow("Job 'x' nicht gefunden");
+    mockSignedFetch(jsonResponse({ detail: "Job nicht gefunden" }, false, 404));
+    await expect(repairPreview("weg", [], "")).rejects.toThrow("Job nicht gefunden");
   });
 
-  test("wirft Fehler bei 422 mit unknown_codes", async () => {
-    const mockFetch = jest.fn(() => Promise.resolve({
-      ok: false, status: 422, statusText: "Unprocessable Entity",
-      json: () => Promise.resolve({
-        detail: {
-          msg: "Unbekannte Issue-Codes",
-          unknown_codes: ["FOO_BAR"],
-          known_codes: ["LENGTH_TOO_SHORT"],
-        },
-      }),
-    }));
-    await expect(
-      repairPreview("p", ["FOO_BAR"], "", mockFetch)
-    ).rejects.toThrow("Unbekannte Issue-Codes");
+  test("wirft Fehler bei 422 mit detail-Objekt", async () => {
+    mockSignedFetch(jsonResponse(
+      { detail: { msg: "unbekannte Codes", unknown_codes: ["XX"] } }, false, 422,
+    ));
+    await expect(repairPreview("job-1", ["XX"], "")).rejects.toThrow("unbekannte Codes");
   });
 
   test("URL-encodet die jobId", async () => {
-    const mockFetch = jest.fn(() => Promise.resolve(jsonResponse({
-      final_prompt: "p", accepted_issues: [], user_hint_sanitized: "",
-    })));
-    await repairPreview("with/slash", [], "", mockFetch);
-    const url = mockFetch.mock.calls[0][0];
-    expect(url).toContain("/jobs/with%2Fslash/repair/preview");
+    const fetchMock = mockSignedFetch(jsonResponse({ final_prompt: "p" }));
+    await repairPreview("job/with slash", [], "");
+    expect(fetchMock.mock.calls[0][0]).toContain("job%2Fwith%20slash");
   });
 
   test("Defaults: leere codes + leerer hint", async () => {
-    const mockFetch = jest.fn(() => Promise.resolve(jsonResponse({
-      final_prompt: "p", accepted_issues: [], user_hint_sanitized: "",
-    })));
-    await repairPreview("p", null, null, mockFetch);
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.accepted_issue_codes).toEqual([]);
-    expect(body.user_hint).toBe("");
+    const fetchMock = mockSignedFetch(jsonResponse({ final_prompt: "p" }));
+    await repairPreview("job-1", null, null);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      accepted_issue_codes: [],
+      user_hint: "",
+    });
   });
 });
 
+// ── repairStart + fetchRepairResult (v19.4 C-1, nicht-blockierend) ───────────
 
-// ── repair() (v19 Phase C) ────────────────────────────────────────────────────
-
-describe("repair()", () => {
-  test("happy path: triggert Job + pollt bis done", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({
-        repair_job_id: "repair-1",
-        parent_job_id: "parent-x",
-        workflow: "anamnese",
-      }),
-      jsonResponse({
-        status: "done",
-        result_text: "Repariert.",
-        befund_text: "Befund repariert.",
-        quality_check: {
-          version: 1, issues: [],
-          summary: { critical: 0, warning: 0, info: 0, total: 0 },
-        },
-      })
+describe("repairStart()", () => {
+  test("triggert Repair-Job und liefert IDs sofort (kein Polling)", async () => {
+    const fetchMock = mockSignedFetch(
+      jsonResponse({ repair_job_id: "rep-1", parent_job_id: "job-1" }),
     );
-    const p = repair("parent-x", ["LENGTH_TOO_SHORT"], "", null, mockFetch);
-    await jest.runAllTimersAsync();
-    const r = await p;
-    expect(r.text).toBe("Repariert.");
-    expect(r.befundText).toBe("Befund repariert.");
-    expect(r.jobId).toBe("repair-1");
-    expect(r.parentJobId).toBe("parent-x");
-    expect(r.qualityCheck.summary.total).toBe(0);
+    const r = await repairStart("job-1", ["NAME_LEAK"], "Hinweis");
+    expect(r).toEqual({ repairJobId: "rep-1", parentJobId: "job-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);  // wirklich non-blocking
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      accepted_issue_codes: ["NAME_LEAK"],
+      user_hint: "Hinweis",
+    });
   });
 
   test("sendet custom_final_prompt wenn gesetzt", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({
-        repair_job_id: "r-1", parent_job_id: "p-1", workflow: "anamnese",
-      }),
-      jsonResponse({ status: "done", result_text: "x" })
-    );
-    const p = repair("p-1", [], "", "MEIN EIGENER PROMPT", mockFetch);
-    await jest.runAllTimersAsync();
-    await p;
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.custom_final_prompt).toBe("MEIN EIGENER PROMPT");
+    const fetchMock = mockSignedFetch(jsonResponse({ repair_job_id: "rep-2" }));
+    await repairStart("job-1", [], "", "EIGENER PROMPT");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).custom_final_prompt)
+      .toBe("EIGENER PROMPT");
   });
 
-  test("OHNE custom_final_prompt wird Feld weggelassen", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({
-        repair_job_id: "r-1", parent_job_id: "p-1", workflow: "anamnese",
-      }),
-      jsonResponse({ status: "done", result_text: "x" })
-    );
-    const p = repair("p-1", ["X_CODE"], "h", null, mockFetch);
-    await jest.runAllTimersAsync();
-    await p;
-    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.custom_final_prompt).toBeUndefined();
-    expect(body.accepted_issue_codes).toEqual(["X_CODE"]);
-    expect(body.user_hint).toBe("h");
+  test("OHNE custom_final_prompt wird das Feld weggelassen", async () => {
+    const fetchMock = mockSignedFetch(jsonResponse({ repair_job_id: "rep-3" }));
+    await repairStart("job-1", [], "");
+    expect("custom_final_prompt" in JSON.parse(fetchMock.mock.calls[0][1].body))
+      .toBe(false);
   });
 
-  test("liefert null wenn polling 'cancelled' meldet", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({
-        repair_job_id: "r-1", parent_job_id: "p-1", workflow: "anamnese",
-      }),
-      jsonResponse({ status: "cancelled" })
-    );
-    const p = repair("p-1", [], "", null, mockFetch);
-    await jest.runAllTimersAsync();
-    const r = await p;
-    expect(r).toBeNull();
+  test("wirft Fehler mit detail-Message bei non-ok", async () => {
+    mockSignedFetch(jsonResponse({ detail: "Parent-Job läuft noch" }, false, 409));
+    await expect(repairStart("job-1", [], "")).rejects.toThrow("Parent-Job läuft noch");
   });
+});
 
-  test("propagiert Job-Error im polling", async () => {
-    const mockFetch = mockFetchSequence(
-      jsonResponse({
-        repair_job_id: "r-1", parent_job_id: "p-1", workflow: "anamnese",
-      }),
-      jsonResponse({ status: "error", error_msg: "LLM hat versagt" })
-    );
-    const p = repair("p-1", [], "", null, mockFetch);
-    await jest.runAllTimersAsync();
-    await expect(p).rejects.toThrow("LLM hat versagt");
-  });
-
-  test("wirft Fehler bei 400 vom Repair-Endpoint", async () => {
-    const mockFetch = jest.fn(() => Promise.resolve({
-      ok: false, status: 400, statusText: "Bad Request",
-      json: () => Promise.resolve({ detail: "Repair nur fuer abgeschlossene Jobs" }),
+describe("fetchRepairResult()", () => {
+  test("mappt fertigen Repair-Job auf applyRepair-Shape", async () => {
+    mockSignedFetch(jsonResponse({
+      status: "done", result_text: "Repariert.", befund_text: "Befund repariert.",
+      quality_check: { issues: [] },
     }));
-    await expect(
-      repair("p", [], "", null, mockFetch)
-    ).rejects.toThrow("Repair nur fuer abgeschlossene Jobs");
+    const r = await fetchRepairResult("rep-1", "job-1");
+    expect(r.text).toBe("Repariert.");
+    expect(r.befundText).toBe("Befund repariert.");
+    expect(r.jobId).toBe("rep-1");
+    expect(r.parentJobId).toBe("job-1");
+    expect(r.qualityCheck).toEqual({ issues: [] });
+  });
+
+  test("liefert null wenn Repair-Job 'cancelled' meldet", async () => {
+    mockSignedFetch(jsonResponse({ status: "cancelled" }));
+    expect(await fetchRepairResult("rep-1")).toBeNull();
+  });
+
+  test("propagiert Job-Error", async () => {
+    mockSignedFetch(jsonResponse({ status: "error", error_msg: "Modell abgestürzt" }));
+    await expect(fetchRepairResult("rep-1")).rejects.toThrow("Modell abgestürzt");
   });
 });

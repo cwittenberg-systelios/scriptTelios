@@ -261,66 +261,252 @@ def _extract_section_by_text(file_path: Path, headings: list[str]) -> str:
     return "\n".join(section_lines).strip()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Patientenname/Geschlecht aus Dokumenten (v19.12)
+#
+# Prinzip: Kandidaten sammeln und abgleichen statt ersten Treffer nehmen.
+# Der Briefkopf einer Antragsvorlage nennt den Patienten mehrfach (Adressblock
+# unter der Ueberschrift + "wir berichten ueber ..."-Satz). Diese Fundstellen
+# sind unabhaengige Stimmen: nur bei Einigkeit wird ein Ergebnis geliefert.
+# Bei Dissens -> None. Ein still falsches Geschlecht (v19.8-Vorgeschichte:
+# Sachbearbeiterin der Kasse statt Patient erkannt) ist schlechter als keins.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Namenspartikel (Adelspraedikate u.ae.), ausgeschrieben. Kleinschreibung im
+# Dokument ist das Hauptsignal; die Liste dient als Positivkontrolle.
+_NAME_PARTIKEL = frozenset({
+    "von", "vom", "van", "zu", "zur", "zum", "de", "del", "della", "di",
+    "da", "dos", "du", "le", "la", "ter", "ten", "op", "den", "der",
+})
+
+# Akademische Titel: werden vor der Segmentierung abgeschnitten. Ein Titel ist
+# zusaetzlich ein Negativsignal - in einer Antragsvorlage deutet er auf
+# Behandler/Gutachter (Signaturblock), nicht auf den Patienten.
+_TITEL_TOKENS = frozenset({
+    "dr.", "prof.", "med.", "dent.", "phil.", "rer.", "nat.", "h.c.",
+    "dipl.-psych.", "dipl.-med.", "m.sc.", "b.sc.", "m.a.", "b.a.", "mba",
+    "fa", "fä", "faerztin",
+})
+
+
+def _ist_partikel_token(tok: str) -> bool:
+    """Partikel: kleingeschriebenes Listenwort ODER abgekuerzte Form ('v.', 'd.').
+
+    Die Kleinschreibungs-Bedingung bei Abkuerzungen unterscheidet Partikel
+    ('v.', 'd.') von abgekuerzten Vornamen ('D.' in 'Maria D. Schmidt').
+    """
+    import re as _re
+    if tok.lower() in _NAME_PARTIKEL and tok[:1].islower():
+        return True
+    return bool(_re.fullmatch(r"[a-zäöü]\.", tok))
+
+
+def _segmentiere_namen(tokens: list[str]) -> dict | None:
+    """Zerlegt Namens-Tokens in Vorname / Nachname / Stamm / Initiale.
+
+    Regeln:
+      - Titel-Tokens am Anfang werden entfernt (und als 'titel' markiert).
+      - Erster Partikel-Lauf -> Nachname beginnt dort ("Maria von der Heyden"
+        -> Vorname "Maria", Nachname "von der Heyden").
+      - Ohne Partikel ist der Nachname das LETZTE Token ("Maria Anna Schmidt"
+        -> Vorname "Maria Anna", Nachname "Schmidt"; behebt v19.12-Vorbefund
+        "Anna Schmidt" als Nachname).
+      - nachname_stamm: erstes Nicht-Partikel-Token des Nachnamens.
+      - initial folgt der Hauskonvention der Klinik-Dokumente (belegt in der
+        Folgeverlaengerungs-Vorlage: "Christina von Musterberg" wird im Text
+        durchgehend "Frau v.M." genannt): Partikel abgekuerzt kleingeschrieben
+        + Stamm-Initiale. "von Musterberg" -> "v.M.", "von der Heyden"
+        -> "v.d.H.", "Schmidt" -> "S.".
+    """
+    titel = False
+    while tokens and tokens[0].lower().rstrip(",") in _TITEL_TOKENS:
+        titel = True
+        tokens = tokens[1:]
+    if not tokens:
+        return None
+
+    part_start = None
+    for i, tok in enumerate(tokens):
+        if _ist_partikel_token(tok):
+            part_start = i
+            break
+
+    if part_start is not None:
+        if part_start == len(tokens) - 1:
+            return None  # Partikel ohne folgenden Stamm - kein Name
+        vor_tokens = tokens[:part_start]
+        nach_tokens = tokens[part_start:]
+    else:
+        vor_tokens = tokens[:-1]
+        nach_tokens = tokens[-1:]
+
+    stamm = next((t for t in nach_tokens if not _ist_partikel_token(t)), None)
+    if not stamm or len(stamm) < 2:
+        return None
+    partikel = [t for t in nach_tokens[: nach_tokens.index(stamm)]]
+    initial = "".join(p[0].lower() + "." for p in partikel) + stamm[0].upper() + "."
+
+    return {
+        "vorname": " ".join(vor_tokens),
+        "nachname": " ".join(nach_tokens),
+        "nachname_stamm": stamm,
+        "initial": initial,
+        "titel": titel,
+    }
+
+
+# Ein Namens-Token: Grossgeschriebenes Wort (inkl. Bindestrich-Doppelnamen),
+# Partikel oder abgekuerzte Partikel-Form.
+_NAME_TOKEN_RX = (
+    r"(?:[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)*"
+    r"|von|vom|van|zu|zur|zum|de|del|della|di|da|dos|du|le|la|ter|ten|op|den|der"
+    r"|[a-zäöü]\.)"
+)
+_NAME_SEQ_RX = _NAME_TOKEN_RX + r"(?:\s+" + _NAME_TOKEN_RX + r")*"
+
+
+def _sammle_kandidaten(head: str, gruss_pos: int) -> list[dict]:
+    """Sammelt Patienten-Kandidaten aus dem Briefkopf.
+
+    Anker A1 - "wir berichten ueber Herrn/Frau <Name>": im gesamten Head
+      (steht NACH der Grussformel). Durch die Verbalphrase eindeutig auf den
+      Patienten bezogen -> staerkster Anker.
+    Anker A2 - Adressblock "Herr/Frau\n<Name>\n<Adresse/geb./Vers-Nr.>": nur
+      VOR der Grussformel gesucht. Der reine Zeilenblock ist positionsgebunden
+      schwaecher; die Adress-Evidenz in den Folgezeilen haelt Behandler- und
+      Sachbearbeiter-Bloecke draussen.
+    """
+    import re as _re
+    kandidaten: list[dict] = []
+
+    for m in _re.finditer(
+        r"[Ww]ir berichten (?:ü|ue)ber\s+(Herrn|Frau)\s+(" + _NAME_SEQ_RX + r")",
+        head,
+    ):
+        seg = _segmentiere_namen(m.group(2).split())
+        if seg:
+            seg["anrede"] = "Herr" if m.group(1) == "Herrn" else m.group(1)
+            seg["anker"] = "a1_berichten_ueber"
+            kandidaten.append(seg)
+
+    vor_gruss = head[:gruss_pos] if gruss_pos >= 0 else head
+    for m in _re.finditer(
+        r"^[ \t]*(Herrn?|Frau)[ \t]*\n+[ \t]*(" + _NAME_SEQ_RX + r")[ \t]*$"
+        r"((?:\n[^\n]*){1,4})",
+        vor_gruss, _re.MULTILINE,
+    ):
+        folge = m.group(3) or ""
+        # Adress-Evidenz: Strasse+Hausnummer, PLZ, geb.-Datum oder Vers.-Nr.
+        if not _re.search(
+            r"\d{5}\s+\w|(?:stra(?:ß|ss)e|weg|platz|allee|gasse|ring|damm)\s*\d"
+            r"|geb\.\s*\d|[Vv]ersicherungs",
+            folge,
+        ):
+            continue
+        seg = _segmentiere_namen(m.group(2).split())
+        if seg:
+            seg["anrede"] = "Herr" if m.group(1) == "Herrn" else m.group(1)
+            seg["anker"] = "a2_adressblock"
+            kandidaten.append(seg)
+
+    return kandidaten
+
+
+def extract_verlaufskopf_name(text: str) -> dict | None:
+    """Extrahiert den Namen aus dem Kopf einer Verlaufsdokumentation.
+
+    Format (handschriftlich, via OCR/Vision): "Nachname, Vorname (Aufnahmenr)"
+    zu Seitenbeginn. KEIN Anrede-Feld -> liefert nie ein Geschlecht; dient nur
+    dem Namens-Kreuzcheck gegen die Antragsvorlage. OCR-Text ist unzuverlaessig
+    -> ausschliesslich stuetzendes Signal, nie Primaerquelle.
+    """
+    import re as _re
+    if not text:
+        return None
+    kopf = text[:300]
+    m = _re.search(
+        r"(" + _NAME_SEQ_RX + r")\s*,\s*(" + _NAME_SEQ_RX + r")\s*\(\s*(\d{4,})\s*\)",
+        kopf,
+    )
+    if not m:
+        return None
+    seg = _segmentiere_namen(m.group(1).split())
+    if not seg:
+        return None
+    seg["anrede"] = ""
+    seg["vorname"] = m.group(2)
+    seg["aufnahmenummer"] = m.group(3)
+    seg["anker"] = "verlaufskopf"
+    return seg
+
+
 def extract_patient_name(text: str) -> dict | None:
     """
-    Extrahiert den Patientennamen aus einem Dokument-Text.
+    Extrahiert den Patientennamen aus einem Dokument-Text (Briefkopf).
 
-    Sucht nach typischen Mustern im Briefkopf:
-      - "Wir berichten über Herrn/Frau [Vorname] [Nachname]"
-      - "Herrn/Frau\n[Vorname] [Nachname]" (mit Zeilenumbruch)
-      - Selbstauskunft: "Name:" / "Nachname:" / "Vorname:"
+    v19.12: Kandidaten-Konsens statt First-Match.
+      1. Suchzone: Dokumentanfang bis kurz nach der Grussformel (max. 3000
+         Zeichen). Namen aus Anamnese/Verlauf/Signatur fallen damit weg -
+         inkl. des Behandler-Signaturblocks, der denselben Nachnamen tragen
+         kann wie der Patient (belegt in der Folgeverlaengerungs-Vorlage).
+      2. Kandidaten sammeln (siehe _sammle_kandidaten).
+      3. Titel-Kandidaten (Dr./Prof./...) werden nicht als Patient gewertet.
+      4. Konsens: alle Kandidaten muessen in Geschlecht UND Nachnamens-Stamm
+         uebereinstimmen. Dissens -> None (+ Warnung). Einzelkandidat wird nur
+         akzeptiert, wenn er vom A1-Anker stammt.
+      5. Fallback Selbstauskunft ("Nachname:"/"Vorname:"/"Geschlecht:") wie
+         bisher - feldgebunden, geringes Verwechslungsrisiko.
 
     Rueckgabe:
-      {"anrede": "Herr"/"Frau", "vorname": "...", "nachname": "...", "initial": "K."}
-      oder None wenn nichts gefunden.
-
-    Die Initiale ist der erste Buchstabe des Nachnamens + Punkt.
+      {"anrede", "vorname", "nachname", "nachname_stamm", "initial",
+       "quelle", "anker"} oder None.
+    Die Initiale folgt der Hauskonvention: "von Musterberg" -> "v.M.".
     """
     import re
     if not text or len(text) < 20:
         return None
 
-    # Suche nur in den ersten 2000 Zeichen (Briefkopf/Deckblatt)
-    head = text[:2000]
+    head = text[:3000]
+    # Zonengrenze fuer die (schwaecheren) Blockmuster: die Grussformel.
+    # Fehlt sie (degradiertes Dokument), endet die Blockzone ersatzweise am
+    # "wir berichten"-Satz - sonst wuerde der Blockscan bis in Signatur-
+    # naehe laufen.
+    m_gruss = re.search(r"Sehr geehrte|[Ww]ir berichten", head)
+    gruss_pos = m_gruss.start() if m_gruss else -1
 
-    # Muster 1: "wir berichten über Herrn/Frau Vorname Nachname"
-    m = re.search(
-        r"[Ww]ir berichten (?:über|ueber)\s+(Herrn|Frau)\s+([A-ZÄÖÜ][a-zäöüß\-]+)"
-        r"(?:\s+(?:von\s+)?(?:der|de[nr])?\s*([A-ZÄÖÜ][\wäöüÄÖÜß\.\-]*(?:\s+[A-ZÄÖÜ][\wäöüÄÖÜß\.\-]*)?))",
-        head,
-    )
-    if m:
-        anrede = m.group(1)
-        if anrede == "Herrn":
-            anrede = "Herr"
-        vorname = m.group(2)
-        nachname = (m.group(3) or "").strip()
-        if nachname:
-            initial = nachname.split()[0][0].upper() + "."
-            # Falls van/von: Initiale vom letzten Teil
-            if nachname.split()[0].lower() in ("van", "von", "de", "der", "zu"):
-                if len(nachname.split()) > 1:
-                    initial = nachname.split()[-1][0].upper() + "."
-            return {
-                "anrede": anrede,
-                "vorname": vorname,
-                "nachname": nachname,
-                "initial": initial,
-            }
+    kandidaten = _sammle_kandidaten(head, gruss_pos)
+    patienten = [k for k in kandidaten if not k.get("titel")]
 
-    # Muster 2: "Herr/Frau" auf einer Zeile, Name auf naechster Zeile (Briefkopf-Block)
-    m = re.search(
-        r"^\s*(Herr|Frau)\s*\n+([A-ZÄÖÜ][a-zäöüß\-]+)\s+([A-ZÄÖÜ][\wäöüÄÖÜß\.\-]+)",
-        head, re.MULTILINE,
-    )
-    if m:
-        anrede = m.group(1)
-        vorname = m.group(2)
-        nachname = m.group(3)
-        initial = nachname[0].upper() + "."
-        return {"anrede": anrede, "vorname": vorname, "nachname": nachname, "initial": initial}
+    if patienten:
+        staemme = {k["nachname_stamm"].lower() for k in patienten}
+        anreden = {k["anrede"] for k in patienten}
+        if len(staemme) > 1 or len(anreden) > 1:
+            logger.warning(
+                "extract_patient_name: Kandidaten-Dissens (Staemme=%s, Anreden=%s, "
+                "Anker=%s) - keine Erkennung, Geschlecht bleibt offen.",
+                sorted(staemme), sorted(anreden), [k["anker"] for k in kandidaten],
+            )
+            return None
+        anker = [k["anker"] for k in patienten]
+        if len(patienten) == 1 and anker[0] != "a1_berichten_ueber":
+            logger.warning(
+                "extract_patient_name: nur Einzelkandidat aus schwachem Anker %s "
+                "- nicht akzeptiert.", anker[0],
+            )
+            return None
+        best = next((k for k in patienten if k["anker"] == "a1_berichten_ueber"),
+                    patienten[0])
+        return {
+            "anrede": best["anrede"],
+            "vorname": best["vorname"],
+            "nachname": best["nachname"],
+            "nachname_stamm": best["nachname_stamm"],
+            "initial": best["initial"],
+            "quelle": "konsens" if len(patienten) > 1 else "a1_einzeln",
+            "anker": anker,
+        }
 
-    # Muster 3: Selbstauskunft "Name: ..." bzw. "Nachname: ..."
+    # Fallback: Selbstauskunft "Name: ..." bzw. "Nachname: ..." (feldgebunden)
     nachname = None
     vorname = None
     anrede = None
@@ -340,23 +526,21 @@ def extract_patient_name(text: str) -> dict | None:
             #   anrede = "Frau" if vorname.endswith("a") else "Herr"
             # war ein stiller Gender-Coinflip (falsch bei Simone, Nicola, Luca,
             # Sascha, Rene, Kim, Andrea (m) - und OHNE Vorname immer "Herr").
-            # Das geratene anrede wurde downstream autoritativ verwendet
-            # (substitute_patient_placeholders, build_system_prompt) und ist
-            # Primaerverdacht fuer Geschlechtsfehler im Output. Kein Raten
-            # mehr: anrede bleibt leer, das Geschlecht kommt aus dem
-            # strukturierten UI-Feld (jobs.py v19.8) oder das Modell leitet
-            # es selbst ab; der GENDER_MISMATCH-Check prueft den Output.
+            # Kein Raten mehr: anrede bleibt leer, das Geschlecht kommt aus dem
+            # strukturierten UI-Feld oder das Modell leitet es selbst ab.
             anrede = ""
             logger.warning(
                 "extract_patient_name: Selbstauskunft ohne Geschlechtsfeld - "
                 "Anrede bleibt leer (Nachname=%s)", nachname,
             )
-        initial = nachname[0].upper() + "."
         return {
             "anrede": anrede,
             "vorname": vorname or "",
             "nachname": nachname,
-            "initial": initial,
+            "nachname_stamm": nachname,
+            "initial": nachname[0].upper() + ".",
+            "quelle": "selbstauskunft",
+            "anker": ["a3_selbstauskunft"],
         }
 
     return None

@@ -4,9 +4,9 @@
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { fetchRepairResult, repairPreview, repairStart } from "./api.jsx";
+import { fetchRepairResult, repairPreview, repairStart } from "./api.js";
 import { useJobResult } from "./hooks.jsx";
-import { friendlyError } from "./shared.jsx";
+import { friendlyError } from "./shared.js";
 import { JobProgressBar } from "./ui.jsx";
 
 
@@ -161,6 +161,7 @@ function RepairPreviewModal({
   };
 
   return createPortal(
+    <div className="st-scope">
     <div className="qc-modal-backdrop" onClick={!busy ? onCancel : undefined}>
       <div className="qc-modal" onClick={(e) => e.stopPropagation()}>
         <div className="qc-modal-head">
@@ -206,6 +207,7 @@ function RepairPreviewModal({
           </button>
         </div>
       </div>
+    </div>
     </div>,
     document.body,
   );

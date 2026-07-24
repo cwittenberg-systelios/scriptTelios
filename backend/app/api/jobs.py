@@ -1721,15 +1721,51 @@ async def create_generate_job(
                             patient_name["anrede"], patient_name["initial"])
 
         # b-d) Fallback: aus Dokumenten extrahieren
+        # v19.12: extract_patient_name arbeitet mit Kandidaten-Konsens und
+        # liefert quelle/anker als Telemetrie mit. Dissens innerhalb eines
+        # Dokuments -> None (Warnung kommt aus der Extraktion selbst).
         if not patient_name:
             for src_text in (antragsvorlage_text, vorantrag_text, selbstauskunft_text, verlaufsdoku_text, vorbefunde_text):
                 if src_text:
                     patient_name = extract_patient_name(src_text)
                     if patient_name:
                         _pn_source = "document"
-                        logger.info("Patientenname aus Unterlagen erkannt: %s %s.",
-                                    patient_name["anrede"], patient_name["initial"])
+                        logger.info(
+                            "Patientenname aus Unterlagen erkannt: %s %s. "
+                            "[v19.12-Telemetrie: quelle=%s anker=%s]",
+                            patient_name["anrede"], patient_name["initial"],
+                            patient_name.get("quelle"), patient_name.get("anker"),
+                        )
                         break
+
+        # v19.12 Kreuzcheck: Kopfzeile der Verlaufsdoku ("Nachname, Vorname
+        # (Aufnahmenr)") gegen den erkannten Namen. Die Verlaufsdoku ist
+        # handschriftlich (OCR/Vision) und traegt KEINE Anrede - sie ist nie
+        # Geschlechtsquelle, aber ein unabhaengiges Namenssignal. Bei
+        # Abweichung wird die Erkennung verworfen: still falsch ist
+        # schlechter als offen.
+        if patient_name and _pn_source == "document" and verlaufsdoku_text:
+            from app.services.extraction import extract_verlaufskopf_name
+            _vk = extract_verlaufskopf_name(verlaufsdoku_text)
+            if _vk:
+                _stamm_doc = (patient_name.get("nachname_stamm")
+                              or patient_name.get("nachname") or "").lower()
+                _stamm_vk = (_vk.get("nachname_stamm") or "").lower()
+                if _stamm_doc and _stamm_vk and _stamm_doc != _stamm_vk:
+                    logger.warning(
+                        "v19.12 Kreuzcheck: Antragsvorlage (%s) vs. "
+                        "Verlaufsdoku-Kopf (%s) nennen verschiedene Nachnamen "
+                        "- Erkennung verworfen, Geschlecht bleibt offen.",
+                        _stamm_doc, _stamm_vk,
+                    )
+                    patient_name = None
+                    _pn_source = None
+                elif _stamm_doc and _stamm_vk:
+                    logger.info(
+                        "v19.12 Kreuzcheck: Verlaufsdoku-Kopf bestaetigt "
+                        "Nachnamen (%s, Aufnahmenr %s).",
+                        _stamm_vk, _vk.get("aufnahmenummer"),
+                    )
 
         # v19.8 (Identitaets-Guard, Schritt S2): strukturiertes Geschlecht aus
         # dem UI ueberstimmt jede abgeleitete Anrede. Ist NUR das Geschlecht

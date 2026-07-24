@@ -1,13 +1,13 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { apiFetch, getApiBase, getConfluenceUser } from "./src/api.jsx";
+import { apiFetch, getApiBase, getConfluenceUser } from "./src/api.js";
 import { P0 } from "./src/panels/P0.jsx";
 import { P1 } from "./src/panels/P1.jsx";
 import { P2, P2b } from "./src/panels/P2.jsx";
 import { P3, P3b } from "./src/panels/P3.jsx";
 import { P4 } from "./src/panels/P4.jsx";
 import { P5 } from "./src/panels/P5.jsx";
-import { clearActiveJob, friendlyError, loadActiveJob } from "./src/shared.jsx";
+import { clearActiveJob, friendlyError, loadActiveJob } from "./src/shared.js";
 import { useDndGuard } from "./src/dnd-guard.jsx";
 import { S, useHeadStyle } from "./src/styles.jsx";
 
@@ -169,7 +169,7 @@ export default function App() {
   }, [backendUrl]);
 
   return (
-    <div id="st-root" style={{
+    <div id="st-root" className="st-scope" style={{
       display:"flex",
       flexDirection:"row",
       minHeight:"600px",
@@ -267,6 +267,8 @@ export default function App() {
       </main>
 
       {/* Settings Modal – via Portal damit position:fixed korrekt funktioniert */}
+      {/* Kein .st-scope-Wrapper: das Settings-Modal nutzt ausschliesslich
+          Inline-Styles und behaelt bewusst die Confluence-Schrift. */}
       {showSettings && createPortal(
         <div style={{
           position:"fixed", inset:0, background:"rgba(0,0,0,0.55)",
@@ -303,9 +305,11 @@ export default function App() {
       , document.body)}
 
       {msg && createPortal(
-        <div className="toast">
-          <span className="toast-dot" />
-          {msg}
+        <div className="st-scope">
+          <div className="toast">
+            <span className="toast-dot" />
+            {msg}
+          </div>
         </div>,
         document.body
       )}

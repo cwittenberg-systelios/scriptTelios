@@ -4,7 +4,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { apiFetch, getApiBase } from "./api.jsx";
+import { apiFetch, getApiBase } from "./api.js";
 
 
 function JobProgressBar({ jobId, onTerminal }) {
@@ -597,6 +597,7 @@ function FeedbackModal({ jobId, workflow, context, toast, onClose }) {
 
   const shown = hover || rating;
   return createPortal(
+    <div className="st-scope">
     <div className="qc-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
       <div className="qc-modal" style={{ maxWidth: 460 }}>
         <div className="qc-modal-head">
@@ -645,6 +646,7 @@ function FeedbackModal({ jobId, workflow, context, toast, onClose }) {
           </div>
         </div>
       </div>
+    </div>
     </div>,
     document.body
   );
