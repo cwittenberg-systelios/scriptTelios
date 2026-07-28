@@ -855,23 +855,20 @@ class JobQueue:
                     qc_text = combined_result_text(
                         job.workflow, job.result_text, job.result_befund,
                     )
-                    # v19.5: Quellentreue-Check braucht die Quelle - Roh-Transkript
-                    # + volle Dokument-Extrakte (Verlaufsdoku, Antragsvorlage mit
-                    # Anamnese/Befund/Diagnosen, Vorantrag). Volle Extrakte, KEIN
-                    # Summary -> keine Falsch-Positive durch Verdichtung. Leere
-                    # Quelle (z.B. fehlende Felder) -> Schritt 7 entfaellt automatisch.
-                    _fidelity_source = "\n\n".join(
-                        s for s in (
-                            job.result_transcript,
-                            job.source_verlauf_text,
-                            job.source_antragsvorlage_text,
-                            job.source_vorantrag_text,
-                            # v19.13: Reflexionsinhalte sind legitime Quelle -
-                            # sonst flaggt SOURCE_FIDELITY korrekt eingebaute
-                            # Reflexions-Passagen als unbelegt.
-                            job.source_prozessreflexion_text,
-                        ) if s and s.strip()
-                    )
+                    # v19.5/v19.14a: Quellentreue-Check braucht die Quelle.
+                    # Aufbau siehe _qc_fidelity_source() am Dateiende - dort
+                    # auch der Repair-Job-Pfad (v19.14a).
+                    _fidelity_source = _qc_fidelity_source(job)
+                    if not _fidelity_source:
+                        # D2: legitimer Fall (fehlende Felder, DB-Luecke nach
+                        # Pod-Neustart) - Schritt 7 entfaellt dann still.
+                        # Log macht im Betrieb unterscheidbar: "Check lief und
+                        # fand nichts" vs. "Check lief gar nicht".
+                        logger.info(
+                            "QualityCheck %s (%s): keine Quelle fuer "
+                            "SOURCE_FIDELITY - Schritt entfaellt.",
+                            job.job_id, job.workflow,
+                        )
                     # v19.6: Datenschutz-Namensleck (Punkt 1) + Stichpunkt-Check
                     # (Punkt 6) brauchen den realen Namen bzw. die Fokus-Themen.
                     # Beide werden in jobs.py als Ad-hoc-Attribute auf dem Job
@@ -919,6 +916,38 @@ class JobQueue:
             )
             for job in done_jobs[:len(self._cache) - self._max_cache]:
                 del self._cache[job.job_id]
+
+
+def _qc_fidelity_source(job) -> str:
+    """v19.14a: baut die Quelle fuer den Quellentreue-Check (SOURCE_FIDELITY).
+
+    Normale Generate-Jobs: Roh-Transkript + volle Dokument-Extrakte (die
+    Felder werden in run_job aus dem Coroutine-Result gesetzt). Volle
+    Extrakte, KEIN Summary -> keine Falsch-Positive durch Verdichtung
+    (v19.5-Learning). source_prozessreflexion_text ist seit v19.13 dabei,
+    sonst flaggt der Check korrekt eingebaute Reflexions-Passagen als
+    unbelegt.
+
+    Repair-Jobs: die source_*-Felder sind dort None (das Repair-Coroutine-
+    Result traegt sie nicht) - der Quellentreue-Check lief auf Repair-Output
+    deshalb bis v19.13 ins Leere. Der LLM-Voll-Repair schreibt aber den
+    GESAMTEN Text neu und braucht das Netz gegen aufgestuelptes Vokabular
+    genauso wie die Originalgenerierung. Fix: repair_execute (jobs.py) legt
+    die Parent-Quellen als in-process Attribut qc_source_text auf den
+    Repair-Job (getattr-Lesepfad, analog patient_name/fokus_themen).
+    Bewusst NICHT als source_*-Felder persistiert - das wuerde Transkript/
+    Extrakte redundant auf der Repair-Zeile duplizieren (Datenschutz:
+    kleinste noetige PII-Flaeche; die Quellen liegen bereits beim Parent).
+    """
+    parts = (
+        getattr(job, "result_transcript", None),
+        getattr(job, "source_verlauf_text", None),
+        getattr(job, "source_antragsvorlage_text", None),
+        getattr(job, "source_vorantrag_text", None),
+        getattr(job, "source_prozessreflexion_text", None),
+        getattr(job, "qc_source_text", None),   # v19.14a: Repair-Jobs
+    )
+    return "\n\n".join(s for s in parts if s and s.strip())
 
 
 # Globale Instanz

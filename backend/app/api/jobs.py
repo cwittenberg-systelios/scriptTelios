@@ -886,6 +886,32 @@ async def repair_execute(
     job.patient_name = _parent_pn
     job.fokus_themen = _parent_fokus
 
+    # v19.14a: Quellentreue-Netz fuer den Repair-Output. Der Voll-Repair
+    # schreibt den GESAMTEN Text neu, lief aber bis v19.13 OHNE
+    # SOURCE_FIDELITY-Check (source_*-Felder auf Repair-Jobs = None).
+    # Parent-Quellen als in-process Attribut mitgeben - bewusst NUR die
+    # Roh-Versionen (result_transcript + source_*-Extrakte), KEINE
+    # Stage-1-Synthesen (verlauf_summary/transcript_summary): Verdichtung
+    # erzeugt Falsch-Positive im Quellentreue-Check (v19.5-Learning).
+    # D1: source_prozessreflexion_text ist dabei - analog Generate-Pfad
+    # (v19.13), sonst flaggt der Check den Reflexionsteil eines
+    # P4-Repairs als unbelegt.
+    # D3: gilt bewusst auch fuer custom_final_prompt-Repairs - der QC ist
+    # beratend, nicht blockierend, und ein Hinweis auf unbelegten Inhalt
+    # ist gerade bei freiem Prompt sinnvoll.
+    # Nicht persistiert (PII nicht auf die Repair-Zeile duplizieren);
+    # _qc_fidelity_source() in job_queue.py liest es per getattr.
+    if repair_sources:
+        job.qc_source_text = "\n\n".join(
+            s for s in (
+                repair_sources.get("result_transcript"),
+                repair_sources.get("source_verlauf_text"),
+                repair_sources.get("source_antragsvorlage_text"),
+                repair_sources.get("source_vorantrag_text"),
+                repair_sources.get("source_prozessreflexion_text"),
+            ) if s and s.strip()
+        ) or None
+
     # Modell: vererben aus Parent (Konsistenz: Repair laeuft mit demselben
     # Modell wie das Original). Kann durch Settings ueberschrieben werden.
     # v19.2.2: parent.model_used speichert den Display-String "ollama/qwen3:32b"

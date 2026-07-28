@@ -973,3 +973,87 @@ class TestIdentityChecksIntegration:
     def test_issue_codes_regex_konform(self):
         assert ISSUE_CODE_RE.match(ISSUE_CODE_PATIENT_INITIAL_MISMATCH)
         assert ISSUE_CODE_RE.match(ISSUE_CODE_GENDER_MISMATCH)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v19.14a: Quellentreue-Quelle fuer den QC (inkl. Repair-Jobs)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestQcFidelitySource:
+    """_qc_fidelity_source (job_queue.py) - die Assembly der SOURCE_FIDELITY-
+    Quelle. Vor v19.14a liefen Repair-Jobs hier mit leerer Quelle (source_*
+    Felder None) -> Quellentreue-Check auf Repair-Output stumm."""
+
+    class _J:
+        """Dummy-JobState: nur die Felder, die die Assembly liest.
+        qc_source_text bewusst NICHT als Klassenattribut - der getattr-
+        Fallback-Pfad wird explizit mitgetestet."""
+        result_transcript = None
+        source_verlauf_text = None
+        source_antragsvorlage_text = None
+        source_vorantrag_text = None
+        source_prozessreflexion_text = None
+
+    @staticmethod
+    def _fn():
+        from app.services.job_queue import _qc_fidelity_source
+        return _qc_fidelity_source
+
+    def test_normaler_job_alle_quellen(self):
+        j = self._J()
+        j.result_transcript = "Transkript"
+        j.source_verlauf_text = "Verlauf"
+        j.source_antragsvorlage_text = "Antrag"
+        assert self._fn()(j) == "Transkript\n\nVerlauf\n\nAntrag"
+
+    def test_prozessreflexion_ist_teil_der_quelle(self):
+        # v19.13-Regression: Reflexionsinhalte sind legitime Quelle, sonst
+        # flaggt SOURCE_FIDELITY korrekt eingebaute Passagen als unbelegt.
+        j = self._J()
+        j.result_transcript = "Transkript"
+        j.source_prozessreflexion_text = "Reflexion"
+        assert self._fn()(j) == "Transkript\n\nReflexion"
+
+    def test_repair_job_ohne_attribut_leer(self):
+        # Stand v19.13: Repair-Job ohne qc_source_text -> leere Quelle
+        # (Check entfaellt). Kein AttributeError - getattr-Pfad.
+        assert self._fn()(self._J()) == ""
+
+    def test_repair_job_mit_qc_source_text(self):
+        j = self._J()
+        j.qc_source_text = "Parent-Transkript\n\nParent-Verlauf"
+        assert self._fn()(j) == "Parent-Transkript\n\nParent-Verlauf"
+
+    def test_reihenfolge_qc_source_text_zuletzt(self):
+        j = self._J()
+        j.result_transcript = "A"
+        j.qc_source_text = "B"
+        assert self._fn()(j) == "A\n\nB"
+
+    def test_leere_und_whitespace_quellen_gefiltert(self):
+        j = self._J()
+        j.result_transcript = "   "
+        j.source_verlauf_text = ""
+        j.source_vorantrag_text = "Vorantrag"
+        assert self._fn()(j) == "Vorantrag"
+
+    def test_fremdes_objekt_ohne_felder_wirft_nicht(self):
+        # Alle Lesepfade sind getattr - ein Objekt ohne jedes Feld darf
+        # keinen AttributeError erzeugen (Robustheit gegen aeltere Aufrufer).
+        class _Bare:
+            pass
+        assert self._fn()(_Bare()) == ""
+
+    def test_fidelity_check_greift_mit_repair_quelle(self):
+        # End-to-End des eigentlichen Zwecks: run_quality_check mit der aus
+        # qc_source_text stammenden Quelle meldet aufgestuelptes Vokabular.
+        j = self._J()
+        j.qc_source_text = "Gespraech ueber Belastung am Arbeitsplatz und Schlaf."
+        src = self._fn()(j)
+        text = _make_text(
+            300,
+            prefix="Frau K. arbeitete mit dem Schutzanteil und Self-Energy. ",
+        )
+        issues = run_quality_check(text, "dokumentation", source_text=src)
+        assert any(i.code == "SOURCE_FIDELITY" for i in issues), \
+            "IFS im Output ohne IFS in der Quelle muss Quellentreue-Issue geben"

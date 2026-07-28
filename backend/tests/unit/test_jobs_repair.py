@@ -511,3 +511,112 @@ class TestCreateRepairJob:
             assert state.workflow == "anamnese"
         finally:
             job_queue._cache.pop(state.job_id, None)
+
+
+# ── v19.14a: qc_source_text auf dem Repair-Job ────────────────────────────────
+
+class TestRepairQcSourceText:
+    """repair_execute muss die Parent-Quellen als in-process Attribut
+    qc_source_text auf den Repair-Job legen. Ohne das lief SOURCE_FIDELITY
+    auf Repair-Output leer (source_*-Felder der Repair-Zeile sind None)."""
+
+    _SOURCES = {
+        "verlauf_summary_text":         "VERDICHTETER VERLAUF",
+        "source_verlauf_text":          "Roh-Verlauf",
+        "transcript_summary_text":      "VERDICHTETES TRANSKRIPT",
+        "result_transcript":            "Roh-Transkript",
+        "source_antragsvorlage_text":   "Antragsvorlage",
+        "source_vorantrag_text":        "Vorantrag",
+        "source_prozessreflexion_text": "Reflexion",
+        "result_text":                  "Original text content.",
+        "workflow":                     "anamnese",
+    }
+
+    async def _run(self, req, sources):
+        parent = _parent_done(quality_check=_qc_dict([]))
+
+        async def _resolve_mock(_job_id):
+            return parent
+
+        async def _ctx_mock(_job_id):
+            return sources
+
+        fake_job = MagicMock()
+        fake_job.job_id = "repair-src"
+        bg = MagicMock()
+        bg.add_task = MagicMock()
+
+        with patch("app.api.jobs._resolve_parent_job", _resolve_mock), \
+             patch("app.api.jobs.job_queue.get_repair_context", _ctx_mock), \
+             patch("app.api.jobs.job_queue.create_repair_job",
+                   return_value=fake_job):
+            await repair_execute(
+                "parent-1", req, background_tasks=bg, current_user="alice",
+            )
+        return fake_job
+
+    @pytest.mark.asyncio
+    async def test_setzt_rohquellen(self):
+        job = await self._run(RepairRequest(accepted_issue_codes=[]),
+                              dict(self._SOURCES))
+        src = job.qc_source_text
+        assert src
+        for expected in ("Roh-Transkript", "Roh-Verlauf", "Antragsvorlage",
+                         "Vorantrag", "Reflexion"):
+            assert expected in src, f"{expected} fehlt in qc_source_text"
+
+    @pytest.mark.asyncio
+    async def test_keine_stage1_synthesen(self):
+        # v19.5-Learning: Verdichtung erzeugt Falsch-Positive im
+        # Quellentreue-Check - Summaries duerfen NICHT rein.
+        job = await self._run(RepairRequest(accepted_issue_codes=[]),
+                              dict(self._SOURCES))
+        assert "VERDICHTETER VERLAUF" not in job.qc_source_text
+        assert "VERDICHTETES TRANSKRIPT" not in job.qc_source_text
+
+    @pytest.mark.asyncio
+    async def test_gilt_auch_fuer_custom_prompt(self):
+        # D3: bewusst kein Guard auf custom_used.
+        job = await self._run(
+            RepairRequest(custom_final_prompt="EXAKT DIESEN PROMPT."),
+            dict(self._SOURCES),
+        )
+        assert "Roh-Transkript" in job.qc_source_text
+
+    @pytest.mark.asyncio
+    async def test_leere_quellen_ergeben_none(self):
+        sources = {k: None for k in self._SOURCES}
+        sources["workflow"] = "anamnese"
+        job = await self._run(RepairRequest(accepted_issue_codes=[]), sources)
+        assert job.qc_source_text is None
+
+    @pytest.mark.asyncio
+    async def test_kein_kontext_kein_attribut(self):
+        # get_repair_context liefert None (Parent weder im Cache noch in DB)
+        # -> Attribut wird gar nicht gesetzt, _qc_fidelity_source faellt per
+        # getattr auf "" zurueck. Kein AttributeError im Aufrufpfad.
+        parent = _parent_done(quality_check=_qc_dict([]))
+
+        async def _resolve_mock(_job_id):
+            return parent
+
+        async def _ctx_mock(_job_id):
+            return None
+
+        real_job = type("J", (), {})()
+        real_job.job_id = "repair-none"
+        bg = MagicMock()
+        bg.add_task = MagicMock()
+
+        with patch("app.api.jobs._resolve_parent_job", _resolve_mock), \
+             patch("app.api.jobs.job_queue.get_repair_context", _ctx_mock), \
+             patch("app.api.jobs.job_queue.create_repair_job",
+                   return_value=real_job):
+            await repair_execute(
+                "parent-1", RepairRequest(accepted_issue_codes=[]),
+                background_tasks=bg, current_user="alice",
+            )
+
+        assert not hasattr(real_job, "qc_source_text")
+        from app.services.job_queue import _qc_fidelity_source
+        assert _qc_fidelity_source(real_job) == ""
