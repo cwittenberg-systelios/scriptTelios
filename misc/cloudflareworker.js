@@ -48,7 +48,7 @@
 // haette Selfcheck, Testrun und Health-Warteschleife stillschweigend gebrochen.
 // Bei Umzug auf eine andere Subdomain nur hier aendern (und den Public
 // Hostname des Tunnels im Zero-Trust-Dashboard nachziehen).
-const BACKEND_BASE = "https://scriptelios.win";
+const BACKEND_BASE = "https://api.scriptelios.win";
 
 const AUTH_WINDOW_SEC = 300;         // Replay-Fenster (== AUTH_TIMESTAMP_WINDOW_SEC)
 const POD_ID_KEY = "state:podId";    // KV-Key fuer die mutable Pod-ID
