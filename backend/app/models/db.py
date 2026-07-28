@@ -108,6 +108,10 @@ class Job(Base):
     transcript_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_antragsvorlage_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_vorantrag_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v19.13: Prozessreflexion (P4, Abschlussreflexion des Klienten).
+    # NULL wenn keine hochgeladen wurde oder Workflow != entlassbericht.
+    # Repair-Fidelity-Quelle analog source_antragsvorlage_text.
+    source_prozessreflexion_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # v19 Phase 1: QualityCheck-Ergebnis fuer den finalen result_text.
     # Format siehe app/services/quality_check.py::serialize_issues:

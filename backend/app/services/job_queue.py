@@ -187,6 +187,8 @@ class JobState:
         self.transcript_summary_text     : Optional[str] = None
         self.source_antragsvorlage_text  : Optional[str] = None
         self.source_vorantrag_text       : Optional[str] = None
+        # v19.13: Prozessreflexion (P4, Abschlussreflexion des Klienten).
+        self.source_prozessreflexion_text: Optional[str] = None
         # v19 Phase 1: QualityCheck-Ergebnis.
         # Wird nach DONE in run_job() ueber app.services.quality_check
         # berechnet und persistiert. Format: serialize_issues()-Output.
@@ -245,6 +247,7 @@ class JobState:
             "transcript_summary_text":     self.transcript_summary_text,
             "source_antragsvorlage_text":  self.source_antragsvorlage_text,
             "source_vorantrag_text":       self.source_vorantrag_text,
+            "source_prozessreflexion_text": self.source_prozessreflexion_text,
             # v19 Phase 1 + C:
             "quality_check":   self.quality_check,
             "parent_job_id":   self.parent_job_id,
@@ -454,6 +457,7 @@ class JobQueue:
                     "transcript_summary_text":     db_job.transcript_summary_text,
                     "source_antragsvorlage_text":  db_job.source_antragsvorlage_text,
                     "source_vorantrag_text":       db_job.source_vorantrag_text,
+                    "source_prozessreflexion_text": db_job.source_prozessreflexion_text,
                     # v19 Phase 1 + C: QualityCheck + Repair-Beziehung.
                     "quality_check":   db_job.quality_check_json,
                     "parent_job_id":   db_job.parent_job_id,
@@ -503,6 +507,7 @@ class JobQueue:
                 "result_transcript":           cached.result_transcript,
                 "source_antragsvorlage_text":  cached.source_antragsvorlage_text,
                 "source_vorantrag_text":       cached.source_vorantrag_text,
+                "source_prozessreflexion_text": cached.source_prozessreflexion_text,
                 "result_text":                 cached.result_text,
                 "workflow":                    cached.workflow,
             }
@@ -523,6 +528,7 @@ class JobQueue:
                     "result_transcript":           db_job.result_transcript,
                     "source_antragsvorlage_text":  db_job.source_antragsvorlage_text,
                     "source_vorantrag_text":       db_job.source_vorantrag_text,
+                    "source_prozessreflexion_text": db_job.source_prozessreflexion_text,
                     "result_text":                 db_job.result_text,
                     "workflow":                    db_job.workflow,
                 }
@@ -624,6 +630,7 @@ class JobQueue:
             "transcript_summary_text":     db_job.transcript_summary_text,
             "source_antragsvorlage_text":  db_job.source_antragsvorlage_text,
             "source_vorantrag_text":       db_job.source_vorantrag_text,
+            "source_prozessreflexion_text": db_job.source_prozessreflexion_text,
             "quality_check":   db_job.quality_check_json,
             "parent_job_id":   db_job.parent_job_id,
             "repair_input":    db_job.repair_input_json,
@@ -752,6 +759,7 @@ class JobQueue:
                         transcript_summary_text=state.transcript_summary_text,
                         source_antragsvorlage_text=state.source_antragsvorlage_text,
                         source_vorantrag_text=state.source_vorantrag_text,
+                        source_prozessreflexion_text=state.source_prozessreflexion_text,
                         # v19 Phase 1 + C
                         quality_check_json=state.quality_check,
                         parent_job_id=state.parent_job_id,
@@ -807,6 +815,7 @@ class JobQueue:
             job.transcript_summary_text     = result.get("transcript_summary_text")
             job.source_antragsvorlage_text  = result.get("source_antragsvorlage_text")
             job.source_vorantrag_text       = result.get("source_vorantrag_text")
+            job.source_prozessreflexion_text = result.get("source_prozessreflexion_text")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
 
             if job._cancel_requested:
@@ -857,6 +866,10 @@ class JobQueue:
                             job.source_verlauf_text,
                             job.source_antragsvorlage_text,
                             job.source_vorantrag_text,
+                            # v19.13: Reflexionsinhalte sind legitime Quelle -
+                            # sonst flaggt SOURCE_FIDELITY korrekt eingebaute
+                            # Reflexions-Passagen als unbelegt.
+                            job.source_prozessreflexion_text,
                         ) if s and s.strip()
                     )
                     # v19.6: Datenschutz-Namensleck (Punkt 1) + Stichpunkt-Check
@@ -867,10 +880,14 @@ class JobQueue:
                     _patient_name = getattr(job, "patient_name", None)
                     _stichpunkte = split_stichpunkte(getattr(job, "fokus_themen", None))
                     _sa_empty = getattr(job, "selbstauskunft_empty", None)
+                    # v19.13: Ad-hoc-Flag aus jobs.py (Pattern selbstauskunft_empty).
+                    # None/False bei Repair-Jobs und aelteren Aufrufern -> Check entfaellt.
+                    _reflexion_present = getattr(job, "prozessreflexion_present", None)
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
                         selbstauskunft_empty=_sa_empty,
+                        prozessreflexion_present=_reflexion_present,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(

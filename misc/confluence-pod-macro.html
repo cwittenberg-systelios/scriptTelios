@@ -1,0 +1,620 @@
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+  scriptTelios – Serversteuerung
+  HTML/JS-Snippet fuer ein Confluence HTML-Macro (NICHT als User-Macro nutzen)
+  ───────────────────────────────────────────────────────────────────────────
+  FUNKTIONEN: Serverstatus, Start/Stop, Fremd-Pod uebernehmen, Pod-ID setzen /
+              migrieren (bei No-GPU), Statusprotokoll (wer/wann/was).
+
+  INSTALLATION:
+    1. Seite bearbeiten → Macro einfuegen → "HTML" (Confluence HTML-Macro).
+       (HTML-Macro muss vom Confluence-Admin aktiviert sein.)
+    2. Kompletten Inhalt dieser Datei in den Macro-Body einfuegen.
+    3. Im Skript-Block unten die zwei Konstanten PROXY_URL und AUTH_SECRET setzen.
+    4. Seite speichern.
+
+  KONFIG (im Skript-Block unten):
+    • PROXY_URL   = URL des Cloudflare-Worker-Proxys (z.B. https://xxx.workers.dev)
+    • AUTH_SECRET = identisch mit CONFLUENCE_SHARED_SECRET im Worker/Backend
+    Der Worker (CONFLUENCE_ORIGIN) muss die Confluence-Origin erlauben.
+
+  SICHERHEIT:
+    Das AUTH_SECRET steht im Seiten-HTML → jede/r mit Lese-/Quelltext-Zugriff auf
+    DIESE Seite kann es sehen. Das Secret erlaubt nur Pod-Start/-Stop (kein
+    Datenzugriff). Seite entsprechend berechtigen; bei breiter Freigabe Secret
+    rotieren. Zugriffsschutz = Confluence-Seitenberechtigungen.
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+
+<div id="stpod-root" class="stpod">
+  <div class="stpod-head">scriptTelios &ndash; Serversteuerung</div>
+
+  <div class="stpod-statuscard">
+    <span class="stpod-badge stpod-grey"></span>
+    <div class="stpod-statusblock">
+      <div class="stpod-status-text">l&auml;dt&hellip;</div>
+      <div class="stpod-podid"></div>
+    </div>
+    <div class="stpod-updated"></div>
+  </div>
+
+  <div class="stpod-warn" style="display:none"></div>
+  <div class="stpod-nogpu" style="display:none"></div>
+
+  <div class="stpod-actions">
+    <button type="button" class="stpod-btn stpod-start" disabled>Server starten</button>
+    <button type="button" class="stpod-btn stpod-stop" disabled>Server stoppen</button>
+    <button type="button" class="stpod-btn stpod-ghost stpod-refresh">Aktualisieren</button>
+  </div>
+
+  <div class="stpod-msg"></div>
+
+  <div class="stpod-podid-row">
+    <span class="stpod-podid-label">Pod-ID</span>
+    <input type="text" class="stpod-podid-input" placeholder="neue Pod-ID" spellcheck="false" autocomplete="off" />
+    <button type="button" class="stpod-btn stpod-ghost stpod-setid">Setzen</button>
+    <button type="button" class="stpod-btn stpod-ghost stpod-migrate">Migrieren &amp; Starten</button>
+  </div>
+
+  <div class="stpod-selfcheck">
+    <div class="stpod-sc-head">
+      <span class="stpod-sc-title">Systempr&uuml;fung</span>
+      <span class="stpod-sc-overall"></span>
+    </div>
+    <div class="stpod-sc-body"></div>
+  </div>
+
+  <div class="stpod-logwrap">
+    <div class="stpod-logtitle">Statusprotokoll</div>
+    <table class="stpod-log">
+      <thead><tr><th>Zeit</th><th>Nutzer</th><th>Aktion</th><th>Ergebnis</th></tr></thead>
+      <tbody class="stpod-log-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<style>
+  #stpod-root {
+    all: initial;
+    display: block;
+    width: 100%;
+    max-width: 640px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    color: #172b4d;
+    box-sizing: border-box;
+    border: 1px solid #dfe1e6;
+    border-radius: 8px;
+    padding: 16px 18px;
+    background: #ffffff;
+  }
+  #stpod-root * { box-sizing: border-box; }
+  #stpod-root .stpod-head { font-size: 16px; font-weight: 600; margin-bottom: 14px; }
+  #stpod-root .stpod-statuscard {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 14px; background: #f4f5f7; border-radius: 6px;
+  }
+  #stpod-root .stpod-badge {
+    width: 14px; height: 14px; border-radius: 50%; flex: 0 0 auto;
+    background: #9e9e9e; box-shadow: 0 0 0 3px rgba(0,0,0,0.05);
+  }
+  #stpod-root .stpod-green { background: #2e7d32; box-shadow: 0 0 0 3px rgba(46,125,50,0.18); }
+  #stpod-root .stpod-amber { background: #f9a825; box-shadow: 0 0 0 3px rgba(249,168,37,0.20); }
+  #stpod-root .stpod-grey  { background: #9e9e9e; box-shadow: 0 0 0 3px rgba(0,0,0,0.05); }
+  #stpod-root .stpod-statusblock { flex: 1 1 auto; }
+  #stpod-root .stpod-status-text { font-size: 15px; font-weight: 600; }
+  #stpod-root .stpod-podid { font-size: 12px; color: #6b778c; margin-top: 2px; }
+  #stpod-root .stpod-updated { font-size: 11px; color: #97a0af; white-space: nowrap; }
+
+  #stpod-root .stpod-warn {
+    margin-top: 12px; padding: 10px 12px; background: #fffae6;
+    border: 1px solid #ffe380; border-radius: 6px; font-size: 13px; color: #7a5c00;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  }
+  #stpod-root .stpod-nogpu {
+    margin-top: 12px; padding: 10px 12px; background: #ffebe6;
+    border: 1px solid #ffbdad; border-radius: 6px; font-size: 13px; color: #ae2a19;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  }
+  #stpod-root .stpod-nogpu-hint { color: #6b778c; font-size: 12px; }
+
+  #stpod-root .stpod-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  #stpod-root .stpod-btn {
+    font: inherit; font-size: 14px; font-weight: 500; padding: 8px 16px;
+    border-radius: 6px; border: 1px solid transparent; cursor: pointer;
+    background: #0052cc; color: #ffffff;
+  }
+  #stpod-root .stpod-btn:hover:not(:disabled) { background: #0747a6; }
+  #stpod-root .stpod-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  #stpod-root .stpod-stop { background: #de350b; }
+  #stpod-root .stpod-stop:hover:not(:disabled) { background: #bf2600; }
+  #stpod-root .stpod-ghost { background: #ffffff; color: #42526e; border: 1px solid #dfe1e6; }
+  #stpod-root .stpod-ghost:hover:not(:disabled) { background: #f4f5f7; }
+
+  #stpod-root .stpod-adopt, #stpod-root .stpod-retry, #stpod-root .stpod-escalate, #stpod-root .stpod-autoretry, #stpod-root .stpod-stopauto {
+    font-size: 12px; font-weight: 500; padding: 4px 10px; cursor: pointer;
+    background: #ffffff; color: #172b4d; border: 1px solid #c1c7d0; border-radius: 4px;
+  }
+  #stpod-root .stpod-adopt:hover:not(:disabled), #stpod-root .stpod-retry:hover:not(:disabled), #stpod-root .stpod-escalate:hover:not(:disabled), #stpod-root .stpod-autoretry:hover:not(:disabled), #stpod-root .stpod-stopauto:hover:not(:disabled) { background: #f4f5f7; }
+
+  #stpod-root .stpod-msg { margin-top: 12px; font-size: 13px; min-height: 18px; }
+  #stpod-root .stpod-msg-ok   { color: #216e4e; }
+  #stpod-root .stpod-msg-info { color: #42526e; }
+  #stpod-root .stpod-msg-warn { color: #7a5c00; }
+  #stpod-root .stpod-msg-err  { color: #ae2a19; }
+
+  #stpod-root .stpod-podid-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid #ebecf0;
+  }
+  #stpod-root .stpod-podid-label { font-size: 12px; font-weight: 600; color: #6b778c; }
+  #stpod-root .stpod-podid-input {
+    font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid #dfe1e6;
+    border-radius: 4px; min-width: 200px; flex: 1 1 200px; color: #172b4d;
+  }
+  #stpod-root .stpod-setid, #stpod-root .stpod-migrate { font-size: 13px; padding: 6px 12px; }
+
+  #stpod-root .stpod-selfcheck { margin-top: 18px; padding-top: 12px; border-top: 1px solid #ebecf0; }
+  #stpod-root .stpod-sc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  #stpod-root .stpod-sc-title { font-size: 13px; font-weight: 600; color: #42526e; }
+  #stpod-root .stpod-sc-overall { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; }
+  #stpod-root .stpod-sc-green { color: #216e4e; background: #e3fcef; }
+  #stpod-root .stpod-sc-amber { color: #7a5c00; background: #fffae6; }
+  #stpod-root .stpod-sc-red   { color: #ae2a19; background: #ffebe6; }
+  #stpod-root .stpod-sc-grey  { color: #5e6c84; background: #f4f5f7; }
+  #stpod-root .stpod-sc-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12.5px; }
+  #stpod-root .stpod-sc-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  #stpod-root .stpod-sc-dot.stpod-sc-green { background: #2e7d32; }
+  #stpod-root .stpod-sc-dot.stpod-sc-red { background: #de350b; }
+  #stpod-root .stpod-sc-label { font-weight: 500; min-width: 82px; }
+  #stpod-root .stpod-sc-detail { color: #6b778c; }
+  #stpod-root .stpod-sc-empty { font-size: 12px; color: #97a0af; font-style: italic; }
+
+  #stpod-root .stpod-logwrap { margin-top: 18px; }  #stpod-root .stpod-logtitle { font-size: 13px; font-weight: 600; color: #42526e; margin-bottom: 6px; }
+  #stpod-root .stpod-log { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  #stpod-root .stpod-log th, #stpod-root .stpod-log td {
+    text-align: left; padding: 6px 8px; border-bottom: 1px solid #ebecf0;
+  }
+  #stpod-root .stpod-log th { color: #6b778c; font-weight: 600; border-bottom: 2px solid #dfe1e6; }
+  #stpod-root .stpod-log tbody tr:hover { background: #f4f5f7; }
+  #stpod-root .stpod-empty { color: #97a0af; font-style: italic; }
+</style>
+
+<script>
+(function () {
+  // ═══════════════ KONFIGURATION — HIER EINTRAGEN ═══════════════
+  var PROXY_URL   = "PROXY_URL_HIER_EINTRAGEN";     // z.B. https://scriptelios-podctrl.example.workers.dev
+  var AUTH_SECRET = "AUTH_SECRET_HIER_EINTRAGEN";   // == CONFLUENCE_SHARED_SECRET (Worker/Backend)
+  // ══════════════════════════════════════════════════════════════
+
+  var root = document.getElementById("stpod-root");
+  if (!root) return;
+
+  var API = (PROXY_URL || "").trim().replace(/\/+$/, "");
+  if (API && API.indexOf("http://") !== 0 && API.indexOf("https://") !== 0) API = "https://" + API;
+
+  var USER = (window.AJS && AJS.Data)
+    ? (AJS.Data.get("remote-user") || AJS.Data.get("current-username") || AJS.Data.get("current-user-fullname") || "anonymous")
+    : "anonymous";
+
+  var q = function (sel) { return root.querySelector(sel); };
+  var badge = q(".stpod-badge"), statusText = q(".stpod-status-text"), podIdEl = q(".stpod-podid");
+  var updatedEl = q(".stpod-updated"), warnEl = q(".stpod-warn"), nogpuEl = q(".stpod-nogpu"), msgEl = q(".stpod-msg");
+  var btnStart = q(".stpod-start"), btnStop = q(".stpod-stop"), btnRefresh = q(".stpod-refresh");
+  var podIdInput = q(".stpod-podid-input"), btnSetId = q(".stpod-setid"), btnMigrate = q(".stpod-migrate");
+  var logBody = q(".stpod-log-body");
+  var scBody = q(".stpod-sc-body"), scOverall = q(".stpod-sc-overall");
+
+  var lastStateTs = 0, busy = false;
+
+  function setMsg(text, kind) {
+    msgEl.textContent = text || "";
+    msgEl.className = "stpod-msg" + (kind ? " stpod-msg-" + kind : "");
+  }
+
+  // HMAC-SHA256 via Web Crypto — signiert "user:timestamp"
+  function hmacSign(user, timestamp) {
+    var enc = new TextEncoder();
+    return crypto.subtle.importKey("raw", enc.encode(AUTH_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
+      .then(function (key) { return crypto.subtle.sign("HMAC", key, enc.encode(user + ":" + timestamp)); })
+      .then(function (sig) {
+        return Array.prototype.map.call(new Uint8Array(sig), function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+      });
+  }
+
+  function signedFetch(path, opts) {
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    var ts = Math.floor(Date.now() / 1000).toString();
+    return hmacSign(USER, ts).then(function (sig) {
+      opts.headers["X-Systelios-User"] = USER;
+      opts.headers["X-Systelios-Timestamp"] = ts;
+      opts.headers["X-Systelios-Signature"] = sig;
+      return fetch(API + path, opts);
+    });
+  }
+
+  function configOk() {
+    if (!window.crypto || !crypto.subtle) {
+      setMsg("HMAC nicht m\u00F6glich: crypto.subtle fehlt. Confluence \u00FCber HTTPS aufrufen.", "err"); return false;
+    }
+    if (!API || API.indexOf("HIER_EINTRAGEN") >= 0) {
+      setMsg("PROXY_URL ist noch nicht im Code eingetragen.", "err"); return false;
+    }
+    if (!AUTH_SECRET || AUTH_SECRET.indexOf("HIER_EINTRAGEN") >= 0) {
+      setMsg("AUTH_SECRET ist noch nicht im Code eingetragen.", "err"); return false;
+    }
+    return true;
+  }
+
+  function validPodId(v) { return /^[a-z0-9]{6,}$/i.test(v); }
+
+  function fmtTime(iso) { try { return new Date(iso).toLocaleString("de-DE"); } catch (e) { return iso || ""; } }
+
+  var ACTION_LABEL = { start: "Start", stop: "Stopp", setPodId: "Pod-ID", recover: "Recover" };
+  function statusLabel(s) {
+    switch (s) {
+      case "SUCCESS":         return "\u2705 OK";
+      case "ALREADY_RUNNING": return "\u2139\uFE0F lief bereits";
+      case "ALREADY_STOPPED": return "\u2139\uFE0F war gestoppt";
+      case "OTHER_RUNNING":   return "\u26A0\uFE0F anderer Pod l\u00E4uft";
+      case "NO_GPU":          return "\uD83D\uDEAB keine GPU";
+      case "HARD_ERROR":      return "\u274C Fehler";
+      case "SOFT_FAIL":       return "\u26A0\uFE0F unklar";
+      case "AUTH_FAILED":     return "\uD83D\uDEA8 Auth-Fehler";
+      default:                return s || "";
+    }
+  }
+
+  // Fremd-Pod-Warnung mit Uebernehmen-Buttons
+  function renderWarn(others) {
+    warnEl.innerHTML = "";
+    if (!others.length) { warnEl.style.display = "none"; return; }
+    var span = document.createElement("span");
+    span.textContent = "\u26A0\uFE0F Es l\u00E4uft bereits ein anderer Pod \u2014 ein Start w\u00FCrde keinen zweiten erzeugen.";
+    warnEl.appendChild(span);
+    others.forEach(function (p) {
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "stpod-btn stpod-adopt"; b.disabled = busy;
+      b.textContent = "\u00DCbernehmen: " + (p.name ? p.name + " " : "") + "(" + p.id + ")";
+      b.addEventListener("click", function () { adopt(p.id); });
+      warnEl.appendChild(b);
+    });
+    warnEl.style.display = "";
+  }
+
+  // No-GPU-Banner mit "Erneut versuchen"
+  function showNoGpu(on) {
+    if (!on) { nogpuEl.style.display = "none"; nogpuEl.innerHTML = ""; return; }
+    nogpuEl.innerHTML = "";
+    if (autoRetry) {
+      var si = document.createElement("span");
+      si.textContent = "\uD83D\uDD01 Automatische Wiederholung l\u00E4uft \u2026";
+      nogpuEl.appendChild(si);
+      var stop = document.createElement("button");
+      stop.type = "button"; stop.className = "stpod-btn stpod-stopauto stpod-keepenabled"; stop.disabled = false;
+      stop.textContent = "Automatik stoppen";
+      stop.addEventListener("click", function () { stopAutoRetry(); });
+      nogpuEl.appendChild(stop);
+      nogpuEl.style.display = "";
+      return;
+    }
+    var s = document.createElement("span");
+    s.textContent = "\uD83D\uDEAB Keine GPU verf\u00FCgbar. RunPod konnte dem Pod keine GPU zuweisen.";
+    nogpuEl.appendChild(s);
+    var r = document.createElement("button");
+    r.type = "button"; r.className = "stpod-btn stpod-retry"; r.disabled = busy;
+    r.textContent = "Erneut versuchen";
+    r.addEventListener("click", function () { retryNoGpu(); });
+    nogpuEl.appendChild(r);
+    var ar = document.createElement("button");
+    ar.type = "button"; ar.className = "stpod-btn stpod-autoretry"; ar.disabled = busy;
+    ar.textContent = "Automatisch wiederholen";
+    ar.addEventListener("click", function () { startAutoRetry(); });
+    nogpuEl.appendChild(ar);
+    var esc = document.createElement("button");
+    esc.type = "button"; esc.className = "stpod-btn stpod-escalate"; esc.disabled = busy;
+    esc.textContent = "Gestoppte Pods durchprobieren";
+    esc.addEventListener("click", function () { startEscalation(); });
+    nogpuEl.appendChild(esc);
+    var hint = document.createElement("span");
+    hint.className = "stpod-nogpu-hint";
+    hint.textContent = "oder unten eine Ersatz-Pod-ID eintragen und \u201EMigrieren & Starten\u201C.";
+    nogpuEl.appendChild(hint);
+    nogpuEl.style.display = "";
+  }
+
+  function renderState(s) {
+    lastStateTs = Date.now();
+    var cls = "grey", txt = "unbekannt";
+    if (s && s.ok !== false) {
+      if (s.trackedRunning)  { cls = "green"; txt = "Server l\u00E4uft" + (s.hasGpu ? " (GPU aktiv)" : ""); }
+      else if (s.anyRunning) { cls = "amber"; txt = "Anderer Pod l\u00E4uft"; }
+      else                   { cls = "grey";  txt = "gestoppt"; }
+    }
+    badge.className = "stpod-badge stpod-" + cls;
+    statusText.textContent = txt;
+    podIdEl.textContent = (s && s.podId) ? ("Pod-ID: " + s.podId) : "";
+
+    renderWarn((s && s.otherRunning) || []);
+    if (s && s.anyRunning && !autoRetry) showNoGpu(false);   // laeuft wieder etwas → No-GPU-Hinweis weg (nicht waehrend Auto-Retry)
+
+    var running = s ? !!s.anyRunning : false;
+    var tracked = s ? !!s.trackedRunning : false;
+    btnStart.disabled  = busy || running;
+    btnStop.disabled   = busy || !tracked;
+    btnSetId.disabled  = busy;
+    btnMigrate.disabled = busy;
+    // dynamische Banner-Buttons mit busy synchronisieren (Auto-Retry-Stopp bleibt aktiv)
+    Array.prototype.forEach.call(nogpuEl.querySelectorAll("button"), function (b) { b.disabled = busy && !b.classList.contains("stpod-keepenabled"); });
+  }
+
+  function tickUpdated() {
+    if (!lastStateTs) { updatedEl.textContent = ""; return; }
+    updatedEl.textContent = "aktualisiert vor " + Math.round((Date.now() - lastStateTs) / 1000) + " s";
+  }
+
+  function setControlsBusy(v) {
+    btnStart.disabled = v; btnStop.disabled = v; btnSetId.disabled = v; btnMigrate.disabled = v;
+    Array.prototype.forEach.call(warnEl.querySelectorAll("button"), function (b) { b.disabled = v; });
+    Array.prototype.forEach.call(nogpuEl.querySelectorAll("button"), function (b) { b.disabled = v && !b.classList.contains("stpod-keepenabled"); });
+  }
+
+  // Poll mit Backoff bei Proxy-Down + Pause bei verstecktem Tab
+  var STATE_MIN = 15000, STATE_MAX = 60000, stateDelay = STATE_MIN, stateTimer = null, stateInFlight = false;
+  function scheduleState(delay) {
+    if (stateTimer) clearTimeout(stateTimer);
+    stateTimer = setTimeout(refreshState, (delay != null) ? delay : stateDelay);
+  }
+  function refreshState() {
+    if (document.hidden) { scheduleState(STATE_MIN); return; }   // Tab versteckt → kein Netz
+    if (!configOk()) { renderState(null); scheduleState(stateDelay); return; }
+    if (stateInFlight) return;
+    stateInFlight = true;
+    signedFetch("/state", { method: "GET" })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s && s.ok === false) { setMsg("Statusfehler: " + (s.reason || s.error || "?"), "err"); }
+        renderState(s);
+        stateDelay = STATE_MIN;                                  // Erfolg → Intervall zuruecksetzen
+      })
+      .catch(function () {
+        setMsg("Proxy nicht erreichbar.", "err"); renderState(null);
+        stateDelay = Math.min(stateDelay * 2, STATE_MAX);        // Fehler → Backoff (max 60s)
+      })
+      .then(function () { stateInFlight = false; scheduleState(stateDelay); });
+  }
+
+  var logsInFlight = false;
+  function refreshLogs() {
+    if (document.hidden || !configOk() || logsInFlight) return;
+    logsInFlight = true;
+    signedFetch("/logs", { method: "GET" })
+      .then(function (r) { return r.json(); })
+      .then(function (rows) {
+        if (!Array.isArray(rows)) return;
+        logBody.innerHTML = "";
+        if (!rows.length) {
+          var tr0 = document.createElement("tr"), td0 = document.createElement("td");
+          td0.colSpan = 4; td0.className = "stpod-empty"; td0.textContent = "Noch keine Eintr\u00E4ge.";
+          tr0.appendChild(td0); logBody.appendChild(tr0); return;
+        }
+        rows.forEach(function (e) {
+          var tr = document.createElement("tr");
+          [fmtTime(e.time), e.user || "\u2014", (ACTION_LABEL[e.action] || e.action || ""), statusLabel(e.status)]
+            .forEach(function (c) { var td = document.createElement("td"); td.textContent = c; tr.appendChild(td); });
+          logBody.appendChild(tr);
+        });
+      })
+      .catch(function () { /* still */ })
+      .then(function () { logsInFlight = false; });
+  }
+
+  // ── Systemprüfung (liest /selfcheck; nur Anzeige) ──
+  var SC_LABELS = { ollama: "Ollama", models: "Modelle", db: "Datenbank", disk: "Speicher", gpu: "GPU", whisper: "Whisper" };
+  var scInFlight = false;
+  function renderSelfcheck(rep) {
+    scBody.innerHTML = "";
+    var status = (rep && rep.status) ? rep.status : "unbekannt";
+    var ocls = status === "ok" ? "green" : (status === "degraded" ? "amber" : (status === "stopped" ? "grey" : "red"));
+    var otxt = status === "ok" ? "OK" : (status === "degraded" ? "eingeschr\u00E4nkt" : (status === "stopped" ? "Pod aus" : "St\u00F6rung"));
+    scOverall.className = "stpod-sc-overall stpod-sc-" + ocls;
+    scOverall.textContent = otxt;
+    var checks = (rep && rep.checks) ? rep.checks : null;
+    if (!checks || !Object.keys(checks).length) {
+      var d = document.createElement("div"); d.className = "stpod-sc-empty";
+      d.textContent = (rep && rep.detail) ? rep.detail : "keine Details";
+      scBody.appendChild(d); return;
+    }
+    Object.keys(SC_LABELS).forEach(function (k) {
+      if (!checks[k]) return;
+      var row = document.createElement("div"); row.className = "stpod-sc-row";
+      var dot = document.createElement("span"); dot.className = "stpod-sc-dot stpod-sc-" + (checks[k].ok ? "green" : "red");
+      var lab = document.createElement("span"); lab.className = "stpod-sc-label"; lab.textContent = SC_LABELS[k];
+      var det = document.createElement("span"); det.className = "stpod-sc-detail"; det.textContent = checks[k].detail || "";
+      row.appendChild(dot); row.appendChild(lab); row.appendChild(det); scBody.appendChild(row);
+    });
+  }
+  function refreshSelfcheck() {
+    if (document.hidden || !configOk() || scInFlight) return;
+    scInFlight = true;
+    signedFetch("/selfcheck", { method: "GET" })
+      .then(function (r) { return r.json(); })
+      .then(function (rep) { renderSelfcheck(rep); })
+      .catch(function () { renderSelfcheck({ status: "unbekannt", detail: "Proxy nicht erreichbar" }); })
+      .then(function () { scInFlight = false; });
+  }
+
+  // Generisches Ergebnis-Handling (deckt Start/Stop, setPodId, recover ab)
+  function handleResult(res, label) {
+    var b = res.body || {};
+    if (res.code === 401) { setMsg(label + ": " + statusLabel("AUTH_FAILED") + (b.reason ? " (" + b.reason + ")" : ""), "err"); return; }
+    if (b.noGpu === true) { setMsg("Keine GPU verf\u00FCgbar \u2014 RunPod konnte keine GPU zuweisen.", "err"); showNoGpu(true); return; }
+    if (b.status === "OTHER_RUNNING") { setMsg("Abgebrochen \u2014 es l\u00E4uft bereits ein anderer Pod.", "warn"); return; }
+    if (b.status === "SUCCESS") { setMsg(label + ": " + statusLabel("SUCCESS"), "ok"); showNoGpu(false); return; }
+    if (b.status === "ALREADY_RUNNING" || b.status === "ALREADY_STOPPED") { setMsg(label + ": " + statusLabel(b.status), "info"); return; }
+    if (b.ok === true) { setMsg(label + ": " + (b.podId ? ("Pod-ID " + b.podId) : "OK"), "ok"); return; }  // setPodId / adopt
+    setMsg(label + ": " + statusLabel(b.status) + (b.reason ? " (" + b.reason + ")" : ""), "err");
+  }
+
+  function runAction(path, bodyObj, label) {
+    if (busy || !configOk()) return;
+    busy = true; setControlsBusy(true);
+    setMsg(label + " l\u00E4uft\u2026", "info");
+    signedFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyObj || {}) })
+      .then(function (r) { return r.json().then(function (b) { return { code: r.status, body: b }; }); })
+      .then(function (res) { handleResult(res, label); })
+      .catch(function () { setMsg(label + " fehlgeschlagen \u2014 Proxy nicht erreichbar.", "err"); })
+      .then(function () { busy = false; refreshState(); refreshLogs(); refreshSelfcheck(); });
+  }
+
+  function adopt(id)      { runAction("/setPodId", { podId: id }, "\u00DCbernehmen"); }
+  function retryNoGpu()   { runAction("/recover", {}, "Erneut versuchen"); }
+
+  function readPodIdInput() {
+    var v = (podIdInput.value || "").trim();
+    if (!validPodId(v)) { setMsg("Ung\u00FCltige Pod-ID (min. 6 alphanumerische Zeichen).", "err"); return null; }
+    return v;
+  }
+  function setPodIdManual() { var v = readPodIdInput(); if (v) runAction("/setPodId", { podId: v }, "Pod-ID setzen"); }
+  function migrateWithId()  { var v = readPodIdInput(); if (v) runAction("/recover", { podId: v }, "Migrieren"); }
+
+  // ── No-GPU-Eskalation: gestoppte Pods der Reihe nach durchprobieren ──
+  // Nutzt bestehende Endpunkte (/pods, /recover, /state). Manuell ausgeloest.
+  // Wenn keiner eine GPU bekommt → nicht-automatisch (Hinweis an den Menschen).
+  var escalating = false, escalateQueue = [];
+  var ESCALATE_POLL_MS = 5000, ESCALATE_TIMEOUT_MS = 75000, ESCALATE_EXIT_GRACE_MS = 8000;
+
+  function startEscalation() {
+    if (escalating || busy || !configOk()) return;
+    escalating = true; busy = true; setControlsBusy(true);
+    setMsg("Lade gestoppte Pods\u2026", "info");
+    signedFetch("/pods", { method: "GET" })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res || !res.ok || !Array.isArray(res.pods)) { setMsg("Konnte Pod-Liste nicht laden.", "err"); return endEscalation(); }
+        var running = res.pods.filter(function (p) { return String(p.desiredStatus).toUpperCase() === "RUNNING"; });
+        if (running.length) { setMsg("Es l\u00E4uft bereits ein Pod \u2014 keine Eskalation n\u00F6tig.", "info"); return endEscalation(); }
+        escalateQueue = res.pods
+          .filter(function (p) { return String(p.desiredStatus).toUpperCase() !== "RUNNING"; })
+          .map(function (p) { return p.id; });
+        if (!escalateQueue.length) { setMsg("Keine gestoppten Pods zum Durchprobieren.", "warn"); return endEscalation(); }
+        tryCandidate(0, escalateQueue.length);
+      })
+      .catch(function () { setMsg("Proxy nicht erreichbar.", "err"); endEscalation(); });
+  }
+
+  function tryCandidate(idx, total) {
+    if (idx >= escalateQueue.length) {
+      setMsg("Keine GPU auf allen " + total + " Pods \u2014 bitte manuell eingreifen (RunPod-Konsole oder sp\u00E4ter erneut).", "err");
+      showNoGpu(true);
+      return endEscalation();
+    }
+    var pod = escalateQueue[idx];
+    setMsg("Teste Pod " + (idx + 1) + "/" + total + ": " + pod + " \u2026", "info");
+    signedFetch("/recover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ podId: pod }) })
+      .then(function (r) { return r.json(); })
+      .then(function (b) {
+        if (b && b.noGpu === true) { return tryCandidate(idx + 1, total); }   // sofort keine GPU → naechster
+        pollCandidate(pod, idx, total, Date.now());                            // koennte hochfahren → auf GPU pollen
+      })
+      .catch(function () { setMsg("Proxy nicht erreichbar.", "err"); endEscalation(); });
+  }
+
+  function pollCandidate(pod, idx, total, startedAt) {
+    signedFetch("/state", { method: "GET" })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s && s.trackedRunning && s.hasGpu) {
+          setMsg("Pod " + pod + " hat eine GPU \u2014 \u00FCbernommen.", "ok");
+          showNoGpu(false); renderState(s); return endEscalation();
+        }
+        var st = s ? String(s.desiredStatus).toUpperCase() : "";
+        var elapsed = Date.now() - startedAt;
+        if ((st === "EXITED" && elapsed > ESCALATE_EXIT_GRACE_MS) || elapsed > ESCALATE_TIMEOUT_MS) {
+          return tryCandidate(idx + 1, total);
+        }
+        setTimeout(function () { pollCandidate(pod, idx, total, startedAt); }, ESCALATE_POLL_MS);
+      })
+      .catch(function () { setTimeout(function () { pollCandidate(pod, idx, total, startedAt); }, ESCALATE_POLL_MS); });
+  }
+
+  function endEscalation() { escalating = false; busy = false; refreshState(); refreshLogs(); refreshSelfcheck(); }
+
+  // ── Auto-Retry: denselben Pod automatisch wiederholen, bis GPU da ist ──
+  // Manuell gestartet, manuell stoppbar. Nutzt /recover (leerer Body = getrackter Pod) + /state.
+  var autoRetry = false, autoRetryTimer = null, autoRetryN = 0;
+  var RETRY_INTERVAL_MS = 90000, RETRY_ATTEMPT_TIMEOUT_MS = 75000;
+
+  function startAutoRetry() {
+    if (autoRetry || busy || !configOk()) return;
+    autoRetry = true; busy = true; autoRetryN = 0; setControlsBusy(true);
+    showNoGpu(true);              // Banner in Auto-Retry-Zustand (Stopp-Button)
+    autoRetryAttempt();
+  }
+
+  function stopAutoRetry() {
+    autoRetry = false; busy = false;
+    if (autoRetryTimer) { clearTimeout(autoRetryTimer); autoRetryTimer = null; }
+    setMsg("Automatische Wiederholung gestoppt.", "info");
+    showNoGpu(true);             // zurueck auf normale Banner-Buttons
+    refreshState(); refreshLogs(); refreshSelfcheck();
+  }
+
+  function autoRetryAttempt() {
+    if (!autoRetry) return;
+    autoRetryN++;
+    setMsg("Auto-Wiederholung \u2013 Versuch " + autoRetryN + " \u2026", "info");
+    showNoGpu(true);
+    signedFetch("/recover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) })
+      .then(function (r) { return r.json(); })
+      .then(function (b) {
+        if (!autoRetry) return;
+        if (b && b.noGpu === true) { scheduleNextRetry(); return; }   // weiter keine GPU → warten + erneut
+        autoRetryPoll(Date.now());                                     // koennte hochfahren → auf GPU pollen
+      })
+      .catch(function () { if (autoRetry) scheduleNextRetry(); });
+  }
+
+  function autoRetryPoll(startedAt) {
+    if (!autoRetry) return;
+    signedFetch("/state", { method: "GET" })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (!autoRetry) return;
+        if (s && s.trackedRunning && s.hasGpu) {
+          autoRetry = false; busy = false;
+          setMsg("GPU erhalten \u2013 Server l\u00E4uft (nach " + autoRetryN + " Versuch(en)).", "ok");
+          showNoGpu(false); renderState(s); refreshLogs(); refreshSelfcheck(); return;
+        }
+        var st = s ? String(s.desiredStatus).toUpperCase() : "";
+        var elapsed = Date.now() - startedAt;
+        if ((st === "EXITED" && elapsed > ESCALATE_EXIT_GRACE_MS) || elapsed > RETRY_ATTEMPT_TIMEOUT_MS) { scheduleNextRetry(); return; }
+        autoRetryTimer = setTimeout(function () { autoRetryPoll(startedAt); }, ESCALATE_POLL_MS);
+      })
+      .catch(function () { if (autoRetry) autoRetryTimer = setTimeout(function () { autoRetryPoll(startedAt); }, ESCALATE_POLL_MS); });
+  }
+
+  function scheduleNextRetry() {
+    if (!autoRetry) return;
+    setMsg("Keine GPU (Versuch " + autoRetryN + " erfolglos) \u2013 n\u00E4chster Versuch in " + (RETRY_INTERVAL_MS / 1000) + "s.", "warn");
+    showNoGpu(true);
+    autoRetryTimer = setTimeout(autoRetryAttempt, RETRY_INTERVAL_MS);
+  }
+
+  btnStart.addEventListener("click", function () { runAction("/start", {}, "Start"); });
+  btnStop.addEventListener("click", function () { runAction("/stop", {}, "Stopp"); });
+  btnRefresh.addEventListener("click", function () { refreshState(); refreshLogs(); refreshSelfcheck(); });
+  btnSetId.addEventListener("click", setPodIdManual);
+  btnMigrate.addEventListener("click", migrateWithId);
+
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) { stateDelay = STATE_MIN; refreshState(); refreshLogs(); refreshSelfcheck(); }
+  });
+  refreshState();                                        // startet die selbst-planende State-Schleife
+  refreshLogs();
+  refreshSelfcheck();
+  setInterval(function () { if (!document.hidden) refreshLogs(); }, 30000);
+  setInterval(function () { if (!document.hidden) refreshSelfcheck(); }, 60000);
+  setInterval(tickUpdated, 1000);
+})();
+</script>

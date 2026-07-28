@@ -165,6 +165,7 @@ _SOURCE_LABELS: dict[str, str] = {
     "vorbefunde":     "Vorbefunde",
     "antragsvorlage": "Antragsvorlage",
     "vorantrag":      "Vorheriger Antrag",
+    "prozessreflexion": "Prozessreflexion des Klienten",
 }
 
 
@@ -596,11 +597,17 @@ def _resolve_repair_sources(parent_context: dict) -> tuple[str, str, str]:
     # Patientendaten: ggf. beide Quellen zusammenfuegen mit klarem Separator
     antragsvorlage = (parent_context.get("source_antragsvorlage_text") or "").strip()
     vorantrag      = (parent_context.get("source_vorantrag_text") or "").strip()
+    # v19.13: Prozessreflexion (P4) als Fidelity-Quelle im Repair-Kontext -
+    # sonst wuerde ein Repair korrekt eingebaute Reflexionsinhalte als
+    # unbelegt behandeln und ggf. entfernen.
+    prozessreflexion = (parent_context.get("source_prozessreflexion_text") or "").strip()
     parts = []
     if antragsvorlage:
         parts.append("ANTRAGSVORLAGE (Anamnese, Diagnosen, Status):\n" + antragsvorlage)
     if vorantrag:
         parts.append("VORANTRAG (vorheriger Bericht mit Verlauf, Diagnosen):\n" + vorantrag)
+    if prozessreflexion:
+        parts.append("PROZESSREFLEXION DES KLIENTEN (Abschlussreflexion):\n" + prozessreflexion)
     patientendaten_context = "\n\n".join(parts)
 
     return verlauf_context, transcript_context, patientendaten_context
@@ -1226,6 +1233,7 @@ async def create_generate_job(
     verlaufsdoku:     Optional[UploadFile] = File(None, description="P3/P4: Verlaufsdokumentation der aktuellen Behandlung (.pdf)"),
     antragsvorlage:   Optional[UploadFile] = File(None, description="P3/P4: Aktueller Bericht (EB/VA) ohne Verlaufsabschnitt (.docx/.pdf)"),
     vorantrag:        Optional[UploadFile] = File(None, description="Folgeverlängerung: Vorheriger Bericht mit Verlauf/Anamnese/Diagnosen (.docx/.pdf)"),
+    prozessreflexion: Optional[UploadFile] = File(None, description="P4: Abschlussreflexion des Klienten (.pdf/.docx, optional)"),
     style_file:       Optional[UploadFile] = File(None, description="Stilvorlage (Beispieltext)"),
 ):
     """
@@ -1240,6 +1248,7 @@ async def create_generate_job(
       P3b (folgeverlaengerung): verlaufsdoku + antragsvorlage + vorantrag + bullets
       P3c (akutantrag):          antragsvorlage (Anamnese/Befund/Diagnosen) + verlaufsdoku (opt)
       P4 (entlassbericht):      verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
+                                + prozessreflexion (v19.13, optional)
     """
     # K1: Therapeut-ID aus validiertem Auth-Header
     therapeut_id = current_user
@@ -1298,6 +1307,8 @@ async def create_generate_job(
     antragsvorlage_name    = antragsvorlage.filename      if antragsvorlage and antragsvorlage.filename else None
     vorantrag_bytes        = await vorantrag.read()       if vorantrag      and vorantrag.filename      else None
     vorantrag_name         = vorantrag.filename           if vorantrag      and vorantrag.filename      else None
+    prozessreflexion_bytes = await prozessreflexion.read() if prozessreflexion and prozessreflexion.filename else None
+    prozessreflexion_name  = prozessreflexion.filename    if prozessreflexion and prozessreflexion.filename else None
     style_bytes            = await style_file.read()      if style_file     and style_file.filename     else None
     style_name             = style_file.filename          if style_file     and style_file.filename     else None
 
@@ -1326,6 +1337,7 @@ async def create_generate_job(
         "has_verlaufsdoku":   bool(verlaufsdoku_bytes),
         "has_antragsvorlage": bool(antragsvorlage_bytes),
         "has_vorantrag":      bool(vorantrag_bytes),
+        "has_prozessreflexion": bool(prozessreflexion_bytes),
         "has_style":          bool(style_bytes) or bool(style_text and style_text.strip()),
         "has_transcript":     bool(transcript and transcript.strip()),
         "has_fokus_themen":   bool(bullets and bullets.strip()),
@@ -1569,10 +1581,27 @@ async def create_generate_job(
             except Exception as e:
                 logger.warning("Vorantrag-Extraktion fehlgeschlagen: %s", e)
 
+        # v19.13 P4: Prozessreflexion (Abschlussreflexion des Klienten, optional).
+        # Kein Stage-1-Verdichter (typisch 2-5 Seiten, weit unter
+        # STAGE1_VERLAUF_MIN_WORDS) - laeuft aber unten durch den
+        # Input-Budget-Guard mit. Bewusst NICHT als Namens-/Geschlechtsquelle
+        # registriert: Kandidaten-Konsens bleibt Antragsvorlage + Verlaufskopf.
+        prozessreflexion_text = ""
+        if prozessreflexion_bytes and prozessreflexion_name:
+            suffix = _Path(prozessreflexion_name).suffix.lower()
+            path = upload_dir() / f"{_uuid.uuid4().hex}{suffix}"
+            path.write_bytes(prozessreflexion_bytes)
+            try:
+                prozessreflexion_text = await extract_text(path)
+                prozessreflexion_text = _check_ocr_garbage(
+                    prozessreflexion_text, "Prozessreflexion", prozessreflexion_name)
+            except Exception as e:
+                logger.warning("Prozessreflexion-Extraktion fehlgeschlagen: %s", e)
+
         # P2: Wenn ALLE Quell-Texte als unbrauchbar gefiltert wurden, ist die
         # Datenlage zu duenn fuer eine sinnvolle Generierung - frueh abbrechen.
         _all_sources = [selbstauskunft_text, vorbefunde_text, verlaufsdoku_text,
-                        antragsvorlage_text, vorantrag_text]
+                        antragsvorlage_text, vorantrag_text, prozessreflexion_text]
         if _ocr_warnings and not any(s and len(s.strip()) > 100 for s in _all_sources):
             # Wir haben kein Transkript noch keinen Text - Hard-Stop.
             if not (transkript_text or transcript or bullets):
@@ -1819,6 +1848,8 @@ async def create_generate_job(
         job.patient_name = patient_name   # Datenschutz-Namensleck-Check (Punkt 1)
         job.fokus_themen = bullets        # Stichpunkt/Fokus-Themen-Check (Punkt 6)
         job.selbstauskunft_empty = selbstauskunft_empty  # v19.7: leere Selbstauskunft (P2)
+        # v19.13: Reflexions-Referenz-Check (P4) - nur wenn Reflexion vorhanden.
+        job.prozessreflexion_present = bool(prozessreflexion_text and prozessreflexion_text.strip())
 
         # v19.8: KLIENT-GESCHLECHT-Hinweis backend-seitig anhaengen, wenn das
         # UI-Feld gesetzt ist und das Frontend ihn NICHT schon eingebaut hat
@@ -1855,6 +1886,7 @@ async def create_generate_job(
         _glossar_source = "\n".join(t for t in (
             transkript_text, verlaufsdoku_text, selbstauskunft_text,
             vorbefunde_text, antragsvorlage_text, vorantrag_text,
+            prozessreflexion_text,
         ) if t)
         system = build_system_prompt(
             workflow=workflow,
@@ -1889,6 +1921,7 @@ async def create_generate_job(
                 "vorbefunde":     {"text": vorbefunde_text,     "compressed": False},
                 "antragsvorlage": {"text": antragsvorlage_text, "compressed": False},
                 "vorantrag":      {"text": vorantrag_text,      "compressed": False},
+                "prozessreflexion": {"text": prozessreflexion_text, "compressed": False},
             },
         )
         if "transkript" in _budget_updated:     transkript_text     = _budget_updated["transkript"]
@@ -1897,6 +1930,7 @@ async def create_generate_job(
         if "vorbefunde" in _budget_updated:     vorbefunde_text     = _budget_updated["vorbefunde"]
         if "antragsvorlage" in _budget_updated: antragsvorlage_text = _budget_updated["antragsvorlage"]
         if "vorantrag" in _budget_updated:      vorantrag_text      = _budget_updated["vorantrag"]
+        if "prozessreflexion" in _budget_updated: prozessreflexion_text = _budget_updated["prozessreflexion"]
         if _budget_audit.get("applied"):
             logger.info("Input-Budget-Guard Audit: %s", _budget_audit)
 
@@ -1909,6 +1943,7 @@ async def create_generate_job(
             verlaufsdoku_text=verlaufsdoku_text,
             antragsvorlage_text=antragsvorlage_text,
             vorantrag_text=vorantrag_text,
+            prozessreflexion_text=prozessreflexion_text,
             diagnosen=dx_list,
             # v18: custom_prompt wird in build_user_content nicht mehr verwendet
             # (Workflow-Anweisungen leben jetzt im System-Prompt). Parameter
@@ -1964,6 +1999,7 @@ async def create_generate_job(
                 verlaufsdoku_text or "",
                 antragsvorlage_text or "",
                 vorantrag_text or "",
+                prozessreflexion_text or "",
             ]))
             v16_expected_keywords = extract_likely_keywords(_src_combined)
             if v16_expected_keywords:
@@ -2265,6 +2301,8 @@ async def create_generate_job(
             "transcript_summary_text":    _transcript_summary_text,
             "source_antragsvorlage_text": antragsvorlage_text or None,
             "source_vorantrag_text":      vorantrag_text or None,
+            # v19.13: Prozessreflexion fuer Repair-Fidelity-Kontext.
+            "source_prozessreflexion_text": prozessreflexion_text or None,
             # v19.3: Transkript-Stage-1-Audit (None wenn nicht relevant oder
             # Workflow nicht in _TRANSCRIPT_STAGE1_WORKFLOWS).
             "transcript_summary_audit": _transcript_stage1_audit,

@@ -2012,6 +2012,7 @@ def build_user_content(
     verlaufsdoku_text: Optional[str] = None,
     antragsvorlage_text: Optional[str] = None,
     vorantrag_text: Optional[str] = None,
+    prozessreflexion_text: Optional[str] = None,
     diagnosen: Optional[list[str]] = None,
     patient_name: Optional[dict] = None,
     # Backwards-Compat: alter Parameter custom_prompt wurde mit v18 entfernt
@@ -2031,6 +2032,7 @@ def build_user_content(
       verlaufsdoku_text:   P3/P4: Verlaufsdokumentation der aktuellen Behandlung
       antragsvorlage_text: P3/P4: Aktueller Bericht (EB/VA) mit Anamnese/Diagnosen
       vorantrag_text:      Folgeverlängerung: Vorheriger Bericht mit Verlauf/Anamnese
+      prozessreflexion_text: P4: Abschlussreflexion des Klienten (v19.13, optional)
       diagnosen:           ICD-Codes (explizit oder aus Antragsvorlage)
       patient_name:        Dict {anrede, vorname, nachname, initial} – explizit uebergeben
                            oder aus Unterlagen extrahiert. Wird als expliziter Hinweis
@@ -2076,6 +2078,7 @@ def build_user_content(
     verlaufsdoku_text   = _dedup_safe(verlaufsdoku_text)
     antragsvorlage_text = _dedup_safe(antragsvorlage_text)
     vorantrag_text      = _dedup_safe(vorantrag_text)
+    prozessreflexion_text = _dedup_safe(prozessreflexion_text)
     # Bewusst NICHT dedupliziert: fokus_themen (Therapeuten-Stichpunkte
     # haben oft kurze, absichtlich aehnliche Eintraege), diagnosen, custom_prompt.
 
@@ -2272,6 +2275,35 @@ def build_user_content(
             )
         if verlaufsdoku_text:
             parts.append(f"VERLAUFSDOKUMENTATION (alle Sitzungen):\n{verlaufsdoku_text}")
+        # v19.13: Abschlussreflexion des Klienten (optional). Instruktionen
+        # BEWUSST nur hier im konditionalen User-Content-Block, NICHT im
+        # statischen BASE_PROMPTS["entlassbericht"] - eine permanente
+        # Reflexions-Anweisung ohne vorhandene Quelle waere ein
+        # Halluzinationsrisiko (Modell erfindet eine Reflexion).
+        if prozessreflexion_text:
+            parts.append(
+                f"PROZESSREFLEXION DES KLIENTEN (Abschlussreflexion in eigenen Worten):\n"
+                f"{prozessreflexion_text}\n\n"
+                "EINBAU DER PROZESSREFLEXION - VERBINDLICH:\n"
+                "1. Widme der Reflexion einen eigenen Absatz am ENDE des "
+                "Behandlungsverlaufs (unmittelbar vor der Epikrise). Leite ihn "
+                "sinngemäß ein mit 'Zum Abschluss ihres Prozesses reflektierte "
+                "die Klientin ...' bzw. 'Zum Abschluss seines Prozesses "
+                "reflektierte der Klient ...' (Geschlecht gemäß den Quellen).\n"
+                "2. Gib die Reflexionsinhalte AUSSCHLIESSLICH in indirekter Rede "
+                "(Konjunktiv I) wieder - keine wörtlichen Zitate.\n"
+                "3. Greife insbesondere auf: erlebte Symptomveränderungen, "
+                "zentrale Erkenntnisse, als hilfreich erlebte Methoden und die "
+                "vom Klienten benannte Essenz des Aufenthalts.\n"
+                "4. Benennt die Reflexion offene Themen oder Wünsche für die "
+                "ambulante Weiterarbeit, lasse diese in die Therapieempfehlungen "
+                "einfließen (quellenbelegt).\n"
+                "5. Enthält die Reflexion Feedback oder Dank an das "
+                "therapeutische Team, übernimm diese Inhalte NICHT in den "
+                "Bericht (internes Feedback, nicht für den Kostenträger).\n"
+                "6. Nur tatsächlich in der Reflexion Genanntes wiedergeben - "
+                "nichts hinzuerfinden."
+            )
         if diagnosen:
             parts.append(f"DIAGNOSEN DES AKTUELLEN PATIENTEN: {', '.join(diagnosen)}")
         if fokus_themen:

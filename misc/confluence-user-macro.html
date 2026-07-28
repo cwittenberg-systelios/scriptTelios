@@ -108,9 +108,20 @@
 </script>
 
 ## Basis-Styling
+##
+## v19.10: 'all: initial' entfernt. 'all: initial' setzte u.a. font-family auf
+## den Browser-Initialwert (= Times New Roman). Da Confluence nachfolgenden
+## Seiten-Content in diesen Wrapper hineinrendert, erbte auch fremder Text
+## unterhalb des Macros die Serif-Schrift.
+## Der Wrapper ist jetzt stilneutral; das komplette App-Styling haengt an
+## .st-scope (siehe frontend/src/styles.jsx).
+##
+## Selektor als Attribut-Match statt '$action.hashCode()': bleibt auch dann
+## gueltig, wenn $action in der User-Macro-Velocity-Umgebung nicht aufgeloest
+## wird (dann waere '#systelios-root-$action.hashCode()' ein ungueltiger
+## CSS-Selektor und die Regel wuerde komplett verworfen).
 <style>
-  #systelios-root-$action.hashCode() {
-    all: initial;
+  [id^="systelios-root-"] {
     display: block;
     width: 100%;
   }

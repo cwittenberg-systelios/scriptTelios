@@ -106,6 +106,12 @@ ISSUE_CODE_PATIENT_INITIAL_MISMATCH = "PATIENT_INITIAL_MISMATCH"
 # wird nur In-Text-Inkonsistenz (Marker beider Geschlechter) als warning
 # gemeldet.
 ISSUE_CODE_GENDER_MISMATCH = "GENDER_MISMATCH"
+# v19.13 (P4): Eine Prozessreflexion des Klienten wurde hochgeladen, aber im
+# Output ist kein Abschluss-Reflexions-Absatz erkennbar (Marker-Stems, siehe
+# _check_prozessreflexion). WARNING statt critical: heuristische Erkennung,
+# und ein Repair kann den Absatz nachziehen (Reflexion liegt als
+# source_prozessreflexion_text im Repair-Kontext).
+ISSUE_CODE_PROZESSREFLEXION_NOT_REFERENCED = "PROZESSREFLEXION_NOT_REFERENCED"
 
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
@@ -173,6 +179,55 @@ def _check_selbstauskunft(
             "Nicht durch Neu-Generierung behebbar. Pruefe das hochgeladene PDF "
             "(ausgefuellt? Formular mit Textfeldern?) und lade die ausgefuellte "
             "Selbstauskunft erneut hoch."
+        ),
+        code_detail={"workflow": workflow},
+    )]
+
+
+# v19.13: Marker-Stems fuer den Reflexions-Absatz. Die Prompt-Instruktion
+# (build_user_content, entlassbericht-Zweig) verlangt eine Einleitung
+# sinngemaess "Zum Abschluss ihres/seines Prozesses reflektierte ...".
+# Die Stems decken die Pflicht-Formulierung plus naheliegende Varianten ab.
+# Case-insensitive Substring-Match (Text wird lowercased).
+_PROZESSREFLEXION_MARKER_STEMS: tuple[str, ...] = (
+    "zum abschluss",
+    "reflektiert",       # reflektierte / reflektiert
+    "reflexion",         # Prozessreflexion / Abschlussreflexion
+    "abschließend berichtet",
+    "rückblickend",
+    "resümiert",
+)
+
+
+def _check_prozessreflexion(
+    text: str, workflow: str, prozessreflexion_present: bool | None,
+) -> list[QualityIssue]:
+    """v19.13 (P4): Meldet, wenn eine Prozessreflexion hochgeladen wurde,
+    der Output aber keinen erkennbaren Abschluss-Reflexions-Absatz enthaelt.
+    Heuristik: mindestens einer der Marker-Stems muss im Text vorkommen.
+    Nur aktiv fuer entlassbericht UND wenn das Flag gesetzt ist (Ad-hoc-
+    Attribut job.prozessreflexion_present aus jobs.py; None/False bei
+    Repair-Jobs und aelteren Aufrufern -> Check entfaellt)."""
+    if workflow != "entlassbericht" or not prozessreflexion_present:
+        return []
+    text_lo = text.lower()
+    if any(stem in text_lo for stem in _PROZESSREFLEXION_MARKER_STEMS):
+        return []
+    return [QualityIssue(
+        code=ISSUE_CODE_PROZESSREFLEXION_NOT_REFERENCED,
+        severity=SEVERITY_WARNING,
+        message=(
+            "Eine Prozessreflexion des Klienten wurde hochgeladen, aber im "
+            "Bericht ist kein Abschluss-Reflexions-Absatz erkennbar "
+            "('Zum Abschluss ihres/seines Prozesses reflektierte ...')."
+        ),
+        repair_hint=(
+            "Ergaenze am Ende des Behandlungsverlaufs (vor der Epikrise) einen "
+            "Absatz, der die Prozessreflexion des Klienten in indirekter Rede "
+            "(Konjunktiv I) wiedergibt: erlebte Symptomveraenderungen, zentrale "
+            "Erkenntnisse, hilfreiche Methoden, Essenz des Aufenthalts. "
+            "Feedback an das Team NICHT uebernehmen. Nur Inhalte aus der "
+            "PROZESSREFLEXION-Quelle verwenden."
         ),
         code_detail={"workflow": workflow},
     )]
@@ -686,6 +741,7 @@ def run_quality_check(
     stichpunkte: list[str] | None = None,
     patient_name: dict | None = None,
     selbstauskunft_empty: bool | None = None,
+    prozessreflexion_present: bool | None = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
@@ -713,6 +769,9 @@ def run_quality_check(
     selbstauskunft_empty: True, wenn die P2-Selbstauskunft keinen verwertbaren
                   Inhalt lieferte (extraction.source_extraction_is_empty). None/
                   False -> Schritt 0a entfaellt.
+    prozessreflexion_present: v19.13: True, wenn fuer einen Entlassbericht (P4)
+                  eine Prozessreflexion hochgeladen und extrahiert wurde. None/
+                  False -> Reflexions-Referenz-Check entfaellt.
 
     Idempotent (kein State, keine Seiteneffekte ausser logging).
     """
@@ -733,6 +792,8 @@ def run_quality_check(
 
     issues: list[QualityIssue] = []
     issues.extend(_check_selbstauskunft(workflow, selbstauskunft_empty))
+    # v19.13: Reflexions-Referenz-Check (nur entlassbericht, nur mit Flag)
+    issues.extend(_check_prozessreflexion(text, workflow, prozessreflexion_present))
     issues.extend(_check_forbidden_names(text, patient_name))
     # v19.8 Identitaets-Guard (O5: alle Workflows; no-op ohne patient_name)
     issues.extend(_check_patient_initial(text, patient_name))

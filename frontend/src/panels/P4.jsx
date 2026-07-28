@@ -24,6 +24,9 @@ function P4({ toast, resumeJob, onResumed }) {
   const [bericht, setBericht]     = useState(null);
   const [verlauf, setVerlauf]     = useState(null);
   const [style, setStyle]         = useState(null);
+  // v19.13: Prozessreflexion des Klienten (optional, .pdf/.docx).
+  // Kein useDraftCache-Eintrag - Files bleiben aussen vor (B2-Konvention).
+  const [reflexion, setReflexion] = useState(null);
 
   // B2: Text-Felder ueber useDraftCache (Pattern aus P2/B1)
   const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p4", P4_DRAFT_DEFAULT);
@@ -96,6 +99,7 @@ function P4({ toast, resumeJob, onResumed }) {
       const jobId = await startJob("entlassbericht", prompt, "", {
         antragsvorlage: bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund/Name
         verlauf:        verlauf,  // Verlaufsdokumentation
+        prozessreflexion: reflexion,  // v19.13: Abschlussreflexion des Klienten (opt)
         style:          style,
         styleText:      styleText || null,
         bullets:        fokus || null,
@@ -129,7 +133,12 @@ function P4({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus dieser Vorlage extrahiert.</div>
           </Card>
 
-          <Card num="C" title="Stilvorlage" badge="opt" open={false}>
+          <Card num="C" title="Prozessreflexion des Klienten" badge="opt" open={false}>
+            <Dropzone label="Prozessreflexion hochladen" hint=".pdf oder .docx — Abschlussreflexion des Klienten" accept=".pdf,.docx" icon="&#128172;" file={reflexion} onFile={setReflexion} />
+            <div className="info-note" style={{marginTop:8}}>Fließt als eigener Absatz am Ende des Behandlungsverlaufs ein („Zum Abschluss ihres Prozesses reflektierte die Klientin …", indirekte Rede). Offene Themen daraus fließen in die Therapieempfehlungen. Feedback an das Team wird nicht übernommen.</div>
+          </Card>
+
+          <Card num="D" title="Stilvorlage" badge="opt" open={false}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -146,7 +155,7 @@ function P4({ toast, resumeJob, onResumed }) {
             </InputTabs>
           </Card>
 
-          <Card num="D" title="Fokus-Themen" badge="opt" open={false}>
+          <Card num="E" title="Fokus-Themen" badge="opt" open={false}>
             <label className="field-label">Schwerpunkte für diesen Entlassbericht</label>
             <textarea rows={4}
               placeholder={"Optionale Schwerpunkte, z.B.:\n– Wächteranteil Türsteher, Arbeit mit inneren Anteilen\n– Gruppenarbeit und soziale Integration\n– Familien- und Paardynamik\n– Entschluss zur räumlichen Trennung"}
@@ -156,7 +165,7 @@ function P4({ toast, resumeJob, onResumed }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
           </Card>
 
-          <Card num="E" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
+          <Card num="F" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
             <JobModelPicker workflow="entlassbericht" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_ENTL} />
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
@@ -197,10 +206,10 @@ function P4({ toast, resumeJob, onResumed }) {
 
           <FeedbackButton jobId={lastJobId} workflow="entlassbericht" toast={toast} />
 
-          {(out || draftDirty || verlauf || bericht || style) && (
+          {(out || draftDirty || verlauf || bericht || style || reflexion) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
-                setVerlauf(null); setBericht(null); setStyle(null);
+                setVerlauf(null); setBericht(null); setStyle(null); setReflexion(null);
                 clearDraft();  // B2: setzt ALLE Text-Felder auf Default + raeumt localStorage
                 setOut(""); setOutWarn(null); setLastJobId(null);
                 jobOps.reset();

@@ -195,6 +195,7 @@ async function startJob(workflow, prompt, userContent, files = {}) {
   if (files.verlauf)        fd.append("verlaufsdoku",    files.verlauf);
   if (files.antragsvorlage) fd.append("antragsvorlage",  files.antragsvorlage);
   if (files.vorantrag)      fd.append("vorantrag",       files.vorantrag);
+  if (files.prozessreflexion) fd.append("prozessreflexion", files.prozessreflexion);
   if (files.style)          fd.append("style_file",      files.style);
   if (files.diagnosen)      fd.append("diagnosen",       files.diagnosen);
   if (files.bullets)        fd.append("bullets",         files.bullets);

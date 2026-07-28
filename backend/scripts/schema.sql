@@ -181,6 +181,12 @@ ALTER TABLE jobs
 ALTER TABLE jobs
     ADD COLUMN IF NOT EXISTS source_vorantrag_text TEXT;
 
+-- v19.13: Prozessreflexion (P4). Abschlussreflexion des Klienten
+-- (.pdf/.docx, optional). NULL wenn keine hochgeladen wurde. Dient als
+-- Repair-Fidelity-Quelle analog source_antragsvorlage_text.
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS source_prozessreflexion_text TEXT;
+
 -- v19 Phase 1: QualityCheck-Ergebnis fuer den finalen result_text.
 -- Format siehe app/services/quality_check.py::serialize_issues:
 --   {"version": 1, "workflow": ..., "issues": [...], "summary": {...}}
