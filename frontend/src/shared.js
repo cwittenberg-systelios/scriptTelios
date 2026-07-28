@@ -172,8 +172,14 @@ function friendlyError(e) {
     return "Server antwortet nicht (502). Bitte warte einen Moment und versuche es erneut.";
   if (msg.includes("503") || msg.includes("Service Unavailable"))
     return "Server überlastet (503). Bitte versuche es in Kürze erneut.";
+  // v19.14b: Der Uhr-Drift-Fall trägt eine bereits nutzerfertige Erklärung aus
+  // dem Backend (auth.py check_auth -> "clock_skew"). Diese Meldung nennt Betrag
+  // und Richtung der Abweichung und sagt dem Nutzer, was zu tun ist - deshalb
+  // durchreichen statt durch das generische "Zugriff verweigert" zu ersetzen.
+  if (msg.includes("Uhr dieses Geräts"))
+    return msg;
   if (msg.includes("401") || msg.includes("403"))
-    return "Zugriff verweigert (403).";
+    return "Zugriff verweigert. Bitte Seite neu laden; falls es weiterhin auftritt, ist ggf. die Systemuhr dieses Geräts falsch gestellt.";
   if (msg.includes("404"))
     return "Endpunkt nicht gefunden (404).";
   if (msg.includes("timeout") || msg.includes("Timeout"))
