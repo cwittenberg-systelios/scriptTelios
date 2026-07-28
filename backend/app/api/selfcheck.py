@@ -116,22 +116,37 @@ async def _check_activity() -> dict:
     `activity` neben `checks` und geht nicht in _aggregate() ein — ein idler
     Pod ist nicht "degraded".
 
-    `active_jobs` zaehlt laufende Generierungen UND laufende Transkriptionen.
-    Beide Status-Spalten sind indiziert, die Query laeuft im 10-s-Cache mit.
+    ABGRENZUNG GEGEN LEICHEN (v19.10a):
+    Nur Zeilen ab dem Prozessstart zaehlen. Die In-Memory-Queue in
+    job_queue.py ist der einzige Executor — was vor dem Boot eingereiht
+    wurde, kann in diesem Prozess nicht mehr laufen und bleibt sonst ewig
+    auf `pending` stehen (real vorgefunden: drei Zeilen, 38 Tage alt).
+    Ohne diese Grenze blockiert eine einzige Leiche den Idle-Stopp dauerhaft.
+
+    KEINE feste Altersgrenze (z.B. "30 min"): ein laufender Job frischt
+    `updated_at` NICHT auf. _persist_job() schreibt nur am Ende der
+    Ausfuehrung, set_progress() haelt den Fortschritt im Cache. Eine
+    Intervallgrenze wuerde lange Generierungen faelschlich als beendet werten
+    und den Pod mitten im Job stoppen. Der Bootzeitpunkt hat dieses Problem
+    nicht: ein nach dem Start angelegter Job zaehlt, solange der Prozess lebt.
 
     Bei Fehler `ok: False` — der Worker verzichtet dann auf den Idle-Stopp
     (Degradations-Fallback); die harte Nachtabschaltung greift weiterhin.
     """
     try:
+        boot = datetime.fromtimestamp(_PROCESS_START, tz=timezone.utc)
+
         async def _q():
             async with engine.connect() as conn:
                 res = await conn.execute(text(
                     "SELECT (SELECT count(*) FROM jobs "
-                    "          WHERE status IN ('pending','running')) "
+                    "          WHERE status IN ('pending','running') "
+                    "            AND updated_at >= :boot) "
                     "     + (SELECT count(*) FROM recordings "
                     "          WHERE status IN ('uploading','transcribing') "
-                    "            AND deleted_at IS NULL) AS active"
-                ))
+                    "            AND deleted_at IS NULL "
+                    "            AND created_at >= :boot) AS active"
+                ), {"boot": boot})
                 return int(res.scalar() or 0)
         active = await asyncio.wait_for(_q(), timeout=3.0)
         return {"ok": True, "active_jobs": active, "idle_sec": round(idle_seconds())}
