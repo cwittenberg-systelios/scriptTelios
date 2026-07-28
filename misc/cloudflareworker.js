@@ -53,14 +53,56 @@ const BACKEND_BASE = "https://api.scriptelios.win";
 const AUTH_WINDOW_SEC = 300;         // Replay-Fenster (== AUTH_TIMESTAMP_WINDOW_SEC)
 const POD_ID_KEY = "state:podId";    // KV-Key fuer die mutable Pod-ID
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ZEITSTEUERUNG (v19.10) — der Cron STOPPT nur, gestartet wird von Hand.
+// ───────────────────────────────────────────────────────────────────────────
+// Vorher: zwei feste UTC-Crons ("0 7 * * 1-5" / "0 18 * * 1-5"), gegen die
+// getAction() per exaktem String verglichen hat. Wurden sie im Dashboard
+// geaendert, lief scheduled() ins "return" — ohne Log, ohne Telegram. Genau
+// das ist passiert (registriert war "0 19 * * 2-6").
+//
+// Jetzt: EIN einziger Cron "*/15 * * * *". Der ist zeitzonen-invariant, also
+// immun gegen Sommer-/Winterzeit, und benutzt Cloudflares Wochentag-
+// Nummerierung nicht (dort ist 1 = Sonntag, 2 = Montag — die Quelle des
+// zweiten Missverstaendnisses). Die gesamte Zeitlogik steht hier im Code und
+// rechnet in echter Lokalzeit.
+//
+// DASHBOARD-SOLL: genau ein Cron-Eintrag, "*/15 * * * *". Jeder andere
+// Trigger loggt und alarmiert (siehe handleUnknownCron).
+const TZ = "Europe/Berlin";
+const EXPECTED_CRONS = ["*/15 * * * *"];
+
+// Idle-Schwellen nach Lokalzeit. 120 min in der Kernzeit, weil eine Aufnahme
+// laenger dauern kann als eine Stunde und ein Abbruch mitten in der Sitzung
+// den Upload verlieren wuerde.
+const IDLE_LONG_SEC  = 120 * 60;   // 08:00–18:00
+const IDLE_SHORT_SEC =  30 * 60;   // 05:00–08:00 und 18:00–23:00
+const HARD_FROM_MIN  = 23 * 60;    // ab 23:00 bedingungslos …
+const HARD_TO_MIN    =  5 * 60;    // … bis 05:00
+
+// Kulanz in der harten Phase (Variante b): laeuft nachweislich noch etwas,
+// wird der Stopp aufgeschoben — aber hoechstens so lange. Danach bedingungs-
+// los, damit ein in "running" haengengebliebener Job den Pod nicht durch die
+// Nacht traegt.
+const HARD_GRACE_MS = 30 * 60 * 1000;
+const HARD_GRACE_IDLE_SEC = 120;   // Heartbeat juenger als 2 min ⇒ "aktiv"
+
+const RECONCILE_KEY    = "state:reconcileStatus";
+const HARD_GRACE_KEY   = "state:hardGraceSince";
+const UNKNOWN_CRON_KEY = "state:lastUnknownCron";
+
 export default {
   async scheduled(event, env, ctx) {
     try {
       const action = getAction(event.cron);
-      if (action === "selfcheck") { await cronSelfcheck(env, ctx); return; }
-      if (!action) return;
-      // Cron laeuft intern — keine Auth, User = "cron", kein Request-Objekt.
-      await execute(action, env, ctx, "cron", null);
+      if (action !== "tick") { await handleUnknownCron(event.cron, env); return; }
+
+      // Ein Report fuer beides — Selfcheck und Reconciler teilen sich den
+      // Backend-Call, sonst wuerde der Pod pro Tick zweimal befragt.
+      const secrets = await getSecrets(env);
+      const report = await getSelfcheckReport(env, secrets);
+      await cronSelfcheck(env, ctx, report, secrets);
+      await reconcile(env, ctx, secrets, report);
     } catch (err) {
       console.log("Scheduled error:", err);
       try {
@@ -301,18 +343,54 @@ function isValidPodId(id) {
 // CRON
 // ─────────────────────────────────────────────
 
+// Cloudflare liefert den Ausdruck gelegentlich mit abweichendem Whitespace
+// (im Log war ein Trailing Space zu sehen). Exakter String-Vergleich ohne
+// Normalisierung ist deshalb fragil.
+function normalizeCron(cron) {
+  return String(cron ?? "").trim().replace(/\s+/g, " ");
+}
+
 function getAction(cron) {
-  if (cron === "0 7 * * 1-5") return "start";
-  if (cron === "0 18 * * 1-5") return "stop";
-  if (cron === "*/15 * * * *") return "selfcheck";
+  const c = normalizeCron(cron);
+  if (c === "*/15 * * * *") return "tick";
   return null;
+}
+
+// Frueher fuehrte ein unbekannter Cron zu einem stillen "return": kein Log,
+// kein Telegram, wallTimeMs 0 — die Stoerung lief wochenlang unbemerkt.
+// Jetzt laut, aber dedupliziert (sonst alle 15 min dieselbe Meldung).
+async function handleUnknownCron(cron, env) {
+  const c = normalizeCron(cron);
+
+  await log(env, {
+    action: "cron", status: "UNKNOWN_CRON", user: "cron",
+    cron: c, expected: EXPECTED_CRONS,
+  });
+
+  let prev = null;
+  if (env.LOGS) {
+    try { prev = await env.LOGS.get(UNKNOWN_CRON_KEY); } catch {}
+  }
+  if (prev === c) return;
+  if (env.LOGS) {
+    try { await env.LOGS.put(UNKNOWN_CRON_KEY, c); } catch {}
+  }
+
+  const secrets = await getSecrets(env);
+  await notify(secrets,
+    `🚨 Unbekannter Cron-Trigger: "${c}"\n` +
+    `Erwartet: ${EXPECTED_CRONS.join(", ")}\n` +
+    `Der Worker hat nichts getan. Eintrag im Cloudflare-Dashboard loeschen.`);
 }
 
 // ─────────────────────────────────────────────
 // MAIN EXECUTION (start/stop)
 // ─────────────────────────────────────────────
 
-async function execute(action, env, ctx, user, req) {
+// opts.quiet: unterdrueckt NUR die Abschlussmeldung. Der Reconciler meldet
+// selbst und dedupliziert dabei — sonst haette ein wiederholt schei-
+// ternder Auto-Stopp alle 15 Minuten dasselbe Telegram erzeugt.
+async function execute(action, env, ctx, user, req, opts = {}) {
   const secrets = await getSecrets(env);
   const podId = await getPodId(env, secrets);
 
@@ -366,7 +444,7 @@ async function execute(action, env, ctx, user, req) {
     return json(e, { env, req });
   }
   if (action === "stop" && stateBefore === "EXITED") {
-    await notify(secrets, "ℹ️ Server is already stopped, nothing to do.");
+    if (!opts.quiet) await notify(secrets, "ℹ️ Server is already stopped, nothing to do.");
     const e = { action, status: "ALREADY_STOPPED", user, podId };
     await log(env, e);
     return json(e, { env, req });
@@ -421,7 +499,7 @@ async function execute(action, env, ctx, user, req) {
   if (status === "SUCCESS" && action === "start") {
     // Fire-and-forget Health-Poll — laeuft dank ctx auch bei manuellem Start.
     ctx?.waitUntil?.(waitForBackend(secrets, result));
-  } else {
+  } else if (!opts.quiet) {
     await notify(secrets,
       status === "SUCCESS"
         ? `✅ ${action.toUpperCase()} OK (${user})\n${stateBefore} → ${stateAfter}`
@@ -781,9 +859,11 @@ async function handleSelfcheck(env, secrets, req) {
 }
 
 // Cron: nur wenn Pod laeuft; Telegram nur bei Statuswechsel (De-Dup ueber KV).
-async function cronSelfcheck(env, ctx) {
-  const secrets = await getSecrets(env);
-  const rep = await getSelfcheckReport(env, secrets);
+// report/secrets werden vom Tick durchgereicht, damit Selfcheck und Reconciler
+// sich EINEN Backend-Call teilen. Ohne Argumente weiterhin eigenstaendig lauffaehig.
+async function cronSelfcheck(env, ctx, report = null, secretsIn = null) {
+  const secrets = secretsIn || await getSecrets(env);
+  const rep = report || await getSelfcheckReport(env, secrets);
   const newStatus = rep.status || "down";
 
   if (newStatus === "stopped") {
@@ -808,6 +888,136 @@ async function cronSelfcheck(env, ctx) {
     }
     await notify(secrets, `${emoji} Self-Check: ${prev} → ${newStatus}${detail}`);
   }
+}
+
+// ─────────────────────────────────────────────
+// RECONCILER — Idle-Auto-Stopp (v19.10)
+// ─────────────────────────────────────────────
+//
+// Level-triggered: jeder Tick vergleicht Soll gegen Ist und handelt nur bei
+// Divergenz. Der Reconciler STARTET nie — der Start erfolgt manuell ueber das
+// Pod-Start-Makro. Damit kann eine Fehlentscheidung hier nie GPU-Kosten
+// erzeugen, nur beenden.
+
+// Intl loest Sommer-/Winterzeit selbst auf — deshalb steht hier keine einzige
+// UTC-Offset-Rechnung. workerd bringt volles ICU mit.
+const _localFmt = new Intl.DateTimeFormat("en-GB", {
+  timeZone: TZ, hour12: false, hour: "2-digit", minute: "2-digit",
+});
+
+function localMinutes(nowMs) {
+  const parts = _localFmt.formatToParts(new Date(nowMs));
+  const pick = (t) => parseInt(parts.find(p => p.type === t)?.value ?? "0", 10);
+  let h = pick("hour");
+  if (h === 24) h = 0;            // en-GB liefert Mitternacht je nach ICU als "24"
+  return h * 60 + pick("minute");
+}
+
+// "hard" = bedingungslos stoppen; sonst Idle-Schwelle in Sekunden.
+function policyFor(minutes) {
+  if (minutes >= HARD_FROM_MIN || minutes < HARD_TO_MIN) return "hard";
+  if (minutes >= 8 * 60 && minutes < 18 * 60) return IDLE_LONG_SEC;
+  return IDLE_SHORT_SEC;
+}
+
+// KV ist eventually consistent — dasselbe Problem wie bei podRunningSince:
+// ein get() direkt nach put() kann den alten Wert liefern und die Kulanz
+// wuerde bei jedem Tick neu beginnen, also nie ablaufen.
+let hardGraceMemo = 0;
+
+async function hardGraceSince(env) {
+  let since = 0;
+  if (env.LOGS) {
+    try { since = parseInt(await env.LOGS.get(HARD_GRACE_KEY) || "0", 10) || 0; } catch {}
+  }
+  if (!since && hardGraceMemo) since = hardGraceMemo;
+  if (!since) {
+    since = Date.now();
+    if (env.LOGS) { try { await env.LOGS.put(HARD_GRACE_KEY, String(since)); } catch {} }
+  }
+  hardGraceMemo = since;
+  return since;
+}
+
+async function clearHardGrace(env) {
+  hardGraceMemo = 0;
+  if (!env.LOGS) return;
+  // Bewusst KEIN Kurzschluss ueber hardGraceMemo: in einem frischen Isolate
+  // ist das Memo immer 0, ein in KV stehengebliebener Zeitstempel wuerde dann
+  // nie geloescht. Beim naechsten Eintritt in die harte Phase gaelte die
+  // Kulanz sofort als abgelaufen — Variante (b) waere still zu (a) degradiert.
+  // Stattdessen lesen (billig) und nur bei Bedarf schreiben.
+  try {
+    const cur = await env.LOGS.get(HARD_GRACE_KEY);
+    if (cur && cur !== "0") await env.LOGS.put(HARD_GRACE_KEY, "0");
+  } catch {}
+}
+
+async function stopViaReconciler(env, ctx, secrets, reason) {
+  const res = await execute("stop", env, ctx, "auto", null, { quiet: true });
+
+  let entry = null;
+  try { entry = await res.json(); } catch {}
+  const status = entry?.status || "UNKNOWN";
+  const ok = status === "SUCCESS" || status === "ALREADY_STOPPED";
+
+  let prev = null;
+  if (env.LOGS) {
+    try { prev = await env.LOGS.get(RECONCILE_KEY); } catch {}
+    try { await env.LOGS.put(RECONCILE_KEY, ok ? "OK" : status); } catch {}
+  }
+
+  if (ok) {
+    // Erfolg meldet immer — passiert hoechstens einmal pro Tag, danach ist
+    // der Pod EXITED und der Reconciler steigt sofort wieder aus.
+    if (status === "SUCCESS") {
+      await notify(secrets, `🌙 Auto-Stopp: ${reason}\nRUNNING → ${entry?.stateAfter || "?"}`);
+    }
+  } else if (prev !== status) {
+    // Fehlschlag nur bei Statuswechsel — sonst alle 15 Minuten dasselbe.
+    await notify(secrets, `🚨 Auto-Stopp fehlgeschlagen (${status})\nGrund des Stopps: ${reason}`);
+  }
+}
+
+async function reconcile(env, ctx, secrets, report) {
+  // Pod aus → nichts zu tun. Auch die Kulanz wird zurueckgesetzt, damit sie
+  // beim naechsten Lauf frisch beginnt.
+  if (!report || report.status === "stopped") {
+    await clearHardGrace(env);
+    return;
+  }
+
+  const policy = policyFor(localMinutes(Date.now()));
+  const act = report.activity;
+  const haveAct = !!(act && act.ok === true);
+  const idle = haveAct && typeof act.idle_sec === "number" ? act.idle_sec : null;
+
+  if (policy === "hard") {
+    // "starting" zaehlt als aktiv: der Pod wurde gerade erst hochgefahren
+    // (Backend-Uptime < 4 min). Ihn binnen 15 Minuten wieder abzuschiessen,
+    // bevor er ueberhaupt nutzbar ist, waere absurd.
+    const busy =
+      report.status === "starting" ||
+      (haveAct && (act.active_jobs > 0 || (idle !== null && idle < HARD_GRACE_IDLE_SEC)));
+
+    if (busy && Date.now() - (await hardGraceSince(env)) < HARD_GRACE_MS) return;
+
+    await clearHardGrace(env);
+    await stopViaReconciler(env, ctx, secrets, "Nachtabschaltung (23:00–05:00)");
+    return;
+  }
+
+  await clearHardGrace(env);
+
+  // Degradations-Fallback: ohne verlaessliche Telemetrie kein Idle-Stopp.
+  // Die harte Nachtphase oben greift trotzdem — das Modell faellt damit auf
+  // das alte Verhalten zurueck, nie auf "laeuft unbemerkt durch".
+  if (!haveAct || idle === null) return;
+  if (act.active_jobs > 0) return;
+  if (idle < policy) return;
+
+  await stopViaReconciler(env, ctx, secrets,
+    `idle ${Math.round(idle / 60)} min (Schwelle ${Math.round(policy / 60)} min)`);
 }
 
 // ─────────────────────────────────────────────

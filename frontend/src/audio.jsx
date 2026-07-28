@@ -48,6 +48,32 @@ function AudioRecorder({ onRecorded, onError }) {
     return () => window.removeEventListener("beforeunload", handler);
   }, [state]);
 
+  // v19.10: Heartbeat waehrend der Aufnahme.
+  // Der Pod sieht waehrend einer laufenden Aufnahme sonst KEINEN Request:
+  // der Upload erfolgt erst am Ende, Recording hat kein updated_at, und das
+  // 30-s-Polling startet nur bei Items mit Status uploading/transcribing.
+  // Ohne dieses Lebenszeichen wuerde der Idle-Auto-Stopp im Cloudflare-Worker
+  // den Pod mitten in der Sitzung herunterfahren — die Aufnahme liegt zu dem
+  // Zeitpunkt nur im Browser, der Upload danach liefe ins Leere.
+  // Bewusst nur an die Aufnahme gekoppelt, nicht an "Makro offen": ein
+  // vergessener Tab soll den Pod gerade NICHT am Leben halten.
+  useEffect(() => {
+    if (state !== "recording" && state !== "paused") return;
+    let stopped = false;
+    const ping = () => {
+      if (stopped) return;
+      // Fehler bewusst schlucken — ein Heartbeat darf die Aufnahme nie stoeren.
+      try {
+        Promise.resolve(
+          apiFetch(`${getApiBase()}/activity/heartbeat`, { method: "POST" })
+        ).catch(() => {});
+      } catch { /* ignoriert */ }
+    };
+    ping();
+    const id = setInterval(ping, 60000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [state]);
+
   async function start() {
     // getUserMedia erfordert HTTPS oder localhost
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {

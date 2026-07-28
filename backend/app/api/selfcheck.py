@@ -22,6 +22,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import engine
+from app.middleware.activity import idle_seconds
 from app.services.embeddings import EMBEDDING_MODEL
 
 router = APIRouter()
@@ -104,6 +105,36 @@ async def _check_db() -> dict:
                 await conn.execute(text("SELECT 1"))
         await asyncio.wait_for(_q(), timeout=3.0)
         return {"ok": True, "detail": "SELECT 1 ok"}
+    except Exception as e:
+        return {"ok": False, "detail": type(e).__name__}
+
+
+async def _check_activity() -> dict:
+    """Belegtheit des Pods fuer den Idle-Auto-Stopp im Cloudflare-Worker.
+
+    Bewusst KEIN Gesundheitszustand: das Ergebnis steht als Top-Level-Key
+    `activity` neben `checks` und geht nicht in _aggregate() ein — ein idler
+    Pod ist nicht "degraded".
+
+    `active_jobs` zaehlt laufende Generierungen UND laufende Transkriptionen.
+    Beide Status-Spalten sind indiziert, die Query laeuft im 10-s-Cache mit.
+
+    Bei Fehler `ok: False` — der Worker verzichtet dann auf den Idle-Stopp
+    (Degradations-Fallback); die harte Nachtabschaltung greift weiterhin.
+    """
+    try:
+        async def _q():
+            async with engine.connect() as conn:
+                res = await conn.execute(text(
+                    "SELECT (SELECT count(*) FROM jobs "
+                    "          WHERE status IN ('pending','running')) "
+                    "     + (SELECT count(*) FROM recordings "
+                    "          WHERE status IN ('uploading','transcribing') "
+                    "            AND deleted_at IS NULL) AS active"
+                ))
+                return int(res.scalar() or 0)
+        active = await asyncio.wait_for(_q(), timeout=3.0)
+        return {"ok": True, "active_jobs": active, "idle_sec": round(idle_seconds())}
     except Exception as e:
         return {"ok": False, "detail": type(e).__name__}
 
@@ -207,11 +238,12 @@ def _aggregate(checks: dict) -> str:
 
 async def _run_selfcheck() -> dict:
     # Alle Probes parallel → Gesamtdauer = langsamste Probe (statt Summe).
-    (reachable, installed), db, disk, gpu = await asyncio.gather(
+    (reachable, installed), db, disk, gpu, activity = await asyncio.gather(
         _tags(),
         _check_db(),
         _disk_cached(),                    # blockiert nie (Hintergrund-Cache)
         asyncio.to_thread(_check_gpu),
+        _check_activity(),
     )
     ollama = {"ok": reachable, "detail": "OK" if reachable else "unerreichbar"}
 
@@ -230,6 +262,7 @@ async def _run_selfcheck() -> dict:
         "ts": datetime.now(timezone.utc).isoformat(),
         "uptime_sec": round(time.time() - _PROCESS_START),   # fuer die Startup-Erkennung
         "checks": checks,
+        "activity": activity,   # Idle-Auto-Stopp (Worker) — kein Gesundheitszustand
     }
 
 
