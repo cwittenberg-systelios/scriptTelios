@@ -48,6 +48,57 @@ async def _cleanup_old_uploads():
         await asyncio.sleep(3600)  # alle 60 Minuten
 
 
+ORPHAN_MSG = ("Verwaist: Der Pod wurde gestoppt, waehrend der Job in der "
+              "Warteschlange stand oder lief. Bitte erneut starten.")
+
+# Altersgrenze fuer die Verwaisten-Bereinigung. NICHT blosse Vorsicht:
+# tests/eval/run_model_eval.sh startet `app.main:app` auf Port 8001 gegen
+# DIESELBE Datenbank. Ohne Grenze wuerde jeder Eval-Lauf die gerade laufenden
+# Jobs der Produktivinstanz als "error" markieren. 30 Minuten liegen
+# komfortabel ueber der harten Obergrenze eines Jobs (httpx-Timeout 600 s in
+# services/llm.py) — ein echter Job ist nie so alt und noch aktiv.
+ORPHAN_MIN_AGE = "30 minutes"
+
+
+async def _close_orphans() -> None:
+    """Jobs und Recordings abschliessen, die einen Pod-Stopp erlebt haben.
+
+    Die In-Memory-Queue in job_queue.py ist der einzige Executor. Was beim
+    Start noch auf `pending`/`running` steht, nimmt niemand mehr auf — ohne
+    diesen Hook bleibt es fuer immer stehen (real vorgefunden: drei Zeilen,
+    38 Tage alt) und suggeriert im UI einen laufenden Auftrag, auf dessen
+    Ergebnis jemand wartet.
+
+    Fehler werden nur geloggt: eine misslungene Bereinigung darf den Start
+    des Backends nicht verhindern.
+    """
+    try:
+        from sqlalchemy import text as _sql
+        from app.core.database import async_session_factory
+        async with async_session_factory() as db:
+            jobs = await db.execute(_sql(
+                "UPDATE jobs "
+                "   SET status = 'error', error_msg = :msg, finished_at = now() "
+                " WHERE status IN ('pending','running') "
+                f"  AND updated_at < now() - interval '{ORPHAN_MIN_AGE}'"
+            ), {"msg": ORPHAN_MSG})
+            recs = await db.execute(_sql(
+                "UPDATE recordings "
+                "   SET status = 'error' "
+                " WHERE status IN ('uploading','transcribing') "
+                "   AND deleted_at IS NULL "
+                f"  AND created_at < now() - interval '{ORPHAN_MIN_AGE}'"
+            ))
+            await db.commit()
+            if jobs.rowcount or recs.rowcount:
+                logger.warning(
+                    "Verwaiste Eintraege beim Start abgeschlossen: %d Job(s), %d Recording(s)",
+                    jobs.rowcount or 0, recs.rowcount or 0,
+                )
+    except Exception as e:
+        logger.warning("Bereinigung verwaister Eintraege fehlgeschlagen: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("sysTelios Backend startet (Modell: %s)", settings.LLM_MODEL)
@@ -57,6 +108,8 @@ async def lifespan(app: FastAPI):
     from app.services.feedback_notify import log_effective_config as _fb_cfg
     _fb_cfg()
     await init_db()
+    # v19.10b: Verwaiste Jobs/Recordings aus einem frueheren Pod-Lauf abschliessen.
+    await _close_orphans()
     # Recordings-Verzeichnis sicherstellen (P0-Aufnahmen)
     from app.core.files import recordings_dir
     recordings_dir()
