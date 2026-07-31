@@ -120,6 +120,15 @@ export default function App() {
     return () => window.removeEventListener("st-nav", handler);
   }, []);
 
+  // v19.15 (Sprint E): Panelwechsel broadcasten. Keep-Mounted-Panels können
+  // so beim Sichtbarwerden ihre Daten auffrischen (z.B. AudioInput-Aufnahmeliste),
+  // ohne dass die App-Shell die Panel-Interna kennen muss.
+  useEffect(() => {
+    try {
+      window.dispatchEvent(new CustomEvent("st-page-changed", { detail: page }));
+    } catch (_) { /* ignorieren */ }
+  }, [page]);
+
   const saveUrl = () => {
     let url = urlInput.trim().replace(/\/+$/, ""); // trailing slash entfernen
     // https:// ergänzen falls kein Protokoll angegeben

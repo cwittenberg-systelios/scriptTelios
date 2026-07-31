@@ -128,9 +128,9 @@ function P4({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Alle Verlaufsnotizen des stationären Aufenthalts als PDF.</div>
           </Card>
 
-          <Card num="B" title="Antragsvorlage" badge="req">
-            <Dropzone label="Vorlage hochladen" hint=".docx — vorheriger Bericht/Verlängerungsantrag mit Diagnosen und Anamnese" accept=".docx,.pdf" icon="&#128196;" file={bericht} onFile={setBericht} />
-            <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus dieser Vorlage extrahiert.</div>
+          <Card num="B" title="Entlassbericht (zu vervollständigen)" badge="req">
+            <Dropzone label="Entlassbericht hochladen" hint=".docx oder .pdf — der zu vervollständigende Entlassbericht ohne den psychotherapeutischen Verlauf (keine Muster-/Stilvorlage)" accept=".docx,.pdf" icon="&#128196;" file={bericht} onFile={setBericht} />
+            <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus diesem Dokument extrahiert; der psychotherapeutische Verlaufsteil wird generiert. Für reine Stil-/Musterbeispiele bitte Feld D verwenden.</div>
           </Card>
 
           <Card num="C" title="Prozessreflexion des Klienten" badge="opt" open={false}>
@@ -138,7 +138,7 @@ function P4({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Fließt als eigener Absatz am Ende des Behandlungsverlaufs ein („Zum Abschluss ihres Prozesses reflektierte die Klientin …", indirekte Rede). Offene Themen daraus fließen in die Therapieempfehlungen. Feedback an das Team wird nicht übernommen.</div>
           </Card>
 
-          <Card num="D" title="Stilvorlage" badge="opt" open={false}>
+          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -186,7 +186,7 @@ function P4({ toast, resumeJob, onResumed }) {
                   disabled={!verlauf || !bericht}
                   title={
                     !verlauf ? "Verlaufsdokumentation erforderlich"
-                    : !bericht ? "Antragsvorlage erforderlich (Diagnosen + Anamnese)"
+                    : !bericht ? "Entlassbericht (zu vervollständigen) erforderlich (Diagnosen + Anamnese)"
                     : ""
                   }
                 >Entlassbericht erstellen</button>

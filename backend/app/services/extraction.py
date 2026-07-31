@@ -1327,3 +1327,53 @@ async def _extract_image(file_path: Path) -> ExtractionResult:
         f"Bild '{file_path.name}' konnte nicht extrahiert werden. "
         f"Details: {'; '.join(warnings)}"
     )
+
+
+# ── v19.15 (Sprint C1): Trunkierungs-Heuristik fuer Quelltexte ────────────────
+#
+# Hintergrund (prompts.log 2026-07-31): Mehrere Verlaufsdoku- und
+# Antragsvorlagen-Quellen kamen mitten im Wort abgeschnitten an
+# ("Abschlussärztliche Sprechstunde: Ke", "erlebten Anspr") - die Trunkierung
+# lag VOR dem Backend (Quelldatei/PDF-Erstellung), input_truncated blieb False
+# und niemand wurde gewarnt. Ausgerechnet die Entlassphase fehlte im
+# Entlassbericht-Input. Diese Heuristik erkennt solche Faelle konservativ.
+
+# Zeichen, mit denen ein regulaer endender Text plausibel schliesst.
+_SENTENCE_FINAL_CHARS = ".!?…\"'»«)]"
+
+# Zeichen, die am Textende fast sicher auf einen Abschnitt-Abbruch deuten.
+_TRUNCATION_TAIL_CHARS = ",;:-–—/("
+
+
+def looks_truncated(text: str) -> bool:
+    """True, wenn der Text vermutlich mitten im Satz/Wort abbricht.
+
+    Konservative Heuristik (lieber False Negative als Fehlalarm):
+      - Endet der Text auf ein Satzschlusszeichen -> False.
+      - Endet er auf ein typisches Abbruchzeichen (Komma, Doppelpunkt,
+        Bindestrich, ...) -> True.
+      - Sonst: True nur, wenn das letzte Wort sehr kurz ist (< 4
+        alphanumerische Zeichen) - faengt "Ke", "im", "Am", "07",
+        laesst aber Listen-/Ueberschriften-Enden wie "Team Nacht" oder
+        Jahreszahlen ("2026") in Ruhe.
+    """
+    if not text:
+        return False
+    stripped = text.rstrip()
+    if not stripped:
+        return False
+    last_char = stripped[-1]
+    if last_char in _SENTENCE_FINAL_CHARS:
+        return False
+    if last_char in _TRUNCATION_TAIL_CHARS:
+        return True
+    last_word = stripped.split()[-1] if stripped.split() else ""
+    alnum = "".join(ch for ch in last_word if ch.isalnum())
+    return 0 < len(alnum) < 4
+
+
+def truncation_tail(text: str, n: int = 60) -> str:
+    """Letzte n Zeichen (einzeilig) fuer Warnmeldungen/QC-Details."""
+    if not text:
+        return ""
+    return " ".join(text.rstrip()[-n:].split())

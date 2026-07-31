@@ -449,6 +449,12 @@ async def summarize_verlauf(
 
     return {
         "summary":              summary,
+        # v19.15 (C2): Prompts fuer prompts.log durchreichen. Stage-1-Calls
+        # waren bisher der einzige LLM-Call ohne Log-Eintrag - ein blinder
+        # Fleck bei der Diagnose (z.B. Job 3d6d3708: Stage 1 lief nicht,
+        # war im Log aber nicht erkennbar).
+        "system_prompt":        system_prompt,
+        "user_content":         user_content,
         "raw_word_count":       raw_words,
         "summary_word_count":   summary_words,
         "compression_ratio":    round(summary_words / raw_words, 3) if raw_words else 0.0,

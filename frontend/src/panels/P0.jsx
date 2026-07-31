@@ -83,6 +83,7 @@ function P0({ toast }) {
         await offlineQueueRemove(item.id);
         setOfflineQueue(prev => prev.filter(q => q.id !== item.id));
         setRecordings(prev => [newRec, ...prev]);
+        try { window.dispatchEvent(new CustomEvent("st-recordings-changed")); } catch (_) {}
         toast(`Offline-Aufnahme „${item.label || item.name}" hochgeladen`);
       } catch (e) {
         break;
@@ -150,6 +151,18 @@ function P0({ toast }) {
     return () => window.removeEventListener("st-health-ok", handler);
   }, [loadRecordings]);
 
+  // v19.15 (Sprint E): Andere Panels (P1/P2-AudioInput) über Änderungen an
+  // der Aufnahmeliste informieren. Keep-Mounted-Rendering bedeutet: die
+  // AudioInput-Instanzen mounten nur einmal beim App-Start und sehen neue
+  // Aufnahmen sonst erst nach einem Seiten-Reload. Bewusst NUR an
+  // Mutations-Stellen gefeuert (Upload/Record/Delete/Retry/Label), NICHT in
+  // loadRecordings – sonst würde jedes Poll-Intervall Fremd-Reloads auslösen.
+  function notifyRecordingsChanged() {
+    try {
+      window.dispatchEvent(new CustomEvent("st-recordings-changed"));
+    } catch (_) { /* ignorieren */ }
+  }
+
   // Sofort-Upload: kein "Speichern"-Button, Datei geht direkt hoch
   function onRecorded(file) {
     submitRecording(file, "");
@@ -173,6 +186,7 @@ function P0({ toast }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const newRec = await res.json();
       setRecordings(prev => prev.map(r => r.id === tempId ? newRec : r));
+      notifyRecordingsChanged();
     } catch (e) {
       setRecordings(prev => prev.filter(r => r.id !== tempId));
       try {
@@ -202,6 +216,7 @@ function P0({ toast }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label }),
       });
+      notifyRecordingsChanged();
     } catch (e) {
       toast("Label konnte nicht gespeichert werden");
     }
@@ -212,6 +227,7 @@ function P0({ toast }) {
     try {
       await apiFetch(`${getApiBase()}/recordings/${id}`, { method: "DELETE" });
       setRecordings(prev => prev.filter(r => r.id !== id));
+      notifyRecordingsChanged();
       toast("Aufnahme gelöscht");
     } catch (e) {
       toast("Löschen fehlgeschlagen: " + e.message);
@@ -227,6 +243,7 @@ function P0({ toast }) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
+      notifyRecordingsChanged();
       toast("Transkription wird erneut gestartet");
     } catch (e) {
       // Bei Fehler den vorherigen Status zurueckholen

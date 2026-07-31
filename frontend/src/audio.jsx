@@ -329,6 +329,26 @@ function AudioInput({ file, onFile }) {
     return () => window.removeEventListener("st-health-ok", handler);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // v19.15 (Sprint E): Keep-Mounted-Fix. AudioInput mountet nur einmal beim
+  // App-Start (Panels werden per display:none versteckt, nie unmounted).
+  // Neue Aufnahmen aus P0 wurden deshalb erst nach Seiten-Reload sichtbar.
+  // 1) st-recordings-changed: P0 feuert nach Upload/Record/Delete/Retry/Label.
+  // 2) st-page-changed: Schutznetz – beim Aktivieren eines Panels mit
+  //    AudioInput (p1: Doku, p2: Anamnese) Liste frisch laden, damit auch
+  //    Statuswechsel (transcribing→ready) ohne eigenes pending-Polling ankommen.
+  useEffect(() => {
+    const onChanged = () => loadP0();
+    const onPage = (e) => {
+      if (e.detail === "p1" || e.detail === "p2") loadP0();
+    };
+    window.addEventListener("st-recordings-changed", onChanged);
+    window.addEventListener("st-page-changed", onPage);
+    return () => {
+      window.removeEventListener("st-recordings-changed", onChanged);
+      window.removeEventListener("st-page-changed", onPage);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   function handleFile(f) {
     setRecError(null);
     if (!f) { setSizeWarn(null); onFile(null); return; }

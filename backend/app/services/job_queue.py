@@ -880,11 +880,19 @@ class JobQueue:
                     # v19.13: Ad-hoc-Flag aus jobs.py (Pattern selbstauskunft_empty).
                     # None/False bei Repair-Jobs und aelteren Aufrufern -> Check entfaellt.
                     _reflexion_present = getattr(job, "prozessreflexion_present", None)
+                    # v19.15 (B3): Antragsvorlagen-Text fuer den Platzhalter-Check
+                    # (Muster-/Stilvorlage im falschen Slot). Ad-hoc-Attribut aus
+                    # jobs.py, None bei Repair-Jobs/aelteren Aufrufern -> Check entfaellt.
+                    _antrag_qc_text = getattr(job, "antragsvorlage_qc_text", None)
+                    # v19.15 (C1): vermutlich abgeschnittene Quellen (jobs.py).
+                    _trunc_sources = getattr(job, "truncated_sources", None)
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
                         selbstauskunft_empty=_sa_empty,
                         prozessreflexion_present=_reflexion_present,
+                        antragsvorlage_text=_antrag_qc_text,
+                        truncated_sources=_trunc_sources,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(

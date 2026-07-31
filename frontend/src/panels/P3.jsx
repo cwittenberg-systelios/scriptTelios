@@ -137,12 +137,12 @@ function P3({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Alle Verlaufsnotizen des stationären Aufenthalts als PDF.</div>
           </Card>
 
-          <Card num="B" title="Antragsvorlage" badge="req">
-            <Dropzone label="Vorlage / Vorheriger Antrag hochladen" hint=".docx oder .pdf — Diagnosen und Anamnese werden entnommen" accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
+          <Card num="B" title="Verlängerungsantrag (zu vervollständigen)" badge="req">
+            <Dropzone label="Verlängerungsantrag hochladen" hint=".docx oder .pdf — der zu vervollständigende Antrag; Diagnosen und Anamnese werden entnommen (keine Muster-/Stilvorlage)" accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
             <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus dieser Vorlage für den neuen Antrag übernommen.</div>
           </Card>
 
-          <Card num="C" title="Stilvorlage" badge="opt" open={false}>
+          <Card num="C" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -184,7 +184,7 @@ function P3({ toast, resumeJob, onResumed }) {
                   disabled={!verlauf || !antrag}
                   title={
                     !verlauf ? "Verlaufsdokumentation erforderlich"
-                    : !antrag ? "Antragsvorlage erforderlich (Diagnosen + Anamnese)"
+                    : !antrag ? "Verlängerungsantrag (zu vervollständigen) erforderlich (Diagnosen + Anamnese)"
                     : ""
                   }
                 >Verlängerungsantrag erstellen</button>
@@ -345,8 +345,8 @@ function P3b({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Idealerweise nur die Notizen seit dem letzten Antrag, sonst alle.</div>
           </Card>
 
-          <Card num="B" title="Antragsvorlage" badge="opt" open={false}>
-            <Dropzone label="Antragsvorlage hochladen" hint=".docx oder .pdf — aktueller Antrag (Diagnosen, Anamnese)" accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
+          <Card num="B" title="Folgeverlängerungsantrag (zu vervollständigen)" badge="opt" open={false}>
+            <Dropzone label="Folgeverlängerungsantrag hochladen" hint=".docx oder .pdf — der zu vervollständigende aktuelle Antrag (Diagnosen, Anamnese)" accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
             <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus dieser Vorlage extrahiert.</div>
           </Card>
 
@@ -355,7 +355,7 @@ function P3b({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>An diesen Verlauf wird der neue Text inhaltlich anknüpfen ("seit dem letzten Antrag ...").</div>
           </Card>
 
-          <Card num="D" title="Stilvorlage" badge="opt" open={false}>
+          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },

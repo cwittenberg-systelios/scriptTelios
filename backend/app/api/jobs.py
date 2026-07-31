@@ -1038,6 +1038,21 @@ async def _run_verlauf_stage1(
             if target_words_override is not None:
                 summarize_kwargs["target_words"] = target_words_override
             stage1_result = await summarize_verlauf(**summarize_kwargs)
+            # v19.15 (C2): Stage-1-Call in prompts.log aufnehmen - gepaart
+            # wie alle anderen LLM-Calls (CALL: stage1_verlauf).
+            try:
+                _log_prompt(
+                    job.job_id, workflow, "stage1_verlauf",
+                    stage1_result.get("system_prompt", ""),
+                    stage1_result.get("user_content", ""),
+                )
+                _log_output(
+                    job.job_id, workflow, "stage1_verlauf",
+                    stage1_result.get("summary", ""),
+                    stage1_result.get("telemetry"),
+                )
+            except Exception:
+                pass  # Logging darf den Job nie gefaehrden
             # Erfolg -> ersetzen, Audit-Bundle aufbauen
             # target_words kommt jetzt aus stage1_result (echter Wert),
             # nicht aus der lokalen Variable
@@ -1088,6 +1103,14 @@ async def _run_verlauf_stage1(
             workflow,
             verlaufsdoku_text,
             flag_enabled=_stage1_enabled,
+        )
+        # v19.15 (C3): Skip-Grund auf INFO heben. Hintergrund Job 3d6d3708
+        # (2026-07-31): 63k-Zeichen-Verlauf lief OHNE Stage 1 durch
+        # (Budget-Guard-Trunkierung, 327-Woerter-Output) und der Grund war
+        # nur muehsam aus dem Audit-Bundle rekonstruierbar.
+        logger.info(
+            "Stage 1 uebersprungen fuer Job %s (%s): %s (Verlauf: %d Woerter)",
+            job.job_id, workflow, reason, len(verlaufsdoku_text.split()),
         )
         audit = _stage1_audit_bundle(
             applied=False,
@@ -1876,6 +1899,33 @@ async def create_generate_job(
         job.selbstauskunft_empty = selbstauskunft_empty  # v19.7: leere Selbstauskunft (P2)
         # v19.13: Reflexions-Referenz-Check (P4) - nur wenn Reflexion vorhanden.
         job.prozessreflexion_present = bool(prozessreflexion_text and prozessreflexion_text.strip())
+        # v19.15 (B3): Antragsvorlagen-Text fuer den Platzhalter-Check
+        # (TEMPLATE_PLACEHOLDER_DETECTED) - erkennt Muster-/Stilvorlagen im
+        # Antragsvorlage-Slot ("Herr X", "N.N.", ...).
+        job.antragsvorlage_qc_text = antragsvorlage_text or None
+        # v19.15 (C1): Trunkierungs-Heuristik ueber die dokumentartigen
+        # Quellen (Selbstauskunft bewusst ausgenommen - Formulare enden
+        # regulaer auf Labels/Kurztokens und wuerden Fehlalarme erzeugen).
+        # Rohtexte VOR dem Budget-Guard, d.h. wie extrahiert.
+        from app.services.extraction import looks_truncated, truncation_tail
+        _trunc: list[dict] = []
+        for _src_name, _src_text in (
+            ("Verlaufsdokumentation", verlaufsdoku_text),
+            ("Antragsvorlage",        antragsvorlage_text),
+            ("Vorheriger Antrag",     vorantrag_text),
+            ("Prozessreflexion",      prozessreflexion_text),
+        ):
+            if _src_text and looks_truncated(_src_text):
+                _trunc.append({
+                    "source": _src_name,
+                    "tail":   truncation_tail(_src_text),
+                })
+                logger.warning(
+                    "Quelle '%s' endet vermutlich unvollstaendig "
+                    "(Job %s): ...%s",
+                    _src_name, job.job_id, truncation_tail(_src_text),
+                )
+        job.truncated_sources = _trunc or None
 
         # v19.8: KLIENT-GESCHLECHT-Hinweis backend-seitig anhaengen, wenn das
         # UI-Feld gesetzt ist und das Frontend ihn NICHT schon eingebaut hat

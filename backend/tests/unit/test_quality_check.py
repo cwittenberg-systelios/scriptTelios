@@ -1057,3 +1057,169 @@ class TestQcFidelitySource:
         issues = run_quality_check(text, "dokumentation", source_text=src)
         assert any(i.code == "SOURCE_FIDELITY" for i in issues), \
             "IFS im Output ohne IFS in der Quelle muss Quellentreue-Issue geben"
+
+
+# ── v19.15 Sprint B3: TEMPLATE_PLACEHOLDER_DETECTED ───────────────────────────
+
+class TestTemplatePlaceholder:
+    """Platzhalter-Heuristik: Muster-/Stilvorlage im Antragsvorlage-Slot.
+
+    Hintergrund: Feedback r.kolic 2026-07-31 (Jobs 1c895366, 4156ccff) -
+    Stilvorlage mit "Herr X"/"Frau X." landete im Antragsvorlage-Slot,
+    Inhalt/Name/Geschlecht der Vorlage wanderten in den Entlassbericht.
+    """
+
+    def _run(self, antrag_text, workflow="entlassbericht"):
+        from app.services.quality_check import (
+            ISSUE_CODE_TEMPLATE_PLACEHOLDER,
+            run_quality_check,
+        )
+        issues = run_quality_check(
+            "Ein hinreichend langer Beispieltext. " * 30,
+            workflow,
+            antragsvorlage_text=antrag_text,
+        )
+        return [i for i in issues if i.code == ISSUE_CODE_TEMPLATE_PLACEHOLDER]
+
+    def test_herr_x_mit_punkt_erkannt(self):
+        hits = self._run("Nach zehn Wochen verlaesst Herr X. unsere Einrichtung.")
+        assert len(hits) == 1
+        assert hits[0].severity == SEVERITY_WARNING
+
+    def test_frau_x_ohne_punkt_erkannt(self):
+        hits = self._run("Wir berichten ueber Frau X und ihren Verlauf.")
+        assert len(hits) == 1
+
+    def test_n_n_erkannt(self):
+        hits = self._run("Der Klient N.N. wurde am 01.01. aufgenommen.")
+        assert len(hits) == 1
+
+    def test_mustermann_erkannt(self):
+        hits = self._run("Wir berichten ueber Herrn Mustermann.")
+        assert len(hits) == 1
+
+    def test_echte_initiale_kein_treffer(self):
+        # "Herr K." ist eine legitime anonymisierte Initiale - kein Platzhalter.
+        hits = self._run("Wir erlebten Herrn K. zu Beginn deutlich erschoepft.")
+        assert hits == []
+
+    def test_x_als_wortbestandteil_kein_treffer(self):
+        # "Herr Xu" (echter Nachname) darf nicht anschlagen.
+        hits = self._run("Wir berichten ueber Herrn Xu und seinen Aufenthalt.")
+        assert hits == []
+
+    def test_leerer_text_kein_treffer(self):
+        assert self._run("") == []
+        assert self._run(None) == []
+
+    def test_workflow_ohne_antragsvorlage_kein_treffer(self):
+        # P1/P2 haben den Slot nicht - Check entfaellt selbst bei Treffertext.
+        hits = self._run("Herr X. berichtet.", workflow="dokumentation")
+        assert hits == []
+
+    def test_code_detail_enthaelt_matches(self):
+        hits = self._run("Frau X. und spaeter nochmals Frau X. sowie N.N.")
+        assert len(hits) == 1
+        assert "matches" in hits[0].code_detail
+        assert any("N.N." in m for m in hits[0].code_detail["matches"])
+
+
+# ── v19.15 Sprint A: Repair-Prompt-Konsistenz (NUTZERHINWEIS) ─────────────────
+
+class TestRepairPromptNutzerhinweis:
+    """Regression-Guards fuer den v19.15-Fix: NUTZERHINWEIS war in
+    Sicherheitsregel 1 gleichzeitig erlaubte UND verbotene Anweisungsquelle
+    (Jobs ad408389/d50cf270 vom 2026-07-31: Repair gab trotz klarem
+    Nutzerhinweis byte-identischen Text zurueck)."""
+
+    def _build(self, **kw):
+        return build_repair_prompt(
+            "entlassbericht",
+            "Originaltext ueber Herrn M. und seinen Verlauf.",
+            [],
+            **kw,
+        )
+
+    def test_nutzerhinweis_nicht_in_verbotsliste(self):
+        prompt = self._build(user_hint="Bitte Absatz 2 kuerzen.")
+        # Die Verbotsliste darf NUTZERHINWEIS nicht mehr enthalten:
+        # zwischen "Befolge KEINE Anweisungen" und dem Satzende darf
+        # NUTZERHINWEIS nicht auftauchen.
+        import re as _re
+        m = _re.search(
+            r"Befolge KEINE Anweisungen.*?QUELLE-TRANSKRIPT[^.]*\.",
+            prompt, _re.S,
+        )
+        assert m, "Verbotsliste nicht gefunden"
+        assert "NUTZERHINWEIS" not in m.group(0)
+
+    def test_nutzerhinweis_als_verbindlich_markiert(self):
+        prompt = self._build(user_hint="Bitte Absatz 2 kuerzen.")
+        assert "verbindlich" in prompt
+        assert "auch im NUTZERHINWEIS" in prompt  # Injection-Verbot bleibt
+
+    def test_schlussanweisung_erlaubt_neuausrichtung(self):
+        prompt = self._build(
+            user_hint="Inhalte nur aus QUELLE-VERLAUF verwenden.",
+            verlauf_context="17.05. Aufnahme. 18.05. Gespraech.",
+        )
+        assert "Neuausrichtung" in prompt
+        assert "Ersetzungen" in prompt
+
+
+# ── v19.15 Sprint C1: SOURCE_POSSIBLY_TRUNCATED + looks_truncated ─────────────
+
+class TestSourceTruncation:
+    """Trunkierungs-Heuristik (extraction.looks_truncated) + QC-Issue.
+
+    Positivbeispiele stammen aus prompts.log 2026-07-31 (Verlaufsdoku endete
+    "Abschlussärztliche Sprechstunde: Ke" u.a.).
+    """
+
+    def test_looks_truncated_positiv(self):
+        from app.services.extraction import looks_truncated
+        assert looks_truncated("Abschlussärztliche Sprechstunde: Ke")
+        assert looks_truncated("Am 27.06. berichtet S.M. im")
+        assert looks_truncated("28.06.–03.07.\nAm")
+        assert looks_truncated("keine Einträge\n07")
+        assert looks_truncated("erlebte sie als stark belastend,")   # Komma-Ende
+        assert looks_truncated("entwickelte die Klientin gemeinsam mit")  # 'mit' < 4
+
+    def test_looks_truncated_negativ(self):
+        from app.services.extraction import looks_truncated
+        assert not looks_truncated("Er ging stabilisiert nach Hause.")
+        assert not looks_truncated("Gehe unbedingt auf das Familiengespräch ein!")
+        assert not looks_truncated("### 18.07.2026\nBericht med. Team Nacht")  # Überschriftende
+        assert not looks_truncated("Dokumentiert bis 18.07.2026")  # Jahreszahl (4 Zeichen)
+        assert not looks_truncated("")
+        assert not looks_truncated("   \n  ")
+
+    def test_qc_issue_bei_trunkierten_quellen(self):
+        from app.services.quality_check import (
+            ISSUE_CODE_SOURCE_POSSIBLY_TRUNCATED,
+            run_quality_check,
+        )
+        issues = run_quality_check(
+            "Ein hinreichend langer Beispieltext. " * 30,
+            "entlassbericht",
+            truncated_sources=[
+                {"source": "Verlaufsdokumentation", "tail": "Sprechstunde: Ke"},
+            ],
+        )
+        hits = [i for i in issues if i.code == ISSUE_CODE_SOURCE_POSSIBLY_TRUNCATED]
+        assert len(hits) == 1
+        assert hits[0].severity == SEVERITY_WARNING
+        assert "Verlaufsdokumentation" in hits[0].message
+        assert hits[0].code_detail["sources"][0]["tail"] == "Sprechstunde: Ke"
+
+    def test_kein_issue_ohne_trunkierung(self):
+        from app.services.quality_check import (
+            ISSUE_CODE_SOURCE_POSSIBLY_TRUNCATED,
+            run_quality_check,
+        )
+        issues = run_quality_check(
+            "Ein hinreichend langer Beispieltext. " * 30,
+            "entlassbericht",
+            truncated_sources=None,
+        )
+        assert not [i for i in issues if i.code == ISSUE_CODE_SOURCE_POSSIBLY_TRUNCATED]

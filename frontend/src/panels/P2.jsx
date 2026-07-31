@@ -238,7 +238,7 @@ function P2({ toast, resumeJob, onResumed }) {
             <div className="field-note">Enter oder Komma zum Hinzufuegen — z.B. F32.1, F41.1, Z73.0</div>
           </Card>
 
-          <Card num="D" title="Stilvorlage" badge="opt" open={false}>
+          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -465,12 +465,12 @@ function P2b({ toast, resumeJob, onResumed }) {
       </div>
       <div className="page-body">
         <div className="workflow">
-          <Card num="A" title="Antragsvorlage" badge="req">
-            <Dropzone label="Antragsvorlage hochladen" hint=".docx oder .pdf — enthält Anamnese, Befund, Diagnosen" accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
+          <Card num="A" title="Akutantrag (zu vervollständigen)" badge="req">
+            <Dropzone label="Akutantrag hochladen" hint=".docx oder .pdf — der zu vervollständigende Akutantrag mit Anamnese, Befund, Diagnosen (keine Muster-/Stilvorlage)" accept=".docx,.pdf" icon="&#128196;" file={antrag} onFile={setAntrag} />
             <div className="info-note" style={{marginTop:8}}>Anamnese, psychischer Befund und Einweisungsdiagnosen werden aus dieser Vorlage extrahiert.</div>
           </Card>
 
-          <Card num="B" title="Stilvorlage" badge="opt" open={false}>
+          <Card num="B" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -516,7 +516,7 @@ function P2b({ toast, resumeJob, onResumed }) {
                   className="btn-primary"
                   onClick={run}
                   disabled={!antrag}
-                  title={!antrag ? "Antragsvorlage erforderlich" : ""}
+                  title={!antrag ? "Akutantrag (zu vervollständigen) erforderlich" : ""}
                 >Akutantrag erstellen</button>
             }
           </div>

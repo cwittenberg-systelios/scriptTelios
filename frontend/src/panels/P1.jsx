@@ -356,7 +356,7 @@ function P1({ toast, resumeJob, onResumed }) {
         <div className="field-note">Ergaenzt oder ersetzt das Transkript bei Bedarf</div>
       </Card>
 
-      <Card num="C" title="Stilvorlage" badge="opt" open={false}>
+      <Card num="C" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
         <InputTabs
           tabs={[
             { id:"file", icon:"📎", label:"Datei"  },
