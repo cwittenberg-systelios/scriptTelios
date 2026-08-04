@@ -159,6 +159,9 @@ class RecordingOut(BaseModel):
     error_msg: Optional[str] = None
     created_at: str
     has_audio: bool = False  # v18: zeigt ob Audio noch auf Disk liegt
+    # v19.16 (T4): Sekunden am Aufnahme-Ende, die das Transkript vermutlich
+    # NICHT abdeckt (None = vollstaendig). Grundlage fuer P0-Badge + QC.
+    coverage_gap_s: Optional[float] = None
 
     model_config = {"from_attributes": True}
 
@@ -169,6 +172,7 @@ async def _set_status(
     error_msg: Optional[str] = None,
     transcript: Optional[str] = None,
     duration_s: Optional[float] = None,
+    coverage_gap_s: Optional[float] = None,
 ):
     async with async_session_factory() as session:
         values = {"status": status, "error_msg": error_msg}
@@ -176,6 +180,8 @@ async def _set_status(
             values["transcript"] = transcript
         if duration_s is not None:
             values["duration_s"] = duration_s
+        if coverage_gap_s is not None:
+            values["coverage_gap_s"] = coverage_gap_s
         await session.execute(
             update(Recording).where(Recording.id == rec_id).values(**values)
         )
@@ -204,11 +210,26 @@ async def _transcribe_background(rec_id: int, audio_path: Path):
         # eigenem Event-Loop, der intern dann nochmal einen Executor-Thread
         # spawnte - reine Verschwendung und potenzielle Loop-Konflikte.
         result = await _transcription.transcribe_audio(audio_path)
+        # v19.16 (T4): Coverage-Check - endet das Transkript deutlich vor dem
+        # Audio-Ende, wird die Luecke am Recording vermerkt (P0-Badge + QC).
+        # Schwelle konservativ: VAD schneidet End-Stille legitim weg.
+        _dur = float(result.get("duration_seconds") or 0.0)
+        _until = float(result.get("transcribed_until_s") or 0.0)
+        _gap_threshold = float(getattr(settings, "WHISPER_COVERAGE_WARN_GAP_S", 30.0))
+        _gap = round(_dur - _until, 1) if (_dur > 0 and _until > 0) else 0.0
+        _coverage_gap = _gap if _gap > _gap_threshold else None
+        if _coverage_gap:
+            logger.warning(
+                "Recording %d: Transkript endet %.0fs vor Audio-Ende "
+                "(%.0fs von %.0fs abgedeckt) - Coverage-Warnung gesetzt.",
+                rec_id, _coverage_gap, _until, _dur,
+            )
         await _set_status(
             rec_id,
             status="ready",
             transcript=result["transcript"],
             duration_s=result.get("duration_seconds"),
+            coverage_gap_s=_coverage_gap,
         )
         logger.info(
             "Recording %d transkribiert (%.0fs, %d Wörter)",
@@ -234,6 +255,7 @@ def _rec_to_out(r: Recording) -> RecordingOut:
         error_msg=r.error_msg,
         created_at=r.created_at.isoformat(),
         has_audio=audio_path.exists(),
+        coverage_gap_s=getattr(r, "coverage_gap_s", None),
     )
 
 

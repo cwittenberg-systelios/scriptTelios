@@ -158,6 +158,9 @@ class Recording(Base):
     label: Mapped[str | None] = mapped_column(String(120), nullable=True)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     duration_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # v19.16 (T4): Sekunden am Aufnahme-Ende ohne Transkript-Abdeckung
+    # (NULL = vollstaendig). Migration: ADD COLUMN IF NOT EXISTS in schema.sql.
+    coverage_gap_s: Mapped[float | None] = mapped_column(Float, nullable=True)
     transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # uploading | transcribing | ready | error

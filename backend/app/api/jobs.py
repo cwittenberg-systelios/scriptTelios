@@ -109,6 +109,59 @@ def _setup_prompt_logger() -> None:
 _setup_prompt_logger()
 
 
+def _missing_source_error(
+    workflow: str,
+    *,
+    transkript_text: str = "",
+    selbstauskunft_text: str = "",
+    vorbefunde_text: str = "",
+    bullets: str = "",
+    transcript_failure_reason: "str | None" = None,
+) -> "str | None":
+    """v19.16 (G1): Quellen-Gate gegen Konfabulation.
+
+    Gibt eine nutzerverstaendliche Fehlermeldung zurueck, wenn fuer den
+    Workflow KEINE inhaltliche Quelle vorliegt - sonst None.
+
+    Hintergrund (Job 58db7006, 2026-08-04): Ein P1-Job lief nach
+    wait_for_transcript-Timeout mit leerem Transkript weiter; der Prompt
+    enthielt keinen Quellblock und das Modell erfand ein vollstaendiges,
+    klinisch plausibel klingendes Dokument aus dem Stil-Referenzwissen.
+    Konfabulierte klinische Inhalte sind nie verwertbar - der Job wird
+    abgebrochen, bevor ein solches Dokument ueberhaupt entsteht (D1).
+
+    Nur P1 (dokumentation) und P2 (anamnese) haben das Transkript bzw.
+    Klienten-Dokumente als inhaltliche Primaerquellen; P2b/P3/P3b/P4 haben
+    eigene Pflichtquellen mit eigener Validierung.
+    """
+    def _has(t: str) -> bool:
+        return bool(t and t.strip())
+
+    reason_suffix = f" {transcript_failure_reason}" if transcript_failure_reason else ""
+
+    if workflow == "dokumentation":
+        if not _has(transkript_text) and not _has(bullets):
+            return (
+                "Kein Gespraechsinhalt verfuegbar - die Dokumentation wurde "
+                "NICHT erstellt, um ein erfundenes Dokument zu verhindern."
+                + reason_suffix
+            )
+        return None
+
+    if workflow == "anamnese":
+        if not (_has(transkript_text) or _has(selbstauskunft_text)
+                or _has(vorbefunde_text)):
+            return (
+                "Keine verwertbare Quelle (Selbstauskunft, Vorbefunde oder "
+                "Aufnahmegespraech) verfuegbar - die Anamnese wurde NICHT "
+                "erstellt, um ein erfundenes Dokument zu verhindern."
+                + reason_suffix
+            )
+        return None
+
+    return None
+
+
 def _log_prompt(job_id: str, workflow: str, call_label: str,
                 system: str, user: str) -> None:
     """
@@ -1284,6 +1337,11 @@ async def create_generate_job(
     vorantrag:        Optional[UploadFile] = File(None, description="Folgeverlängerung: Vorheriger Bericht mit Verlauf/Anamnese/Diagnosen (.docx/.pdf)"),
     prozessreflexion: Optional[UploadFile] = File(None, description="P4: Abschlussreflexion des Klienten (.pdf/.docx, optional)"),
     style_file:       Optional[UploadFile] = File(None, description="Stilvorlage (Beispieltext)"),
+    # v19.16 (G0): Das Frontend sendet .txt/.docx-Transkripte seit jeher als
+    # 'transcript_file' - der Endpoint kannte das Feld nicht, FastAPI verwarf
+    # es stillschweigend. P1/P2 mit Transkript-Datei liefen dadurch ohne
+    # Quelle (Konfabulationspfad, siehe Job 58db7006 vom 2026-08-04).
+    transcript_file:  Optional[UploadFile] = File(None, description="Transkript-Datei (.txt/.docx) als Gespraechsquelle fuer P1/P2"),
 ):
     """
     Startet einen asynchronen Generierungs-Job.
@@ -1360,6 +1418,8 @@ async def create_generate_job(
     prozessreflexion_name  = prozessreflexion.filename    if prozessreflexion and prozessreflexion.filename else None
     style_bytes            = await style_file.read()      if style_file     and style_file.filename     else None
     style_name             = style_file.filename          if style_file     and style_file.filename     else None
+    transcript_file_bytes  = await transcript_file.read() if transcript_file and transcript_file.filename else None
+    transcript_file_name   = transcript_file.filename     if transcript_file and transcript_file.filename else None
 
     dx_list = [d.strip() for d in diagnosen.split(",") if d.strip()] if diagnosen else []
 
@@ -1421,17 +1481,46 @@ async def create_generate_job(
                 job.set_progress(bands["transcription"][1])
             transkript_text = tr["transcript"]
 
+        # ── 1a2. Transkript-Datei (.txt/.docx) einlesen (v19.16 G0) ──
+        # Direkte Quelle wie Audio; greift nur wenn noch kein Transkript da ist.
+        if not transkript_text and transcript_file_bytes and transcript_file_name:
+            _tf_suffix = _Path(transcript_file_name).suffix.lower()
+            if _tf_suffix in (".txt", ".text", ".md"):
+                for _enc in ("utf-8", "cp1252", "latin-1"):
+                    try:
+                        transkript_text = transcript_file_bytes.decode(_enc)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+            else:
+                _tf_path = upload_dir() / f"{_uuid.uuid4().hex}{_tf_suffix}"
+                _tf_path.write_bytes(transcript_file_bytes)
+                try:
+                    transkript_text = await extract_text(_tf_path)
+                except Exception as e:
+                    logger.warning("Transkript-Datei-Extraktion fehlgeschlagen: %s", e)
+            if transkript_text:
+                logger.info("Transkript aus Datei '%s' (%d Wörter)",
+                            transcript_file_name, len(transkript_text.split()))
+
         # ── 1b. P0-Recording: Transkript aus DB holen (ggf. warten) ──
         # Wenn kein Transkript direkt mitgegeben wurde aber eine Recording-ID,
         # holt jobs.py das Transkript selbst. Ist die Aufnahme noch nicht
         # fertig transkribiert, wird sie in der P0-Queue priorisiert und
         # der Job wartet bis sie bereit ist (max. 10 Min).
+        # v19.16 (G2): Grund fuer ein fehlendes Recording-Transkript - fliesst
+        # in die Gate-Fehlermeldung (G1) ein, damit der Therapeut versteht
+        # was passiert ist und was zu tun ist.
+        transcript_failure_reason = None
         if not transkript_text and p0_recording_id:
             rec_id_int = None
             try:
                 rec_id_int = int(p0_recording_id)
             except (ValueError, TypeError):
                 logger.warning("Ungültige p0_recording_id: %r", p0_recording_id)
+                transcript_failure_reason = (
+                    "Die Aufnahme-Referenz war ungueltig."
+                )
 
             if rec_id_int is not None:
                 from app.core.database import async_session_factory as _asf
@@ -1451,23 +1540,53 @@ async def create_generate_job(
                     logger.info("P0-Recording %d: Transkript aus DB (%d Wörter)",
                                 rec_id_int, len(transkript_text.split()))
                 elif _rec and _rec.status in ("uploading", "transcribing"):
-                    # Noch nicht fertig → priorisieren + warten
+                    # Noch nicht fertig → priorisieren + warten.
+                    # v19.16 (G3): Timeout skaliert mit der Aufnahmelaenge -
+                    # fix 600 s reichte fuer eine 62-min-Aufnahme nicht
+                    # (Fall 58db7006). Formel: max(600, 2x Audiodauer + 120),
+                    # gedeckelt bei 1800 s. Ohne bekannte Dauer: 900 s.
                     from app.api.recordings import reprioritize_recording, wait_for_transcript
+                    _rec_dur = float(_rec.duration_s or 0.0)
+                    if _rec_dur > 0:
+                        _wait_timeout = int(max(600, min(_rec_dur * 2 + 120, 1800)))
+                    else:
+                        _wait_timeout = 900
                     audio_path_rec = recordings_dir() / _rec.filename
                     if audio_path_rec.exists():
                         await reprioritize_recording(rec_id_int, audio_path_rec)
                     job.set_progress(5, "Warte auf Transkription",
                                      "Aufnahme wird priorisiert transkribiert…")
-                    transkript_text = await wait_for_transcript(rec_id_int, timeout_s=600) or ""
+                    transkript_text = await wait_for_transcript(rec_id_int, timeout_s=_wait_timeout) or ""
                     if transkript_text:
                         logger.info("P0-Recording %d: Transkript nach Wartezeit (%d Wörter)",
                                     rec_id_int, len(transkript_text.split()))
                     else:
-                        logger.warning("P0-Recording %d: Transkript nach Timeout nicht verfügbar", rec_id_int)
+                        logger.warning("P0-Recording %d: Transkript nach Timeout (%ds) nicht verfügbar",
+                                       rec_id_int, _wait_timeout)
+                        transcript_failure_reason = (
+                            f"Die Aufnahme war nach {_wait_timeout // 60} Minuten "
+                            "Wartezeit noch nicht fertig transkribiert. Bitte warten "
+                            "bis die Aufnahme in P0 'Bereit' zeigt und den Auftrag "
+                            "erneut starten."
+                        )
                 elif _rec and _rec.status == "error":
                     logger.warning("P0-Recording %d: Status=error, kein Transkript verfügbar", rec_id_int)
+                    transcript_failure_reason = (
+                        "Die Transkription dieser Aufnahme ist fehlgeschlagen "
+                        f"({(_rec.error_msg or 'unbekannter Fehler')[:160]}). In P0 kann die "
+                        "Transkription erneut gestartet werden."
+                    )
                 else:
                     logger.warning("P0-Recording %d: nicht gefunden oder unbekannter Status", rec_id_int)
+                    transcript_failure_reason = (
+                        "Die gewaehlte Aufnahme wurde nicht gefunden - "
+                        "moeglicherweise wurde sie geloescht."
+                    )
+
+                # v19.16 (T4/D3): Coverage-Luecke des Recordings an den Job
+                # heften - der QualityCheck macht daraus ein CRITICAL-Issue.
+                if _rec is not None and getattr(_rec, "coverage_gap_s", None):
+                    job.transcript_coverage_gap_s = float(_rec.coverage_gap_s)
 
         # Cancel-Check nach Transkription (teuerster Schritt)
         if job._cancel_requested:
@@ -1926,6 +2045,21 @@ async def create_generate_job(
                     _src_name, job.job_id, truncation_tail(_src_text),
                 )
         job.truncated_sources = _trunc or None
+
+        # v19.16 (G1): Quellen-Gate gegen Konfabulation - VOR jeder weiteren
+        # (teuren) Verarbeitung. Wirft mit nutzerverstaendlicher Meldung;
+        # job_queue uebernimmt str(e) als error_msg.
+        _gate_msg = _missing_source_error(
+            workflow,
+            transkript_text=transkript_text,
+            selbstauskunft_text=selbstauskunft_text,
+            vorbefunde_text=vorbefunde_text,
+            bullets=bullets or "",
+            transcript_failure_reason=transcript_failure_reason,
+        )
+        if _gate_msg:
+            logger.error("Quellen-Gate (%s): %s", workflow, _gate_msg)
+            raise RuntimeError(_gate_msg)
 
         # v19.8: KLIENT-GESCHLECHT-Hinweis backend-seitig anhaengen, wenn das
         # UI-Feld gesetzt ist und das Frontend ihn NICHT schon eingebaut hat

@@ -886,6 +886,8 @@ class JobQueue:
                     _antrag_qc_text = getattr(job, "antragsvorlage_qc_text", None)
                     # v19.15 (C1): vermutlich abgeschnittene Quellen (jobs.py).
                     _trunc_sources = getattr(job, "truncated_sources", None)
+                    # v19.16 (T4): Coverage-Luecke des verwendeten Recordings.
+                    _cov_gap = getattr(job, "transcript_coverage_gap_s", None)
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
@@ -893,6 +895,7 @@ class JobQueue:
                         prozessreflexion_present=_reflexion_present,
                         antragsvorlage_text=_antrag_qc_text,
                         truncated_sources=_trunc_sources,
+                        transcript_coverage_gap_s=_cov_gap,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(

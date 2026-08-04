@@ -352,6 +352,14 @@ function P0({ toast }) {
                       <span>{fmtDat(r.created_at)}</span>
                       <span>{fmtDur(r.duration_s)}</span>
                       {!isTemp && <span style={{color:st.color,fontWeight:600}}>{st.text}</span>}
+                      {/* v19.16 (T4): Transkript deckt das Audio-Ende nicht ab */}
+                      {!isTemp && r.coverage_gap_s > 0 && (
+                        <span
+                          title={`Transkript endet ca. ${(r.coverage_gap_s/60).toFixed(1)} Min vor dem Aufnahme-Ende – der Schluss des Gesprächs fehlt. Transkription ggf. erneut starten.`}
+                          style={{color:"#c07000",fontWeight:600,cursor:"help"}}>
+                          ⚠ unvollständig
+                        </span>
+                      )}
                       {r.error_msg && <span title={r.error_msg} style={{cursor:"help"}}>ⓘ</span>}
                     </div>
                   </div>

@@ -128,6 +128,13 @@ ISSUE_CODE_TEMPLATE_PLACEHOLDER = "TEMPLATE_PLACEHOLDER_DETECTED"
 # gewarnt wurde.
 ISSUE_CODE_SOURCE_POSSIBLY_TRUNCATED = "SOURCE_POSSIBLY_TRUNCATED"
 
+# v19.16 (T4/D3): Das verwendete P0-Recording hat eine Coverage-Luecke -
+# das Transkript endet messbar vor dem Audio-Ende (z.B. Duration-Schaetzfehler
+# bei Browser-webm, uebersprungene Chunks). Der generierte Text basiert dann
+# auf einem unvollstaendigen Gespraech. Per Nutzer-Entscheid CRITICAL,
+# obwohl nicht durch Neu-Generierung behebbar (repair_hint stellt das klar).
+ISSUE_CODE_TRANSCRIPT_INCOMPLETE = "TRANSCRIPT_INCOMPLETE"
+
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
 # Wird in serialize_issues + Pydantic-Schemas (Phase C) genutzt.
@@ -218,6 +225,34 @@ _TEMPLATE_PLACEHOLDER_PATTERNS: tuple[re.Pattern, ...] = (
 _TEMPLATE_PLACEHOLDER_WORKFLOWS = frozenset(
     {"akutantrag", "verlaengerung", "folgeverlaengerung", "entlassbericht"}
 )
+
+
+def _check_transcript_coverage(
+    workflow: str,
+    transcript_coverage_gap_s: "float | None",
+) -> list[QualityIssue]:
+    """v19.16 (T4): CRITICAL-Issue, wenn das verwendete Recording-Transkript
+    das Audio nicht vollstaendig abdeckt (Luecke am Ende, in Sekunden)."""
+    if workflow not in ("dokumentation", "anamnese"):
+        return []
+    if not transcript_coverage_gap_s or transcript_coverage_gap_s <= 0:
+        return []
+    _min = transcript_coverage_gap_s / 60.0
+    return [QualityIssue(
+        code=ISSUE_CODE_TRANSCRIPT_INCOMPLETE,
+        severity=SEVERITY_CRITICAL,
+        message=(
+            f"Das Transkript der verwendeten Aufnahme endet ca. "
+            f"{_min:.1f} Minuten vor dem Aufnahme-Ende - der Schluss des "
+            "Gespraechs fehlt in der Quelle und damit auch in diesem Text."
+        ),
+        repair_hint=(
+            "NICHT durch Neu-Generierung behebbar - die Luecke liegt im "
+            "Transkript, nicht im Text. In P0 die Transkription der Aufnahme "
+            "erneut starten und den Auftrag danach neu ausfuehren."
+        ),
+        code_detail={"gap_s": round(float(transcript_coverage_gap_s), 1)},
+    )]
 
 
 def _check_source_truncation(
@@ -848,6 +883,7 @@ def run_quality_check(
     prozessreflexion_present: bool | None = None,
     antragsvorlage_text: str | None = None,
     truncated_sources: "list[dict] | None" = None,
+    transcript_coverage_gap_s: "float | None" = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
@@ -884,6 +920,9 @@ def run_quality_check(
     truncated_sources: v19.15 (C1): Liste [{source, tail}] vermutlich
                   abgeschnittener Quelldokumente (jobs.py, looks_truncated).
                   None/leer -> Trunkierungs-Warnung (Schritt 0f) entfaellt.
+    transcript_coverage_gap_s: v19.16 (T4): Sekunden-Luecke am Ende des
+                  verwendeten Recording-Transkripts. None/0 -> Check
+                  (Schritt 0g, TRANSCRIPT_INCOMPLETE, critical) entfaellt.
 
     Idempotent (kein State, keine Seiteneffekte ausser logging).
     """
@@ -909,6 +948,8 @@ def run_quality_check(
     issues.extend(_check_template_placeholder(workflow, antragsvorlage_text))
     # v19.15 (C1): vermutlich abgeschnittene Quelldokumente (Input-Level).
     issues.extend(_check_source_truncation(truncated_sources))
+    # v19.16 (T4): Recording-Transkript deckt das Audio nicht vollstaendig ab.
+    issues.extend(_check_transcript_coverage(workflow, transcript_coverage_gap_s))
     # v19.13: Reflexions-Referenz-Check (nur entlassbericht, nur mit Flag)
     issues.extend(_check_prozessreflexion(text, workflow, prozessreflexion_present))
     issues.extend(_check_forbidden_names(text, patient_name))

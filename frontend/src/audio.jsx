@@ -472,6 +472,14 @@ function AudioInput({ file, onFile }) {
                       : <>
                           {r.created_at ? new Date(r.created_at).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit",year:"2-digit"}) : ""}
                           {r.duration_s ? ` · ${Math.floor(r.duration_s/60)}:${String(Math.floor(r.duration_s%60)).padStart(2,"0")}` : ""}
+                          {/* v19.16 (T4): Transkript deckt Audio-Ende nicht ab */}
+                          {r.coverage_gap_s > 0 && (
+                            <span
+                              title={`Transkript endet ca. ${(r.coverage_gap_s/60).toFixed(1)} Min vor dem Aufnahme-Ende – der Schluss fehlt.`}
+                              style={{color:"#c07000",fontWeight:600,marginLeft:6,cursor:"help"}}>
+                              ⚠
+                            </span>
+                          )}
                         </>
                     }
                   </span>

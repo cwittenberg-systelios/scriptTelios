@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS recordings (
     error_msg       TEXT
 );
 
+-- v19.16 (T4): Coverage-Luecke am Aufnahme-Ende (Transkript unvollstaendig)
+ALTER TABLE recordings ADD COLUMN IF NOT EXISTS coverage_gap_s DOUBLE PRECISION;
+
 -- StyleProfile: aggregierte Stilmerkmale eines Therapeuten
 CREATE TABLE IF NOT EXISTS style_profiles (
     id              VARCHAR(36)              PRIMARY KEY,

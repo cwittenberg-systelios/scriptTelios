@@ -485,6 +485,46 @@ async def check_whisper_model_available() -> bool:
         return False
 
 
+def _parse_ffmpeg_stderr_duration(stderr: str) -> float:
+    """Extrahiert die Audiodauer aus ffmpeg-stderr einer Voll-Dekodierung.
+
+    v19.16 (T1): Zwei Quellen, in dieser Reihenfolge:
+      1. 'Duration: HH:MM:SS.xx' aus dem Header - fehlt bei
+         MediaRecorder-webm ("Duration: N/A", kein finalisierter Header).
+      2. Die LETZTE Fortschrittszeile 'time=HH:MM:SS.xx' - bei vollstaendiger
+         Dekodierung (-f null) ist das die echte Dauer, auch ohne Header.
+         Belegt an aufnahme-79 (2026-08-04): Header 'N/A', time=01:02:38.71 -
+         die alte Version fiel deshalb auf die Dateigroessen-Schaetzung
+         zurueck, die 214 s zu kurz lag; die letzten 3,5 Minuten des
+         Gespraechs wurden nie transkribiert.
+    """
+    import re as _re
+    m = _re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", stderr)
+    if m:
+        d = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+        if d > 0:
+            return d
+    times = _re.findall(r"time=(\d+):(\d+):(\d+\.\d+)", stderr)
+    if times:
+        h, mins, secs = times[-1]
+        d = int(h) * 3600 + int(mins) * 60 + float(secs)
+        if d > 0:
+            return d
+    return 0.0
+
+
+def _estimate_duration_from_size(file_size: int) -> float:
+    """v19.16 (T2): Dateigroessen-Schaetzung, bewusst nach OBEN gepuffert.
+
+    Opus@24kbps (audioBitsPerSecond: 24000 im Browser) = 3000 Byte/s.
+    Die alte Version teilte durch 1.05 ("Container-Overhead abziehen") und
+    machte die Schaetzung damit KUERZER - das Gegenteil des dokumentierten
+    Ziels "lieber zu lang schaetzen". Folge: der letzte Audio-Abschnitt
+    wurde beim Chunking abgeschnitten. Jetzt +5 % Puffer nach oben.
+    """
+    return max(file_size / 3000 * 1.05, 1.0)
+
+
 def _get_duration(file_path: Path) -> float:
     """
     Gibt Audiodauer in Sekunden zurueck.
@@ -572,17 +612,12 @@ def _get_duration(file_path: Path) -> float:
             ["ffmpeg", "-i", str(file_path), "-f", "null", "-"],
             capture_output=True, text=True,
         )
-        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", result.stderr)
-        if m:
-            h = int(m.group(1))
-            mins = int(m.group(2))
-            secs = float(m.group(3))
-            duration = h * 3600 + mins * 60 + secs
-            if duration > 0:
-                logger.info(
-                    "ffmpeg-Dekodierung: %.1fs für %s", duration, file_path.name
-                )
-                return duration
+        duration = _parse_ffmpeg_stderr_duration(result.stderr)
+        if duration > 0:
+            logger.info(
+                "ffmpeg-Dekodierung: %.1fs für %s", duration, file_path.name
+            )
+            return duration
     except Exception as e:
         logger.debug("ffmpeg-Dekodierung fehlgeschlagen: %s – Fallback 4", e)
 
@@ -592,14 +627,13 @@ def _get_duration(file_path: Path) -> float:
     # Ist konservativ: lieber etwas zu lang schätzen als zu kurz (→ kein Timeout).
     try:
         file_size = file_path.stat().st_size
-        # 24 kbit/s = 3000 Byte/s; Container-Overhead ~5% Puffer abziehen
-        estimated = file_size / (3000 * 1.05)
+        estimated = _estimate_duration_from_size(file_size)
         logger.warning(
-            "Audiodauer unbekannt – Schätzung via Dateigrösse: "
+            "Audiodauer unbekannt – Schätzung via Dateigrösse (+5%% Puffer): "
             "%.1f MB → ~%.0fs (~%.1f Min) für %s",
             file_size / 1_048_576, estimated, estimated / 60, file_path.name,
         )
-        return max(estimated, 1.0)
+        return estimated
     except Exception as e:
         logger.error("Alle Duration-Methoden fehlgeschlagen: %s", e)
 
@@ -692,8 +726,13 @@ def _split_audio(file_path: Path, splits: list[float], tmp_dir: Path, duration: 
     for i, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:])):
         chunk_path = tmp_dir / f"chunk_{i:03d}{suffix}"
         cmd = ["ffmpeg", "-y", "-ss", str(start)]
-        # Bei letztem Chunk und unbekannter Dauer: kein -to, ffmpeg liest bis EOF
-        if end > 0 and end < end_duration * 1.01:
+        # v19.16 (T3): Der LETZTE Chunk bekommt NIE ein '-to' - ffmpeg liest
+        # bis EOF. Die alte Bedingung (end < end_duration*1.01) schnitt bei
+        # unterschaetzter Dauer (Browser-webm ohne Duration-Header, Stufe-4-
+        # Schaetzung) das Aufnahme-Ende hart ab: aufnahme-79 verlor so die
+        # letzten 214 s. Haenger faengt der per-Chunk-Watchdog ab.
+        is_last = (i == len(boundaries) - 2)
+        if not is_last and end > 0:
             cmd += ["-to", str(end)]
         cmd += ["-i", str(file_path), "-c", "copy", str(chunk_path)]
         subprocess.run(cmd, capture_output=True, check=True)
@@ -1032,11 +1071,15 @@ def _transcribe_single(file_path: Path, duration: float) -> dict:
         text = _assign_speakers(segments)
 
     text = _preprocess_transcript(text)
+    # v19.16 (T4): Ende des letzten transkribierten Segments - Basis fuer den
+    # Coverage-Check (Transkript deckt das Audio bis hierher ab).
+    _last_end = max((float(getattr(s_, "end", 0.0) or 0.0) for s_ in segments), default=0.0)
     return {
         "transcript": text.strip(),
         "language": info.language,
         "duration_seconds": duration,
         "word_count": len(text.split()),
+        "transcribed_until_s": _last_end,
     }
 
 
@@ -1239,9 +1282,13 @@ def _transcribe_chunked(file_path: Path, duration: float) -> dict:
 
         full_text = "\n".join(all_lines)
         full_text = _preprocess_transcript(full_text)
+        # v19.16 (T4): absolute Endzeit des letzten Segments (Chunk-Offsets
+        # sind in all_segments bereits eingerechnet).
+        _last_end = max((seg["end"] for seg in all_segments), default=0.0)
         return {
             "transcript": full_text.strip(),
             "language": language,
             "duration_seconds": duration,
             "word_count": len(full_text.split()),
+            "transcribed_until_s": _last_end,
         }
