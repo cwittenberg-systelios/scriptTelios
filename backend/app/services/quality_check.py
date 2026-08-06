@@ -135,6 +135,18 @@ ISSUE_CODE_SOURCE_POSSIBLY_TRUNCATED = "SOURCE_POSSIBLY_TRUNCATED"
 # obwohl nicht durch Neu-Generierung behebbar (repair_hint stellt das klar).
 ISSUE_CODE_TRANSCRIPT_INCOMPLETE = "TRANSCRIPT_INCOMPLETE"
 
+# v19.17 (P-3): Wir-Form in der Einzelgespraechs-Doku (P1). Team-Perspektive
+# ('Wir erlebten ...') gehoert in Berichte/Antraege; in der Doku eines
+# Einzelgespraechs wirkt sie kuenstlich (Nutzerfeedback 2026-08). Durch
+# Repair behebbar (Umformulierung) -> warning.
+ISSUE_CODE_WIR_FORM_IN_DOKU = "WIR_FORM_IN_DOKU"
+
+# v19.17 (F6): Pathologisierende Personenbeschreibung in P1 ('-gestoert',
+# 'defizitaer', 'auffaellig', 'pathologisch'). Bewusst als sichtbare Warnung,
+# damit auch der Therapeut fuer die Sprachwahl geschaerft wird (Entscheid F6).
+# Gilt NUR fuer P1 - im AMDP-Befund ist diese Sprache korrekte Fachsprache.
+ISSUE_CODE_PATHOLOGISIERENDE_SPRACHE = "PATHOLOGISIERENDE_SPRACHE"
+
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
 # Wird in serialize_issues + Pydantic-Schemas (Phase C) genutzt.
@@ -225,6 +237,84 @@ _TEMPLATE_PLACEHOLDER_PATTERNS: tuple[re.Pattern, ...] = (
 _TEMPLATE_PLACEHOLDER_WORKFLOWS = frozenset(
     {"akutantrag", "verlaengerung", "folgeverlaengerung", "entlassbericht"}
 )
+
+
+# Konservative Wir-Muster: nur eindeutige Team-Perspektive, kein generisches
+# \bwir\b (False Positives in wiedergegebener Klientenrede: 'dass er und
+# seine Frau ...', 'wir als Familie').
+_WIR_FORM_RE = re.compile(
+    r"\bwir\s+(erlebten|erleben|sahen|sehen|hielten|halten|"
+    r"empfehlen|empfahlen|vereinbarten|erarbeiteten|beobachteten)\b"
+    r"|\bunsere[rs]?\s+(einrichtung|arbeit|sicht|klinik|einschätzung|einschaetzung)\b",
+    re.IGNORECASE,
+)
+
+# Pathologisierende Personenbeschreibungen. '-gestoert'-Komposita als
+# Adjektive (konzentrationsgestoert, ...) treffen; '-stoerung'-Substantive
+# (Schlafstoerung, Essstoerung = legitime Symptom-/Diagnosebenennung) NICHT.
+# 'ungestoert'/'unauffaellig' sind harmlos und explizit ausgenommen.
+_PATHO_RE = re.compile(
+    r"\b(?!ungestört|ungestoert)\w*gestört\w*\b"
+    r"|\b(?!ungestört|ungestoert)\w*gestoert\w*\b"
+    r"|\bdefizitär\w*\b|\bdefizitaer\w*\b"
+    r"|\bpathologisch\w*\b"
+    r"|\b(?!unauffällig|unauffaellig)auffällig\w*\b"
+    r"|\b(?!unauffällig|unauffaellig)auffaellig\w*\b",
+    re.IGNORECASE,
+)
+
+
+def _check_wir_form(workflow: str, text: str) -> list[QualityIssue]:
+    """v19.17 (P-3): Wir-Form-Treffer in P1 melden (warning, repair-faehig)."""
+    if workflow != "dokumentation":
+        return []
+    hits = sorted({m.group(0) for m in _WIR_FORM_RE.finditer(text)})
+    if not hits:
+        return []
+    return [QualityIssue(
+        code=ISSUE_CODE_WIR_FORM_IN_DOKU,
+        severity=SEVERITY_WARNING,
+        message=(
+            f"Wir-Form in der Einzelgespraechs-Dokumentation: "
+            f"{', '.join(repr(h) for h in hits[:4])}. Die Team-Perspektive "
+            "gehoert in Berichte/Antraege, nicht in die Doku eines "
+            "Einzelgespraechs."
+        ),
+        repair_hint=(
+            "Formuliere die betroffenen Saetze in deskriptiver 3. Person mit "
+            "dem Klientennamen als Subjekt um ('Herr N. berichtete ...', "
+            "'Im Gespraech zeigte sich ...'); gemeinsame Absprachen ohne Wir "
+            "('Als Uebung wurde vereinbart, ...', '[Name] wurde eingeladen, ...'). "
+            "Inhalte unveraendert lassen."
+        ),
+        code_detail={"matches": hits[:10]},
+    )]
+
+
+def _check_pathologisierende_sprache(workflow: str, text: str) -> list[QualityIssue]:
+    """v19.17 (F6): klinische Etiketten als Personenbeschreibung in P1 melden."""
+    if workflow != "dokumentation":
+        return []
+    hits = sorted({m.group(0) for m in _PATHO_RE.finditer(text)})
+    if not hits:
+        return []
+    return [QualityIssue(
+        code=ISSUE_CODE_PATHOLOGISIERENDE_SPRACHE,
+        severity=SEVERITY_WARNING,
+        message=(
+            f"Pathologisierende Personenbeschreibung: "
+            f"{', '.join(repr(h) for h in hits[:4])}. In der "
+            "Gespraechsdokumentation beschreibend formulieren "
+            "(z.B. 'unkonzentriert' statt 'konzentrationsgestoert')."
+        ),
+        repair_hint=(
+            "Ersetze klinische Etiketten durch alltagsnah-deskriptive "
+            "Formulierungen und attribuiere Selbstbeschreibungen als solche "
+            "('beschreibt sich als ...', 'erlebt sich als ...'). Vom Klienten "
+            "benannte Diagnosen bleiben unveraendert."
+        ),
+        code_detail={"matches": hits[:10]},
+    )]
 
 
 def _check_transcript_coverage(
@@ -950,6 +1040,9 @@ def run_quality_check(
     issues.extend(_check_source_truncation(truncated_sources))
     # v19.16 (T4): Recording-Transkript deckt das Audio nicht vollstaendig ab.
     issues.extend(_check_transcript_coverage(workflow, transcript_coverage_gap_s))
+    # v19.17 (P-3/F6): Perspektive + Sprachstil der Einzelgespraechs-Doku.
+    issues.extend(_check_wir_form(workflow, text))
+    issues.extend(_check_pathologisierende_sprache(workflow, text))
     # v19.13: Reflexions-Referenz-Check (nur entlassbericht, nur mit Flag)
     issues.extend(_check_prozessreflexion(text, workflow, prozessreflexion_present))
     issues.extend(_check_forbidden_names(text, patient_name))

@@ -29,7 +29,10 @@ Schildere die wesentlichen Inhalte aus Sicht der Klientin/des Klienten: Symptome
 Formuliere systemische Hypothesen über Sinnzusammenhänge. Zeige Entwicklungsperspektiven auf – was wird möglich, wenn... Ressourcenorientiert und konkret.
 
 **Einladungen**
-Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden – aktiv formuliert: "Frau M. wurde eingeladen, ..." oder "Als Übung wurde vereinbart, ..." (verwende den tatsächlichen Namen, NICHT "[Patient/in]").`;
+Beschreibe die konkreten Aufgaben, Übungen oder Impulse die mitgegeben wurden – aktiv formuliert: "Frau M. wurde eingeladen, ..." oder "Als Übung wurde vereinbart, ..." (verwende den tatsächlichen Namen, NICHT "[Patient/in]").
+
+PERSPEKTIVE UND SPRACHE (gilt für alle Abschnitte):
+Keine Wir-Form – "Wir erlebten Frau G. ..." gehört in Team-Berichte, nicht in die Dokumentation eines Einzelgesprächs. Deskriptive 3. Person mit dem Namen als Subjekt ("Frau G. beschreibt sich eingangs des Gesprächs als müde, unruhig und unkonzentriert") oder Ich-Perspektive des Klientenberichts. Beschreibend statt pathologisierend: "unkonzentriert" statt "konzentrationsgestört", Selbstbeschreibungen als solche kennzeichnen ("beschreibt sich als ...").`;
 
 const P_ANAMNESE = `Erstelle eine vollständige psychotherapeutische Anamnese auf Basis der bereitgestellten Unterlagen.
 

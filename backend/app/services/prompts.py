@@ -188,6 +188,46 @@ INSTITUTIONELLES_GLOSSAR: dict[str, str] = {
 }
 
 
+# ── v19.17 (P-1): Wendungsblock workflow-sensitiv ────────────────────────────
+#
+# Die "Klinik-typischen Wendungen" beider Glossar-Varianten sind Berichts-
+# Sprache (Wir-Form, Antragsfloskeln wie 'Alltagstauglichkeit ... nicht
+# gegeben'). Fuer P1 (Einzelgespraechs-Doku) werden sie durch gespraechsnahe
+# deskriptive Wendungen ersetzt (Nutzerfeedback 2026-08: Wir-Form wirkt in
+# der Doku kuenstlich). Deterministischer Regex-Tausch zwischen den stabilen
+# Markern "Klinik-typische Wendungen" und "Häufige Beobachtungs-Vokabeln" -
+# schlaegt der Tausch fehl, bleibt schlicht das alte Verhalten (Muster analog
+# FEW_SHOT_DOKUMENTATION-Tausch). P2 (Anamnese) behaelt die Wendungen bewusst
+# unveraendert (Entscheid F4).
+
+_DOKU_WENDUNGEN_BLOCK = """Gesprächsnahe Wendungen (Einzelgesprächs-Dokumentation - nur wenn sachlich passend):
+- 'Im Mittelpunkt des Gesprächs stand ...'
+- '[Name] beschreibt sich eingangs des Gesprächs als ...'
+- '[Name] berichtete/schilderte, dass ...'
+- 'Im Gespräch zeigte sich ...'
+- '[Name] wurde eingeladen, ...' / 'Als Übung wurde vereinbart, ...'
+- 'Ein therapeutisches Angebot für die Zwischenzeit ...'
+"""
+
+_WENDUNGEN_RE = re.compile(
+    r"Klinik-typische Wendungen \(im realen Korpus belegt [–-] nur wenn "
+    r"sachlich passend\):\n.*?(?=\nHäufige Beobachtungs-Vokabeln)",
+    re.DOTALL,
+)
+
+
+def _swap_wendungen_for_doku(glossar: str) -> str:
+    """Ersetzt den Berichts-Wendungsblock durch die P1-Variante."""
+    swapped, n = _WENDUNGEN_RE.subn(_DOKU_WENDUNGEN_BLOCK.rstrip("\n"), glossar)
+    if n != 1:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "v19.17 Wendungs-Tausch griff nicht (n=%d) - Glossar unveraendert.", n
+        )
+        return glossar
+    return swapped
+
+
 def _render_institutionelles_glossar() -> str:
     """Baut den Prompt-Textblock aus INSTITUTIONELLES_GLOSSAR.
 
@@ -1057,6 +1097,32 @@ BASE_PROMPTS: dict[str, str] = {
         "nicht nur was theoretisch dahintersteckt. "
         "Beispiel besser: 'Frau M. beschreibt, dass ein Teil von ihr immer wieder...' "
         "statt das Erleben mit einem Verfahrensbegriff zu etikettieren\n\n"
+        # v19.17 (P-2/P-6): Perspektive + Sprache. Nutzerfeedback 2026-08:
+        # P1-Zusammenfassungen uebernahmen zunehmend die Wir-Form und
+        # klinische Etiketten aus dem Berichts-Vokabular des Glossars.
+        # Nicht editierbar (Pflichtkern), damit die Regel nicht per
+        # Workflow-Anweisung wegkonfiguriert werden kann.
+        "PERSPEKTIVE: Dies ist die Dokumentation EINES Einzelgesprächs, kein "
+        "Team-Bericht. KEINE Wir-Form ('Wir erlebten ...', 'Wir sehen ...', "
+        "'unsere Arbeit') - die gehört ausschließlich in Berichte und Anträge. "
+        "Schreibe in deskriptiver 3. Person mit dem tatsächlichen Namen als "
+        "Subjekt ('Herr N. berichtete ...', 'Im Gespräch zeigte sich ...') "
+        "ODER - wenn die Stilvorlage es so vorgibt - in der Ich-Perspektive "
+        "des Klientenberichts. Gemeinsame Absprachen OHNE Wir formulieren: "
+        "'Als Übung wurde vereinbart, ...', 'Frau N. wurde eingeladen, ...', "
+        "'Ein therapeutisches Angebot für die Zwischenzeit ...'. "
+        "Diese Perspektivregel gilt auch dann, wenn eine Stilvorlage die "
+        "Wir-Form verwendet.\n"
+        "SPRACHE: Beschreibend statt pathologisierend. Eigenschaften, die aus "
+        "Schilderungen der Klientin/des Klienten stammen, als Selbstbericht "
+        "attribuieren ('beschreibt sich als ...', 'erlebt sich als ...', "
+        "'schildert, dass ...') statt als Fremdurteil. Alltagsnah-deskriptive "
+        "Wörter statt klinischer Etiketten, wo keine Diagnose gemeint ist. "
+        "Beispiel besser: 'Frau G. beschreibt sich eingangs des Gesprächs als "
+        "müde, unruhig und unkonzentriert' - NICHT: 'Wir erlebten Frau G. als "
+        "sehr unruhig und konzentrationsgestört'. Keine Begriffe wie "
+        "'gestört'/-gestört-Komposita, 'defizitär', 'auffällig' oder "
+        "'pathologisch' als Personenbeschreibung.\n\n"
         "QUELLENREGEL: Alle Inhalte müssen aus dem Transkript oder den Stichpunkten "
         "ableitbar sein. Keine Symptome, Diagnosen, Interventionen oder Zitate "
         "erfinden die nicht im Gespräch vorkamen.\n\n"
@@ -1814,6 +1880,10 @@ def build_system_prompt(
     # source_text=None (Legacy/Tests) -> konservativ das volle Glossar.
     _parts_work = True if source_text is None else source_mentions_parts_work(source_text)
     _glossar = KLINISCHES_GLOSSAR if _parts_work else KLINISCHES_GLOSSAR_NEUTRAL
+    # v19.17 (P-1): P1 bekommt gespraechsnahe statt Berichts-Wendungen
+    # (Wir-Form + Antragsfloskeln raus aus der Einzelgespraechs-Doku).
+    if workflow == "dokumentation":
+        _glossar = _swap_wendungen_for_doku(_glossar)
     # Institutionelles Glossar ist KEIN Priming-Risiko (keine Therapieverfahren-
     # Begriffe) - deshalb unabhaengig von _parts_work immer angehaengt.
     _glossar = _glossar + _render_institutionelles_glossar()

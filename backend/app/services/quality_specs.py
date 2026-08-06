@@ -37,6 +37,16 @@ KEYWORD_SYNONYMS: dict[str, list[str]] = {
         "therapeutische arbeit", "wir erlebten", "im stationaeren rahmen",
         "im stationären rahmen", "im laufe der behandlung",
         "im verlauf der behandlung",
+        # v19.17 (P-7): Fehlalarm-Fix - "Im bisherigen Verlauf des
+        # stationären Aufenthalts ..." matchte keinen der Eintraege
+        # (Substring-Matching scheitert am eingeschobenen Adjektiv).
+        # Bewusst NICHT "stationären aufenthalt" allein - zu generisch,
+        # steht auch ohne Verlaufsteil im ersten Satz jedes Berichts.
+        "bisherigen verlauf", "bisheriger verlauf",
+        "verlauf des stationären aufenthalts",
+        "verlauf des stationaeren aufenthalts",
+        "verlauf des aufenthalts", "aufenthaltsverlauf",
+        "therapieverlauf", "im therapeutischen prozess",
     ],
     "empfehlung": [
         "empfehlung", "empfohlen", "empfehlen", "ambulant", "nachsorge",
