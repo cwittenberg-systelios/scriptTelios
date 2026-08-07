@@ -58,6 +58,9 @@ class Settings(BaseSettings):
         "akutantrag":         "mistral-small3.2",
         "verlaengerung":      "mistral-small3.2",
         "folgeverlaengerung": "mistral-small3.2",
+        # v19.18 (PX): ISM-Fragebogen arbeitet direkt auf dem Rohtranskript -
+        # gemma4 ist dort die staerkste Familie (Rollen-/Verlaufstreue).
+        "ism_fragebogen":     "gemma4:31b",
     }
 
     def model_for_workflow(self, workflow: Optional[str]) -> str:

@@ -12,7 +12,7 @@ from app.middleware.audit import AuditMiddleware
 from app.middleware.activity import ActivityMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import health, style_embeddings, jobs, admin, testrun, recordings, workflow_manifest, selfcheck, feedback, activity
+from app.api import health, style_embeddings, jobs, admin, testrun, recordings, workflow_manifest, selfcheck, feedback, activity, ism
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -206,6 +206,7 @@ app.include_router(testrun.router,           prefix="/api", tags=["Tests"])
 app.include_router(recordings.router,        prefix="/api", tags=["Aufnahmen"])
 app.include_router(feedback.router,          prefix="/api", tags=["Feedback"])
 app.include_router(activity.router,           prefix="/api", tags=["Health"])
+app.include_router(ism.router,               prefix="/api", tags=["ISM"])
 app.include_router(workflow_manifest.router)
 
 @app.options("/{full_path:path}")

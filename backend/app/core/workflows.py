@@ -130,6 +130,23 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         expected_tokens=2800,
         color_hex="#8b1a1a",
     ),
+    WorkflowSpec(
+        key="ism_fragebogen",
+        label="ISM-Fragebogen",
+        short_label="ISM-Fragebogen",
+        is_structural=False,
+        word_limit=(50, 400),      # v19.18: nominal - Output ist JSON, kein
+                                   # Fliesstext. Dient nur als Fallback fuer
+                                   # generische Laengen-Konsumenten; der
+                                   # workflow-eigene QC (ism.py) prueft
+                                   # strukturell statt nach Wortzahl.
+        max_tokens=3500,           # 12 Items x (Frage + 2 Pole) + Begruessung/
+                                   # Verabschiedung + JSON-Overhead; grosszuegig
+                                   # damit die Grammatik-Dekodierung nie mid-
+                                   # object capt.
+        expected_tokens=900,
+        color_hex="#0A4B71",       # SNS-Faktorblau (BeispielOutput.xml)
+    ),
 )
 
 
@@ -158,6 +175,7 @@ except TypeError:
         "folgeverlaengerung",
         "akutantrag",
         "entlassbericht",
+        "ism_fragebogen",
     ]
 
 

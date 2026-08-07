@@ -107,4 +107,18 @@ Symptomatik-Entwicklung im Vergleich zu Aufnahme, entlastete Schutzanteile, verb
 Teil 3 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss, DARF NICHT FEHLEN):
 Konkrete Empfehlungen für die ambulante Weiterbehandlung: Therapieform, Schwerpunkte, Frequenz, Nachsorge.`;
 
-export { P_DOKU, P_ANAMNESE, P_BEFUND_VORLAGE, P_VERL, P_VERL_FOLGE, P_AKUT, P_ENTL };
+const P_ISM = `Erstelle aus dem Therapiegespräch einen individualisierten ISM-Fragebogen für das tägliche Prozessmonitoring des Klienten.
+
+ITEM-FORM:
+- Jedes Item ist eine Selbstauskunft in der Ich-Perspektive des Klienten, meist im Heute-Format ("Heute konnte ich ...", "Heute ist es mir gelungen ...", "Wie sehr hat ... heute noch eine Rolle gespielt?").
+- Verwende die eigene Sprache des Klienten aus dem Gespräch: seine Bilder, Metaphern, Anteile-Namen und Schlüsselformulierungen machen das Item wiedererkennbar und wirksam.
+- Jedes Item bekommt zwei individuelle Pol-Labels: der linke Pol (Wert 0) ist validierend und einladend formuliert – nie abwertend, nie beschämend ("ich übe noch...", "...und das ist ok"). Der rechte Pol (Wert 100) bestätigt die Ressource oder den gelungenen Schritt.
+
+TONALITÄT:
+- Hypnosystemisch-ressourcenorientiert: würdigend, einladend, humorvoll wo es zum Klienten passt.
+- Beschreibend statt pathologisierend; Entwicklungsrichtung statt Defizit.
+
+BEGRÜSSUNG UND VERABSCHIEDUNG:
+- Formuliere eine kurze, persönliche Begrüßung (1-2 Sätze) und Verabschiedung (1-2 Sätze) für den täglichen Fragebogen – warm, einladend, gerne mit einem Motiv aus dem Gespräch des Klienten.`;
+
+export { P_DOKU, P_ANAMNESE, P_BEFUND_VORLAGE, P_VERL, P_VERL_FOLGE, P_AKUT, P_ENTL, P_ISM };

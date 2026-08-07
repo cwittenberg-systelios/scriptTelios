@@ -190,6 +190,8 @@ async function startJob(workflow, prompt, userContent, files = {}) {
     fd.append("transcript", userContent);
   }
 
+  // v19.18 (PX): gewuenschte Itemanzahl fuer den ISM-Fragebogen (4-12).
+  if (files.ismNItems)      fd.append("ism_n_items",     String(files.ismNItems));
   if (files.selbst)         fd.append("selbstauskunft",  files.selbst);
   if (files.vorbef)         fd.append("vorbefunde",      files.vorbef);
   if (files.verlauf)        fd.append("verlaufsdoku",    files.verlauf);

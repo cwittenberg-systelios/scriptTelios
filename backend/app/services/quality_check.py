@@ -992,6 +992,11 @@ def run_quality_check(
       8. KOMPOSITA_KLEBEBUG
       9. SOURCE_FIDELITY        (nur wenn source_text uebergeben wird)
 
+    v19.18 (PX): workflow == "ism_fragebogen" wird VOR allen Fliesstext-
+    Checks an ism.run_ism_quality_check() delegiert - der Output ist JSON,
+    Wortlimit-/Fidelity-/Sektions-Checks wuerden dort nur Fehlalarme
+    produzieren.
+
     source_text:  optionale Quelle (Roh-Transkript + extrahierte Eingabedokumente)
                   fuer die Quellentreue-Pruefung. Leer -> Schritt 8 entfaellt.
     stichpunkte:  optionale Liste der Stichpunkte/Fokus-Themen (Feld 'bullets').
@@ -1016,6 +1021,15 @@ def run_quality_check(
 
     Idempotent (kein State, keine Seiteneffekte ausser logging).
     """
+    # v19.18 (PX): ISM-Fragebogen -> dedizierter struktureller QC. Der
+    # Output ist JSON, kein klinischer Fliesstext - Wortlimit-, Fidelity-
+    # und Sektions-Checks wuerden hier ausschliesslich Fehlalarme melden.
+    # Leerer Text faellt bewusst NICHT in diesen Zweig (das generische
+    # Leer-Issue unten ist auch fuer ISM die richtige Meldung).
+    if workflow == "ism_fragebogen" and text and text.strip():
+        from app.services.ism import run_ism_quality_check
+        return run_ism_quality_check(text)
+
     if not text or not text.strip():
         # Leerer Output -> hat sich vermutlich woanders schon als
         # Job-Error gezeigt; trotzdem geben wir ein critical-Issue mit zurueck

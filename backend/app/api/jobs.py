@@ -1300,6 +1300,145 @@ async def _run_transcript_stage1(
     return transkript_text, None, None
 
 
+# ── v19.18 (PX): ISM-Fragebogen-Generierung ──────────────────────────────────
+
+async def _run_ism_generation(
+    *,
+    job,
+    bands: dict,
+    transkript_text: str,
+    transcript_failure_reason: "str | None",
+    themen: "str | None",
+    instructions: str,
+    model: "str | None",
+    n_items_raw: "int | None",
+) -> dict:
+    """Kompletter Generierungspfad fuer workflow="ism_fragebogen".
+
+    Structured-Output-Call (Ollama format=JSON-Schema, Pattern Befund v19.7)
+    mit genau EINEM Retry bei unbrauchbarem JSON. Das validierte Ergebnis
+    wird als JSON-String in result["text"] persistiert - das Frontend parst
+    es fuer die editierbare Vorschau, der QualityCheck laeuft ueber den
+    ISM-Dispatch in quality_check.run_quality_check().
+
+    Bewusst KEINE Quell-Felder fuer den Fidelity-Check gesetzt
+    (source_verlauf_text etc.) - SOURCE_FIDELITY greift fuer ISM ohnehin
+    nicht (eigener QC), und Repair-Jobs sind fuer diesen Workflow nicht
+    vorgesehen (Editierung passiert direkt in der Vorschau).
+    """
+    from app.services.ism import (
+        build_ism_json_schema,
+        build_ism_system_prompt,
+        build_ism_user_content,
+        clamp_n_items,
+        validate_ism_payload,
+    )
+    from app.core.workflows import max_tokens_for as _max_tokens_for
+
+    # Quellen-Gate (Pattern G1/v19.16): ohne Gespraechsinhalt KEIN Fragebogen -
+    # ein aus Referenzwissen konfabulierter Fragebogen waere klinisch wertlos.
+    if not (transkript_text and transkript_text.strip()):
+        reason_suffix = f" {transcript_failure_reason}" if transcript_failure_reason else ""
+        raise RuntimeError(
+            "Kein Gespraechsinhalt verfuegbar - der ISM-Fragebogen wurde "
+            "NICHT erstellt, um erfundene Items zu verhindern. Bitte in P0 "
+            "ein Gespraech mit fertigem Transkript auswaehlen." + reason_suffix
+        )
+
+    n_items = clamp_n_items(n_items_raw)
+    system = build_ism_system_prompt(instructions, n_items)
+    user = build_ism_user_content(transkript_text, themen)
+    schema = build_ism_json_schema()
+    max_tok = _max_tokens_for("ism_fragebogen", fallback=3500)
+
+    lb = bands["llm"]
+    from app.core.workflows import expected_tokens_for as _expected_tokens_for
+    expected_tok = _expected_tokens_for("ism_fragebogen", fallback=900)
+
+    def _on_tok(n):
+        pct = lb[0] + (lb[1] - lb[0]) * min(1.0, n / expected_tok)
+        job.set_progress(int(pct), "KI-Generierung", f"{n} Wörter")
+
+    job.set_progress(lb[0], "KI-Generierung", f"ISM-Fragebogen ({n_items} Items)")
+
+    fb = None
+    result = None
+    last_errors: list[str] = []
+    for attempt in (1, 2):
+        if job._cancel_requested:
+            raise RuntimeError("__CANCELLED__")
+        _log_prompt(job.job_id, "ism_fragebogen", f"ism_attempt{attempt}",
+                    system, user)
+        result = await generate_text(
+            system, user, max_tokens=max_tok, model=model,
+            workflow="ism_fragebogen", on_progress=_on_tok,
+            response_format=schema,
+        )
+        _sd = result.get("structured_data")
+        _log_output(job.job_id, "ism_fragebogen", f"ism_attempt{attempt}",
+                    result.get("text") or "", result.get("telemetry"))
+        if result.get("structured_parse_error") or not isinstance(_sd, dict):
+            last_errors = ["LLM-Antwort war kein parsebares JSON-Objekt."]
+            logger.warning(
+                "ISM [%s] Versuch %d: JSON unbrauchbar (parse_error=%s, "
+                "type=%s)%s",
+                job.job_id, attempt, result.get("structured_parse_error"),
+                type(_sd).__name__,
+                " - Retry." if attempt == 1 else " - Abbruch.",
+            )
+            continue
+        fb, hard_errors = validate_ism_payload(_sd, n_items)
+        if fb is not None:
+            break
+        last_errors = hard_errors
+        logger.warning(
+            "ISM [%s] Versuch %d strukturell invalide: %s%s",
+            job.job_id, attempt, "; ".join(hard_errors[:3]),
+            " - Retry." if attempt == 1 else " - Abbruch.",
+        )
+
+    if fb is None:
+        raise RuntimeError(
+            "Der ISM-Fragebogen konnte nicht in gueltiger Struktur erzeugt "
+            "werden (auch nach Wiederholung). Details: "
+            + "; ".join(last_errors[:3])
+        )
+
+    if len(fb.items) != n_items:
+        # Weiche Abweichung: loggen, Ergebnis trotzdem liefern (D1c erlaubt
+        # Spielraum; der Therapeut editiert in der Vorschau).
+        logger.info(
+            "ISM [%s]: %d Items geliefert (angefordert: %d) - Ergebnis wird "
+            "trotzdem uebernommen.",
+            job.job_id, len(fb.items), n_items,
+        )
+
+    import json as _json
+    result_json = _json.dumps(
+        fb.model_dump(), ensure_ascii=False, indent=2
+    )
+
+    tel = result.get("telemetry") or {}
+    return {
+        "text":        result_json,
+        "befund_text": None,
+        "akut_text":   None,
+        "transcript":  transkript_text or None,
+        "model_used":  result.get("model_used"),
+        "style_info":  None,
+        "ocr_warnings": None,
+        "generation_telemetry": {
+            **tel,
+            "retry_used":      result.get("retry_used", False),
+            "degraded":        result.get("degraded", False),
+            "degraded_reason": result.get("degraded_reason"),
+            "structured_output": True,
+            "ism_n_items_requested": n_items,
+            "ism_n_items_delivered": len(fb.items),
+        },
+    }
+
+
 # ── Asynchrone Generierung ────────────────────────────────────────────────────
 
 @router.post("/jobs/generate")
@@ -1342,6 +1481,10 @@ async def create_generate_job(
     # es stillschweigend. P1/P2 mit Transkript-Datei liefen dadurch ohne
     # Quelle (Konfabulationspfad, siehe Job 58db7006 vom 2026-08-04).
     transcript_file:  Optional[UploadFile] = File(None, description="Transkript-Datei (.txt/.docx) als Gespraechsquelle fuer P1/P2"),
+    # v19.18 (PX): gewuenschte Itemanzahl fuer den ISM-Fragebogen (4-12,
+    # Default 6). Nur fuer workflow=ism_fragebogen relevant; andere
+    # Workflows ignorieren das Feld.
+    ism_n_items:      Annotated[Optional[int], Form(description="ISM-Fragebogen: Anzahl der Items (4-12, Default 6).")] = None,
 ):
     """
     Startet einen asynchronen Generierungs-Job.
@@ -1591,6 +1734,26 @@ async def create_generate_job(
         # Cancel-Check nach Transkription (teuerster Schritt)
         if job._cancel_requested:
             raise RuntimeError("__CANCELLED__")
+
+        # ── v19.18 (PX): ISM-Fragebogen - dedizierter Kurzpfad ───────────
+        # Der Workflow braucht NUR das Transkript (+ optionale Themen).
+        # Die gesamte nachfolgende Dokumenten-/Stil-/Namens-/Budget-
+        # Maschinerie ist fuer JSON-Output irrelevant bis kontraproduktiv
+        # (Stilbeispiele aus der pgvector-Bibliothek wuerden klinischen
+        # Fliesstext-Stil in einen Fragebogen-Prompt injizieren) - deshalb
+        # frueher Return, Pattern analog dem Anamnese-Sonderpfad, aber
+        # vollstaendig gekapselt in _run_ism_generation().
+        if workflow == "ism_fragebogen":
+            return await _run_ism_generation(
+                job=job,
+                bands=bands,
+                transkript_text=transkript_text,
+                transcript_failure_reason=transcript_failure_reason,
+                themen=bullets,
+                instructions=instructions,
+                model=model,
+                n_items_raw=ism_n_items,
+            )
 
         # ── 2. Dokumente extrahieren (jedes Feld → eigene Variable) ──
 

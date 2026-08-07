@@ -962,6 +962,35 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Konkrete Empfehlungen für die ambulante Weiterbehandlung: "
         "Therapieform, Schwerpunkte, Frequenz, Nachsorge."
     ),
+
+    # v19.18 (PX): ISM-Fragebogen - editierbare inhaltliche Anweisungen.
+    # Der Pflichtkern (JSON-Form, Faktorregeln, Quellenregel, Datenschutz)
+    # liegt in BASE_PROMPTS["ism_fragebogen"] und ist NICHT editierbar.
+    "ism_fragebogen": (
+        "Erstelle aus dem Therapiegespräch einen individualisierten "
+        "ISM-Fragebogen für das tägliche Prozessmonitoring des Klienten.\n\n"
+        "ITEM-FORM:\n"
+        "- Jedes Item ist eine Selbstauskunft in der Ich-Perspektive des "
+        "Klienten, meist im Heute-Format ('Heute konnte ich ...', 'Heute ist "
+        "es mir gelungen ...', 'Wie sehr hat ... heute noch eine Rolle "
+        "gespielt?').\n"
+        "- Verwende die eigene Sprache des Klienten aus dem Gespräch: seine "
+        "Bilder, Metaphern, Anteile-Namen und Schlüsselformulierungen machen "
+        "das Item wiedererkennbar und wirksam.\n"
+        "- Jedes Item bekommt zwei individuelle Pol-Labels: der linke Pol "
+        "(Wert 0) ist validierend und einladend formuliert - nie abwertend, "
+        "nie beschämend ('ich übe noch...', '...und das ist ok'). Der rechte "
+        "Pol (Wert 100) bestätigt die Ressource oder den gelungenen Schritt.\n\n"
+        "TONALITÄT:\n"
+        "- Hypnosystemisch-ressourcenorientiert: würdigend, einladend, "
+        "humorvoll wo es zum Klienten passt.\n"
+        "- Beschreibend statt pathologisierend; Entwicklungsrichtung statt "
+        "Defizit.\n\n"
+        "BEGRÜSSUNG UND VERABSCHIEDUNG:\n"
+        "- Formuliere eine kurze, persönliche Begrüßung (1-2 Sätze) und "
+        "Verabschiedung (1-2 Sätze) für den täglichen Fragebogen - warm, "
+        "einladend, gerne mit einem Motiv aus dem Gespräch des Klienten."
+    ),
 }
 
 
@@ -1333,6 +1362,41 @@ BASE_PROMPTS: dict[str, str] = {
     ),
 
     "akutantrag": BASE_PROMPT_AKUTANTRAG,
+
+    # v19.18 (PX): ISM-Fragebogen - Pflichtkern (NICHT editierbar).
+    # Wird von ism.build_ism_system_prompt() konsumiert; build_system_prompt
+    # kann den Workflow ebenfalls bauen (Registry-Konsistenz/Tests), der
+    # Job-Pfad laeuft aber ueber den dedizierten Structured-Output-Builder.
+    "ism_fragebogen": (
+        "AUSGABEFORM (verbindlich): Antworte AUSSCHLIESSLICH mit einem "
+        "JSON-Objekt der Form {\"begruessung\": \"...\", \"verabschiedung\": "
+        "\"...\", \"items\": [{\"faktor_id\": 0, \"frage\": \"...\", "
+        "\"pol_min\": \"...\", \"pol_max\": \"...\"}, ...]}. Kein Text vor "
+        "oder nach dem JSON, kein Markdown.\n\n"
+        "FAKTORREGELN:\n"
+        "- faktor_id ist eine Ganzzahl 0-5 gemäß der Faktorliste.\n"
+        "- Faktor 2 (Hindernisse): entweder belastungsseitig formulieren "
+        "(hohes Rating = hohe Belastung) ODER auf die Ressourcenseite drehen "
+        "(hohes Rating = gelungener Umgang) - die Pol-Labels müssen die "
+        "gewählte Richtung eindeutig machen.\n"
+        "- Pole: pol_min gehört zum Wert 0, pol_max zum Wert 100. Beide kurz "
+        "(wenige Worte bis ein Satz), unterscheidbar, in der Sprache des "
+        "Klienten.\n\n"
+        "PERSPEKTIVE: Ich-Perspektive des Klienten. NIEMALS Wir-Form, "
+        "niemals Therapeuten- oder Berichtssprache in Items oder Polen.\n\n"
+        "QUELLENREGEL: Jedes Item MUSS auf konkrete Inhalte des Gesprächs "
+        "zurückführbar sein (Anliegen, Ressourcen, Hindernisse, Muster, "
+        "Formulierungen des Klienten). NIEMALS Themen, Symptome, Anteile "
+        "oder Metaphern erfinden, die nicht im Gespräch vorkommen. Liefert "
+        "das Gespräch für einen Faktor nichts Tragfähiges, bleibt er ohne "
+        "Item.\n\n"
+        "DATENSCHUTZ: Keine Nachnamen in Items, Polen, Begrüßung oder "
+        "Verabschiedung. Der Vorname darf in Begrüßung/Verabschiedung "
+        "verwendet werden, wenn er im Gespräch fällt (Duz-/Siez-Form wie im "
+        "Gespräch); im Zweifel neutrale Anrede ohne Namen. Keine Namen "
+        "dritter Personen - stattdessen Rollenbezeichnungen (z.B. 'mein "
+        "Sohn', 'meine Kollegin')."
+    ),
 }
 
 

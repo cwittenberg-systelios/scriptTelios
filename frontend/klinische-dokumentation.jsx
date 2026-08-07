@@ -7,6 +7,7 @@ import { P2, P2b } from "./src/panels/P2.jsx";
 import { P3, P3b } from "./src/panels/P3.jsx";
 import { P4 } from "./src/panels/P4.jsx";
 import { P5 } from "./src/panels/P5.jsx";
+import { P6 } from "./src/panels/P6.jsx";
 import { clearActiveJob, friendlyError, loadActiveJob } from "./src/shared.js";
 import { useDndGuard } from "./src/dnd-guard.jsx";
 import { S, useHeadStyle } from "./src/styles.jsx";
@@ -20,6 +21,7 @@ const NAVS = [
   { id: "p3",  n: "3",  title: "Verlängerungsantrag",    sub: "Kostenübernahme" },
   { id: "p3b", n: "3b", title: "Folgeverlängerung",      sub: "Anschluss-Verlängerung" },
   { id: "p4",  n: "4",  title: "Entlassbericht",         sub: "Abschlussbericht" },
+  { id: "p6",  n: "6",  title: "ISM-Fragebogen",         sub: "SNS-Prozessmonitoring" },
   { id: "p5",  n: "✦",  title: "Stilprofil-Bibliothek",  sub: "Beispiele verwalten" },
 ];
 
@@ -263,6 +265,7 @@ export default function App() {
         <div style={{display: page === "p3"  ? "" : "none"}}><P3  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
         <div style={{display: page === "p3b" ? "" : "none"}}><P3b toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
         <div style={{display: page === "p4"  ? "" : "none"}}><P4  toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
+        <div style={{display: page === "p6" ? "" : "none"}}><P6 toast={toast} resumeJob={resumeJob} onResumed={() => setResumeJob(null)} /></div>
         <div style={{display: page === "p5" ? "" : "none"}}><P5
           toast={toast}
           liste={stilListe}

@@ -360,6 +360,7 @@ const JOB_MODEL_RECOMMENDATION = {
   akutantrag:         "mistral",
   verlaengerung:      "mistral",
   folgeverlaengerung: "mistral",
+  ism_fragebogen:     "gemma",
 };
 
 function modelFamily(name) {
