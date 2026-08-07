@@ -19,6 +19,24 @@ WARUM /api/health UND /api/selfcheck AUSGENOMMEN SIND:
 Die pollt der Worker selbst (Selfcheck alle 15 min, Health-Warteschleife alle
 30 s beim Start). Wuerden sie als Aktivitaet zaehlen, waere der Pod nie idle
 und der Auto-Stopp wuerde nie ausloesen.
+
+WARUM GET NICHT ZAEHLT (v19.10c):
+Das Makro pollt im Hintergrund, ohne dass jemand davorsitzt — P1 laedt die
+Job-Liste alle 5 s (P1.jsx:127), P0 die Aufnahmen alle 30 s. Ein offener Tab
+hat den Idle-Zaehler damit dauerhaft nahe 0 gehalten: der Stopp nach 18:00
+loeste nie aus, erst die Nachtabschaltung um 23:00 griff (die prueft keine
+Aktivitaet). Genau das sollte der Auto-Stopp verhindern.
+
+Statuspolling ist Maschinenverkehr, kein Nutzungssignal. Die Trennung laeuft
+deshalb ueber die HTTP-Methode: GET fragt ab, alles andere veraendert etwas
+und ist damit eine bewusste Handlung — Job starten (POST /jobs/generate),
+Aufnahme hochladen (POST /recordings), Reparatur, Loeschen, Retry, und der
+Aufnahme-Heartbeat (POST /activity/heartbeat, bewusst POST statt GET).
+
+Bewusst in Kauf genommen: GET /jobs/{id}/transcript und /download sind echte
+Benutzung, zaehlen aber nicht mehr. Folge ist hoechstens, dass der Pod 30 min
+nach dem letzten Abruf statt nach dem letzten Klick herunterfaehrt — waehrend
+eine Aufnahme laeuft, haelt ohnehin der Heartbeat dagegen.
 """
 import time
 
@@ -50,9 +68,14 @@ def idle_seconds() -> float:
     return max(0.0, time.time() - _last_activity)
 
 
+# Nur diese Methoden gelten als Benutzung. GET/HEAD/OPTIONS sind Abfrage bzw.
+# Preflight und werden vom Frontend im Sekundentakt automatisch erzeugt.
+_ACTIVE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
 class ActivityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # OPTIONS sind Preflights, keine Nutzung.
-        if request.method != "OPTIONS" and request.url.path not in _IGNORED_PATHS:
+        if (request.method in _ACTIVE_METHODS
+                and request.url.path not in _IGNORED_PATHS):
             touch()
         return await call_next(request)
