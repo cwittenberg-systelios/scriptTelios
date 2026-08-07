@@ -45,13 +45,47 @@ const P6_DRAFT_DEFAULT = {
 };
 
 // ── Editierbare Item-Zeile mit Slider-Vorschau ──────────────────────────────
+// Kleines Papierkorb-Icon (inline SVG - Codebase nutzt keine Icon-Lib).
+function TrashIcon({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+         strokeLinejoin="round" aria-hidden="true">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6M14 11v6" />
+      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+    </svg>
+  );
+}
+
 function IsmItemEditor({ item, index, onChange, onDelete }) {
   const set = (patch) => onChange(index, patch);
+  function confirmDelete() {
+    const kurz = (item.frage || "").trim();
+    const label = kurz.length > 60 ? kurz.slice(0, 60) + "\u2026" : kurz || "(ohne Frage)";
+    if (!window.confirm(`Item entfernen?\n\n\u201E${label}\u201C`)) return;
+    onDelete(index);
+  }
   return (
     <div style={{
       border: "1px solid var(--st-gray-border)", borderRadius: 6,
       padding: "10px 12px", marginBottom: 10, background: "var(--st-bg)",
+      position: "relative",
     }}>
+      <button
+        onClick={confirmDelete}
+        title="Item entfernen"
+        aria-label="Item entfernen"
+        style={{ position: "absolute", top: 6, right: 6, border: "none",
+                 background: "none", cursor: "pointer",
+                 color: "var(--st-text-soft)", padding: 2, lineHeight: 1,
+                 display: "flex", alignItems: "center" }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "#c0392b")}
+        onMouseLeave={(e) => (e.currentTarget.style.color = "var(--st-text-soft)")}
+      >
+        <TrashIcon />
+      </button>
       <textarea
         rows={2}
         value={item.frage}
@@ -59,7 +93,7 @@ function IsmItemEditor({ item, index, onChange, onDelete }) {
         placeholder="Heute konnte ich ..."
         style={{ width: "100%", fontWeight: 600, fontSize: 13, resize: "vertical",
                  border: "1px solid transparent", background: "transparent",
-                 padding: "2px 4px" }}
+                 padding: "2px 4px", paddingRight: 26 }}
       />
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
         <input
@@ -88,12 +122,6 @@ function IsmItemEditor({ item, index, onChange, onDelete }) {
                    color: "var(--st-text-soft)", background: "var(--st-bg)",
                    textAlign: "right" }}
         />
-        <button
-          onClick={() => onDelete(index)}
-          title="Item entfernen"
-          style={{ border: "none", background: "none", cursor: "pointer",
-                   color: "var(--st-text-soft)", fontSize: 14, padding: "0 2px" }}
-        >✕</button>
       </div>
     </div>
   );
