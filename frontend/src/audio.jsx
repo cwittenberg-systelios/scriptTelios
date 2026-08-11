@@ -361,8 +361,23 @@ function AudioInput({ file, onFile }) {
     onFile(f);
   }
 
+  // v19.18 (U1): In-flight-Guard - st-page-changed, st-recordings-changed und
+  // das 30s-Polling koennen loadP0 ueberlappend ausloesen. Refs statt State
+  // in den Bedingungen, weil loadP0 aus []-Dep-Effekten mit der
+  // Erst-Render-Closure aufgerufen wird (stale p0List).
+  const p0InFlightRef = useRef(false);
+  const p0HasDataRef  = useRef(false);
+
   async function loadP0() {
-    setP0Loading(true);
+    if (p0InFlightRef.current) return;
+    p0InFlightRef.current = true;
+    // v19.18 (U1): Stale-while-revalidate. 'Lade Aufnahmen…' nur beim
+    // Erststart ohne Daten anzeigen - eine vorhandene Liste bleibt waehrend
+    // des Refreshs stehen. Vorher ersetzte JEDER Reload (z.B. beim
+    // Panelwechsel) die Liste durch den Lade-Hinweis; war der Server durch
+    // eine laufende Transkription zaeh, wirkte die Seite 30+ s 'kaputt'
+    // (Nutzerfeedback 2026-08-11).
+    if (!p0HasDataRef.current) setP0Loading(true);
     setP0Error(null);
     try {
       const url = `${getApiBase()}/recordings`;
@@ -388,10 +403,12 @@ function AudioInput({ file, onFile }) {
         _pendingLabels[r.id] !== undefined ? { ...r, label: _pendingLabels[r.id] } : r
       );
       setP0List(withLabels.filter(r => r.status !== "deleted"));
+      p0HasDataRef.current = true;
     } catch (e) {
       setP0Error("Aufnahmen konnten nicht geladen werden.");
     } finally {
       setP0Loading(false);
+      p0InFlightRef.current = false;
     }
   }
 

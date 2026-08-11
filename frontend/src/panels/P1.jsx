@@ -122,10 +122,24 @@ function P1({ toast, resumeJob, onResumed }) {
     }
   }, []);
 
+  // v19.18 (U2): Poll-Intervall dynamisch. 5 s nur solange ein Job laeuft
+  // (pending/running) - sonst 30 s. Das bedingungslose 5-s-Polling erzeugte
+  // Dauer-Traffic auf /jobs?workflow=dokumentation und wirkte nach einem
+  // Job-Fehler, als liefe etwas weiter (Nutzerfeedback 2026-08-11).
+  const jobsRef = useRef([]);
+  useEffect(() => { jobsRef.current = jobs; }, [jobs]);
   useEffect(() => {
     reloadJobs();
-    const id = setInterval(reloadJobs, 5000);
-    return () => clearInterval(id);
+    let id = null;
+    const schedule = () => {
+      const active = (jobsRef.current || []).some(
+        j => j.status === "pending" || j.status === "running"
+      );
+      id = setTimeout(async () => { await reloadJobs(); schedule(); },
+                      active ? 5000 : 30000);
+    };
+    schedule();
+    return () => { if (id) clearTimeout(id); };
   }, [reloadJobs]);
 
   // ── B2 (F2): Auto-Selektion eines laufenden Jobs nach F5/Neustart ────

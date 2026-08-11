@@ -831,10 +831,16 @@ class JobQueue:
             job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)
             if job._cancel_requested or "__CANCELLED__" in str(e):
                 job.status = JobStatus.CANCELLED.value
+                # v19.18 (U3): eingefrorene Zwischenphase raeumen.
+                job.set_progress(job.progress, "Abgebrochen", "")
                 logger.info("Job abgebrochen: %s (%s) in %.1fs", job.job_id, job.workflow, job.duration_s)
             else:
                 job.status    = JobStatus.ERROR.value
                 job.error_msg = str(e)
+                # v19.18 (U3): Ohne Aufraeumen bleibt die letzte Phase (z.B.
+                # 'Warte auf Transkription', 5%) im error-Zustand stehen und
+                # suggeriert, der Job liefe weiter (Nutzerfeedback 2026-08-11).
+                job.set_progress(job.progress, "Fehler", "")
                 logger.error("Job fehlgeschlagen: %s (%s) in %.1fs – %s", job.job_id, job.workflow, job.duration_s, e)
         finally:
             job.finished_at = datetime.now(timezone.utc)
