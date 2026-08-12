@@ -205,6 +205,17 @@ export default function App() {
         ))}
 
         <div className="sidebar-footer">
+          {/* AI-Act-Transparenzhinweis (Art. 50 Abs. 1): permanenter Systemhinweis.
+              Bewusst KEINE Kennzeichnung pro Dokument — Krankenakte/Kassenantraege sind
+              keine Veroeffentlichung i.S.v. Art. 50 Abs. 4; fachliche Pruefung erfolgt
+              stets durch die behandelnde Person (Nachweis via job_id in prompts.log). */}
+          <div style={{
+            background:"rgba(255,255,255,0.06)", border:"1px solid rgba(255,255,255,0.12)",
+            borderRadius:4, padding:"8px 10px", marginBottom:8,
+            fontSize:10.5, color:"rgba(255,255,255,0.55)", lineHeight:1.5
+          }}>
+            KI-Entw&#252;rfe — fachliche Pr&#252;fung erforderlich.
+          </div>
           <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",lineHeight:1.6,marginBottom:10}}>
             scriptTelios · v0.1 · sysTelios Klinik f&#252;r Psychosomatik und Psychotherapie
           </div>

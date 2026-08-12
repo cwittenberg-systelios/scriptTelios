@@ -138,7 +138,8 @@ class Job(Base):
 class Recording(Base):
     """
     P0-Aufnahme: Audiodatei + Transkript, persistent auf /workspace/recordings.
-    Löschung läuft über externe Datenschutz-Prozesse (deleted_at Soft-Delete).
+    Nutzer-Löschung via deleted_at (Soft-Delete); harte Löschung inkl.
+    Transkript nach 90 Tagen durch retention.cleanup_recordings_db (§6a).
 
     v18: therapeut_id hinzugefügt (Migration läuft automatisch beim
     Server-Start via scripts/schema.sql). Jeder Therapeut sieht nur eigene Aufnahmen.

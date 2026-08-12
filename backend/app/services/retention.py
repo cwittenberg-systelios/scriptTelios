@@ -31,6 +31,12 @@ RETENTION = {
     "style_embeddings":  365 * 24 * 3600,          # 1 Jahr Inaktivität
     "audit_log":          90 * 24 * 3600,          # 90 Tage
     "performance_log":   180 * 24 * 3600,          # 180 Tage
+    # §6a Einwilligung v1.1 (Qualitaetssicherung Einfuehrungsphase):
+    # Verarbeitungsdaten mit Patienteninhalten (Jobs inkl. Transkripten/
+    # Entwuerfen, Recording-Zeilen inkl. DB-Transkript) werden hoechstens
+    # 90 Tage vorgehalten, danach geloescht. Frist NICHT verlaengern ohne
+    # Anpassung der Einwilligungserklaerung.
+    "qa_artifacts":       90 * 24 * 3600,          # 90 Tage
 }
 
 
@@ -213,6 +219,77 @@ async def cleanup_old_logs() -> int:
     return count
 
 
+async def cleanup_jobs_db() -> int:
+    """§6a (Einwilligung v1.1): Löscht Job-Zeilen älter als RETENTION['qa_artifacts'].
+
+    Betrifft alle Inhalts-Spalten (result_text, result_transcript,
+    transcript_summary_text, source_*, Telemetrie). ISM-Jobs (P6) sind
+    Jobs wie alle anderen und werden mit erfasst. Massgeblich ist
+    created_at — finished_at kann bei abgebrochenen Jobs NULL sein.
+    """
+    from app.core.database import async_session_factory
+    from app.models.db import Job
+    from sqlalchemy import delete
+    from datetime import timezone as _tz
+    cutoff = datetime.now(tz=_tz.utc) - timedelta(seconds=RETENTION["qa_artifacts"])
+    count = 0
+    try:
+        async with async_session_factory() as db:
+            result = await db.execute(delete(Job).where(Job.created_at < cutoff))
+            count = result.rowcount or 0
+            await db.commit()
+    except Exception as e:
+        logger.warning("Jobs-DB-Cleanup fehlgeschlagen: %s", e)
+    if count:
+        logger.info("Retention §6a: %d Jobs älter als %d Tage gelöscht",
+                    count, RETENTION["qa_artifacts"] // 86400)
+    return count
+
+
+async def cleanup_recordings_db() -> int:
+    """§6a (Einwilligung v1.1): Löscht Recording-Zeilen älter als RETENTION['qa_artifacts'].
+
+    Anders als cleanup_recordings_audio (entfernt nur die Audiodatei nach
+    24h, Transkript bleibt) wird hier die komplette DB-Zeile inklusive
+    Transkript hart gelöscht — auch Soft-Deleted-Zeilen (deleted_at
+    gesetzt), die bisher unbegrenzt liegen blieben. Etwaige noch
+    vorhandene Audiodateien werden vor dem DB-Delete mit entfernt.
+    """
+    from app.core.files import recordings_dir as _recordings_dir
+    from app.core.database import async_session_factory
+    from app.models.db import Recording
+    from sqlalchemy import select, delete
+    from datetime import timezone as _tz
+    cutoff = datetime.now(tz=_tz.utc) - timedelta(seconds=RETENTION["qa_artifacts"])
+    count = 0
+    try:
+        async with async_session_factory() as db:
+            result = await db.execute(
+                select(Recording.filename).where(Recording.created_at < cutoff)
+            )
+            old_filenames = [row.filename for row in result if row.filename]
+            res = await db.execute(delete(Recording).where(Recording.created_at < cutoff))
+            count = res.rowcount or 0
+            await db.commit()
+        # Dateireste erst nach erfolgreichem Commit entfernen — schlaegt das
+        # DB-Delete fehl, bleiben Datei und Zeile konsistent beisammen.
+        try:
+            rec_dir = _recordings_dir()
+            for filename in old_filenames:
+                try:
+                    (rec_dir / filename).unlink(missing_ok=True)
+                except Exception as e:
+                    logger.warning("recordings_db Datei-Cleanup %s: %s", filename, e)
+        except Exception as e:
+            logger.warning("recordings_db Verzeichniszugriff: %s", e)
+    except Exception as e:
+        logger.warning("Recordings-DB-Cleanup fehlgeschlagen: %s", e)
+    if count:
+        logger.info("Retention §6a: %d Recordings (inkl. Transkript) älter als %d Tage gelöscht",
+                    count, RETENTION["qa_artifacts"] // 86400)
+    return count
+
+
 async def retention_task():
     """
     Periodischer Task: läuft alle 6 Stunden alle Cleanup-Funktionen durch.
@@ -225,6 +302,8 @@ async def retention_task():
             await cleanup_uploads()
             await cleanup_inactive_style_embeddings()
             await cleanup_old_logs()
+            await cleanup_jobs_db()
+            await cleanup_recordings_db()
         except asyncio.CancelledError:
             logger.info("Retention-Task gestoppt")
             return

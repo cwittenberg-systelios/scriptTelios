@@ -16,8 +16,10 @@ Design-Entscheidungen (Cars10, 2026-07-21):
 - Job-Anreicherung: kompakte Metadaten + Telemetrie, aber KEINE Text-Blobs
   (result_text, source_*) — die stehen bereits in prompts.log/DB und würden
   feedback.log nur aufblähen.
-- Rotation: täglich wie prompts.log, aber backupCount=3650 (~10 Jahre) —
-  Feedback ist Auswertungsdatenbestand und soll nicht nach 14 Tagen verfallen.
+- Rotation: täglich wie prompts.log, backupCount=90 Tage (§6a Einwilligung
+  v1.1, Retention-Sprint 2026-08-12; vorher 3650). Der Freitext kann
+  Patientenbezug enthalten — Auswertung muss innerhalb der 90-Tage-Frist
+  erfolgen oder anonymisiert exportiert werden.
 - Push (optional, FEEDBACK_NOTIFY): fire-and-forget im Hintergrund, ohne
   Freitext (DSGVO — siehe feedback_notify.py). Scheitert der Push, ist das
   für den POST irrelevant.
@@ -41,8 +43,8 @@ from app.services.feedback_notify import notify_feedback_background
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/feedback", tags=["Feedback"])
 
-# ── feedback.log — dedizierter Logger, Tagesrotation, lange Aufbewahrung ──
-_FEEDBACK_LOG_BACKUP_DAYS = 3650
+# ── feedback.log — dedizierter Logger, Tagesrotation, 90 Tage (§6a) ──
+_FEEDBACK_LOG_BACKUP_DAYS = 90
 
 _feedback_logger = logging.getLogger("systelios.feedback")
 
