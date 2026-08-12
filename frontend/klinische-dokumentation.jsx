@@ -155,29 +155,48 @@ export default function App() {
   // NICHT wenn die URL aus dem Confluence-Macro kommt (data-api)
   const firstRun = !backendUrl && !urlFromMacro;
 
-  // Backend-Erreichbarkeit prüfen (alle 30 Sekunden)
-  const [backendOffline, setBackendOffline] = useState(false);
+  // Backend-Status prüfen (alle 30 Sekunden) — nutzt /selfcheck statt nur
+  // /health, damit die Sidebar nicht nur "erreichbar" sondern den echten
+  // Aggregatzustand aller Subsysteme (ollama/models/db/disk/gpu) zeigen kann.
+  //   serverStatus: null (noch unbekannt) | "ok" | "degraded" | "down"
+  const [serverStatus, setServerStatus] = useState(null);
   const wasOfflineRef = useRef(false);
   useEffect(() => {
     if (!backendUrl) return;
     let cancelled = false;
     const check = () => {
-      apiFetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(5000) })
-        .then(r => {
+      apiFetch(`${getApiBase()}/selfcheck`, { signal: AbortSignal.timeout(8000) })
+        .then(async r => {
           if (cancelled) return;
-          const offline = !r.ok;
-          setBackendOffline(offline);
+          if (!r.ok) {
+            setServerStatus("down");
+            wasOfflineRef.current = true;
+            return;
+          }
+          let status = "down";
+          try {
+            const data = await r.json();
+            status = (data && data.status) || "down";
+          } catch { status = "down"; }
+          setServerStatus(status);
+          const offline = status === "down";
+          // Bestehende Listener (z.B. Recording-Reload) erwarten st-health-ok
+          // beim Übergang von offline -> wieder erreichbar. Beibehalten.
           if (!offline && wasOfflineRef.current) {
             window.dispatchEvent(new CustomEvent("st-health-ok"));
           }
           wasOfflineRef.current = offline;
         })
-        .catch(() => { if (!cancelled) { setBackendOffline(true); wasOfflineRef.current = true; } });
+        .catch(() => { if (!cancelled) { setServerStatus("down"); wasOfflineRef.current = true; } });
     };
     check();
     const interval = setInterval(check, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [backendUrl]);
+
+  // Rückwärtskompatibler Alias: mehrere Stellen (Overlay-Schließen etc.)
+  // fragen weiterhin "ist der Server offline?".
+  const backendOffline = serverStatus === "down";
 
   return (
     <div id="st-root" className="st-scope" style={{
@@ -191,6 +210,40 @@ export default function App() {
 
       <div className="sidebar">
         <div className="sidebar-section-label">KI-Dokumentation</div>
+
+        {/* Server-Statusnotiz — oberste Stelle der Seitenleiste.
+            Quelle: /selfcheck-Aggregat (serverStatus). Drei Zustaende:
+              ok       -> gruen  ("Server bereit — alle Systeme aktiv")
+              degraded -> gelb   (erreichbar, aber Modelle/Disk nicht ok)
+              down     -> rot    ("Server nicht erreichbar")
+            null (erster Check ausstehend) -> kein Kasten. */}
+        {serverStatus === "ok" && (
+          <div style={{
+            background:"rgba(46,125,50,0.28)", border:"1px solid rgba(76,175,80,0.55)",
+            borderRadius:4, padding:"8px 10px", marginBottom:10,
+            fontSize:11, color:"rgba(200,240,200,0.95)", lineHeight:1.5
+          }}>
+            ● Server bereit — alle Systeme aktiv
+          </div>
+        )}
+        {serverStatus === "degraded" && (
+          <div style={{
+            background:"rgba(180,130,20,0.28)", border:"1px solid rgba(230,170,40,0.55)",
+            borderRadius:4, padding:"8px 10px", marginBottom:10,
+            fontSize:11, color:"rgba(245,225,170,0.95)", lineHeight:1.5
+          }}>
+            ● Server l&#228;uft — einzelne Dienste eingeschr&#228;nkt
+          </div>
+        )}
+        {serverStatus === "down" && (
+          <div style={{
+            background:"rgba(168,40,30,0.3)", border:"1px solid rgba(168,40,30,0.6)",
+            borderRadius:4, padding:"8px 10px", marginBottom:10,
+            fontSize:11, color:"rgba(255,200,200,0.9)", lineHeight:1.5
+          }}>
+            ⚠ Server nicht erreichbar
+          </div>
+        )}
 
         {NAVS.map((n) => (
           <div key={n.id} className={"nav-item" + (page === n.id ? " active" : "")} onClick={() => setPage(n.id)}>
@@ -219,15 +272,6 @@ export default function App() {
           <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",lineHeight:1.6,marginBottom:10}}>
             scriptTelios · v0.1 · sysTelios Klinik f&#252;r Psychosomatik und Psychotherapie
           </div>
-          {backendOffline && (
-            <div style={{
-              background:"rgba(168,40,30,0.3)", border:"1px solid rgba(168,40,30,0.6)",
-              borderRadius:4, padding:"8px 10px", marginBottom:8,
-              fontSize:11, color:"rgba(255,200,200,0.9)", lineHeight:1.5
-            }}>
-              ⚠ Server nicht erreichbar
-            </div>
-          )}
           <button
             onClick={() => setShowSettings(true)}
             style={{
