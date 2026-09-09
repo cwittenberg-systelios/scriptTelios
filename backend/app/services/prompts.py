@@ -625,10 +625,11 @@ Alle Inhalte MÜSSEN aus der Selbstauskunft des AKTUELLEN Patienten stammen.
 Steht eine Information NICHT in der Selbstauskunft: schreibe 'nicht erhoben'.
 
 Beispiel-Einstieg (NUR als Stilreferenz):
-'[Patient/in] stellt sich mit dem Hauptanliegen vor, ... . Die Symptomatik begann vor
-etwa ... Monaten im Kontext von ... . Seither habe sich ... . Vorbehandlungen umfassen
-... . Familiär sei bekannt, dass ... . Beruflich sei sie ... . Der Schlaf sei ...,
-der Appetit ... . An Ressourcen nennt sie ... .'
+'[Patient/in] stellt sich mit dem Hauptanliegen vor, ... . Die Symptomatik habe vor
+etwa ... Monaten im Kontext von ... begonnen. Seither habe sich ... . Vorbehandlungen
+habe es in Form von ... gegeben. Familiär sei bekannt, dass ... . Beruflich sei sie ... .
+Der Schlaf sei ..., der Appetit ... . An Ressourcen nenne sie ... .'
+(Indirekte Rede im Konjunktiv I - siehe SPRACHFORM.)
 
 WICHTIG: Schreibe KEINE Überschriften wie 'Vorstellungsanlass:', 'Aktuelle Erkrankung:' etc.
 Alle Inhalte müssen von DIESEM Patienten stammen – KEINE Inhalte aus dem Beispiel übernehmen.\
@@ -1187,6 +1188,26 @@ BASE_PROMPTS: dict[str, str] = {
         "auslösende Ereignisse, Testwerte, Zitate\n"
         # v13: LÄNGE-Zeile entfernt - Längenanker steht zentral via resolve_length_anchor()
         "- Schreibe ausführliche, zusammenhängende Absätze (KEINE kurzen Stichwort-Absätze) als Fließtext\n\n"
+        # v19.19 (A1): Konjunktiv I als harte Regel. Zwei Therapeuten-
+        # Feedbacks (e.krause 07.08. Rating 1, c.saur 20.08.) forderten die
+        # indirekte Rede; Messung ueber 6 Log-Outputs: 4x NULL Konjunktiv-
+        # formen (mistral-small3.2). Bisher stand die Regel nur in
+        # Checklisten/Kommentaren - nicht im Pflichtkern.
+        "SPRACHFORM (verbindlich): Alle Angaben, die auf Aussagen der Patientin/"
+        "des Patienten beruhen (Selbstauskunft, Aufnahmegespräch), werden in "
+        "INDIREKTER REDE im KONJUNKTIV I wiedergegeben - das kennzeichnet sie "
+        "als Selbstbericht, nicht als geprüften Befund.\n"
+        "  RICHTIG: 'Sie berichtet, sie fühle sich seit Monaten erschöpft und "
+        "habe den Kontakt zu Freunden weitgehend abgebrochen. Ihre Mutter sei "
+        "früh verstorben; der Vater habe viel getrunken.'\n"
+        "  FALSCH:  'Sie fühlt sich seit Monaten erschöpft und hat den Kontakt "
+        "zu Freunden abgebrochen. Ihre Mutter ist früh verstorben.'\n"
+        "Rahmenverben (berichtet, schildert, gibt an, beschreibt) stehen im "
+        "Indikativ, der Inhalt danach im Konjunktiv I (sei, habe, fühle, könne, "
+        "müsse, wolle, leide, nehme, arbeite, lebe ...). Wo Konjunktiv I mit dem "
+        "Indikativ formgleich wäre (z.B. 'sie hätten' statt 'sie haben'), ist "
+        "Konjunktiv II zulässig. Nur objektiv belegte Fakten aus Vorbefunden "
+        "oder die ICD-Diagnosen stehen im Indikativ.\n\n"
         # v13 Iteration C: Anamnese-Längen-Disziplin verstärken.
         # Bisheriges Problem: Anamnese-Modell ignorierte ZIELLÄNGE strukturell.
         # an-02 produzierte 633w bei Max=418w (51% über Limit).

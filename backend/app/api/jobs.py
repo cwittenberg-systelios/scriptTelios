@@ -1136,6 +1136,15 @@ async def _run_verlauf_stage1(
             return stage1_result["summary"], audit
         except Exception as e:
             # Fallback: Original-Verlauf behalten, Audit-Eintrag mit Begruendung
+            # v19.19 (S3): Fehlschlag sichtbar im prompts.log (C2 loggte nur
+            # Erfolge -> die Stage-1-Ausfaelle der groessten EB-Jobs waren
+            # unsichtbar).
+            try:
+                _log_output(job.job_id, workflow, "stage1_verlauf",
+                            f"[STAGE 1 FEHLGESCHLAGEN - Fallback Roh-Verlauf] "
+                            f"{type(e).__name__}: {str(e)[:300]}", None)
+            except Exception:
+                pass
             logger.warning(
                 "Stage 1 fehlgeschlagen (%s), Fallback auf Roh-Verlauf",
                 e,
@@ -1165,6 +1174,15 @@ async def _run_verlauf_stage1(
             "Stage 1 uebersprungen fuer Job %s (%s): %s (Verlauf: %d Woerter)",
             job.job_id, workflow, reason, len(verlaufsdoku_text.split()),
         )
+        # v19.19 (S3): auch Skips ins prompts.log - nur wenn ueberhaupt ein
+        # Verlauf vorlag (sonst Log-Rauschen bei P1/P2).
+        if verlaufsdoku_text and verlaufsdoku_text.strip():
+            try:
+                _log_output(job.job_id, workflow, "stage1_verlauf",
+                            f"[STAGE 1 UEBERSPRUNGEN] {reason} "
+                            f"(Verlauf: {len(verlaufsdoku_text.split())} Woerter)", None)
+            except Exception:
+                pass
         audit = _stage1_audit_bundle(
             applied=False,
             raw_word_count=len(verlaufsdoku_text.split()),
@@ -1234,6 +1252,12 @@ async def _run_transcript_stage1(
             if tr_target_override is not None:
                 tr_kwargs["target_words"] = tr_target_override
             tr_result = await summarize_transcript(**tr_kwargs)
+            # v19.19 (S3): Transcript-Stage-1 bisher gar nicht im prompts.log.
+            try:
+                _log_output(job.job_id, workflow, "stage1_transcript",
+                            tr_result.get("summary", ""), tr_result.get("telemetry"))
+            except Exception:
+                pass
 
             effective_target = tr_result.get("target_words", tr_target_override)
             audit = _stage1_audit_bundle(
@@ -1262,6 +1286,13 @@ async def _run_transcript_stage1(
         except Exception as e:
             # Fallback: Roh-Transkript behalten, Audit mit Begruendung.
             # _sample_uniformly in llm.py wird dann vermutlich greifen.
+            # v19.19 (S3): Fehlschlag sichtbar im prompts.log.
+            try:
+                _log_output(job.job_id, workflow, "stage1_transcript",
+                            f"[TRANSCRIPT-STAGE 1 FEHLGESCHLAGEN - Fallback Roh-Transkript] "
+                            f"{type(e).__name__}: {str(e)[:300]}", None)
+            except Exception:
+                pass
             logger.warning(
                 "Transcript-Stage 1 fehlgeschlagen (%s), Fallback auf "
                 "Roh-Transkript (_sample_uniformly wird vermutlich greifen)",

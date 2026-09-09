@@ -153,6 +153,13 @@ ISSUE_CODE_PATHOLOGISIERENDE_SPRACHE = "PATHOLOGISIERENDE_SPRACHE"
 # Neu-Generierung behebbar -> warning mit Prozentangabe.
 ISSUE_CODE_INPUT_TRUNCATED = "INPUT_TRUNCATED"
 
+# v19.19 (A2): Anamnese-Patientenangaben nicht in indirekter Rede (Konjunktiv I).
+# Messinstrument fuer die A1-Regel: Anteil Konjunktiv- an Berichtsformen.
+# Log-Kalibrierung (6 Anamnese-Outputs): Faelle mit 0/10, 0/12, 0/22 -> Issue;
+# 8/3 und 4/6 -> kein Issue. Nur Anamnese-Teil (vor ###BEFUND###), der
+# AMDP-Befund steht korrekt im Indikativ. Warning, repair-faehig.
+ISSUE_CODE_KONJUNKTIV_QUOTE = "KONJUNKTIV_QUOTE"
+
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
 # Wird in serialize_issues + Pydantic-Schemas (Phase C) genutzt.
@@ -268,6 +275,64 @@ _PATHO_RE = re.compile(
     r"|\b(?!unauffällig|unauffaellig)auffaellig\w*\b",
     re.IGNORECASE,
 )
+
+
+# Konjunktiv-I-Formen (haeufige Berichtsverben) + Konjunktiv II als
+# Ersatzform. Absichtlich ohne "sollte/wuerde" (Modalitaet, nicht Redeform).
+_KONJ_RE = re.compile(
+    r"\b(sei|seien|habe|hätten|haette|hätte|fühle|leide|könne|müsse|wolle|"
+    r"gebe|nehme|schlafe|arbeite|lebe|wohne|erlebe|kenne|wisse|denke|glaube|"
+    r"gehe|komme|finde|mache|bekomme|verstehe|dürfe|möge|sehe|höre|trinke|"
+    r"rauche|esse|verliere|verbringe|stehe|liege|bestehe|beginne|halte)\b",
+    re.IGNORECASE,
+)
+# Indikativ-Formen von Patientenaussagen. Rahmenverben (berichtet, schildert,
+# gibt an, beschreibt, nennt, erklaert) sind ausgenommen - sie tragen die
+# indirekte Rede und stehen korrekt im Indikativ.
+_INDIK_RE = re.compile(
+    r"\b(ist|sind|hat|haben|fühlt|leidet|kann|muss|will|nimmt|schläft|"
+    r"arbeitet|lebt|wohnt|erlebt|kennt|weiß|denkt|glaubt|geht|kommt|findet|"
+    r"macht|bekommt|versteht|darf|sieht|hört|trinkt|raucht|isst|verliert|"
+    r"verbringt|steht|liegt|besteht|beginnt|hält)\b",
+    re.IGNORECASE,
+)
+_KONJ_MIN_RATIO = 0.30
+_KONJ_MIN_FORMS = 6   # unter so wenigen Formen keine Aussage moeglich
+
+
+def konjunktiv_ratio(text: str) -> tuple[float, int, int]:
+    """(Quote, Konjunktiv-Formen, Indikativ-Formen) fuer Anamnese-Fliesstext."""
+    k = len(_KONJ_RE.findall(text))
+    i = len(_INDIK_RE.findall(text))
+    total = k + i
+    return ((k / total) if total else 1.0), k, i
+
+
+def _check_konjunktiv(workflow: str, text: str) -> list[QualityIssue]:
+    """v19.19 (A2): Anamnese ohne indirekte Rede melden."""
+    if workflow != "anamnese":
+        return []
+    anamnese_part = text.split("###BEFUND###", 1)[0]
+    ratio, k, i = konjunktiv_ratio(anamnese_part)
+    if k + i < _KONJ_MIN_FORMS or ratio >= _KONJ_MIN_RATIO:
+        return []
+    return [QualityIssue(
+        code=ISSUE_CODE_KONJUNKTIV_QUOTE,
+        severity=SEVERITY_WARNING,
+        message=(
+            f"Patientenangaben stehen ueberwiegend im Indikativ ({k} Konjunktiv- "
+            f"vs. {i} Indikativformen, Quote {ratio:.0%}). Die Anamnese soll "
+            "Selbstberichte in indirekter Rede (Konjunktiv I) wiedergeben."
+        ),
+        repair_hint=(
+            "Formuliere alle Aussagen der Patientin/des Patienten in indirekte "
+            "Rede um: 'Sie berichtet, sie fühle sich ... und habe ...' statt "
+            "'Sie fühlt sich ... und hat ...'. Rahmenverben (berichtet, "
+            "schildert) bleiben im Indikativ; Vorbefund-Fakten und Diagnosen "
+            "ebenfalls. Inhalte nicht veraendern."
+        ),
+        code_detail={"konjunktiv": k, "indikativ": i, "ratio": round(ratio, 2)},
+    )]
 
 
 def _check_input_truncated(
@@ -1099,6 +1164,8 @@ def run_quality_check(
     issues.extend(_check_transcript_coverage(workflow, transcript_coverage_gap_s))
     # v19.19 (K2): Budget-Guard hat Quellen gekuerzt.
     issues.extend(_check_input_truncated(input_truncated_chars))
+    # v19.19 (A2): Anamnese in indirekter Rede?
+    issues.extend(_check_konjunktiv(workflow, text))
     # v19.17 (P-3/F6): Perspektive + Sprachstil der Einzelgespraechs-Doku.
     issues.extend(_check_wir_form(workflow, text))
     issues.extend(_check_pathologisierende_sprache(workflow, text))

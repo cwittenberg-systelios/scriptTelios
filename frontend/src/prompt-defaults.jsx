@@ -37,7 +37,7 @@ Keine Wir-Form – "Wir erlebten Frau G. ..." gehört in Team-Berichte, nicht in
 const P_ANAMNESE = `Erstelle eine vollständige psychotherapeutische Anamnese auf Basis der bereitgestellten Unterlagen.
 
 TON UND STIL:
-Schreibe einen erzählerischen, biographisch eingebetteten Bericht. Die Anamnese ist KEINE Symptom-Liste – sie ist die Lebensgeschichte des Patienten in seinem Kontext. Lass die Lebenswelt, die Bezugspersonen und die Entwicklungslinien sichtbar werden. Vermeide pathologisierende Sprache ("Defizit", "gestört", "auffällig"), wo eine beschreibende Formulierung möglich ist ("hat Schwierigkeiten mit...", "erlebt sich als...", "schildert, dass...").
+Schreibe einen erzählerischen, biographisch eingebetteten Bericht. Die Anamnese ist KEINE Symptom-Liste – sie ist die Lebensgeschichte des Patienten in seinem Kontext. Lass die Lebenswelt, die Bezugspersonen und die Entwicklungslinien sichtbar werden. Vermeide pathologisierende Sprache ("Defizit", "gestört", "auffällig"), wo eine beschreibende Formulierung möglich ist ("hat Schwierigkeiten mit...", "erlebt sich als...", "schildert, dass..."). Patientenangaben in indirekter Rede im Konjunktiv I: "Sie berichtet, sie fühle sich erschöpft und habe wenig Kontakt" – nicht "Sie fühlt sich erschöpft und hat wenig Kontakt".
 
 ANAMNESE als durchgehender FLIESSTEXT (KEINE Unterüberschriften!):
 Schreibe die Anamnese als einen zusammenhängenden Fließtext OHNE Zwischenüberschriften wie "Vorstellungsanlass", "Aktuelle Erkrankung" etc. Der Text soll natürlich von Thema zu Thema fließen, wie ein erfahrener Therapeut einen Bericht diktieren würde.

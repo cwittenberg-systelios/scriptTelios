@@ -11,6 +11,7 @@ isoliert getestet werden.
 """
 from __future__ import annotations
 
+import re
 from typing import Iterable, Optional
 
 
@@ -324,3 +325,94 @@ def plan_source_compression(
         _shave(compressed, compressed_floor_ratio, raw_floor_min)
 
     return plan
+
+
+# ── v19.19 (S2): Chunking fuer ueberlange Stage-1-Inputs ─────────────────────
+#
+# Hintergrund (Log-Analyse 13.08.-09.09.): Die beiden groessten Entlassberichte
+# (99k/111k Zeichen Verlauf) hatten KEINEN Stage-1-Lauf - der Stage-1-Input
+# selbst sprengte das Kontextbudget (31k Tokens > 16k), generate_text kuerzte
+# ihn, die Zusammenfassung fiel unter min_acceptable -> RuntimeError ->
+# Fallback Rohtext -> nochmals gekuerzt. Bei P1 dasselbe Muster mit 75k-
+# Transkripten. Loesung: ueberlange Inputs an Block-/Datumsgrenzen in Teile
+# schneiden, jeden Teil separat verdichten, Ergebnisse chronologisch
+# zusammenfuegen.
+
+# Ab dieser Zeichenzahl wird gechunkt (~17k Tokens - passt mit System-Prompt
+# und Output sicher in 32k, und auch in 16k noch knapp).
+STAGE1_CHUNK_CHARS_DEFAULT = 55_000
+
+_BLOCK_BOUNDARY_RE = re.compile(
+    r"(?m)^(?="
+    r"\s*(?:###\s*)?\d{1,2}\.\d{1,2}\.\d{2,4}"      # Datumszeile 12.05.2026 / ### 12.05.
+    r"|\s*#{1,3}\s+\S"                                # Markdown-Ueberschrift
+    r"|\s*\*\*[^*]{3,60}\*\*"                          # **fette Sektionszeile**
+    r"|\s*\d{2}:\d{2}:\d{2}"                          # Timestamp 00:12:05 (Transkript)
+    r"|\s*\[[AB]\]:"                                  # Sprecherzeile [A]:/[B]:
+    r")"
+)
+
+
+def chunk_text_by_blocks(text: str, max_chars: int) -> list[str]:
+    """Teilt text in Stuecke <= max_chars, geschnitten an Block-Grenzen
+    (Datumszeilen, Ueberschriften, Sprecher-/Timestamp-Zeilen, sonst
+    Leerzeilen). Ein einzelner Block, der groesser als max_chars ist, wird
+    an Zeilengrenzen hart geteilt. Passt der Text, kommt [text] zurueck."""
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    # Kandidaten-Grenzen: Block-Starts + Absatzgrenzen (Leerzeilen)
+    starts = {0}
+    for m in _BLOCK_BOUNDARY_RE.finditer(text):
+        starts.add(m.start())
+    for m in re.finditer(r"\n\s*\n", text):
+        starts.add(m.end())
+    starts = sorted(s for s in starts if s < len(text))
+    blocks = [text[a:b] for a, b in zip(starts, starts[1:] + [len(text)])]
+
+    chunks: list[str] = []
+    cur = ""
+    for blk in blocks:
+        if len(blk) > max_chars:
+            # Ueberlanger Einzelblock: erst cur wegschreiben, dann hart teilen
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            lines = blk.splitlines(keepends=True)
+            piece = ""
+            for ln in lines:
+                # Einzelzeile laenger als max_chars: an Wortgrenzen teilen
+                while len(ln) > max_chars:
+                    cut = ln.rfind(" ", 0, max_chars)
+                    cut = cut if cut > max_chars // 2 else max_chars
+                    if piece:
+                        chunks.append(piece)
+                        piece = ""
+                    chunks.append(ln[:cut])
+                    ln = ln[cut:]
+                if len(piece) + len(ln) > max_chars and piece:
+                    chunks.append(piece)
+                    piece = ""
+                piece += ln
+            if piece:
+                cur = piece
+            continue
+        if len(cur) + len(blk) > max_chars and cur:
+            chunks.append(cur)
+            cur = blk
+        else:
+            cur += blk
+    if cur:
+        chunks.append(cur)
+    return [c for c in chunks if c.strip()]
+
+
+def stage1_chunk_chars() -> int:
+    """Konfigurierbare Chunk-Grenze (STAGE1_CHUNK_CHARS in settings/.env)."""
+    try:
+        from app.core.config import settings
+        return int(getattr(settings, "STAGE1_CHUNK_CHARS", STAGE1_CHUNK_CHARS_DEFAULT))
+    except Exception:
+        return STAGE1_CHUNK_CHARS_DEFAULT

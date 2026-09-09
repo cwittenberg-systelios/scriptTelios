@@ -246,6 +246,7 @@ async def summarize_verlauf(
     patient_initial: Optional[str] = None,
     *,
     target_words: Optional[int] = None,
+    _is_chunk: bool = False,
 ) -> dict:
     """
     Stage 1 der Two-Stage-Pipeline.
@@ -289,6 +290,22 @@ async def summarize_verlauf(
 
     if not verlauf_text or not verlauf_text.strip():
         raise RuntimeError("Stage 1: leerer Verlauf-Text")
+
+    # v19.19 (S2): Ueberlange Verlaeufe in Teile schneiden und einzeln
+    # verdichten. Ohne das sprengte der Stage-1-Input selbst das Budget
+    # (99k/111k-Verlaeufe der EB-Jobs 3b86cd68/6ed83865 -> Stage 1 scheiterte
+    # still, Fallback auf Rohtext, der dann zu 60 % weggesampelt wurde).
+    if not _is_chunk:
+        from app.services.staging import chunk_text_by_blocks, stage1_chunk_chars
+        _chunk_limit = stage1_chunk_chars()
+        if len(verlauf_text) > _chunk_limit:
+            return await _summarize_verlauf_chunked(
+                verlauf_text=verlauf_text,
+                workflow=workflow,
+                patient_initial=patient_initial,
+                target_words=target_words,
+                chunks=chunk_text_by_blocks(verlauf_text, _chunk_limit),
+            )
 
     raw_words = len(verlauf_text.split())
 
@@ -366,16 +383,44 @@ async def summarize_verlauf(
     # OLLAMA_MODEL-Default -> kein Ollama-404 durch stale/retired Config).
     _summary_model = await resolve_summary_model()
     t0 = _t.time()
+    # v19.19 (S1): 1.5x -> 2.2x target_words. Deutsch braucht ~1.4-1.6
+    # Tokens/Wort; 1.5x Tokens entsprach ~1.0x Woertern, waehrend bis 2.5x
+    # akzeptiert wird -> 7 von 21 Stage-1-Laeufen (Log 13.08.-09.09.) endeten
+    # in tokens_hit_cap mitten im Satz. Angleichung an transcript_summary.
+    _s1_max_tokens = max(2500, int(target_words * 2.2))
     result = await generate_text(
         system_prompt=system_prompt,
         user_content=user_content,
-        max_tokens=int(target_words * 1.5),  # Wort->Token-Puffer
+        max_tokens=_s1_max_tokens,
         model=_summary_model,
         workflow=None,
         temperature_override=0.4,
         skip_aggressive_dedup=True,
         force_hard_no_think=True,
     )
+    cap_retry_used = False
+    if (result.get("telemetry") or {}).get("tokens_hit_cap"):
+        # v19.19 (S1): EIN Retry mit 1.5x Budget statt abgeschnittener Summary.
+        logger.warning(
+            "Stage 1 tokens_hit_cap bei max_tokens=%d - Retry mit %d",
+            _s1_max_tokens, int(_s1_max_tokens * 1.5),
+        )
+        _retry = await generate_text(
+            system_prompt=system_prompt,
+            user_content=user_content,
+            max_tokens=int(_s1_max_tokens * 1.5),
+            model=_summary_model,
+            workflow=None,
+            temperature_override=0.4,
+            skip_aggressive_dedup=True,
+            force_hard_no_think=True,
+        )
+        cap_retry_used = True
+        _rt = (_retry.get("text") or "").strip()
+        if _rt and not (_retry.get("telemetry") or {}).get("tokens_hit_cap"):
+            result = _retry
+        elif len(_rt) > len(result.get("text") or ""):
+            result = _retry  # immer noch am Cap, aber laenger
 
     summary = (result.get("text") or "").strip()
     summary_words = len(summary.split()) if summary else 0
@@ -463,9 +508,94 @@ async def summarize_verlauf(
         "retry_telemetry":      retry_telemetry,
         "issues":               issues,
         "retry_used":           retry_used,
+        "cap_retry_used":       cap_retry_used,   # v19.19 (S1)
         "degraded":             degraded,
         "target_words":         target_words,
         "min_acceptable":       min_acceptable,
+    }
+
+
+async def _summarize_verlauf_chunked(
+    *,
+    verlauf_text: str,
+    workflow: Optional[str],
+    patient_initial: Optional[str],
+    target_words: Optional[int],
+    chunks: list[str],
+) -> dict:
+    """v19.19 (S2): Verdichtet jeden Teil separat (rekursiv ueber
+    summarize_verlauf mit _is_chunk=True) und fuegt die Teil-Zusammen-
+    fassungen chronologisch zusammen. Zielwortzahl wird proportional zur
+    Teil-Laenge verteilt; Halluzinations-Check laeuft pro Teil."""
+    import time as _t
+    from app.services.staging import compute_verlauf_target_words
+
+    t0 = _t.time()
+    raw_words = len(verlauf_text.split())
+    total_target = target_words or compute_verlauf_target_words(raw_words)
+    chunk_words = [len(c.split()) for c in chunks]
+    n = len(chunks)
+    logger.info(
+        "Stage 1 chunked: %d Zeichen / %d Woerter -> %d Teile, Ziel gesamt %dw",
+        len(verlauf_text), raw_words, n, total_target,
+    )
+
+    parts: list[str] = []
+    telemetry_parts: list[dict] = []
+    issues: list = []
+    retry_used = cap_retry_used = degraded = False
+    sys_prompts: list[str] = []
+    user_contents: list[str] = []
+
+    for i, (chunk, cw) in enumerate(zip(chunks, chunk_words), start=1):
+        share = max(300, int(total_target * (cw / max(raw_words, 1))))
+        res = await summarize_verlauf(
+            verlauf_text=chunk,
+            workflow=workflow,
+            patient_initial=patient_initial,
+            target_words=share,
+            _is_chunk=True,
+        )
+        parts.append(f"### Teil {i}/{n} (chronologisch)\n\n{res['summary']}")
+        telemetry_parts.append(res.get("telemetry") or {})
+        issues.extend(res.get("issues") or [])
+        retry_used = retry_used or bool(res.get("retry_used"))
+        cap_retry_used = cap_retry_used or bool(res.get("cap_retry_used"))
+        degraded = degraded or bool(res.get("degraded"))
+        sys_prompts.append(res.get("system_prompt") or "")
+        user_contents.append(res.get("user_content") or "")
+
+    summary = (
+        f"[Verdichtet in {n} chronologischen Teilen - Reihenfolge entspricht "
+        f"dem Original-Verlauf.]\n\n" + "\n\n".join(parts)
+    )
+    summary_words = len(summary.split())
+    merged_tel = {
+        "chunked": True,
+        "chunks": n,
+        "tokens_hit_cap": any(t.get("tokens_hit_cap") for t in telemetry_parts),
+        "input_truncated": any(t.get("input_truncated") for t in telemetry_parts),
+        "parts": telemetry_parts,
+    }
+    return {
+        "summary":              summary,
+        "system_prompt":        sys_prompts[0] if sys_prompts else "",
+        "user_content":         (
+            f"[CHUNKED: {n} Teile - hier Teil 1/{n}]\n\n"
+            + (user_contents[0] if user_contents else "")
+        ),
+        "raw_word_count":       raw_words,
+        "summary_word_count":   summary_words,
+        "compression_ratio":    round(summary_words / raw_words, 3) if raw_words else 0.0,
+        "duration_s":           round(_t.time() - t0, 1),
+        "telemetry":            merged_tel,
+        "retry_telemetry":      {},
+        "issues":               issues,
+        "retry_used":           retry_used,
+        "cap_retry_used":       cap_retry_used,
+        "degraded":             degraded,
+        "target_words":         total_target,
+        "min_acceptable":       0,
     }
 
 
@@ -536,7 +666,7 @@ async def _retry_stricter_summary(
         result = await generate_text(
             system_prompt=system_prompt,
             user_content=user_content,
-            max_tokens=int(target_words * 1.5),
+            max_tokens=max(2500, int(target_words * 2.2)),  # v19.19 (S1)
             model=_summary_model,
             workflow=None,
             # v19.2.2: Temperatur 0.3 statt 0.1 - selbst beim Halluzinations-Retry

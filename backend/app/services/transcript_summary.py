@@ -116,6 +116,7 @@ async def summarize_transcript(
     *,
     target_words: Optional[int] = None,
     patient_initial: Optional[str] = None,
+    _is_chunk: bool = False,
 ) -> dict:
     """
     Stage 1 fuer Sitzungstranskripte.
@@ -159,6 +160,22 @@ async def summarize_transcript(
 
     if not transcript_text or not transcript_text.strip():
         raise RuntimeError("Transcript-Stage 1: leeres Transkript")
+
+    # v19.19 (S4): Ueberlange Transkripte (75k-96k Zeichen bei 60-90-min-
+    # Gespraechen) in Teile schneiden - der Stage-1-Input sprengte sonst
+    # selbst das Budget; 9 von 20 P1-Jobs (Log 13.08.-09.09.) liefen deshalb
+    # auf roh gesampelten Transkripten.
+    if not _is_chunk:
+        from app.services.staging import chunk_text_by_blocks, stage1_chunk_chars
+        _chunk_limit = stage1_chunk_chars()
+        if len(transcript_text) > _chunk_limit:
+            return await _summarize_transcript_chunked(
+                transcript_text=transcript_text,
+                workflow=workflow,
+                patient_initial=patient_initial,
+                target_words=target_words,
+                chunks=chunk_text_by_blocks(transcript_text, _chunk_limit),
+            )
 
     raw_words = len(transcript_text.split())
 
@@ -411,4 +428,71 @@ async def summarize_transcript(
         "issues":               issues,
         "target_words":         target_words,
         "min_acceptable":       min_acceptable,
+    }
+
+
+async def _summarize_transcript_chunked(
+    *,
+    transcript_text: str,
+    workflow: Optional[str],
+    patient_initial: Optional[str],
+    target_words: Optional[int],
+    chunks: list[str],
+) -> dict:
+    """v19.19 (S4): Teil-Verdichtung fuer ueberlange Transkripte, chronologisch
+    zusammengefuegt. Zielwortzahl proportional zur Teil-Laenge; Halluzinations-
+    Check laeuft pro Teil in summarize_transcript."""
+    import time as _t
+    from app.services.staging import compute_transcript_target_words
+
+    t0 = _t.time()
+    raw_words = len(transcript_text.split())
+    total_target = target_words or compute_transcript_target_words(raw_words)
+    chunk_words = [len(c.split()) for c in chunks]
+    n = len(chunks)
+    logger.info(
+        "Transcript-Stage 1 chunked: %d Zeichen / %d Woerter -> %d Teile, Ziel %dw",
+        len(transcript_text), raw_words, n, total_target,
+    )
+    parts: list[str] = []
+    tel_parts: list[dict] = []
+    issues: list = []
+    retry_used = degraded = False
+    for i, (chunk, cw) in enumerate(zip(chunks, chunk_words), start=1):
+        share = max(300, int(total_target * (cw / max(raw_words, 1))))
+        res = await summarize_transcript(
+            transcript_text=chunk,
+            workflow=workflow,
+            target_words=share,
+            patient_initial=patient_initial,
+            _is_chunk=True,
+        )
+        parts.append(f"### Gespraechsabschnitt {i}/{n} (chronologisch)\n\n{res['summary']}")
+        tel_parts.append(res.get("telemetry") or {})
+        issues.extend(res.get("issues") or [])
+        retry_used = retry_used or bool(res.get("retry_used"))
+        degraded = degraded or bool(res.get("degraded"))
+    summary = (
+        f"[Verdichtet in {n} chronologischen Gespraechsabschnitten.]\n\n"
+        + "\n\n".join(parts)
+    )
+    summary_words = len(summary.split())
+    return {
+        "summary":              summary,
+        "raw_word_count":       raw_words,
+        "summary_word_count":   summary_words,
+        "compression_ratio":    round(summary_words / raw_words, 3) if raw_words else 0.0,
+        "duration_s":           round(_t.time() - t0, 1),
+        "telemetry":            {
+            "chunked": True, "chunks": n,
+            "tokens_hit_cap": any(t.get("tokens_hit_cap") for t in tel_parts),
+            "input_truncated": any(t.get("input_truncated") for t in tel_parts),
+            "parts": tel_parts,
+        },
+        "retry_telemetry":      {},
+        "issues":               issues,
+        "retry_used":           retry_used,
+        "degraded":             degraded,
+        "target_words":         total_target,
+        "min_acceptable":       0,
     }
