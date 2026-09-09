@@ -3,6 +3,7 @@ GET  /api/jobs/{job_id}   – Job-Status abfragen
 GET  /api/jobs            – Alle Jobs auflisten (optional)
 """
 import logging
+import re
 import time as _t
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile, Depends
 from typing import Annotated, Optional
@@ -728,6 +729,18 @@ def _build_repair_context(
     # ohne Kontext - dann verhaelt sich Repair wie pre-v19.3.
     if repair_sources:
         verlauf_context, transcript_context, patientendaten_context = _resolve_repair_sources(repair_sources)
+        # v19.19 (R3): Kontexte kappen, damit der Repair-Prompt nicht selbst
+        # in den Budget-Guard laeuft (aaf4366f: 112k Zeichen -> uniform
+        # gesampelt, das Modell sah die Quelle nicht, die es ergaenzen sollte).
+        # Head/Tail-bewahrend; Original + Hinweis bleiben immer vollstaendig.
+        from app.services.llm import _sample_head_tail
+        _caps = {"verlauf": 30_000, "transcript": 30_000, "patientendaten": 15_000}
+        if len(verlauf_context) > _caps["verlauf"]:
+            verlauf_context = _sample_head_tail(verlauf_context, _caps["verlauf"])
+        if len(transcript_context) > _caps["transcript"]:
+            transcript_context = _sample_head_tail(transcript_context, _caps["transcript"])
+        if len(patientendaten_context) > _caps["patientendaten"]:
+            patientendaten_context = _sample_head_tail(patientendaten_context, _caps["patientendaten"])
         logger.info(
             "Repair-Kontext: Verlauf=%dw, Transkript=%dw, Patientendaten=%dw",
             len(verlauf_context.split()) if verlauf_context else 0,
@@ -780,11 +793,59 @@ async def repair_preview(
     )
 
 
+# v19.19 (R1): No-op-Kalibrierung an den 8 Log-Repairs (13.08.-09.09.):
+#   1.00/1.00/1.00 (byte-identisch)         -> No-op
+#   0.98 (+3 % Woerter), 0.97 (+7 % Woerter) -> kleine, echte Ergaenzung
+# Deshalb: sim >= 0.995 ODER (sim >= 0.97 UND Wortzahl-Delta <= 1 %).
+_REPAIR_NOOP_SIM_HARD = 0.995
+_REPAIR_NOOP_SIM_SOFT = 0.97
+_REPAIR_NOOP_WORD_DELTA = 0.01
+_REPAIR_ADD_HINT_RE = re.compile(
+    r"ergänz|ergaenz|hinzufüg|hinzufueg|aufnehm|mitaufnehm|mit aufnehm|"
+    r"erweiter|ausführlicher|ausfuehrlicher|mehr (?:aus|zu|über|ueber)|noch mehr|"
+    r"zusätzlich|zusaetzlich|einbauen|integrier",
+    re.IGNORECASE,
+)
+
+
+def _text_similarity(a: str, b: str) -> float:
+    """v19.19 (R1): Aehnlichkeit zweier Texte (0..1) auf normalisierter
+    Wortfolge - robust gegen Whitespace-/Zeilenumbruch-Unterschiede."""
+    import difflib
+    na = " ".join((a or "").split())
+    nb = " ".join((b or "").split())
+    if not na and not nb:
+        return 1.0
+    return difflib.SequenceMatcher(None, na, nb, autojunk=False).ratio()
+
+
+def _is_repair_noop(original: str, new: str) -> tuple:
+    """(no_op, similarity) - siehe Kalibrierung oben."""
+    sim = _text_similarity(original, new)
+    ow, nw = len((original or "").split()), len((new or "").split())
+    delta = abs(nw - ow) / ow if ow else 0.0
+    noop = sim >= _REPAIR_NOOP_SIM_HARD or (
+        sim >= _REPAIR_NOOP_SIM_SOFT and delta <= _REPAIR_NOOP_WORD_DELTA
+    )
+    return noop, sim
+
+
+def _repair_wants_addition(user_hint: str, accepted_codes: list) -> bool:
+    """v19.19 (R2): Verlangt der Auftrag eine Ergaenzung (statt Kuerzung/Stil)?"""
+    if user_hint and _REPAIR_ADD_HINT_RE.search(user_hint):
+        return True
+    return any(str(c).startswith(("MISSING_", "MODALITY_NOT_COVERED", "PROZESSREFLEXION"))
+               for c in (accepted_codes or []))
+
+
 async def _run_repair_coroutine(
     job,            # JobState - Forward-Reference (kein circular import)
     workflow: str,
     final_prompt: str,
     model_override: Optional[str] = None,
+    original_text: str = "",
+    user_hint: str = "",
+    accepted_codes: Optional[list] = None,
 ) -> dict:
     """Schlanker Repair-Run: ein einziger LLM-Call, kein Transcribing,
     kein PDF-Extract, kein Stage 1.
@@ -825,6 +886,64 @@ async def _run_repair_coroutine(
     raw = (result.get("text") or "").strip()
     _log_output(job.job_id, workflow, "repair", raw, result.get("telemetry"))
 
+    # ── v19.19 (R1): No-op-Detektor + verschaerfter zweiter Versuch ──
+    # Log-Analyse 13.08.-09.09.: 3 von 8 Repairs byte-identisch (auch bei
+    # klarem Hinweis wie 'Paargespraech mitaufnehmen'). Entscheid F5: einmal
+    # mit haerterer Anweisung wiederholen; bleibt es identisch -> Original
+    # zurueckgeben + CRITICAL REPAIR_NO_CHANGE (QC).
+    repair_flags: dict = {"attempts": 1}
+    has_instructions = bool((user_hint or "").strip()) or bool(accepted_codes)
+    noop, sim = _is_repair_noop(original_text, raw) if original_text else (False, 0.0)
+    repair_flags["similarity"] = round(sim, 3)
+    if original_text and has_instructions and noop:
+        logger.warning(
+            "Repair %s: Output ~identisch mit Original (sim=%.3f) - verschaerfter "
+            "zweiter Versuch", job.job_id[:8], sim,
+        )
+        job.set_progress(55, "Repair", "Zweiter Versuch (keine Aenderung erkannt)")
+        _hard = (
+            final_prompt
+            + "\n\n>>>ZWEITER VERSUCH<<<\n"
+            "Dein erster Versuch hat den Text NICHT veraendert - er war mit dem "
+            "Original identisch. Das ist KEIN akzeptables Ergebnis. Die "
+            "UEBERARBEITUNGS-HINWEISE bzw. der NUTZERHINWEIS oben MUESSEN jetzt "
+            "sichtbar umgesetzt werden: Betroffene Absaetze umschreiben, verlangte "
+            "Inhalte aus den QUELLE-Bloecken ergaenzen, verlangte Formulierungen "
+            "aendern. Gib den vollstaendigen ueberarbeiteten Text aus.\n"
+            ">>>/ZWEITER VERSUCH<<<"
+        )
+        _log_prompt(job.job_id, workflow, "repair_retry", REPAIR_SYSTEM_PROMPT, _hard)
+        result2 = await generate_text(
+            REPAIR_SYSTEM_PROMPT, _hard, max_tokens=max_tok, model=model_override,
+            workflow=workflow, on_progress=_on_tok, force_hard_no_think=True,
+            temperature_override=0.35,
+        )
+        raw2 = (result2.get("text") or "").strip()
+        _log_output(job.job_id, workflow, "repair_retry", raw2, result2.get("telemetry"))
+        repair_flags["attempts"] = 2
+        noop2, sim2 = _is_repair_noop(original_text, raw2)
+        repair_flags["similarity"] = round(sim2, 3)
+        if raw2 and not noop2:
+            raw, result = raw2, result2
+        else:
+            logger.error(
+                "Repair %s: auch zweiter Versuch ohne Aenderung (sim=%.3f) - "
+                "Original wird zurueckgegeben", job.job_id[:8], sim2,
+            )
+            repair_flags["no_change"] = True
+            raw = original_text
+
+    # ── v19.19 (R2): Schrumpf-Check bei Ergaenzungs-Auftrag ──
+    if original_text and not repair_flags.get("no_change") \
+            and _repair_wants_addition(user_hint, accepted_codes or []):
+        ow, nw = len(original_text.split()), len(raw.split())
+        if ow and nw < ow * 0.9:
+            repair_flags.update({"shrunk": True, "orig_words": ow, "new_words": nw})
+            logger.warning(
+                "Repair %s: Ergaenzung verlangt, Output aber kuerzer (%d -> %d Woerter)",
+                job.job_id[:8], ow, nw,
+            )
+
     # Wenn Anamnese-Workflow und der Output enthaelt ###BEFUND###:
     # in zwei Felder splitten (analog zur normalen Pipeline). Frontend zeigt
     # dann Tabs Anamnese/Befund - genauso wie beim originalen Job.
@@ -842,6 +961,7 @@ async def _run_repair_coroutine(
             "degraded":        result.get("degraded", False),
             "degraded_reason": result.get("degraded_reason"),
             "repair_run":      True,  # Marker fuer perf_log
+            "repair_flags":    repair_flags,  # v19.19 (R1/R2) -> QC
         },
         # Stage 1 laeuft beim Repair definitiv nicht:
         "verlauf_summary_text":  None,
@@ -881,6 +1001,9 @@ async def repair_execute(
             )
         final_prompt = req.custom_final_prompt
         custom_used = True
+        _original = combined_result_text(
+            workflow, parent.get("result_text") or "", parent.get("befund_text") or "",
+        )
     else:
         workflow, _original, _accepted, final_prompt = _build_repair_context(
             parent, req.accepted_issue_codes, req.user_hint,
@@ -981,6 +1104,9 @@ async def repair_execute(
     async def _coro():
         return await _run_repair_coroutine(
             job, workflow, final_prompt, model_override=model_override,
+            original_text=_original,
+            user_hint=req.user_hint or "",
+            accepted_codes=list(req.accepted_issue_codes or []),
         )
 
     background_tasks.add_task(job_queue.run_job, job, _coro())
@@ -2216,6 +2342,8 @@ async def create_generate_job(
         # (TEMPLATE_PLACEHOLDER_DETECTED) - erkennt Muster-/Stilvorlagen im
         # Antragsvorlage-Slot ("Herr X", "N.N.", ...).
         job.antragsvorlage_qc_text = antragsvorlage_text or None
+        # v19.19 (A3b): Einweisungsdiagnosen fuer den Kriterien-Check (P2).
+        job.diagnosen_qc = list(dx_list) if dx_list else None
         # v19.15 (C1): Trunkierungs-Heuristik ueber die dokumentartigen
         # Quellen (Selbstauskunft bewusst ausgenommen - Formulare enden
         # regulaer auf Labels/Kurztokens und wuerden Fehlalarme erzeugen).

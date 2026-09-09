@@ -896,6 +896,9 @@ class JobQueue:
                     _cov_gap = getattr(job, "transcript_coverage_gap_s", None)
                     # v19.19 (K2): Budget-Guard-Kuerzung aus der Telemetrie.
                     _in_trunc = (job.generation_telemetry or {}).get("input_truncated_chars")
+                    # v19.19 (R1/R2, A3b): Repair-Flags + Diagnosen.
+                    _repair_flags = (job.generation_telemetry or {}).get("repair_flags")
+                    _dx = getattr(job, "diagnosen_qc", None)
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
@@ -905,6 +908,8 @@ class JobQueue:
                         truncated_sources=_trunc_sources,
                         transcript_coverage_gap_s=_cov_gap,
                         input_truncated_chars=_in_trunc,
+                        repair_flags=_repair_flags,
+                        diagnosen=_dx,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(

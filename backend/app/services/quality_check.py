@@ -160,6 +160,22 @@ ISSUE_CODE_INPUT_TRUNCATED = "INPUT_TRUNCATED"
 # AMDP-Befund steht korrekt im Indikativ. Warning, repair-faehig.
 ISSUE_CODE_KONJUNKTIV_QUOTE = "KONJUNKTIV_QUOTE"
 
+# v19.19 (R1/R2): Repair-Ergebnis-Flags aus _run_repair_coroutine.
+# REPAIR_NO_CHANGE: auch der verschaerfte zweite Versuch hat den Text nicht
+# veraendert -> Original zurueckgegeben (Entscheid F5). CRITICAL, weil der
+# Therapeut sonst ein unveraendertes 1:1 fuer ueberarbeitet haelt (Log:
+# 3 von 8 Repairs byte-identisch, Feedback c.wittenberg 14.08.).
+# REPAIR_SHRUNK: Ergaenzungs-Hinweis, aber Output deutlich kuerzer als das
+# Original (Feedback f.landau 13.08.: "kuerzer, Passagen rausgelassen").
+ISSUE_CODE_REPAIR_NO_CHANGE = "REPAIR_NO_CHANGE"
+ISSUE_CODE_REPAIR_SHRUNK = "REPAIR_SHRUNK"
+
+# v19.19 (A3): Anamnese soll die Kriterien der Einweisungsdiagnose abbilden
+# (nicht die Diagnose nennen). Feedback e.krause 07.08.: "Diagnose kaum
+# beruecksichtigt" = Diagnosekriterien kommen nicht ausreichend vor.
+ISSUE_CODE_DIAGNOSEKRITERIEN_COVERAGE = "DIAGNOSEKRITERIEN_COVERAGE"
+ISSUE_CODE_DIAGNOSE_IM_TEXT = "DIAGNOSE_IM_TEXT"
+
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
 # Wird in serialize_issues + Pydantic-Schemas (Phase C) genutzt.
@@ -333,6 +349,213 @@ def _check_konjunktiv(workflow: str, text: str) -> list[QualityIssue]:
         ),
         code_detail={"konjunktiv": k, "indikativ": i, "ratio": round(ratio, 2)},
     )]
+
+
+def _check_repair_flags(repair_flags: "dict | None") -> list[QualityIssue]:
+    """v19.19 (R1/R2): Repair-No-op und Repair-Schrumpfung sichtbar machen."""
+    if not repair_flags:
+        return []
+    out: list[QualityIssue] = []
+    if repair_flags.get("no_change"):
+        sim = repair_flags.get("similarity")
+        out.append(QualityIssue(
+            code=ISSUE_CODE_REPAIR_NO_CHANGE,
+            severity=SEVERITY_CRITICAL,
+            message=(
+                "Die Ueberarbeitung hat trotz zweier Versuche keine Aenderung "
+                f"vorgenommen (Aehnlichkeit {sim:.0%}). Angezeigt wird der "
+                "unveraenderte Originaltext." if isinstance(sim, float) else
+                "Die Ueberarbeitung hat trotz zweier Versuche keine Aenderung "
+                "vorgenommen. Angezeigt wird der unveraenderte Originaltext."
+            ),
+            repair_hint=(
+                "Hinweis konkreter fassen: WELCHER Absatz, WELCHE Quelle "
+                "(z.B. 'Paargespraech vom 12.06. aus dem Verlauf ergaenzen'), "
+                "WELCHE Formulierung. Vage Anweisungen wie 'systemischer "
+                "formulieren' setzt das Modell nicht um."
+            ),
+            code_detail={"similarity": sim, "attempts": repair_flags.get("attempts", 2)},
+        ))
+    if repair_flags.get("shrunk"):
+        ow, nw = repair_flags.get("orig_words"), repair_flags.get("new_words")
+        out.append(QualityIssue(
+            code=ISSUE_CODE_REPAIR_SHRUNK,
+            severity=SEVERITY_CRITICAL,
+            message=(
+                f"Der Hinweis verlangte eine Ergaenzung, der ueberarbeitete Text "
+                f"ist aber kuerzer geworden ({ow} -> {nw} Woerter). Passagen des "
+                "Originals wurden vermutlich weggelassen."
+            ),
+            repair_hint=(
+                "Alle Inhalte des Originals vollstaendig beibehalten und die "
+                "gewuenschte Ergaenzung ZUSAETZLICH einfuegen. Nichts kuerzen, "
+                "nichts zusammenfassen."
+            ),
+            code_detail={"orig_words": ow, "new_words": nw},
+        ))
+    return out
+
+
+# ── v19.19 (A3b): Diagnosekriterien je ICD-Familie ────────────────────────────
+# Kriterium -> Synonym-Stems (lowercase Substring). Bewusst grob: das Ziel ist
+# "kommt das Thema ueberhaupt vor", nicht klinische Diagnostik.
+_DX_CRITERIA: dict[str, tuple[str, list[tuple[str, list[str]]]]] = {
+    "F32/F33": ("depressive Stoerung", [
+        ("Stimmung",        ["stimmung", "niedergeschlagen", "traurig", "deprimiert", "bedrückt", "bedrueckt"]),
+        ("Antrieb/Energie", ["antrieb", "energie", "erschöpf", "erschoepf", "kraftlos", "müde", "muede"]),
+        ("Interesse/Freude",["interesse", "freude", "freudlos", "anhedon", "lustlos"]),
+        ("Schlaf",          ["schlaf", "einschlaf", "durchschlaf", "früh erwach", "frueh erwach"]),
+        ("Appetit/Gewicht", ["appetit", "gewicht", "essen"]),
+        ("Konzentration",   ["konzentr", "aufmerksam", "gedächtnis", "gedaechtnis"]),
+        ("Selbstwert/Schuld",["selbstwert", "schuld", "wertlos", "versag", "minderwertig"]),
+        ("Suizidalität",    ["suizid", "lebensmüd", "lebensmued", "sterben", "nicht mehr leben"]),
+        ("Grübeln",         ["grübel", "gruebel", "gedankenkreis"]),
+        ("Rückzug",         ["rückzug", "rueckzug", "zurückgezogen", "zurueckgezogen", "kontakt", "isolier"]),
+    ]),
+    "F41": ("Angst-/Panikstoerung", [
+        ("Angst",           ["angst", "ängst", "aengst", "furcht"]),
+        ("Panik/Attacken",  ["panik", "attacke", "anfall"]),
+        ("Körpersymptome",  ["herzras", "herzklopf", "atemnot", "schwindel", "zittern", "schwitz", "engegefühl", "engegefuehl"]),
+        ("Sorgen",          ["sorge", "befürcht", "befuercht", "grübel", "gruebel"]),
+        ("Vermeidung",      ["vermeid", "meidet", "nicht mehr allein", "traut sich"]),
+        ("Anspannung/Unruhe",["anspannung", "unruhe", "nervös", "nervoes", "angespannt"]),
+    ]),
+    "F43": ("Anpassungs-/Belastungsstoerung", [
+        ("Belastendes Ereignis", ["ereignis", "belastung", "trauma", "verlust", "trennung", "tod", "unfall", "gewalt"]),
+        ("Wiedererleben",   ["wiedererleb", "flashback", "albtr", "alptr", "intrusion", "erinnerung"]),
+        ("Vermeidung",      ["vermeid", "meidet"]),
+        ("Übererregung",    ["schreckhaft", "reizbar", "übererreg", "uebererreg", "wachsam", "schlaf"]),
+        ("Zeitbezug",       ["seit", "nach dem", "nachdem", "wochen", "monate"]),
+        ("Alltagsbeeinträchtigung", ["alltag", "arbeit", "beruf", "funktion", "bewältig", "bewaeltig"]),
+    ]),
+    "F45": ("somatoforme Stoerung", [
+        ("Körperliche Beschwerden", ["schmerz", "körperlich", "koerperlich", "beschwerden", "symptom"]),
+        ("Organische Abklärung", ["untersuch", "arzt", "ärzt", "aerzt", "befund", "organisch", "ohne befund"]),
+        ("Krankheitssorge", ["sorge", "krank", "befürcht", "befuercht"]),
+        ("Organsystem",     ["magen", "darm", "herz", "schwindel", "kopfschmerz", "rücken", "ruecken", "verdau"]),
+        ("Alltagsbeeinträchtigung", ["alltag", "arbeit", "beruf", "einschränk", "einschraenk"]),
+    ]),
+    "F50": ("Essstoerung", [
+        ("Essverhalten",    ["essen", "nahrung", "mahlzeit", "essverhalten"]),
+        ("Gewicht",         ["gewicht", "bmi", "abnehm", "kilo", "untergewicht"]),
+        ("Körperbild",      ["körperbild", "koerperbild", "figur", "dick", "körper", "koerper"]),
+        ("Kompensation",    ["erbrech", "abführ", "abfuehr", "sport", "fasten", "kompens"]),
+        ("Essanfälle",      ["heißhunger", "heisshunger", "essanfall", "essanfäll", "binge"]),
+        ("Kontrolle/Angst", ["kontroll", "angst zuzunehmen", "zunehmen"]),
+    ]),
+    "F60": ("Persoenlichkeitsstoerung", [
+        ("Beziehungsmuster",["beziehung", "bindung", "partnerschaft"]),
+        ("Impulsivität/Wut",["impuls", "wut", "ausrast", "aggress"]),
+        ("Selbstschädigung",["selbstverletz", "selbstschäd", "selbstschaed", "ritz"]),
+        ("Leere/Identität", ["leere", "identität", "identitaet", "selbstbild", "wer sie", "wer er"]),
+        ("Instabilität",    ["instabil", "schwank", "wechselnd", "chaotisch"]),
+        ("Verlassenheitsangst", ["verlassen", "allein gelassen", "zurückgewiesen", "zurueckgewiesen"]),
+        ("Langjähriges Muster", ["seit der jugend", "seit der kindheit", "schon immer", "langjährig", "langjaehrig", "muster"]),
+    ]),
+    "F10": ("Alkoholabhaengigkeit", [
+        ("Konsum",          ["alkohol", "trink", "bier", "wein", "schnaps"]),
+        ("Menge/Kontrollverlust", ["menge", "täglich", "taeglich", "kontrollverlust", "nicht aufhören", "nicht aufhoeren"]),
+        ("Entzug",          ["entzug", "zittern", "schwitz", "unruhe morgens"]),
+        ("Toleranz",        ["toleranz", "immer mehr", "vertrag"]),
+        ("Craving",         ["verlangen", "craving", "drang", "bedürfnis", "beduerfnis"]),
+        ("Folgen",          ["folgen", "arbeit", "führerschein", "fuehrerschein", "leber", "beziehung", "konflikt"]),
+        ("Abstinenz",       ["abstinen", "entgift", "trocken", "aufgehört", "aufgehoert"]),
+    ]),
+}
+
+_DX_FAMILY_PATTERNS: list[tuple[str, "re.Pattern"]] = [
+    ("F32/F33", re.compile(r"\bF3[23]\b|depressi", re.I)),
+    ("F41",     re.compile(r"\bF41\b|angstst|panikst|generalisierte angst", re.I)),
+    ("F43",     re.compile(r"\bF43\b|anpassungsst|posttraumat|belastungsst|ptbs", re.I)),
+    ("F45",     re.compile(r"\bF45\b|somatoform|somatisierung", re.I)),
+    ("F50",     re.compile(r"\bF50\b|essst|anorex|bulim|binge", re.I)),
+    ("F60",     re.compile(r"\bF60\b|persönlichkeitsst|persoenlichkeitsst|borderline", re.I)),
+    ("F10",     re.compile(r"\bF10\b|alkohol", re.I)),
+]
+
+_DX_LABEL_IN_TEXT_RE = re.compile(
+    r"\bF\d{2}(?:\.\d{1,2})?\b"
+    r"|depressive[ns]? (?:episode|störung|stoerung)|rezidivierende depressive"
+    r"|panikstörung|panikstoerung|generalisierte angststörung|generalisierte angststoerung"
+    r"|anpassungsstörung|anpassungsstoerung|posttraumatische belastungsstörung|posttraumatische belastungsstoerung"
+    r"|somatoforme|somatisierungsstörung|somatisierungsstoerung"
+    r"|anorexia|bulimia|binge-eating"
+    r"|persönlichkeitsstörung|persoenlichkeitsstoerung"
+    r"|abhängigkeitssyndrom|abhaengigkeitssyndrom",
+    re.IGNORECASE,
+)
+
+_DX_COVERAGE_MIN = 0.4
+
+
+def dx_families_for(diagnosen: "list[str] | None") -> list[str]:
+    """Erkannte ICD-Familien (mit Kriterienliste) aus den Diagnose-Strings."""
+    if not diagnosen:
+        return []
+    joined = " | ".join(d for d in diagnosen if d)
+    fams: list[str] = []
+    for fam, pat in _DX_FAMILY_PATTERNS:
+        if pat.search(joined) and fam not in fams:
+            fams.append(fam)
+    return fams
+
+
+def _check_diagnosekriterien(
+    workflow: str, text: str, diagnosen: "list[str] | None",
+) -> list[QualityIssue]:
+    """v19.19 (A3b): Kriterien-Abdeckung je erkannter Familie + Diagnose-
+    Nennung im Anamnesetext."""
+    if workflow != "anamnese" or not diagnosen:
+        return []
+    anamnese_part = text.split("###BEFUND###", 1)[0]
+    low = anamnese_part.lower()
+    out: list[QualityIssue] = []
+
+    _fam_suffix = {"F32/F33": "DEPRESSIV", "F41": "ANGST", "F43": "BELASTUNG",
+                   "F45": "SOMATOFORM", "F50": "ESSSTOERUNG", "F60": "PERSOENLICHKEIT",
+                   "F10": "ALKOHOL"}
+    for fam in dx_families_for(diagnosen):
+        label, criteria = _DX_CRITERIA[fam]
+        missing = [name for name, stems in criteria
+                   if not any(st in low for st in stems)]
+        covered = len(criteria) - len(missing)
+        ratio = covered / len(criteria)
+        if ratio < _DX_COVERAGE_MIN:
+            out.append(QualityIssue(
+                code=f"{ISSUE_CODE_DIAGNOSEKRITERIEN_COVERAGE}_{_fam_suffix[fam]}",
+                severity=SEVERITY_WARNING,
+                message=(
+                    f"Die Kriterien der Einweisungsdiagnose ({label}) sind in der "
+                    f"Anamnese nur zu {ratio:.0%} abgebildet ({covered}/{len(criteria)}). "
+                    f"Nicht erkennbar: {', '.join(missing[:6])}."
+                ),
+                repair_hint=(
+                    "Pruefe Selbstauskunft und Aufnahmegespraech auf Angaben zu "
+                    f"{', '.join(missing[:4])} und ergaenze belegte Angaben "
+                    "als Selbstbericht. Nichts erfinden; fehlt es in den Quellen, "
+                    "weglassen. Die Diagnose selbst NICHT nennen."
+                ),
+                code_detail={"family": fam, "missing": missing, "coverage": round(ratio, 2)},
+            ))
+
+    hits = sorted({m.group(0) for m in _DX_LABEL_IN_TEXT_RE.finditer(anamnese_part)})
+    if hits:
+        out.append(QualityIssue(
+            code=ISSUE_CODE_DIAGNOSE_IM_TEXT,
+            severity=SEVERITY_WARNING,
+            message=(
+                f"Diagnosebezeichnung/ICD-Code im Anamnesetext: "
+                f"{', '.join(repr(h) for h in hits[:4])}. Die Anamnese begruendet "
+                "die Diagnose ueber die Symptomatik, nennt sie aber nicht."
+            ),
+            repair_hint=(
+                "Diagnosebezeichnungen und ICD-Codes aus dem Anamnesetext "
+                "entfernen; stattdessen die zugrundeliegenden Beschwerden "
+                "beschreibend wiedergeben."
+            ),
+            code_detail={"matches": hits[:10]},
+        ))
+    return out
 
 
 def _check_input_truncated(
@@ -1079,6 +1302,8 @@ def run_quality_check(
     truncated_sources: "list[dict] | None" = None,
     transcript_coverage_gap_s: "float | None" = None,
     input_truncated_chars: "tuple | list | None" = None,
+    repair_flags: "dict | None" = None,
+    diagnosen: "list[str] | None" = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
@@ -1126,6 +1351,10 @@ def run_quality_check(
     input_truncated_chars: v19.19 (K2): (Zeichen vorher, nachher) aus der
                   generate_text-Telemetrie, wenn der Budget-Guard gekuerzt
                   hat. None -> Check (Schritt 0h, INPUT_TRUNCATED) entfaellt.
+    repair_flags: v19.19 (R1/R2): {no_change, similarity, shrunk, orig_words,
+                  new_words} aus _run_repair_coroutine. None -> entfaellt.
+    diagnosen:    v19.19 (A3b): Einweisungsdiagnosen (P2). Steuert den
+                  Kriterien-Abdeckungs-Check und DIAGNOSE_IM_TEXT.
 
     Idempotent (kein State, keine Seiteneffekte ausser logging).
     """
@@ -1166,6 +1395,10 @@ def run_quality_check(
     issues.extend(_check_input_truncated(input_truncated_chars))
     # v19.19 (A2): Anamnese in indirekter Rede?
     issues.extend(_check_konjunktiv(workflow, text))
+    # v19.19 (A3b): Diagnosekriterien abgebildet, Diagnose nicht genannt?
+    issues.extend(_check_diagnosekriterien(workflow, text, diagnosen))
+    # v19.19 (R1/R2): Repair-No-op / Repair-Schrumpfung.
+    issues.extend(_check_repair_flags(repair_flags))
     # v19.17 (P-3/F6): Perspektive + Sprachstil der Einzelgespraechs-Doku.
     issues.extend(_check_wir_form(workflow, text))
     issues.extend(_check_pathologisierende_sprache(workflow, text))

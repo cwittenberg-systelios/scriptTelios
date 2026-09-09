@@ -219,6 +219,28 @@ async def cleanup_old_logs() -> int:
     return count
 
 
+async def cleanup_feedback_cases() -> int:
+    """v19.19 (R5): feedback_cases/*.log aelter als 90 Tage loeschen
+    (gleiche Frist wie feedback.log, §6a Einwilligung)."""
+    import os as _os
+    log_dir = Path(_os.environ.get("LOG_FILE", "/workspace/systelios.log")).parent
+    case_dir = log_dir / "feedback_cases"
+    if not case_dir.exists():
+        return 0
+    cutoff = time.time() - 90 * 86400
+    count = 0
+    for f in case_dir.glob("*.log"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                count += 1
+        except Exception as e:
+            logger.warning("feedback_cases-Cleanup %s: %s", f.name, e)
+    if count:
+        logger.info("Retention: %d Feedback-Fallkopien geloescht", count)
+    return count
+
+
 async def cleanup_jobs_db() -> int:
     """§6a (Einwilligung v1.1): Löscht Job-Zeilen älter als RETENTION['qa_artifacts'].
 
@@ -302,6 +324,7 @@ async def retention_task():
             await cleanup_uploads()
             await cleanup_inactive_style_embeddings()
             await cleanup_old_logs()
+            await cleanup_feedback_cases()   # v19.19 (R5)
             await cleanup_jobs_db()
             await cleanup_recordings_db()
         except asyncio.CancelledError:

@@ -1166,7 +1166,19 @@ BASE_PROMPTS: dict[str, str] = {
         "kein 'Aktuelle Erkrankung:', kein 'PSYCHOPATHOLOGISCHER BEFUND', "
         "kein 'AMDP', keine Bullet-Listen. "
         "Stattdessen fließende Übergänge zwischen den Themen.\n\n"
-        "DIAGNOSEN gemäß ICD: {diagnosen}\n\n"
+        "DIAGNOSEN gemäß ICD: {diagnosen}\n"
+        # v19.19 (A3a): Diagnose begruenden, nicht nennen. Feedback e.krause
+        # 07.08.: 'Diagnose kaum beruecksichtigt' = die Kriterien der
+        # Einweisungsdiagnose kommen nicht ausreichend vor.
+        "Diese Diagnosen sind der fachliche RAHMEN der Anamnese, NICHT ihr "
+        "Textinhalt: Die Anamnese muss die zugehörigen Kriterien und Symptome "
+        "so abbilden, dass die Diagnose daraus nachvollziehbar wird - soweit "
+        "sie in den Quellen belegt sind (z.B. Stimmung, Antrieb, Interesse, "
+        "Schlaf, Appetit, Konzentration, Selbstwert, Ängste, Vermeidung, "
+        "körperliche Beschwerden, zeitlicher Verlauf, Auslöser, Alltags-"
+        "beeinträchtigung). Was die Quellen zu einem Kriterium nicht hergeben, "
+        "wird WEGGELASSEN - nicht mit 'nicht erhoben' aufgefüllt. "
+        "Diagnosebezeichnungen und ICD-Codes erscheinen NICHT im Text.\n\n"
         "NICHT SCHREIBEN:\n"
         "– Keinen psychopathologischen Befund (wird separat generiert!)\n"
         "– Keine 'PSYCHOPATHOLOGISCHER BEFUND'-Sektion, kein 'AMDP'-Schema\n"

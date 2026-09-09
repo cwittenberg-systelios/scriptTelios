@@ -116,6 +116,62 @@ async def _load_job_info(job_id: str) -> dict | None:
     }
 
 
+# ── v19.19 (R5): Prompt/Output-Kopie fuer bemaengelte Jobs ───────────────────
+# prompts.log rotiert nach 14 Dateien (jobs.py: _PROMPT_LOG_BACKUP_DAYS) -
+# der Fall e.krause vom 07.08. war bei der Analyse am 09.09. schon weg.
+# Entscheid Cars10 (F4, 2026-09-09): NUR fuer Jobs mit Feedback die
+# prompts.log-Bloecke (alle CALLs des Jobs: Stage 1, Hauptcall, Repair)
+# in eine eigene Datei unter feedback_cases/ kopieren; Retention 90 Tage
+# wie feedback.log (retention.cleanup_feedback_cases). Nicht in die
+# feedback.log-Zeile selbst (Design: keine Text-Blobs dort).
+
+def _prompt_log_dir():
+    from pathlib import Path
+    return Path(os.environ.get("LOG_FILE", "/workspace/systelios.log")).parent
+
+
+def _collect_prompt_log_blocks(job_id: str) -> str:
+    """Alle prompts.log-Bloecke (aktuelle + rotierte Dateien) mit JOB: <id>."""
+    import re as _re
+    log_dir = _prompt_log_dir()
+    marker = f"JOB: {job_id}"
+    found: list[str] = []
+    for f in sorted(log_dir.glob("prompts.log*")):
+        try:
+            txt = f.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        if marker not in txt:
+            continue
+        for block in _re.split(r"\n(?=\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", txt):
+            if marker in block:
+                found.append(block.strip("\n"))
+    return "\n\n".join(found)
+
+
+def _write_feedback_case(job_id: str, record: dict) -> "str | None":
+    """Schreibt feedback_cases/<ts>_<job8>.log; gibt den Pfad zurueck."""
+    try:
+        blocks = _collect_prompt_log_blocks(job_id)
+        if not blocks:
+            return None
+        case_dir = _prompt_log_dir() / "feedback_cases"
+        case_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        path = case_dir / f"{ts}_{job_id[:8]}.log"
+        header = (
+            f"# FEEDBACK-FALL {job_id}\n# rating={record.get('rating')} "
+            f"user={record.get('user')} context={record.get('context')!r}\n"
+            f"# text: {record.get('text')!r}\n"
+            f"# (Kopie der prompts.log-Bloecke; Retention 90 Tage)\n\n"
+        )
+        path.write_text(header + blocks + "\n", encoding="utf-8")
+        return str(path)
+    except Exception as e:  # noqa: BLE001 - Kopie darf Feedback nie blockieren
+        logger.warning("Feedback-Fallkopie fehlgeschlagen (%s): %s", job_id, e)
+        return None
+
+
 @router.post("")
 async def submit_feedback(body: FeedbackIn, user: str = Depends(get_current_user)):
     """
@@ -137,6 +193,8 @@ async def submit_feedback(body: FeedbackIn, user: str = Depends(get_current_user
         "job_id":   body.job_id,             # → prompts.log: "JOB: <id>"
         "job":      job_info,                # null wenn Job nicht (mehr) in DB
     }
+    # v19.19 (R5): Prompt/Output des Jobs als Fallkopie sichern (90 Tage).
+    record["prompt_log_file"] = _write_feedback_case(body.job_id, record)
     _feedback_logger.info(json.dumps(record, ensure_ascii=False))
 
     workflow = (job_info or {}).get("workflow") or body.context or "?"
