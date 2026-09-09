@@ -114,6 +114,15 @@ Die Tunnel-URL ändert sich dabei – im Frontend unter ⚙ Backend-URL anpassen
 
 ## Tests ausführen
 
+### Lint-Gate (ruff) – Pflicht vor jedem Patch
+
+```bash
+cd backend
+bash scripts/lint_gate.sh          # Exit != 0 => Patch nicht ausliefern
+```
+`scripts/lint_gate.sh` prueft `app/` und `scripts/` gegen `ruff.toml` (E722, F, B, ASYNC, RUF006).
+In `commit_patch.sh` als ersten Schritt aufrufen; Auto-Fixes: `ruff check app scripts --fix`.
+
 ### Backend (pytest)
 
 ```bash

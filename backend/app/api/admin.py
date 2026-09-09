@@ -63,7 +63,7 @@ async def set_whisper_model(
     # Modell wechseln + Cache leeren damit das neue Modell geladen wird
     settings.WHISPER_MODEL = model
     try:
-        from app.services.transcription import _model_cache, _diarization_pipeline
+        from app.services.transcription import _model_cache
         _model_cache.clear()
         # Diarization-Pipeline bleibt erhalten (von Modell unabhaengig)
     except Exception as e:

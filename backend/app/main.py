@@ -28,24 +28,33 @@ async def _cleanup_old_uploads():
     Audio-Dateien werden separat per DELETE_AUDIO_AFTER_TRANSCRIPTION behandelt,
     aber PDFs/DOCXs bleiben sonst fuer immer liegen.
     """
-    import time
     MAX_AGE_HOURS = 24
 
     while True:
         try:
-            upload_path = Path(settings.UPLOAD_DIR)
-            if upload_path.exists():
-                cutoff = time.time() - (MAX_AGE_HOURS * 3600)
-                count = 0
-                for f in upload_path.iterdir():
-                    if f.is_file() and f.stat().st_mtime < cutoff:
-                        f.unlink(missing_ok=True)
-                        count += 1
-                if count > 0:
-                    logger.info("Upload-Bereinigung: %d Dateien aelter als %dh geloescht", count, MAX_AGE_HOURS)
+            # Blockierende Datei-I/O ausserhalb des Event-Loops
+            count = await asyncio.to_thread(
+                _delete_stale_uploads, Path(settings.UPLOAD_DIR), MAX_AGE_HOURS * 3600
+            )
+            if count > 0:
+                logger.info("Upload-Bereinigung: %d Dateien aelter als %dh geloescht", count, MAX_AGE_HOURS)
         except Exception as e:
             logger.debug("Upload-Bereinigung fehlgeschlagen: %s", e)
         await asyncio.sleep(3600)  # alle 60 Minuten
+
+
+def _delete_stale_uploads(upload_path: Path, max_age_s: float) -> int:
+    """Synchroner Kern von _cleanup_old_uploads. Liefert Anzahl geloeschter Dateien."""
+    import time
+    if not upload_path.exists():
+        return 0
+    cutoff = time.time() - max_age_s
+    count = 0
+    for f in upload_path.iterdir():
+        if f.is_file() and f.stat().st_mtime < cutoff:
+            f.unlink(missing_ok=True)
+            count += 1
+    return count
 
 
 ORPHAN_MSG = ("Verwaist: Der Pod wurde gestoppt, waehrend der Job in der "

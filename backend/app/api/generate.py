@@ -64,7 +64,7 @@ async def generate(req: GenerateRequest, db: AsyncSession = Depends(get_db)):
     try:
         result = await generate_text(system, user)
     except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
     job_id = uuid.uuid4().hex
     logger.info("Generierung [%s] Workflow=%s Modell=%s", job_id, req.workflow, result["model_used"])
@@ -118,7 +118,7 @@ async def generate_with_files(
             audio_transcript = tr["transcript"]
             logger.info("Transkription: %d Woerter", tr["word_count"])
         except RuntimeError as e:
-            raise HTTPException(status_code=502, detail=f"Transkriptions-Fehler: {e}")
+            raise HTTPException(status_code=502, detail=f"Transkriptions-Fehler: {e}") from e
 
     # ── 2. Dokumente extrahieren ─────────────────────────────────
     selbstauskunft_text = ""
@@ -178,7 +178,7 @@ async def generate_with_files(
     try:
         result = await generate_text(system, user)
     except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
     job_id = uuid.uuid4().hex
     logger.info(

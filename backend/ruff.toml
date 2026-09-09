@@ -10,10 +10,9 @@ target-version = "py312"
 
 [lint]
 select = ["E722", "F", "B", "ASYNC", "RUF006"]
-# F841 (unused variable) erzeugt in gewachsenem Code viel Rauschen -
-# bewusst erst in einer eigenen Aufraeumrunde aktivieren.
+# F841 (unused variable) seit v19.21 aktiv (Aufraeumrunde S2 erledigt).
 # B008: Depends(...) im Default ist das FastAPI-Standard-Idiom (kein Bug).
-ignore = ["F841", "B008"]
+ignore = ["B008"]
 
 [lint.per-file-ignores]
 # Tests duerfen breite excepts und ungenutzte Imports haben (Fixtures)

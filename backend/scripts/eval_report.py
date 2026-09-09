@@ -107,7 +107,7 @@ def load_eval_results(d: Path) -> dict:
             sf = wd/f"{tid}.style.json"
             if sf.exists():
                 try: e["style_metrics"] = json.loads(sf.read_text("utf-8"))
-                except: pass
+                except Exception: pass
             # v19.1: Generierungs-Telemetrie (Think-Block-Diagnose, Retry-Status).
             # Geschrieben vom test_eval.py-Patch wenn das LLM-Result entsprechende
             # Felder lieferte; fehlt bei Pre-v19.1-Ergebnissen.
@@ -130,12 +130,12 @@ def load_eval_results(d: Path) -> dict:
     if vd.exists():
         for f in sorted(vd.glob("*.json")):
             try: var.append(json.loads(f.read_text("utf-8")))
-            except: pass
+            except Exception: pass
     jd = d/"style_jury"
     if jd.exists():
         for f in sorted(jd.glob("*.jury.json")):
             try: jury.append(json.loads(f.read_text("utf-8")))
-            except: pass
+            except Exception: pass
 
     # P6: Jury-Scores in die Test-Eintraege einmappen, Composite berechnen,
     # Status nochmal pruefen (Jury <3 -> FAIL, auch wenn Regex-Checks PASS waren).
@@ -193,7 +193,7 @@ def _hbar(title, labels, values, bcols, w=460, bh=18, ref=None, rl=None, sfx="%"
                  fontName="Helvetica-Bold", fillColor=C["dark"]))
     if mx is None: mx = max(values)*1.15 if values and max(values)>0 else 100
     y0 = h-30
-    for i,(lb,v,cl) in enumerate(zip(labels,values,bcols)):
+    for i,(lb,v,cl) in enumerate(zip(labels,values,bcols, strict=True)):
         y = y0-i*(bh+gap)
         d.add(String(lw-4, y+bh/2-4, lb, textAnchor="end", fontSize=7, fillColor=C["dark"]))
         bw = max((v/mx)*cw,1) if mx else 1
@@ -210,9 +210,9 @@ def _stacked(title, labels, pv, iv, w=400):
     d = Drawing(w, h)
     d.add(String(w/2,h-12,title,textAnchor="middle",fontSize=10,
                  fontName="Helvetica-Bold",fillColor=C["dark"]))
-    mx = max(p+i for p,i in zip(pv,iv)) if pv else 1
+    mx = max(p+i for p,i in zip(pv,iv, strict=True)) if pv else 1
     x0, y0 = 50, 30
-    for i,(lb,p,iv2) in enumerate(zip(labels,pv,iv)):
+    for i,(lb,p,iv2) in enumerate(zip(labels,pv,iv, strict=True)):
         x = x0+i*(bw+12)
         ph = (p/mx)*ch; ih = (iv2/mx)*ch
         d.add(Rect(x,y0,bw,ph,fillColor=C["green"],strokeColor=colors.white,strokeWidth=.5))
@@ -231,7 +231,7 @@ def _issue_bars(title, labels, sizes, icols, w=320):
     d.add(String(w/2,h-12,title,textAnchor="middle",fontSize=10,
                  fontName="Helvetica-Bold",fillColor=C["dark"]))
     tot = sum(sizes) or 1
-    for i,(lb,sz,cl) in enumerate(zip(labels,sizes,icols)):
+    for i,(lb,sz,cl) in enumerate(zip(labels,sizes,icols, strict=True)):
         y = h-34-i*22
         bw = max((sz/mx)*bmax,2)
         d.add(Rect(105,y,bw,16,fillColor=cl,strokeWidth=0))

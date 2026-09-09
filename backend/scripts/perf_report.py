@@ -50,7 +50,7 @@ def load_entries(log_path: str, since: datetime | None, workflow: str | None, er
     """Lädt und filtert Einträge aus der performance.log."""
     entries = []
     with open(log_path, "r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, 1):
+        for line in f:
             line = line.strip()
             if not line:
                 continue
@@ -348,7 +348,7 @@ def main():
     log_path = args.log
     if not os.path.exists(log_path):
         print(f"Log-Datei nicht gefunden: {log_path}")
-        print(f"Tipp: Performance-Logging wird automatisch aktiviert wenn Jobs laufen.")
+        print("Tipp: Performance-Logging wird automatisch aktiviert wenn Jobs laufen.")
         sys.exit(1)
 
     since = None

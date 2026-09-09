@@ -31,9 +31,6 @@ from app.services.transcript_summary import summarize_transcript
 from app.services.document_summary import summarize_document
 from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
 from app.services.quality_check import (
-    QualityIssue,
-    SEVERITY_CRITICAL,
-    SEVERITY_WARNING,
     build_repair_prompt,
     deserialize_issues,
     sanitize_for_repair_prompt,
@@ -414,7 +411,7 @@ async def delete_job_permanent(
     try:
         result = await job_queue.delete_job_permanent(job_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden") from None
 
     if not result["deleted"]:
         raise HTTPException(status_code=409, detail=result["reason"])
@@ -443,8 +440,7 @@ async def get_job_transcript(job_id: str):
     db_result = await job_queue.get_job_from_db(job_id)
     if not db_result:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' nicht gefunden")
-    transcript = db_result.get("result_text", "")  # DB hat kein separates transcript-Feld im dict
-    # Transkript direkt aus DB laden
+    # Transkript direkt aus DB laden (get_job_from_db liefert nur has_transcript)
     try:
         from app.core.database import async_session_factory
         from app.models.db import Job as JobModel
@@ -457,8 +453,8 @@ async def get_job_transcript(job_id: str):
             return {"job_id": job_id, "transcript": row, "word_count": len(row.split())}
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(status_code=404, detail="Transkript nicht verfuegbar")
+    except Exception as e:
+        raise HTTPException(status_code=404, detail="Transkript nicht verfuegbar") from e
 
 
 

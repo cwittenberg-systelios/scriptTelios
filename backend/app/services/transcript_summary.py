@@ -288,7 +288,7 @@ async def summarize_transcript(
             retry_reasons.append(f"zu kurz ({summary_words}w < {min_acceptable}w Min)")
         if critical_issues:
             retry_reasons.append(
-                f"critical Halluzinations-Signale: "
+                "critical Halluzinations-Signale: "
                 + "; ".join(f"{i['type']}: {i['detail']}" for i in critical_issues)
             )
         logger.warning("Transcript-Stage 1 Retry startet: %s", " | ".join(retry_reasons))
@@ -458,7 +458,7 @@ async def _summarize_transcript_chunked(
     tel_parts: list[dict] = []
     issues: list = []
     retry_used = degraded = False
-    for i, (chunk, cw) in enumerate(zip(chunks, chunk_words), start=1):
+    for i, (chunk, cw) in enumerate(zip(chunks, chunk_words, strict=True), start=1):
         share = max(300, int(total_target * (cw / max(raw_words, 1))))
         res = await summarize_transcript(
             transcript_text=chunk,

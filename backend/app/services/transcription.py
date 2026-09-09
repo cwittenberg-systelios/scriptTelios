@@ -541,7 +541,6 @@ def _get_duration(file_path: Path) -> float:
     4. Schätzung via Dateigrösse (Opus@24kbps = 180 KB/min, konstant weil
        der Browser mit audioBitsPerSecond: 24000 aufnimmt)
     """
-    import re
 
     # ── Stufe 1: ffprobe Standard ────────────────────────────────────────
     try:
@@ -563,7 +562,7 @@ def _get_duration(file_path: Path) -> float:
         raise RuntimeError(
             "ffprobe nicht gefunden. Bitte ffmpeg installieren: "
             "'apt-get install -y ffmpeg'"
-        )
+        ) from None
     except (ValueError, subprocess.CalledProcessError):
         logger.debug("ffprobe Standard fehlgeschlagen für %s – Fallback 2", file_path.name)
 
@@ -723,7 +722,7 @@ def _split_audio(file_path: Path, splits: list[float], tmp_dir: Path, duration: 
     boundaries = [0.0] + splits + [end_duration]
     suffix = file_path.suffix.lower() or ".wav"
 
-    for i, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:])):
+    for i, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:], strict=True)):
         chunk_path = tmp_dir / f"chunk_{i:03d}{suffix}"
         cmd = ["ffmpeg", "-y", "-ss", str(start)]
         # v19.16 (T3): Der LETZTE Chunk bekommt NIE ein '-to' - ffmpeg liest
@@ -846,12 +845,12 @@ async def transcribe_audio(file_path: Path) -> dict:
       ist dann unvermeidbar.
     """
     try:
-        from faster_whisper import WhisperModel
+        from faster_whisper import WhisperModel  # noqa: F401  (Verfuegbarkeits-Check)
     except ImportError:
         raise RuntimeError(
             "faster-whisper nicht installiert. "
             "Bitte 'pip install faster-whisper' ausfuehren."
-        )
+        ) from None
 
     if settings.WHISPER_FREE_OLLAMA_VRAM:
         await _ollama_free_vram()

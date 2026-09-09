@@ -370,7 +370,7 @@ def chunk_text_by_blocks(text: str, max_chars: int) -> list[str]:
     for m in re.finditer(r"\n\s*\n", text):
         starts.add(m.end())
     starts = sorted(s for s in starts if s < len(text))
-    blocks = [text[a:b] for a, b in zip(starts, starts[1:] + [len(text)])]
+    blocks = [text[a:b] for a, b in zip(starts, starts[1:] + [len(text)], strict=True)]
 
     chunks: list[str] = []
     cur = ""

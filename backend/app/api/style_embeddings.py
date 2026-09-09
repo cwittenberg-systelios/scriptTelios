@@ -157,7 +157,7 @@ async def upload_style_example(
         try:
             raw_text = await extract_text(path)
         except Exception as e:
-            raise HTTPException(status_code=422, detail=f"Text konnte nicht extrahiert werden: {e}")
+            raise HTTPException(status_code=422, detail=f"Text konnte nicht extrahiert werden: {e}") from e
 
     # ── Abschnitts-Filterung: nur relevante Abschnitte speichern ──
     # Bei DOCX: verlaessliche Heading-Extraktion (erkennt Bold-Headings, Plain-Text-Headings,

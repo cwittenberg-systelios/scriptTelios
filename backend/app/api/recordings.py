@@ -34,6 +34,26 @@ router = APIRouter(prefix="/recordings", tags=["Aufnahmen"])
 _PRIO_P0 = 10
 _PRIO_URGENT = 1  # Wenn Nutzer eine noch-transcribierende Aufnahme auswählt
 p0_queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
+# Referenzen auf Fire-and-forget-Tasks halten, sonst kann der Event-Loop sie
+# vor Abschluss einsammeln (RUF006; gleicher Fund wie job_queue._spawn_db_task).
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro, what: str) -> None:
+    """Startet einen Fire-and-forget-Task mit gehaltener Referenz und loggt
+    Fehler statt sie stumm zu verlieren."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def _done(t: asyncio.Task, _what=what) -> None:
+        _background_tasks.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            logger.warning("Hintergrund-Task %s fehlgeschlagen: %s", _what, exc)
+
+    task.add_done_callback(_done)
 
 
 async def reprioritize_recording(rec_id: int, audio_path: Path) -> None:
@@ -320,7 +340,7 @@ async def upload_recording(
     # (v19.16 G3, max(600, 2xDauer+120)) auch bei frisch hochgeladenen
     # Aufnahmen statt auf 900 s zurueckzufallen (Fall 11.08.: 62-min-Aufnahme,
     # Job nach 15 min abgebrochen). Fire-and-forget: Fehler sind unkritisch.
-    asyncio.create_task(_set_duration_early(out.id, audio_path))
+    _spawn_background(_set_duration_early(out.id, audio_path), f"set_duration_early({out.id})")
     return out
 
 

@@ -31,7 +31,7 @@ async def transcribe(file: UploadFile = File(..., description="Audio-Datei (.mp3
     try:
         result = await _transcription.transcribe_audio(file_path)
     except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
     job_id = uuid.uuid4().hex
 

@@ -36,4 +36,5 @@ pdf2image==1.17.0                # PDF zu Bild fuer OCR-Fallback
 pytest==8.3.4
 pytest-asyncio==0.24.0
 pytest-cov==6.0.0               # Coverage-Messung
+ruff==0.16.6                    # Lint-Gate (scripts/lint_gate.sh), Config: ruff.toml
 requests>=2.31.0               # faster-whisper Abhaengigkeit

@@ -359,7 +359,7 @@ async def summarize_verlauf(
         + ">>>VERLAUFSDOKU<<<\n"
         + verlauf_text
         + "\n>>>/VERLAUFSDOKU<<<\n\n"
-        + f"Verdichte diese Verlaufsdokumentation jetzt. "
+        + "Verdichte diese Verlaufsdokumentation jetzt. "
         + f"Zielwortzahl: ca. {target_words} Wörter "
         + f"(akzeptiert: {min_acceptable}–{max_acceptable}).\n\n"
         + "/no_think"
@@ -573,7 +573,7 @@ async def _summarize_verlauf_chunked(
     sys_prompts: list[str] = []
     user_contents: list[str] = []
 
-    for i, (chunk, cw) in enumerate(zip(chunks, chunk_words), start=1):
+    for i, (chunk, cw) in enumerate(zip(chunks, chunk_words, strict=True), start=1):
         share = max(300, int(total_target * (cw / max(raw_words, 1))))
         res = await summarize_verlauf(
             verlauf_text=chunk,
@@ -681,7 +681,7 @@ async def _retry_stricter_summary(
         + ">>>VERLAUFSDOKU<<<\n"
         + verlauf_text
         + "\n>>>/VERLAUFSDOKU<<<\n\n"
-        + f"Verdichte diese Verlaufsdokumentation jetzt. "
+        + "Verdichte diese Verlaufsdokumentation jetzt. "
         + f"Zielwortzahl: ca. {target_words} Wörter "
         + f"(akzeptiert: {min_acceptable}–{max_acceptable}).\n\n"
         + "/no_think"

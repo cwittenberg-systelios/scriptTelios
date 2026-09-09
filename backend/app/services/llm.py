@@ -1838,10 +1838,10 @@ async def _generate_ollama(
             raise RuntimeError(
                 f"Ollama nicht erreichbar unter {settings.OLLAMA_HOST}. "
                 "Bitte sicherstellen, dass Ollama laeuft."
-            )
+            ) from None
         except httpx.HTTPStatusError as e:
             body = e.response.text
-            raise _classify_ollama_error(e.response.status_code, body)
+            raise _classify_ollama_error(e.response.status_code, body) from e
 
     # Versuch 1: Normal mit dynamisch berechnetem Kontext
     try:

@@ -160,7 +160,7 @@ def _validate_paths(paths: list[str]) -> list[str]:
             raise HTTPException(
                 status_code=400,
                 detail=f"Pfad ausserhalb des Test-Verzeichnisses: {p}",
-            )
+            ) from None
         valid.append(str(resolved.relative_to(_BACKEND_ROOT)))
     return valid
 
@@ -320,12 +320,6 @@ async def testrun(req: TestRunRequest = TestRunRequest()) -> TestRunResponse:
 
     # Im Threadpool ausfuehren (kein Event-Loop-Blocking)
     result = await run_in_threadpool(_run_pytest_blocking, cmd, req.timeout_s, env_overrides)
-
-    logger.info(
-        "testrun: pytest fertig (exitCode=%d, output_len=%d)",
-        result["exitCode"], len(result["output"]),
-    )
-    return TestRunResponse(**result)
 
     logger.info(
         "testrun: pytest fertig (exitCode=%d, output_len=%d)",

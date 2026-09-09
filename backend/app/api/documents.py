@@ -5,7 +5,6 @@ GET  /api/documents/download/{filename} – Befuelltes DOCX herunterladen
 """
 import logging
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -48,7 +47,7 @@ async def fill_document(
     try:
         verlauf_text = await extract_text(verlauf_path)
     except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Verlaufsdokumentation konnte nicht gelesen werden: {e}")
+        raise HTTPException(status_code=422, detail=f"Verlaufsdokumentation konnte nicht gelesen werden: {e}") from e
 
     if len(verlauf_text.strip()) < 50:
         raise HTTPException(status_code=422, detail="Verlaufsdokumentation scheint leer zu sein (OCR fehlgeschlagen?)")
@@ -81,7 +80,7 @@ async def fill_document(
     try:
         result = await generate_text(system, user, max_tokens=3000)
     except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e)) from e
 
     generated_text = result["text"]
 
@@ -95,7 +94,7 @@ async def fill_document(
             workflow=workflow,
         )
     except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     job_id = uuid.uuid4().hex
     download_url = f"/api/documents/download/{out_path.name}"
@@ -125,7 +124,7 @@ async def extract_style(
     try:
         style_context = await extract_style_context(path, generate_text)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Stilprofil-Extraktion fehlgeschlagen: {e}")
+        raise HTTPException(status_code=500, detail=f"Stilprofil-Extraktion fehlgeschlagen: {e}") from e
 
     if not style_context.strip():
         raise HTTPException(status_code=422, detail="Kein verwertbarer Text im Dokument gefunden")
@@ -184,9 +183,9 @@ async def extract_document(
     try:
         result = await extract_text_with_meta(path)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except RuntimeError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
     return ExtractionResponse(
         filename=file.filename or path.name,

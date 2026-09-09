@@ -43,7 +43,7 @@ async def ism_xml(req: IsmXmlRequest) -> IsmXmlResponse:
         xml = render_sns_xml(req.fragebogen, req.name.strip())
     except Exception as e:  # pragma: no cover - Renderer ist deterministisch
         logger.error("ISM-XML-Rendering fehlgeschlagen: %s", e)
-        raise HTTPException(status_code=500, detail=f"XML-Rendering fehlgeschlagen: {e}")
+        raise HTTPException(status_code=500, detail=f"XML-Rendering fehlgeschlagen: {e}") from e
 
     # Dateiname aus der Kennung: nur URL-/dateisystem-sichere Zeichen.
     stem = "".join(

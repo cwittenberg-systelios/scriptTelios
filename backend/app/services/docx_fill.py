@@ -47,9 +47,9 @@ async def fill_docx_template(
     def _run():
         try:
             from docx import Document
-            from docx.shared import Pt
+            from docx.shared import Pt  # noqa: F401  (Verfuegbarkeits-Check)
         except ImportError:
-            raise RuntimeError("python-docx nicht installiert: pip install python-docx")
+            raise RuntimeError("python-docx nicht installiert: pip install python-docx") from None
 
         doc = Document(str(template_path))
         full_template_text = "\n".join(p.text for p in doc.paragraphs)

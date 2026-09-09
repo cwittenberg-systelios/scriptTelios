@@ -1277,11 +1277,15 @@ async def _extract_docx(file_path: Path) -> ExtractionResult:
 
 # ── TXT ──────────────────────────────────────────────────────────────────────
 
-async def _extract_txt(file_path: Path) -> ExtractionResult:
+def _read_txt_blocking(file_path: Path) -> str:
     try:
-        text = file_path.read_text(encoding="utf-8", errors="replace")
+        return file_path.read_text(encoding="utf-8", errors="replace")
     except Exception:
-        text = file_path.read_text(encoding="latin-1", errors="replace")
+        return file_path.read_text(encoding="latin-1", errors="replace")
+
+
+async def _extract_txt(file_path: Path) -> ExtractionResult:
+    text = await asyncio.to_thread(_read_txt_blocking, file_path)
     text = _normalize_text(text)
     q = _assess_quality(text)
     return ExtractionResult(text, "txt", q.score, 1, [])

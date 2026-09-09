@@ -176,6 +176,40 @@ def _ts_to_epoch(ts) -> Optional[float]:
     return None
 
 
+def _prune_log_file(p: Path, max_age: float) -> int:
+    """Synchroner Kern von cleanup_old_logs (blockierende Datei-I/O, wird
+    per asyncio.to_thread ausserhalb des Event-Loops ausgefuehrt).
+    Liefert die Anzahl entfernter Zeilen."""
+    import json as _j
+
+    if not p.exists():
+        return 0
+    cutoff_ts = time.time() - max_age
+    lines = p.read_text(encoding="utf-8").splitlines()
+    kept = []
+    removed = 0
+    for line in lines:
+        try:
+            e = _j.loads(line)
+            ts_raw = e.get("ts") or e.get("timestamp")
+            if not ts_raw:
+                kept.append(line)  # Zeilen ohne Timestamp behalten
+                continue
+            ts_epoch = _ts_to_epoch(ts_raw)
+            if ts_epoch is None:
+                # unbekanntes Format -> sicherheitshalber behalten
+                kept.append(line)
+            elif ts_epoch >= cutoff_ts:
+                kept.append(line)
+            else:
+                removed += 1
+        except Exception:
+            kept.append(line)
+    if removed:
+        p.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    return removed
+
+
 async def cleanup_old_logs() -> int:
     """Trunkiert performance.log und audit.log jenseits der Retention."""
     count = 0
@@ -185,32 +219,8 @@ async def cleanup_old_logs() -> int:
     ]:
         try:
             p = Path(log_path)
-            if not p.exists(): continue
-            cutoff_ts = time.time() - max_age
-            lines = p.read_text(encoding="utf-8").splitlines()
-            kept = []
-            removed = 0
-            import json as _j
-
-            for line in lines:
-                try:
-                    e = _j.loads(line)
-                    ts_raw = e.get("ts") or e.get("timestamp")
-                    if not ts_raw:
-                        kept.append(line)  # Zeilen ohne Timestamp behalten
-                        continue
-                    ts_epoch = _ts_to_epoch(ts_raw)
-                    if ts_epoch is None:
-                        # unbekanntes Format -> sicherheitshalber behalten
-                        kept.append(line)
-                    elif ts_epoch >= cutoff_ts:
-                        kept.append(line)
-                    else:
-                        removed += 1
-                except Exception:
-                    kept.append(line)
+            removed = await asyncio.to_thread(_prune_log_file, p, max_age)
             if removed:
-                p.write_text("\n".join(kept) + "\n", encoding="utf-8")
                 count += removed
                 logger.info("Retention: %d Zeilen aus %s gelöscht",
                             removed, p.name)

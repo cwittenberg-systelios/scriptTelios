@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field, asdict
-from typing import Any, Optional
+from typing import Any
 
 from app.core.workflows import word_limit_for
 from app.services.quality_specs import (

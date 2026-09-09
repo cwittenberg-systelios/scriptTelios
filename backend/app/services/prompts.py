@@ -1474,7 +1474,6 @@ def derive_word_limits(
       - Im Test (test_eval.py): gleiche Logik, gleiche Funktion importieren
         oder duplizieren.
     """
-    import re as _re
 
     counts = []
     for t in style_texts:
@@ -1768,7 +1767,6 @@ def _compute_style_constraints(
         paragraphs = [p.strip() for p in style_text.split("\n") if len(p.strip().split()) >= 20]
     if len(paragraphs) < 1:
         paragraphs = [style_text.strip()]
-    avg_para_len = round(sum(len(p.split()) for p in paragraphs) / max(len(paragraphs), 1), 0)
 
     # Wir-Perspektive
     wir_pattern = _re.compile(r'\b(wir|uns|unser[ems]?|unserer?)\b', _re.IGNORECASE)
