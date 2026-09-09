@@ -255,13 +255,24 @@ function InputTabs({ tabs, children, defaultTab }) {
   );
 }
 
-function Card({ num, title, badge, open: defaultOpen = true, children }) {
-  const [open, setOpen] = useState(defaultOpen);
+// v19.20 (P2-1): hasContent - true, wenn ein per Draft-Cache persistiertes
+// Feld in dieser Card nicht leer/Default ist. Dann startet die Card
+// AUFGEKLAPPT (auch bei open={false}) und zeigt eingeklappt einen Punkt.
+// Hintergrund: Nach Reload waren Dateien weg (nicht persistierbar), aber
+// Fokus-Themen/Diagnosen standen unsichtbar in eingeklappten Cards und
+// gingen unbemerkt in den naechsten Job (Nutzerfeedback 2026-09-09).
+function Card({ num, title, badge, open: defaultOpen = true, hasContent = false, children }) {
+  const [open, setOpen] = useState(defaultOpen || !!hasContent);
   return (
     <div className="step-card">
       <div className={"step-head" + (open ? " open" : "")} onClick={() => setOpen(!open)}>
         <div className="step-num">{num}</div>
-        <div className="step-label">{title}</div>
+        <div className="step-label">
+          {title}
+          {!open && hasContent && (
+            <span title="Enthält Eingaben" style={{marginLeft:8,color:"var(--st-red)",fontSize:11}}>●</span>
+          )}
+        </div>
         {badge && (
           <span className={"step-pill " + (badge === "opt" ? "pill-opt" : "pill-req")}>
             {badge === "opt" ? "Optional" : "Erforderlich"}

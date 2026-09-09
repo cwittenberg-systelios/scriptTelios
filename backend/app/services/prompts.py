@@ -945,8 +945,9 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden "
         "(IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), "
         "konkrete Wendepunkte und Entwicklungsschritte. "
-        "Den nonverbalen Therapien (Kunst-, Musik-, Körperpsychotherapie/Körperarbeit) "
-        "einen eigenen Absatz widmen, sofern sie in den Quellen dokumentiert sind – "
+        "Der Einzeltherapie, der Gruppentherapie und den nonverbalen Therapien "
+        "(Kunst-, Musik-, Körperpsychotherapie/Körperarbeit) jeweils einen eigenen "
+        "Absatz widmen, sofern sie in den Quellen dokumentiert sind – "
         "nur die tatsächlich dokumentierten Verfahren nennen. "
         # v13: Absatzlängen-Hinweis entfernt - Längenanker steht zentral via resolve_length_anchor()
         # v13 A korrigiert: Stil folgt Vorlage. Bei Wir-Vorlage Wir-Sicht
@@ -1331,11 +1332,30 @@ BASE_PROMPTS: dict[str, str] = {
         "– Keine Überschriften (kein 'Psychotherapeutischer Behandlungsverlauf', "
         "kein 'Epikrise', keine nummerierten Abschnitte)\n"
         "– Keine Einleitungspräambel ('Im Folgenden...', 'Die Behandlung erstreckte sich...')\n"
-        "– Keine Beschreibung des Therapieangebots der Klinik "
-        "(kein Block über Einzelgespräche, Gruppentherapie, Bezugsgruppe etc.)\n"
+        # v19.20 (M1): Praezisiert. Die alte Fassung 'kein Block ueber
+        # Einzelgespraeche, Gruppentherapie, Bezugsgruppe' wurde vom Modell
+        # als Verbot des Gruppentherapie-Absatzes gelesen - Log-Analyse
+        # 13.08.-09.09.: Gruppentherapie fehlte in 10/19 Berichten trotz bis
+        # zu 32 Erwaehnungen im Verlauf.
+        "– Keine allgemeine Beschreibung des Klinik-Therapieangebots "
+        "(Werbetext, Stundenplan, Konzeptbeschreibung). Die "
+        "PATIENTENSPEZIFISCHE Arbeit in Einzeltherapie, Gruppentherapie und "
+        "nonverbalen Therapien ist dagegen PFLICHTINHALT (siehe MODALITÄTEN)\n"
         "– Keine 'Einladungen' (nur in Verlaufsnotizen)\n"
         "– Keine Unterschrift, kein Briefkopf, kein Grußsatz\n"
         "– Keine Stammdaten, Diagnosen-Kodierung, Medikation\n\n"
+        # v19.20 (M2): Positive Strukturregel - bisher forderte nur die
+        # editierbare Workflow-Anweisung einen eigenen Absatz, und nur fuer
+        # nonverbale Therapien. Nicht editierbar, damit sie nicht per
+        # Anweisungs-Edit verloren geht.
+        "MODALITÄTEN (verbindlich): Für JEDE im Verlauf dokumentierte "
+        "Modalität – Einzeltherapie, Gruppentherapie, nonverbale Therapien "
+        "(Kunst-, Musik-, Körperpsychotherapie) – ein eigener Absatz mit den "
+        "bearbeiteten Themen, Wendepunkten und der Beziehungsdynamik. Ein "
+        "Absatz darf nur fehlen, wenn die Quellen die Modalität nicht "
+        "dokumentieren. Absätze OHNE Überschrift, als Fließtext. "
+        "Vollständigkeit aller dokumentierten Modalitäten hat Vorrang vor "
+        "Kürze.\n\n"
         "STIL:\n"
         + STIL_VORLAGEN_MIMIK +
         "Konkret und patientenspezifisch – keine Allgemeinplätze.\n"
@@ -1584,6 +1604,32 @@ def split_style_examples(combined: str) -> list:
     return cleaned if cleaned else [combined.strip()]
 
 
+def render_length_anchor_block(workflow: str, anchor_min: int, anchor_max: int) -> str:
+    """EINZIGER Renderer des ZIELLAENGE-Blocks (v19.20 M4) - genutzt von
+    resolve_length_anchor (Default-Pfad) UND build_system_prompt
+    (word_limits-Pfad aus jobs.py). Vorher gab es den Text zweimal; der
+    EB-Sonderfall haette den Produktionspfad sonst nicht erreicht."""
+    target = (anchor_min + anchor_max) // 2
+    if workflow == "entlassbericht":
+        # v19.20 (M4): Kein Kuerze-Priming fuer den EB. Log-Analyse: Outputs
+        # 380-686 Woerter (Fenster 500-900), dokumentierte Modalitaeten
+        # fehlten - 'Lieber praezise als ausschweifend' drueckte ans untere
+        # Ende. Vollstaendigkeit vor Kuerze.
+        return (
+            f"\nZIELLÄNGE: {anchor_min}–{anchor_max} Wörter, Richtwert ca. {target}. "
+            f"Obergrenze: {anchor_max} Wörter. Innerhalb dieser Bandbreite hat die "
+            "Vollständigkeit aller dokumentierten Sektionen und Modalitäten "
+            "Vorrang vor Kürze – lasse keinen belegten Absatz weg, um kürzer "
+            "zu werden.\n"
+        )
+    return (
+        f"\nZIELLÄNGE: ca. {target} Wörter (akzeptierte Bandbreite {anchor_min}–{anchor_max} Wörter). "
+        f"Harte Obergrenze: {anchor_max} Wörter — überschreite sie NIEMALS. "
+        f"Lieber {max(anchor_min, target - 30)} Wörter präzise als {anchor_max + 50} Wörter ausschweifend. "
+        f"Zähle vor Abgabe deine Wörter.\n"
+    )
+
+
 def resolve_length_anchor(
     workflow: str,
     style_raw_texts: "list[str] | None" = None,
@@ -1660,13 +1706,7 @@ def resolve_length_anchor(
         n_sub = 0
 
     target = (anchor_min + anchor_max) // 2
-
-    anchor_block = (
-        f"\nZIELLÄNGE: ca. {target} Wörter (akzeptierte Bandbreite {anchor_min}–{anchor_max} Wörter). "
-        f"Harte Obergrenze: {anchor_max} Wörter — überschreite sie NIEMALS. "
-        f"Lieber {max(anchor_min, target - 30)} Wörter präzise als {anchor_max + 50} Wörter ausschweifend. "
-        f"Zähle vor Abgabe deine Wörter.\n"
-    )
+    anchor_block = render_length_anchor_block(workflow, anchor_min, anchor_max)
 
     return {
         "min": anchor_min,
@@ -2109,13 +2149,8 @@ def build_system_prompt(
     # auf einen lokalen resolve_length_anchor-Call zurück (Workflow-Default).
     if word_limits is not None:
         _anchor_min, _anchor_max = word_limits
-        _target = (_anchor_min + _anchor_max) // 2
-        parts.append(
-            f"\nZIELLÄNGE: ca. {_target} Wörter (akzeptierte Bandbreite {_anchor_min}–{_anchor_max} Wörter). "
-            f"Harte Obergrenze: {_anchor_max} Wörter — überschreite sie NIEMALS. "
-            f"Lieber {max(_anchor_min, _target - 30)} Wörter präzise als {_anchor_max + 50} Wörter ausschweifend. "
-            f"Zähle vor Abgabe deine Wörter."
-        )
+        # v19.20 (M4): gemeinsamer Renderer (EB ohne Kuerze-Priming).
+        parts.append(render_length_anchor_block(workflow, _anchor_min, _anchor_max).rstrip())
     else:
         # Fallback: Workflow-Default direkt aus core/workflows holen
         _result = resolve_length_anchor(workflow, style_raw_texts=None)

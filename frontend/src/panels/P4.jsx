@@ -138,7 +138,7 @@ function P4({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Fließt als eigener Absatz am Ende des Behandlungsverlaufs ein („Zum Abschluss ihres Prozesses reflektierte die Klientin …", indirekte Rede). Offene Themen daraus fließen in die Therapieempfehlungen. Feedback an das Team wird nicht übernommen.</div>
           </Card>
 
-          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
+          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(styleText || "").trim()}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -155,7 +155,7 @@ function P4({ toast, resumeJob, onResumed }) {
             </InputTabs>
           </Card>
 
-          <Card num="E" title="Fokus-Themen" badge="opt" open={false}>
+          <Card num="E" title="Fokus-Themen" badge="opt" open={false} hasContent={!!(fokus || "").trim()}>
             <label className="field-label">Schwerpunkte für diesen Entlassbericht</label>
             <textarea rows={4}
               placeholder={"Optionale Schwerpunkte, z.B.:\n– Wächteranteil Türsteher, Arbeit mit inneren Anteilen\n– Gruppenarbeit und soziale Integration\n– Familien- und Paardynamik\n– Entschluss zur räumlichen Trennung"}
@@ -165,7 +165,7 @@ function P4({ toast, resumeJob, onResumed }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
           </Card>
 
-          <Card num="F" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
+          <Card num="F" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false} hasContent={prompt !== P_ENTL}>
             <JobModelPicker workflow="entlassbericht" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_ENTL} />
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>

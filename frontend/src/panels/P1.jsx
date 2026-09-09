@@ -361,7 +361,7 @@ function P1({ toast, resumeJob, onResumed }) {
         </InputTabs>
       </Card>
 
-      <Card num="B" title="Stichpunkte" badge="opt" open={false}>
+      <Card num="B" title="Stichpunkte" badge="opt" open={false} hasContent={!!(currentDraft.bullets || "").trim()}>
         <label className="field-label">Relevante Themen und Beobachtungen</label>
         <textarea rows={4}
           placeholder={"- Bericht ueber das Wochenende\n- Schlafprobleme anhaltend\n- Fortschritt bei Expositionsuebung ..."}
@@ -370,7 +370,7 @@ function P1({ toast, resumeJob, onResumed }) {
         <div className="field-note">Ergaenzt oder ersetzt das Transkript bei Bedarf</div>
       </Card>
 
-      <Card num="C" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
+      <Card num="C" title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(currentDraft.styleText || "").trim()}>
         <InputTabs
           tabs={[
             { id:"file", icon:"📎", label:"Datei"  },
@@ -395,7 +395,7 @@ function P1({ toast, resumeJob, onResumed }) {
         </InputTabs>
       </Card>
 
-      <Card num="D" title="Prompt/Modell anpassen (advanced)" open={false}>
+      <Card num="D" title="Prompt/Modell anpassen (advanced)" open={false} hasContent={currentDraft.prompt !== P_DOKU}>
         <JobModelPicker workflow="dokumentation" value={jobModel} onChange={setJobModel} />
         <PromptEditor value={currentDraft.prompt}
           onChange={(v) => updateDraft(currentDraft.id, { prompt: v })}

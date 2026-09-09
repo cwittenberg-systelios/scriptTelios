@@ -117,7 +117,13 @@ def _build_focus_hint(workflow: Optional[str]) -> str:
         "entlassbericht": (
             "Für einen Entlassbericht relevant: chronologischer Gesamtbogen — "
             "Ausgangslage, Hauptphasen der Behandlung, Wendepunkte, Endzustand. "
-            "Auch Episoden die nicht 'erfolgreich' waren gehören dazu."
+            "Auch Episoden die nicht 'erfolgreich' waren gehören dazu. "
+            # v19.20 (M5): Modalitaeten sind im Zielbericht eigene Absaetze -
+            # sie muessen die Verdichtung als solche ueberleben.
+            "MODALITÄTEN ERHALTEN: Gruppensitzungen, Einzelgespräche und "
+            "nonverbale Therapien (Kunst/Musik/Körper) als jeweils eigene, "
+            "so benannte Einträge mit ihren Themen führen - Gruppeninhalte "
+            "NICHT in das Einzel-Narrativ auflösen."
         ),
     }.get(workflow, "")
 
@@ -512,6 +518,26 @@ async def summarize_verlauf(
         "degraded":             degraded,
         "target_words":         target_words,
         "min_acceptable":       min_acceptable,
+        # v19.20 (M5): Erhalt der Modalitaets-Erwaehnungen ueber die
+        # Verdichtung (roh -> verdichtet). Diagnose-Kennzahl im Audit.
+        "modality_retention":   _modality_retention(verlauf_text, summary),
+    }
+
+
+_MODALITY_STEMS = {
+    "gruppe":    ("gruppe",),
+    "einzel":    ("einzelgespr", "einzeltherap", "einzelsitzung", "im einzel"),
+    "nonverbal": ("kunst", "musik", "körper", "koerper", "nonverbal", "bewegung", "tanz"),
+}
+
+
+def _modality_retention(raw: str, summary: str) -> dict:
+    """{modalitaet: {"raw": n, "summary": n}} - reine Zaehlung, kein Urteil."""
+    lr, ls = (raw or "").lower(), (summary or "").lower()
+    return {
+        k: {"raw": sum(lr.count(st) for st in stems),
+            "summary": sum(ls.count(st) for st in stems)}
+        for k, stems in _MODALITY_STEMS.items()
     }
 
 

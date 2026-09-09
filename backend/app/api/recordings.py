@@ -314,7 +314,38 @@ async def upload_recording(
     await p0_queue.put((_PRIO_P0, out.id, audio_path))
     logger.info("Recording %d (Therapeut: %s) in P0-Queue (Größe: %d)",
                 out.id, current_user, p0_queue.qsize())
+    # v19.20 (D1): Dauer sofort im Hintergrund bestimmen - nicht erst mit dem
+    # Transkriptionsergebnis. Damit (a) zeigt P0 die Dauer schon waehrend
+    # 'Transkribiert...', (b) greift der dynamische Transkript-Timeout
+    # (v19.16 G3, max(600, 2xDauer+120)) auch bei frisch hochgeladenen
+    # Aufnahmen statt auf 900 s zurueckzufallen (Fall 11.08.: 62-min-Aufnahme,
+    # Job nach 15 min abgebrochen). Fire-and-forget: Fehler sind unkritisch.
+    asyncio.create_task(_set_duration_early(out.id, audio_path))
     return out
+
+
+async def _set_duration_early(rec_id: int, audio_path: Path) -> None:
+    """v19.20 (D1): duration_s per ffprobe/ffmpeg ermitteln und speichern,
+    sofern noch nicht gesetzt (Transkriptionsergebnis ueberschreibt spaeter
+    mit demselben Wert). Bei Browser-webm ohne Header dekodiert _get_duration
+    die Datei komplett (~10 s bei 60 min) - deshalb im Thread, nicht im
+    Request."""
+    try:
+        from app.services import transcription as _transcription
+        duration = await asyncio.to_thread(_transcription._get_duration, audio_path)
+        if not duration or duration <= 1.0:
+            return
+        async with async_session_factory() as session:
+            rec = (await session.execute(
+                select(Recording).where(Recording.id == rec_id)
+            )).scalar_one_or_none()
+            if rec is None or rec.duration_s:
+                return
+            rec.duration_s = round(float(duration), 1)
+            await session.commit()
+        logger.info("Recording %d: Dauer vorab bestimmt: %.0fs", rec_id, duration)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Recording %d: Vorab-Dauer fehlgeschlagen: %s", rec_id, e)
 
 
 @router.get("", response_model=list[RecordingOut])

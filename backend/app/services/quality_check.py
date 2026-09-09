@@ -1124,13 +1124,28 @@ def _check_required_sections(text: str, workflow: str) -> list[QualityIssue]:
     return issues
 
 
-def _check_recommended_sections(text: str, workflow: str) -> list[QualityIssue]:
-    """Empfohlene Therapie-Modalitaeten (v19.6.1): INFO-Ebene. Anders als
-    Pflicht-Sektionen ist ihr Fehlen KEIN Mangel - die Modalitaet hat evtl. nicht
-    stattgefunden (nicht jeder Patient macht Kunst-/Musik-/Koerpertherapie). Der
-    Check surfacet nur eine Abdeckungs-Uebersicht ('keine Gruppentherapie
-    erwaehnt - beabsichtigt?'), failt aber keinen gueltigen Bericht und wird im
-    Repair nicht vorausgewaehlt (nur critical wird vorausgewaehlt)."""
+# v19.20 (M3): Ab so vielen Synonym-Treffern in der Quelle gilt die Modalitaet
+# als dokumentiert -> Fehlen im Output ist ein Mangel (warning, repair-faehig).
+_MODALITY_SOURCE_MIN_HITS = 3
+
+
+def _count_modality_in_source(source_text: str, section: str) -> int:
+    low = (source_text or "").lower()
+    return sum(low.count(syn) for syn in synonyms_for(section))
+
+
+def _check_recommended_sections(
+    text: str, workflow: str, source_text: str = "",
+) -> list[QualityIssue]:
+    """Empfohlene Therapie-Modalitaeten (v19.6.1): INFO-Ebene, wenn die Quelle
+    nichts zur Modalitaet hergibt (nicht jeder Patient macht Kunst-/Musik-/
+    Koerpertherapie).
+
+    v19.20 (M3): WARNING (repair-faehig), wenn die Quelle die Modalitaet
+    nachweislich dokumentiert (>= _MODALITY_SOURCE_MIN_HITS Synonym-Treffer)
+    und sie im Text trotzdem fehlt. Log-Analyse 13.08.-09.09.: Gruppentherapie
+    fehlte in 10/19 Entlassberichten bei bis zu 32 Quell-Erwaehnungen - als
+    reiner Info-Hinweis wurde das nie repariert."""
     issues: list[QualityIssue] = []
     for section in recommended_sections_for(workflow):
         if section_present(text, section):
@@ -1138,20 +1153,42 @@ def _check_recommended_sections(text: str, workflow: str) -> list[QualityIssue]:
         suffix = upper_code_suffix(section)
         if not suffix:
             continue
-        issues.append(QualityIssue(
-            code=f"{ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED}{suffix}",
-            severity=SEVERITY_INFO,
-            message=(
-                f"Modalitaet nicht erwaehnt: '{section}' - sofern nicht "
-                "durchgefuehrt, ist das in Ordnung."
-            ),
-            repair_hint=(
-                f"Falls '{section}' im Aufenthalt stattgefunden hat, ergaenze "
-                "einen kurzen Absatz dazu - AUSSCHLIESSLICH sofern durch die "
-                "Quellen gedeckt (keine erfundene Modalitaet)."
-            ),
-            code_detail={"section": section, "synonyms": synonyms_for(section)},
-        ))
+        hits = _count_modality_in_source(source_text, section)
+        documented = hits >= _MODALITY_SOURCE_MIN_HITS
+        if documented:
+            issues.append(QualityIssue(
+                code=f"{ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED}{suffix}",
+                severity=SEVERITY_WARNING,
+                message=(
+                    f"Modalitaet fehlt: '{section}' - die Quellen dokumentieren "
+                    f"sie ({hits} Erwaehnungen im Verlauf), im Text kommt sie "
+                    "nicht vor."
+                ),
+                repair_hint=(
+                    f"Ergaenze einen eigenen Absatz zu '{section}' aus dem "
+                    "QUELLE-VERLAUF: bearbeitete Themen, Wendepunkte, "
+                    "Beziehungsdynamik. Alle bestehenden Inhalte beibehalten; "
+                    "nur aus den Quellen belegte Inhalte verwenden."
+                ),
+                code_detail={"section": section, "source_hits": hits,
+                             "synonyms": synonyms_for(section)},
+            ))
+        else:
+            issues.append(QualityIssue(
+                code=f"{ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED}{suffix}",
+                severity=SEVERITY_INFO,
+                message=(
+                    f"Modalitaet nicht erwaehnt: '{section}' - sofern nicht "
+                    "durchgefuehrt, ist das in Ordnung."
+                ),
+                repair_hint=(
+                    f"Falls '{section}' im Aufenthalt stattgefunden hat, ergaenze "
+                    "einen kurzen Absatz dazu - AUSSCHLIESSLICH sofern durch die "
+                    "Quellen gedeckt (keine erfundene Modalitaet)."
+                ),
+                code_detail={"section": section, "source_hits": hits,
+                             "synonyms": synonyms_for(section)},
+            ))
     return issues
 
 
@@ -1413,7 +1450,7 @@ def run_quality_check(
     issues.extend(_check_length(text, workflow))
     issues.extend(_check_required_keywords(text, workflow))
     issues.extend(_check_required_sections(text, workflow))
-    issues.extend(_check_recommended_sections(text, workflow))
+    issues.extend(_check_recommended_sections(text, workflow, source_text=source_text))
     issues.extend(_check_stichpunkte(text, stichpunkte))
     issues.extend(_check_kompositum_klebebugs(text))
     issues.extend(_check_source_fidelity(text, source_text))

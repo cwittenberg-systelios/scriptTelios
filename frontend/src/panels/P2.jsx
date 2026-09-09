@@ -203,7 +203,7 @@ function P2({ toast, resumeJob, onResumed }) {
             </div>
           </Card>
 
-          <Card num="B" title="Aufnahmegespräch" badge="opt" open={false}>
+          <Card num="B" title="Aufnahmegespräch" badge="opt" open={false} hasContent={!!(text || "").trim()}>
             <InputTabs tabs={[
               { id:"audio", icon:"🎙", label:"Aufnahme" },
               { id:"file",  icon:"📄", label:"Datei"    },
@@ -238,7 +238,7 @@ function P2({ toast, resumeJob, onResumed }) {
             <div className="field-note">Enter oder Komma zum Hinzufuegen — z.B. F32.1, F41.1, Z73.0</div>
           </Card>
 
-          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
+          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(styleText || "").trim()}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -256,13 +256,13 @@ function P2({ toast, resumeJob, onResumed }) {
             </InputTabs>
           </Card>
 
-          <Card num="E" title="Prompt/Modell anpassen (advanced)" open={false}>
+          <Card num="E" title="Prompt/Modell anpassen (advanced)" open={false} hasContent={prompt !== P_ANAMNESE}>
             <JobModelPicker workflow="anamnese" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_ANAMNESE} />
             <div className="field-note" style={{marginTop:8}}>Inhaltliche Anweisungen fuer die Anamnese. Stil-/Quellenregeln liegen im Backend.</div>
           </Card>
 
-          <Card num="F" title="Befundvorlage (advanced)" open={false}>
+          <Card num="F" title="Befundvorlage (advanced)" open={false} hasContent={befundVorlage !== P_BEFUND_VORLAGE}>
             <PromptEditor value={befundVorlage} onChange={setBefundVorlage} def={P_BEFUND_VORLAGE} />
             <div className="field-note" style={{marginTop:8}}>AMDP-Vorlage fuer den separaten Befund-Call. Wird vom Modell mit Inhalten aus der Selbstauskunft gefuellt. Anpassen nur wenn die Standardvorlage nicht passt.</div>
           </Card>
@@ -470,7 +470,7 @@ function P2b({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Anamnese, psychischer Befund und Einweisungsdiagnosen werden aus dieser Vorlage extrahiert.</div>
           </Card>
 
-          <Card num="B" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
+          <Card num="B" title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(styleText || "").trim()}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -487,7 +487,7 @@ function P2b({ toast, resumeJob, onResumed }) {
             </InputTabs>
           </Card>
 
-          <Card num="C" title="Fokus-Themen" badge="opt" open={false}>
+          <Card num="C" title="Fokus-Themen" badge="opt" open={false} hasContent={!!(fokus || "").trim()}>
             <label className="field-label">Schwerpunkte für die Akutbegründung</label>
             <textarea rows={4}
               placeholder={"Optionale Schwerpunkte, z.B.:\n– Akute Suizidalität\n– Dekompensation nach Auslöser-Ereignis\n– Ambulant nicht ausreichend, weil ..."}
@@ -497,7 +497,7 @@ function P2b({ toast, resumeJob, onResumed }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Antragsvorlage belegt sind werden aufgegriffen.</div>
           </Card>
 
-          <Card num="D" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
+          <Card num="D" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false} hasContent={prompt !== P_AKUT}>
             <JobModelPicker workflow="akutantrag" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_AKUT} />
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>

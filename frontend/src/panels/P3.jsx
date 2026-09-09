@@ -142,7 +142,7 @@ function P3({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus dieser Vorlage für den neuen Antrag übernommen.</div>
           </Card>
 
-          <Card num="C" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
+          <Card num="C" title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(styleText || "").trim()}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -159,7 +159,7 @@ function P3({ toast, resumeJob, onResumed }) {
             </InputTabs>
           </Card>
 
-          <Card num="D" title="Fokus-Themen" badge="opt" open={false}>
+          <Card num="D" title="Fokus-Themen" badge="opt" open={false} hasContent={!!(fokus || "").trim()}>
             <label className="field-label">Schwerpunkte für diesen Antrag</label>
             <textarea rows={4}
               placeholder={"Optionale Schwerpunkte, z.B.:\n– Wächteranteil Türsteher\n– Gruppenarbeit, soziale Integration\n– Entschluss zur räumlichen Trennung"}
@@ -169,7 +169,7 @@ function P3({ toast, resumeJob, onResumed }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku belegt sind werden aufgegriffen.</div>
           </Card>
 
-          <Card num="E" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
+          <Card num="E" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false} hasContent={prompt !== P_VERL}>
             <JobModelPicker workflow="verlaengerung" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_VERL} />
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
@@ -355,7 +355,7 @@ function P3b({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>An diesen Verlauf wird der neue Text inhaltlich anknüpfen ("seit dem letzten Antrag ...").</div>
           </Card>
 
-          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false}>
+          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(styleText || "").trim()}>
             <InputTabs tabs={[
               { id:"file", icon:"📎", label:"Datei"   },
               { id:"text", icon:"✏️", label:"Text C&P" },
@@ -372,7 +372,7 @@ function P3b({ toast, resumeJob, onResumed }) {
             </InputTabs>
           </Card>
 
-          <Card num="E" title="Fokus-Themen" badge="opt" open={false}>
+          <Card num="E" title="Fokus-Themen" badge="opt" open={false} hasContent={!!(fokus || "").trim()}>
             <label className="field-label">Schwerpunkte für die Folgeverlängerung</label>
             <textarea rows={4}
               placeholder={"Optionale Schwerpunkte, z.B.:\n– Vertiefte Traumabearbeitung seit Antrag\n– Neue Wendepunkte\n– Noch offene Therapieziele"}
@@ -382,7 +382,7 @@ function P3b({ toast, resumeJob, onResumed }) {
             <div className="field-note">Werden als Hinweis an das Modell weitergegeben – nur Themen die in der Verlaufsdoku oder dem Vorantrag belegt sind werden aufgegriffen.</div>
           </Card>
 
-          <Card num="F" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false}>
+          <Card num="F" title="Prompt/Modell anpassen (advanced)" badge="opt" open={false} hasContent={prompt !== P_VERL_FOLGE}>
             <JobModelPicker workflow="folgeverlaengerung" value={jobModel} onChange={setJobModel} />
             <PromptEditor value={prompt} onChange={setPrompt} def={P_VERL_FOLGE} />
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
