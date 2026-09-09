@@ -147,6 +147,12 @@ ISSUE_CODE_WIR_FORM_IN_DOKU = "WIR_FORM_IN_DOKU"
 # Gilt NUR fuer P1 - im AMDP-Befund ist diese Sprache korrekte Fachsprache.
 ISSUE_CODE_PATHOLOGISIERENDE_SPRACHE = "PATHOLOGISIERENDE_SPRACHE"
 
+# v19.19 (K2): Der Budget-Guard hat den Input gekuerzt - ein Teil der
+# Quellen hat das Modell nie gesehen. Log-Analyse 13.08.-09.09.: 19 von ~70
+# Primaer-Calls betroffen, fuer den Therapeuten unsichtbar. Nicht durch
+# Neu-Generierung behebbar -> warning mit Prozentangabe.
+ISSUE_CODE_INPUT_TRUNCATED = "INPUT_TRUNCATED"
+
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
 # Wird in serialize_issues + Pydantic-Schemas (Phase C) genutzt.
@@ -262,6 +268,39 @@ _PATHO_RE = re.compile(
     r"|\b(?!unauffällig|unauffaellig)auffaellig\w*\b",
     re.IGNORECASE,
 )
+
+
+def _check_input_truncated(
+    input_truncated_chars: "tuple | list | None",
+) -> list[QualityIssue]:
+    """v19.19 (K2): Sichtbar machen, dass der Budget-Guard Quellen gekuerzt hat."""
+    if not input_truncated_chars:
+        return []
+    try:
+        before, after = int(input_truncated_chars[0]), int(input_truncated_chars[1])
+    except (TypeError, ValueError, IndexError):
+        return []
+    if before <= 0 or after >= before:
+        return []
+    pct = round((1 - after / before) * 100)
+    return [QualityIssue(
+        code=ISSUE_CODE_INPUT_TRUNCATED,
+        severity=SEVERITY_WARNING,
+        message=(
+            f"Die Quellen waren zu umfangreich fuer das Modell-Kontextfenster: "
+            f"ca. {pct} % des Inputs (~{(before - after) // 6} Woerter) wurden "
+            "aus dem Mittelteil gekuerzt. Anfang und Ende der Quellen sind "
+            "vollstaendig, Themen aus der Mitte koennen fehlen oder "
+            "untergewichtet sein."
+        ),
+        repair_hint=(
+            "Nicht durch Neu-Generierung behebbar. Bei Verlaufsdokumentationen "
+            "die Verdichtung (Stage 1) pruefen; bei Transkripten das Gespraech "
+            "ggf. in zwei Auftraege teilen. Themen aus der Gespraechsmitte "
+            "gezielt per Stichpunkt/Hinweis nachfordern."
+        ),
+        code_detail={"chars_before": before, "chars_after": after, "pct_removed": pct},
+    )]
 
 
 def _check_wir_form(workflow: str, text: str) -> list[QualityIssue]:
@@ -974,6 +1013,7 @@ def run_quality_check(
     antragsvorlage_text: str | None = None,
     truncated_sources: "list[dict] | None" = None,
     transcript_coverage_gap_s: "float | None" = None,
+    input_truncated_chars: "tuple | list | None" = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
@@ -1018,6 +1058,9 @@ def run_quality_check(
     transcript_coverage_gap_s: v19.16 (T4): Sekunden-Luecke am Ende des
                   verwendeten Recording-Transkripts. None/0 -> Check
                   (Schritt 0g, TRANSCRIPT_INCOMPLETE, critical) entfaellt.
+    input_truncated_chars: v19.19 (K2): (Zeichen vorher, nachher) aus der
+                  generate_text-Telemetrie, wenn der Budget-Guard gekuerzt
+                  hat. None -> Check (Schritt 0h, INPUT_TRUNCATED) entfaellt.
 
     Idempotent (kein State, keine Seiteneffekte ausser logging).
     """
@@ -1054,6 +1097,8 @@ def run_quality_check(
     issues.extend(_check_source_truncation(truncated_sources))
     # v19.16 (T4): Recording-Transkript deckt das Audio nicht vollstaendig ab.
     issues.extend(_check_transcript_coverage(workflow, transcript_coverage_gap_s))
+    # v19.19 (K2): Budget-Guard hat Quellen gekuerzt.
+    issues.extend(_check_input_truncated(input_truncated_chars))
     # v19.17 (P-3/F6): Perspektive + Sprachstil der Einzelgespraechs-Doku.
     issues.extend(_check_wir_form(workflow, text))
     issues.extend(_check_pathologisierende_sprache(workflow, text))

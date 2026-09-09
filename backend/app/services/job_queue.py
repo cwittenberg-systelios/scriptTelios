@@ -894,6 +894,8 @@ class JobQueue:
                     _trunc_sources = getattr(job, "truncated_sources", None)
                     # v19.16 (T4): Coverage-Luecke des verwendeten Recordings.
                     _cov_gap = getattr(job, "transcript_coverage_gap_s", None)
+                    # v19.19 (K2): Budget-Guard-Kuerzung aus der Telemetrie.
+                    _in_trunc = (job.generation_telemetry or {}).get("input_truncated_chars")
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
@@ -902,6 +904,7 @@ class JobQueue:
                         antragsvorlage_text=_antrag_qc_text,
                         truncated_sources=_trunc_sources,
                         transcript_coverage_gap_s=_cov_gap,
+                        input_truncated_chars=_in_trunc,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(

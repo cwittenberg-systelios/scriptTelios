@@ -108,12 +108,15 @@ class TestTruncationTelemetry:
         async def _fake(system_prompt, user_content, max_tokens, **kwargs):
             return _fake_ollama_result()
 
-        # ~18.3k geschaetzte Tokens (wie Job 9b3b58): 64000 Zeichen.
-        # 18286 + 3500 > 20480, aber 20480 - 18286 - 200 = 1994 >= 1000
-        # (min_output dokumentation) -> nur Output-Budget schrumpft. Bei Cap
-        # 32768 passt der volle Input zudem real ins Fenster (kein stiller
-        # Ollama-Abschnitt mehr).
-        medium_user = ("Verlaufszeile mit Inhalt. " * 3000).strip()[:64000]
+        # v19.19 (K1): Die harte Decke ist jetzt 32768 (vorher 20480), d.h.
+        # MAX_SAFE_CTX = min(32768, 32768) = 32768.
+        # ~29.7k geschaetzte Tokens: 104000 Zeichen. 29714 + 3500 > 32768,
+        # aber 32768 - 29714 - 200 = 2854 >= 1000 (min_output dokumentation)
+        # -> nur Output-Budget schrumpft, Input bleibt vollstaendig.
+        # (Der alte 64k-Fall - 18.3k Tokens - passt mit 32k jetzt komplett
+        # ohne Drosselung: genau das ist der K1-Gewinn, siehe Log-Analyse
+        # 13.08.-09.09.: 15 von 19 Kuerzungen entfallen.)
+        medium_user = ("Verlaufszeile mit Inhalt. " * 5000).strip()[:104000]
 
         with patch("app.services.llm._generate_ollama", _fake):
             result = await generate_text(

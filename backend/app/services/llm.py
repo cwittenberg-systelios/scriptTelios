@@ -933,7 +933,14 @@ async def generate_text(
     # sichtbar (input_truncated=True) gekuerzt statt still uebergelaufen wird.
     # Auf 32GB-GPUs zusaetzlich LLM_NUM_CTX_CAP=32768 setzen (q8_0-KV ist am Pod
     # aktiv) – dann passt das volle Transkript und Stage 1 verdichtet es sauber.
-    MAX_SAFE_CTX = min(20480, getattr(settings, "LLM_NUM_CTX_CAP", 16384))
+    # v19.19 (K1): Harte Decke 20480 -> 32768. Die 20480 deckelte das Budget
+    # auch dann, wenn LLM_NUM_CTX_CAP=32768 gesetzt war (RTX Pro 4500, 32GB,
+    # q8_0-KV). Log-Analyse 13.08.-09.09.: 19 von ~70 Primaer-Calls wurden
+    # still gekuerzt, P1 in 9/20 Jobs, EB-Verlaeufe bis zu 60 %. Mit 32k
+    # verschwinden 15 der 19 Faelle. Voraussetzung auf dem Pod:
+    #   OLLAMA_FLASH_ATTENTION=true  OLLAMA_KV_CACHE_TYPE=q8_0
+    #   OLLAMA_NUM_PARALLEL=1        LLM_NUM_CTX_CAP=32768
+    MAX_SAFE_CTX = min(32768, getattr(settings, "LLM_NUM_CTX_CAP", 16384))
     # Workflow-spezifische Mindest-Output-Tokens:
     # Der Output darf nie unter dieses Minimum fallen, sonst wird der Input gekuerzt.
     MIN_OUTPUT_TOKENS = {
@@ -954,6 +961,7 @@ async def generate_text(
     # Verlauf wurde still beschnitten, der Therapeut erfuhr es nie.
     _original_max_tokens = max_tokens
     input_truncated = False
+    input_truncated_chars = None  # v19.19 (K2): (vorher, nachher) fuer QC/UI
 
     # max_tokens dynamisch anpassen: so viel wie moeglich, aber mindestens min_output
     if estimated_input_tokens + max_tokens > MAX_SAFE_CTX:
@@ -973,8 +981,15 @@ async def generate_text(
             max_user_chars = int(available_input * 3.5)
             if max_user_chars > 0 and len(user_content) > max_user_chars:
                 original_len = len(user_content)
-                user_content = _sample_uniformly(user_content, max_user_chars)
+                # v19.19 (K3): Anfang und Ende bewahren, nur den Mittelteil
+                # samplen. Uniformes Sampling ueber den GESAMTEN User-Content
+                # traf auch die Instruktions-Bloecke am Anfang (AKTUELLER
+                # PATIENT, DATENSCHUTZ) und Ende (ERINNERUNG) sowie Aufnahme-
+                # und Entlassphase der Quellen - f.landau-Feedback 3b86cd68:
+                # 'unterschiedliche Gewichtung, was den Unterschied gemacht hat'.
+                user_content = _sample_head_tail(user_content, max_user_chars)
                 input_truncated = True
+                input_truncated_chars = (original_len, len(user_content))
                 logger.warning(
                     "User-Content gekuerzt um min. %d Output-Tokens zu garantieren: "
                     "%d → %d Zeichen",
@@ -1042,6 +1057,7 @@ async def generate_text(
         _tel = result.setdefault("telemetry", {})
         _tel["structured_output"] = True
         _tel["input_truncated"] = input_truncated
+        _tel["input_truncated_chars"] = input_truncated_chars
         _tel["output_budget_reduced"] = max_tokens < _original_max_tokens
         logger.info(
             "Structured-Generierung: %d Tokens in %.1fs (Modell: %s)%s",
@@ -1168,6 +1184,7 @@ async def generate_text(
     # ersetzt) die Flags traegt.
     _tel = result.setdefault("telemetry", {})
     _tel["input_truncated"] = input_truncated
+    _tel["input_truncated_chars"] = input_truncated_chars
     _tel["output_budget_reduced"] = max_tokens < _original_max_tokens
 
     logger.info(
@@ -1211,6 +1228,69 @@ def _estimate_num_ctx(system_prompt: str, user_content: str, max_tokens: int) ->
     # (statt von Ollama still gekuerzt zu werden).
     cap = getattr(settings, "LLM_NUM_CTX_CAP", 16384)
     return min(rounded, cap)
+
+
+def _sample_head_tail(
+    text: str,
+    max_chars: int,
+    head_frac: float = 0.30,
+    tail_frac: float = 0.30,
+) -> str:
+    """v19.19 (K3): Kuerzt einen Text auf max_chars, bewahrt aber Anfang und
+    Ende wortgetreu und sampelt nur den Mittelteil.
+
+    Budgetaufteilung: head_frac vom Budget fuer den Anfang (Instruktions-
+    Bloecke, Aufnahmephase), tail_frac fuer das Ende (Entlassphase,
+    Schluss-Erinnerung), der Rest fuer den gleichmaessig gesampelten
+    Mittelteil. Ein sichtbarer Marker nennt dem Modell die ausgelassene
+    Menge, damit es die Luecke nicht ueberbrueckt, sondern benennt.
+
+    Schnitte an Zeilengrenzen; bei Texten, die ohnehin passen, unveraendert.
+    """
+    if len(text) <= max_chars:
+        return text
+    head_budget = int(max_chars * head_frac)
+    tail_budget = int(max_chars * tail_frac)
+    marker_reserve = 120
+    mid_budget = max_chars - head_budget - tail_budget - marker_reserve
+    if mid_budget < 200:
+        # Winziges Budget: nur Anfang + Ende
+        mid_budget = 0
+
+    # Kopf an Zeilengrenze
+    head = text[:head_budget]
+    nl = head.rfind("\n")
+    if nl > head_budget // 2:
+        head = head[:nl + 1]
+    # Schwanz an Zeilengrenze
+    tail = text[len(text) - tail_budget:]
+    nl = tail.find("\n")
+    if 0 <= nl < tail_budget // 2:
+        tail = tail[nl + 1:]
+
+    middle = text[len(head):len(text) - len(tail)]
+    omitted_total = len(middle)
+    if mid_budget > 0 and len(middle) > mid_budget:
+        middle_sampled = _sample_uniformly(middle, mid_budget)
+    elif mid_budget > 0:
+        middle_sampled = middle
+    else:
+        middle_sampled = ""
+    omitted = max(0, omitted_total - len(middle_sampled))
+
+    marker = (
+        f"\n[HINWEIS SYSTEM: Der Mittelteil wurde aus Platzgruenden gekuerzt - "
+        f"ca. {omitted} Zeichen (~{omitted // 6} Woerter) ausgelassen. Anfang und "
+        f"Ende sind vollstaendig. Erfinde keine Inhalte fuer die Luecke.]\n"
+    )
+    result = head + marker + middle_sampled + marker + tail
+    logger.warning(
+        "User-Content head/tail-gekuerzt: %d -> %d Zeichen (Anfang %d, Mitte %d "
+        "gesampelt von %d, Ende %d)",
+        len(text), len(result), len(head), len(middle_sampled), omitted_total,
+        len(tail),
+    )
+    return result
 
 
 def _sample_uniformly(text: str, max_chars: int, n_windows: int = 10) -> str:
