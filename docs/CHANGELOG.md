@@ -12,6 +12,29 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 Basis: `v19_QA_v02` @ `b89f6d8`. Schritte als Einzelpatches (S2, S3, …),
 jeweils ohne Verhaltensaenderung fuer Therapeut:innen.
 
+### S6 — `create_generate_job` zerlegt (Backend)
+
+**S6a** Neu `app/services/generation_pipeline.py`: `UploadBundle.read(**uploads)`
+ersetzt die 18-Zeilen-`*_bytes/*_name`-Leiter, `PipelineInput` buendelt alle
+(validierten) Form-Felder + Uploads, `input_meta()`/`patient_kuerzel`,
+`parse_dx_list()`, `normalize_geschlecht()`.
+
+**S6b** Das 1.000-Zeilen-Closure `_run()` ist jetzt `run_generation(ctx, job)`
+mit sieben Phasenfunktionen (`_resolve_transcript`, `_extract_sources`,
+`_resolve_style`, `_resolve_patient_and_gates`, `_build_prompts`, `_generate`,
+`_finalize`) und einem `PipelineState` fuer den phasenuebergreifenden
+Zwischenstand. Logik byte-nah uebernommen (Closure-Variablen -> `ctx.*`,
+uebergreifende Locals -> `st.*`; Token-basiert umgeschrieben, keine
+String-Treffer). Komplexitaet: `create_generate_job` 104 -> < 10, groesste
+Phase 21 (vorher `_run` 101). Phasen sind einzeln aufrufbar - neue Tests
+in `tests/unit/test_v1921_s6_pipeline.py` (Transkript-Phase, Orchestrierung,
+ISM-Kurzpfad).
+
+**Nicht in S6 (Backlog S6c):** Verschieben der Pipeline und der Repair-/
+Stage-1-/ISM-Helfer aus `jobs.py` nach `services/`. Grund: 30+ Tests patchen
+`app.api.jobs.generate_text` u. a. - ein Umzug erfordert das Umschreiben der
+Patch-Ziele in einem eigenen Schritt.
+
 ### S5 — Frontend-Panel-Skelett (P2, P2b, P3, P3b, P4, P6)
 
 Neu `frontend/src/workflow-run.jsx`: `useWorkflowRun()` (Output-State,
