@@ -14,6 +14,7 @@ import {
   loadActiveJob,
   clearActiveJob,
   friendlyError,
+  buildPatientName,
 } from "../src/shared.js";
 
 describe("Job-Persistenz (localStorage)", () => {
@@ -59,5 +60,21 @@ describe("friendlyError()", () => {
 
   test("unbekannte Fehler behalten ihre Message", () => {
     expect(friendlyError(new Error("VRAM erschöpft"))).toMatch(/VRAM erschöpft/);
+  });
+});
+
+
+// v19.21 (S5): Kuerzel/Anrede-Ableitung, vorher in P1/P2/P6 dreimal inline.
+describe("buildPatientName()", () => {
+  test("leer -> null", () => {
+    expect(buildPatientName("", "w")).toBeNull();
+    expect(buildPatientName("   ", "m")).toBeNull();
+    expect(buildPatientName(undefined, "")).toBeNull();
+  });
+  test("haengt Punkt an und setzt Anrede nach Geschlecht", () => {
+    expect(buildPatientName("K", "w")).toBe("Frau K.");
+    expect(buildPatientName("K.", "m")).toBe("Herr K.");
+    expect(buildPatientName(" Mü ", "")).toBe("Mü.");
+    expect(buildPatientName("K", "auto")).toBe("K.");   // kein Geschlecht -> nur Kuerzel
   });
 });

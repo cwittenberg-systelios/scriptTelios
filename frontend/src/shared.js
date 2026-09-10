@@ -203,4 +203,16 @@ function getEmptyWarning(text) {
 const _recordingsCache = { data: [] };
 const _pendingLabels   = {};  // { [id]: label } — überlebt P0-Unmount
 
-export { MAX_UPLOAD_MB, fmtSec, fmtMB, offlineQueueAdd, offlineQueueList, offlineQueueRemove, pickQualityCheck, JOB_STORAGE_KEY, saveActiveJob, loadActiveJob, clearActiveJob, friendlyError, getEmptyWarning, _recordingsCache, _pendingLabels };
+// v19.21 (S5): explizites Patienten-Kuerzel fuer das Backend (P1/P2-Konvention).
+// "K" -> "K.", plus Anrede nach Geschlecht ("w"/"m"); leeres Kuerzel -> null.
+// Vorher in P1, P2 und P6 dreimal inline.
+function buildPatientName(kuerzel, geschlecht) {
+  const k = (kuerzel || "").trim();
+  if (!k) return null;
+  const kurz = k.replace(/\.?$/, ".");
+  if (geschlecht === "w") return `Frau ${kurz}`;
+  if (geschlecht === "m") return `Herr ${kurz}`;
+  return kurz;
+}
+
+export { buildPatientName, MAX_UPLOAD_MB, fmtSec, fmtMB, offlineQueueAdd, offlineQueueList, offlineQueueRemove, pickQualityCheck, JOB_STORAGE_KEY, saveActiveJob, loadActiveJob, clearActiveJob, friendlyError, getEmptyWarning, _recordingsCache, _pendingLabels };

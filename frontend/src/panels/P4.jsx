@@ -1,14 +1,14 @@
 // ────────────────────────────────────────────────────────────────────────────
-// src/panels/P4.jsx — extrahiert aus klinische-dokumentation.jsx (R4, 2026-07-01).
-// Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
+// src/panels/P4.jsx — Entlassbericht. Extrahiert aus klinische-dokumentation.jsx
+// (R4, 2026-07-01); v19.21 (S5a): Job-Skelett (attach/poll/resume/cancel/
+// Action-Bar) nach ../workflow-run.jsx ausgelagert.
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, getApiBase, pollJob, startJob } from "../api.js";
-import { useDraftCache, useJobResult, useResumeWorkflowJob } from "../hooks.jsx";
+import { useState, useCallback, useMemo } from "react";
+import { useDraftCache } from "../hooks.jsx";
 import { P_ENTL } from "../prompt-defaults.jsx";
 import { RepairBundle, ResultVersionsTabs } from "../qa.jsx";
-import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.js";
-import { Card, Dropzone, InputTabs, Output, PromptEditor, JobModelPicker, copyFormatted, FeedbackButton } from "../ui.jsx";
+import { Card, Dropzone, Output, PromptEditor, JobModelPicker, copyFormatted, FeedbackButton, StyleSourceCard } from "../ui.jsx";
+import { useWorkflowRun, WorkflowActionBar } from "../workflow-run.jsx";
 
 
 // Sprint B2: persistierte Text-Felder P4 (Files bleiben aussen vor)
@@ -40,78 +40,20 @@ function P4({ toast, resumeJob, onResumed }) {
     [draft]
   );
 
-  const [out, setOut]             = useState("");
-  const [outWarn, setOutWarn]       = useState(null);
-  const [job, jobOps]               = useJobResult();
-  const [lastJobId, setLastJobId] = useState(null);
-  const [busy, setBusy]           = useState(false);
-  const [currentJobId, setCurrentJobId] = useState(null);
+  const wr = useWorkflowRun({ workflow: "entlassbericht", page: "p4", resumeJob, onResumed });
 
-  // B2: attach-Pattern (siehe P3-Kommentar)
-  const attachedRef = useRef(null);
-  function attach(jobId) {
-    if (attachedRef.current === jobId) return;
-    attachedRef.current = jobId;
-    setBusy(true);
-    setCurrentJobId(jobId);
-    pollJob(jobId, 1200)
-      .then(j => {
-        if (!j) return;  // cancelled
-        setOut(j.result_text || "");
-        setOutWarn(getEmptyWarning(j.result_text));
-        jobOps.applyOriginal(j);
-        setLastJobId(jobId);
-      })
-      .catch(e => { setOut("Fehler: " + friendlyError(e)); })
-      .finally(() => { setBusy(false); setCurrentJobId(null); });
-  }
-
-  useEffect(() => {
-    if (!resumeJob || resumeJob.page !== "p4") return;
-    attach(resumeJob.jobId);
-    onResumed();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resumeJob]);
-
-  useResumeWorkflowJob("entlassbericht", attach, !resumeJob);
-
-  function cancelRun() {
-    const jobId = currentJobId || loadActiveJob()?.jobId;
-    if (jobId) {
-      apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
-    }
-    clearActiveJob();
-    setBusy(false);
-    setCurrentJobId(null);
-    attachedRef.current = null;
-  }
-
-  async function run() {
-    // B2: non-blocking Pfad (startJob -> attach) wie in P2/P3
-    setBusy(true);
-    setOut(""); setOutWarn(null);
-    jobOps.reset();
-    setLastJobId(null);
-    attachedRef.current = null;
-    try {
-      // v19.12: patientName/geschlecht kommen aus der Antragsvorlage
-      // (Backend-Extraktion, Kandidaten-Konsens) - kein manueller Override.
-      const jobId = await startJob("entlassbericht", prompt, "", {
-        antragsvorlage: bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund/Name
-        verlauf:        verlauf,  // Verlaufsdokumentation
-        prozessreflexion: reflexion,  // v19.13: Abschlussreflexion des Klienten (opt)
-        style:          style,
-        styleText:      styleText || null,
-        bullets:        fokus || null,
-        model:          jobModel || null,
-      });
-      attach(jobId);
-    }
-    catch (e) {
-      setOut("Fehler: " + friendlyError(e));
-      setBusy(false);
-      setCurrentJobId(null);
-    }
+  function run() {
+    // v19.12: patientName/geschlecht kommen aus der Antragsvorlage
+    // (Backend-Extraktion, Kandidaten-Konsens) - kein manueller Override.
+    wr.start(prompt, "", {
+      antragsvorlage: bericht,  // Vorbericht/Verlängerungsantrag → Diagnosen/Anamnese/Befund/Name
+      verlauf:        verlauf,  // Verlaufsdokumentation
+      prozessreflexion: reflexion,  // v19.13: Abschlussreflexion des Klienten (opt)
+      style:          style,
+      styleText:      styleText || null,
+      bullets:        fokus || null,
+      model:          jobModel || null,
+    });
   }
 
   return (
@@ -138,22 +80,12 @@ function P4({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Fließt als eigener Absatz am Ende des Behandlungsverlaufs ein („Zum Abschluss ihres Prozesses reflektierte die Klientin …", indirekte Rede). Offene Themen daraus fließen in die Therapieempfehlungen. Feedback an das Team wird nicht übernommen.</div>
           </Card>
 
-          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(styleText || "").trim()}>
-            <InputTabs tabs={[
-              { id:"file", icon:"📎", label:"Datei"   },
-              { id:"text", icon:"✏️", label:"Text C&P" },
-            ]}>
-              {(activeTab) => (<>
-                {activeTab === "file" && (
-                  <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
-                )}
-                {activeTab === "text" && (<>
-                  <textarea rows={5} placeholder="Beispiel-Entlassbericht einfügen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
-                  <div className="field-note">Schreibstil des eingefügten Texts wird übernommen</div>
-                </>)}
-              </>)}
-            </InputTabs>
-          </Card>
+          <StyleSourceCard
+            num="D"
+            style={style} onStyle={setStyle}
+            styleText={styleText} onStyleText={setStyleText}
+            placeholder="Beispiel-Entlassbericht einfügen ..."
+          />
 
           <Card num="E" title="Fokus-Themen" badge="opt" open={false} hasContent={!!(fokus || "").trim()}>
             <label className="field-label">Schwerpunkte für diesen Entlassbericht</label>
@@ -171,49 +103,39 @@ function P4({ toast, resumeJob, onResumed }) {
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
           </Card>
 
-          <div className="action-bar">
-            {/* v19.12: Klient-Controls (v19.8 nachgeruestet) wieder entfernt.
-                Geschlecht + Kuerzel werden backend-seitig aus der
-                Antragsvorlage extrahiert (Kandidaten-Konsens ueber
-                Adressblock + "wir berichten ueber", Kreuzcheck gegen den
-                Verlaufsdoku-Kopf). Spacer erhaelt das Button-Layout. */}
-            <div style={{marginRight:"auto"}} />
-            {busy
-              ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button
-                  className="btn-primary"
-                  onClick={run}
-                  disabled={!verlauf || !bericht}
-                  title={
-                    !verlauf ? "Verlaufsdokumentation erforderlich"
-                    : !bericht ? "Entlassbericht (zu vervollständigen) erforderlich (Diagnosen + Anamnese)"
-                    : ""
-                  }
-                >Entlassbericht erstellen</button>
+          {/* v19.12: Geschlecht + Kuerzel werden backend-seitig aus der
+              Antragsvorlage extrahiert (Kandidaten-Konsens) - keine
+              Klient-Controls in der Action-Bar. */}
+          <WorkflowActionBar
+            busy={wr.busy} onRun={run} onCancel={wr.cancel}
+            runLabel="Entlassbericht erstellen"
+            disabled={!verlauf || !bericht}
+            title={
+              !verlauf ? "Verlaufsdokumentation erforderlich"
+              : !bericht ? "Entlassbericht (zu vervollständigen) erforderlich (Diagnosen + Anamnese)"
+              : ""
             }
-          </div>
+          />
 
           <ResultVersionsTabs
-            hasRepair={job.hasRepair}
-            active={job.activeVersion}
-            onChange={jobOps.setActiveVersion}
-            disabled={job.repairBusy}
+            hasRepair={wr.job.hasRepair}
+            active={wr.job.activeVersion}
+            onChange={wr.jobOps.setActiveVersion}
+            disabled={wr.job.repairBusy}
           />
-          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { copyFormatted(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          <Output text={wr.displayText} loading={wr.busy} jobId={wr.currentJobId} warn={wr.outWarn}
+            onCopy={() => { copyFormatted(wr.displayText); toast("Kopiert"); }} />
 
-          <RepairBundle job={job} ops={jobOps} toast={toast} />
+          <RepairBundle job={wr.job} ops={wr.jobOps} toast={toast} />
 
-          <FeedbackButton jobId={lastJobId} workflow="entlassbericht" toast={toast} />
+          <FeedbackButton jobId={wr.lastJobId} workflow="entlassbericht" toast={toast} />
 
-          {(out || draftDirty || verlauf || bericht || style || reflexion) && (
+          {(wr.out || draftDirty || verlauf || bericht || style || reflexion) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setBericht(null); setStyle(null); setReflexion(null);
                 clearDraft();  // B2: setzt ALLE Text-Felder auf Default + raeumt localStorage
-                setOut(""); setOutWarn(null); setLastJobId(null);
-                jobOps.reset();
-                attachedRef.current = null;
+                wr.reset();
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Entlassbericht</button>
             </div>

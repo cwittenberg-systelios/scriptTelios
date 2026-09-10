@@ -2,13 +2,12 @@
 // src/panels/P3.jsx — extrahiert aus klinische-dokumentation.jsx (R4, 2026-07-01).
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { apiFetch, getApiBase, pollJob, startJob } from "../api.js";
-import { useDraftCache, useJobResult, useResumeWorkflowJob } from "../hooks.jsx";
+import { useState, useCallback, useMemo } from "react";
+import { useDraftCache } from "../hooks.jsx";
 import { P_VERL, P_VERL_FOLGE } from "../prompt-defaults.jsx";
 import { RepairBundle, ResultVersionsTabs } from "../qa.jsx";
-import { clearActiveJob, friendlyError, getEmptyWarning, loadActiveJob } from "../shared.js";
-import { Card, Dropzone, InputTabs, Output, PromptEditor, JobModelPicker, copyFormatted, FeedbackButton } from "../ui.jsx";
+import { Card, Dropzone, Output, PromptEditor, JobModelPicker, copyFormatted, FeedbackButton, StyleSourceCard } from "../ui.jsx";
+import { useWorkflowRun, WorkflowActionBar } from "../workflow-run.jsx";
 
 
 // Sprint B2: Text-Felder die in localStorage persistiert werden - ueberleben
@@ -43,84 +42,19 @@ function P3({ toast, resumeJob, onResumed }) {
     [draft]
   );
 
-  const [out, setOut]             = useState("");
-  const [outWarn, setOutWarn]       = useState(null);
-  const [job, jobOps]               = useJobResult();
-  const [lastJobId, setLastJobId] = useState(null);
-  const [busy, setBusy]           = useState(false);
-  const [currentJobId, setCurrentJobId] = useState(null);
+  const wr = useWorkflowRun({ workflow: "verlaengerung", page: "p3", resumeJob, onResumed });
 
-  // B2: zentrale attach-Funktion (Pattern aus P2/B1). attachedRef verhindert
-  // Doppel-Attach im Race zwischen Resume-Banner (resumeJob-Prop) und
-  // Auto-Resume (useResumeWorkflowJob) - beide koennen beim Mount denselben
-  // laufenden Job finden.
-  const attachedRef = useRef(null);
-  function attach(jobId) {
-    if (attachedRef.current === jobId) return;
-    attachedRef.current = jobId;
-    setBusy(true);
-    setCurrentJobId(jobId);
-    pollJob(jobId, 1200)
-      .then(j => {
-        if (!j) return;  // cancelled
-        setOut(j.result_text || "");
-        setOutWarn(getEmptyWarning(j.result_text));
-        jobOps.applyOriginal(j);
-        setLastJobId(jobId);
-      })
-      .catch(e => { setOut("Fehler: " + friendlyError(e)); })
-      .finally(() => { setBusy(false); setCurrentJobId(null); });
-  }
-
-  // Resume-Banner-Prop (App-Root nach F5). Hoehere Prioritaet als Auto-Resume.
-  useEffect(() => {
-    if (!resumeJob || resumeJob.page !== "p3") return;
-    attach(resumeJob.jobId);
-    onResumed();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resumeJob]);
-
-  // Auto-Resume beim Mount: laufenden verlaengerung-Job wiederfinden.
-  useResumeWorkflowJob("verlaengerung", attach, !resumeJob);
-
-  function cancelRun() {
-    const jobId = currentJobId || loadActiveJob()?.jobId;
-    if (jobId) {
-      apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
-    }
-    clearActiveJob();
-    setBusy(false);
-    setCurrentJobId(null);
-    attachedRef.current = null;
-  }
-
-  async function run() {
-    // B2: non-blocking Pfad (startJob -> attach) wie in P2. Der Job laeuft
-    // im Backend weiter, auch wenn der Tab gewechselt oder F5 gedrueckt wird;
-    // useResumeWorkflowJob findet ihn dann wieder.
-    setBusy(true);
-    setOut(""); setOutWarn(null);
-    jobOps.reset();
-    setLastJobId(null);
-    attachedRef.current = null;
-    try {
-      // v19.12: patientName/geschlecht kommen aus der Antragsvorlage
-      // (Backend-Extraktion, Kandidaten-Konsens) - kein manueller Override.
-      const jobId = await startJob("verlaengerung", prompt, "", {
-        antragsvorlage: antrag,   // Antragsvorlage → Diagnosen/Anamnese/Name
-        verlauf:        verlauf,  // Verlaufsdokumentation
-        style:          style,
-        styleText:      styleText || null,
-        bullets:        fokus || null,
-        model:          jobModel || null,
-      });
-      attach(jobId);
-    }
-    catch (e) {
-      setOut("Fehler: " + friendlyError(e));
-      setBusy(false);
-      setCurrentJobId(null);
-    }
+  function run() {
+    // v19.12: patientName/geschlecht kommen aus der Antragsvorlage
+    // (Backend-Extraktion, Kandidaten-Konsens) - kein manueller Override.
+    wr.start(prompt, "", {
+      antragsvorlage: antrag,   // Antragsvorlage → Diagnosen/Anamnese/Name
+      verlauf:        verlauf,  // Verlaufsdokumentation
+      style:          style,
+      styleText:      styleText || null,
+      bullets:        fokus || null,
+      model:          jobModel || null,
+    });
   }
 
   return (
@@ -142,22 +76,12 @@ function P3({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>Diagnosen, Anamnese und Befund werden aus dieser Vorlage für den neuen Antrag übernommen.</div>
           </Card>
 
-          <Card num="C" title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(styleText || "").trim()}>
-            <InputTabs tabs={[
-              { id:"file", icon:"📎", label:"Datei"   },
-              { id:"text", icon:"✏️", label:"Text C&P" },
-            ]}>
-              {(activeTab) => (<>
-                {activeTab === "file" && (
-                  <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
-                )}
-                {activeTab === "text" && (<>
-                  <textarea rows={5} placeholder="Beispiel-Verlängerungsantrag einfügen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
-                  <div className="field-note">Schreibstil des eingefügten Texts wird übernommen</div>
-                </>)}
-              </>)}
-            </InputTabs>
-          </Card>
+          <StyleSourceCard
+            num="C"
+            style={style} onStyle={setStyle}
+            styleText={styleText} onStyleText={setStyleText}
+            placeholder="Beispiel-Verlängerungsantrag einfügen ..."
+          />
 
           <Card num="D" title="Fokus-Themen" badge="opt" open={false} hasContent={!!(fokus || "").trim()}>
             <label className="field-label">Schwerpunkte für diesen Antrag</label>
@@ -175,43 +99,34 @@ function P3({ toast, resumeJob, onResumed }) {
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
           </Card>
 
-          <div className="action-bar">
-            {busy
-              ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button
-                  className="btn-primary"
-                  onClick={run}
-                  disabled={!verlauf || !antrag}
-                  title={
-                    !verlauf ? "Verlaufsdokumentation erforderlich"
+          <WorkflowActionBar
+            busy={wr.busy} onRun={run} onCancel={wr.cancel}
+            runLabel="Verlängerungsantrag erstellen"
+            disabled={!verlauf || !antrag}
+            title={!verlauf ? "Verlaufsdokumentation erforderlich"
                     : !antrag ? "Verlängerungsantrag (zu vervollständigen) erforderlich (Diagnosen + Anamnese)"
-                    : ""
-                  }
-                >Verlängerungsantrag erstellen</button>
-            }
-          </div>
+                    : ""}
+          />
 
           <ResultVersionsTabs
-            hasRepair={job.hasRepair}
-            active={job.activeVersion}
-            onChange={jobOps.setActiveVersion}
-            disabled={job.repairBusy}
+            hasRepair={wr.job.hasRepair}
+            active={wr.job.activeVersion}
+            onChange={wr.jobOps.setActiveVersion}
+            disabled={wr.job.repairBusy}
           />
-          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { copyFormatted(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          <Output text={wr.displayText} loading={wr.busy} jobId={wr.currentJobId} warn={wr.outWarn}
+            onCopy={() => { copyFormatted(wr.displayText); toast("Kopiert"); }} />
 
-          <RepairBundle job={job} ops={jobOps} toast={toast} />
+          <RepairBundle job={wr.job} ops={wr.jobOps} toast={toast} />
 
-          <FeedbackButton jobId={lastJobId} workflow="verlaengerung" toast={toast} />
+          <FeedbackButton jobId={wr.lastJobId} workflow="verlaengerung" toast={toast} />
 
-          {(out || draftDirty || verlauf || antrag || style) && (
+          {(wr.out || draftDirty || verlauf || antrag || style) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setAntrag(null); setStyle(null);
                 clearDraft();  // B2: setzt ALLE Text-Felder auf Default + raeumt localStorage
-                setOut(""); setOutWarn(null); setLastJobId(null);
-                jobOps.reset();
-                attachedRef.current = null;
+                wr.reset();
                 toast("Formular zurückgesetzt");
               }}>+ Neuer Verlängerungsantrag</button>
             </div>
@@ -257,78 +172,20 @@ function P3b({ toast, resumeJob, onResumed }) {
     [draft]
   );
 
-  const [out, setOut]             = useState("");
-  const [outWarn, setOutWarn]       = useState(null);
-  const [job, jobOps]               = useJobResult();
-  const [lastJobId, setLastJobId] = useState(null);
-  const [busy, setBusy]           = useState(false);
-  const [currentJobId, setCurrentJobId] = useState(null);
+  const wr = useWorkflowRun({ workflow: "folgeverlaengerung", page: "p3b", resumeJob, onResumed });
 
-  // B2: attach-Pattern (siehe P3-Kommentar)
-  const attachedRef = useRef(null);
-  function attach(jobId) {
-    if (attachedRef.current === jobId) return;
-    attachedRef.current = jobId;
-    setBusy(true);
-    setCurrentJobId(jobId);
-    pollJob(jobId, 1200)
-      .then(j => {
-        if (!j) return;  // cancelled
-        setOut(j.result_text || "");
-        setOutWarn(getEmptyWarning(j.result_text));
-        jobOps.applyOriginal(j);
-        setLastJobId(jobId);
-      })
-      .catch(e => { setOut("Fehler: " + friendlyError(e)); })
-      .finally(() => { setBusy(false); setCurrentJobId(null); });
-  }
-
-  useEffect(() => {
-    if (!resumeJob || resumeJob.page !== "p3b") return;
-    attach(resumeJob.jobId);
-    onResumed();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resumeJob]);
-
-  useResumeWorkflowJob("folgeverlaengerung", attach, !resumeJob);
-
-  function cancelRun() {
-    const jobId = currentJobId || loadActiveJob()?.jobId;
-    if (jobId) {
-      apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
-    }
-    clearActiveJob();
-    setBusy(false);
-    setCurrentJobId(null);
-    attachedRef.current = null;
-  }
-
-  async function run() {
-    // B2: non-blocking Pfad (startJob -> attach) wie in P2/P3
-    setBusy(true);
-    setOut(""); setOutWarn(null);
-    jobOps.reset();
-    setLastJobId(null);
-    attachedRef.current = null;
-    try {
-      // v19.12: patientName/geschlecht kommen aus der Antragsvorlage
-      // (Backend-Extraktion, Kandidaten-Konsens) - kein manueller Override.
-      const jobId = await startJob("folgeverlaengerung", prompt, "", {
-        verlauf:        verlauf,
-        antragsvorlage: antrag,
-        vorantrag:      vorantrag,
-        style:          style,
-        styleText:      styleText || null,
-        bullets:        fokus || null,
-        model:          jobModel || null,
-      });
-      attach(jobId);
-    }
-    catch (e) {
-      setOut("Fehler: " + friendlyError(e));
-      setBusy(false);
-      setCurrentJobId(null);
-    }
+  function run() {
+    // v19.12: patientName/geschlecht kommen aus der Antragsvorlage
+    // (Backend-Extraktion, Kandidaten-Konsens) - kein manueller Override.
+    wr.start(prompt, "", {
+      verlauf:        verlauf,
+      antragsvorlage: antrag,
+      vorantrag:      vorantrag,
+      style:          style,
+      styleText:      styleText || null,
+      bullets:        fokus || null,
+      model:          jobModel || null,
+    });
   }
 
   return (
@@ -355,22 +212,13 @@ function P3b({ toast, resumeJob, onResumed }) {
             <div className="info-note" style={{marginTop:8}}>An diesen Verlauf wird der neue Text inhaltlich anknüpfen ("seit dem letzten Antrag ...").</div>
           </Card>
 
-          <Card num="D" title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(styleText || "").trim()}>
-            <InputTabs tabs={[
-              { id:"file", icon:"📎", label:"Datei"   },
-              { id:"text", icon:"✏️", label:"Text C&P" },
-            ]}>
-              {(activeTab) => (<>
-                {activeTab === "file" && (
-                  <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={setStyle} />
-                )}
-                {activeTab === "text" && (<>
-                  <textarea rows={5} placeholder="Beispiel-Folgeverlängerung einfügen ..." value={styleText} onChange={(e) => setStyleText(e.target.value)} style={{marginTop:0}} />
-                  <div className="field-note">Schreibstil des eingefügten Texts wird übernommen. Wenn keine Folgeverlängerungs-Stilvorlage vorliegt, fällt das Backend auf Verlängerungs-Stilbeispiele zurück.</div>
-                </>)}
-              </>)}
-            </InputTabs>
-          </Card>
+          <StyleSourceCard
+            num="D"
+            style={style} onStyle={setStyle}
+            styleText={styleText} onStyleText={setStyleText}
+            placeholder="Beispiel-Folgeverlängerung einfügen ..."
+            textNote="Schreibstil des eingefügten Texts wird übernommen. Wenn keine Folgeverlängerungs-Stilvorlage vorliegt, fällt das Backend auf Verlängerungs-Stilbeispiele zurück."
+          />
 
           <Card num="E" title="Fokus-Themen" badge="opt" open={false} hasContent={!!(fokus || "").trim()}>
             <label className="field-label">Schwerpunkte für die Folgeverlängerung</label>
@@ -388,46 +236,38 @@ function P3b({ toast, resumeJob, onResumed }) {
             <div className="field-note">Inhaltliche Workflow-Anweisungen. Anpassen nur wenn nötig – Stil-/Quellenregeln und Halluzinationsschutz liegen im Backend und sind nicht hier editierbar.</div>
           </Card>
 
-          <div className="action-bar">
-            {/* v19.12: Klient-Controls (Geschlecht + Kuerzel) entfernt.
+          {/* v19.12: Klient-Controls (Geschlecht + Kuerzel) entfernt.
                 Beides wird backend-seitig aus der Antragsvorlage extrahiert
                 (Kandidaten-Konsens ueber Adressblock + "wir berichten ueber",
                 Kreuzcheck gegen den Verlaufsdoku-Kopf). Spacer erhaelt das
                 Button-Layout der action-bar. */}
-            <div style={{marginRight:"auto"}} />
-            {busy
-              ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button
-                  className="btn-primary"
-                  onClick={run}
-                  disabled={!verlauf}
-                  title={!verlauf ? "Verlaufsdokumentation erforderlich" : ""}
-                >Folgeverlängerung erstellen</button>
-            }
-          </div>
+          <WorkflowActionBar
+            busy={wr.busy} onRun={run} onCancel={wr.cancel}
+            runLabel="Folgeverlängerung erstellen"
+            disabled={!verlauf}
+            title={!verlauf ? "Verlaufsdokumentation erforderlich" : ""}
+          />
 
           <ResultVersionsTabs
-            hasRepair={job.hasRepair}
-            active={job.activeVersion}
-            onChange={jobOps.setActiveVersion}
-            disabled={job.repairBusy}
+            hasRepair={wr.job.hasRepair}
+            active={wr.job.activeVersion}
+            onChange={wr.jobOps.setActiveVersion}
+            disabled={wr.job.repairBusy}
           />
-          <Output text={job.hasRepair ? job.text : out} loading={busy} jobId={currentJobId} warn={outWarn}
-            onCopy={() => { copyFormatted(job.hasRepair ? job.text : out); toast("Kopiert"); }} />
+          <Output text={wr.displayText} loading={wr.busy} jobId={wr.currentJobId} warn={wr.outWarn}
+            onCopy={() => { copyFormatted(wr.displayText); toast("Kopiert"); }} />
 
-          <RepairBundle job={job} ops={jobOps} toast={toast} />
+          <RepairBundle job={wr.job} ops={wr.jobOps} toast={toast} />
 
-          <FeedbackButton jobId={lastJobId} workflow="folgeverlaengerung" toast={toast} />
+          <FeedbackButton jobId={wr.lastJobId} workflow="folgeverlaengerung" toast={toast} />
 
-          {(out || draftDirty || verlauf || antrag || vorantrag || style) && (
+          {(wr.out || draftDirty || verlauf || antrag || vorantrag || style) && (
             <div style={{marginTop:12, textAlign:"right"}}>
               <button className="btn-secondary" onClick={() => {
                 setVerlauf(null); setAntrag(null); setVorantrag(null);
                 setStyle(null);
                 clearDraft();  // B2: setzt ALLE Text-Felder auf Default + raeumt localStorage
-                setOut(""); setOutWarn(null); setLastJobId(null);
-                jobOps.reset();
-                attachedRef.current = null;
+                wr.reset();
                 toast("Formular zurückgesetzt");
               }}>+ Neue Folgeverlängerung</button>
             </div>

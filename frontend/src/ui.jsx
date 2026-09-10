@@ -2,7 +2,7 @@
 // src/ui.jsx — extrahiert aus klinische-dokumentation.jsx (R4, 2026-07-01).
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { apiFetch, getApiBase } from "./api.js";
 
@@ -683,4 +683,29 @@ function FeedbackButton({ jobId, workflow, context, toast }) {
   );
 }
 
-export { JobProgressBar, Dropzone, ModelSelector, InputTabs, Card, PromptEditor, Output, Tags, JobModelPicker, copyFormatted, FeedbackButton };
+// v19.21 (S5): "Stilvorlage (Textbeispiel)"-Karte - Datei-Upload ODER
+// eingefuegter Text. Vorher in P2, P2b, P3, P3b, P4 fuenfmal inline.
+// fileNote/textNote sind optionale Hinweiszeilen unter Dropzone bzw. Textarea.
+function StyleSourceCard({ num, style, onStyle, styleText, onStyleText, placeholder, rows = 5, fileNote = null, textNote = "Schreibstil des eingefügten Texts wird übernommen" }) {
+  return (
+    <Card num={num} title="Stilvorlage (Textbeispiel)" badge="opt" open={false} hasContent={!!(styleText || "").trim()}>
+      <InputTabs tabs={[
+        { id:"file", icon:"📎", label:"Datei"   },
+        { id:"text", icon:"✏️", label:"Text C&P" },
+      ]}>
+        {(activeTab) => (<>
+          {activeTab === "file" && (<>
+            <Dropzone label="Beispieltext hochladen" hint="PDF, DOCX oder TXT" accept=".pdf,.docx,.txt" icon="&#128221;" file={style} onFile={onStyle} />
+            {fileNote && <div className="info-note" style={{marginTop:8}}>{fileNote}</div>}
+          </>)}
+          {activeTab === "text" && (<>
+            <textarea rows={rows} placeholder={placeholder} value={styleText} onChange={(e) => onStyleText(e.target.value)} style={{marginTop:0}} />
+            {textNote && <div className="field-note">{textNote}</div>}
+          </>)}
+        </>)}
+      </InputTabs>
+    </Card>
+  );
+}
+
+export { StyleSourceCard, JobProgressBar, Dropzone, ModelSelector, InputTabs, Card, PromptEditor, Output, Tags, JobModelPicker, copyFormatted, FeedbackButton };

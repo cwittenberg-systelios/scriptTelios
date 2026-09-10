@@ -8,7 +8,7 @@ import { AudioInput } from "../audio.jsx";
 import { useDraftCache, useJobResult } from "../hooks.jsx";
 import { JobDetailPane, JobListPane } from "../joblist.jsx";
 import { P_DOKU } from "../prompt-defaults.jsx";
-import { clearActiveJob, friendlyError } from "../shared.js";
+import { buildPatientName, clearActiveJob, friendlyError } from "../shared.js";
 import { Card, Dropzone, InputTabs, PromptEditor, JobModelPicker } from "../ui.jsx";
 
 
@@ -247,15 +247,7 @@ function P1({ toast, resumeJob, onResumed }) {
     // (jobs.py v19.8, Marker-Guard) - mit korrektem, geschlechtskonsistentem
     // Kuerzel-Beispiel. Die Frontend-Strings schalteten den besseren
     // Backend-Pfad ueber den Marker-Guard aus.
-    const k = d.kuerzel.trim().replace(/\.?$/, ".");
-
-    let patientNameExplicit = null;
-    if (d.kuerzel.trim()) {
-      const kurz = k;
-      if (d.geschlecht === "w")      patientNameExplicit = `Frau ${kurz}`;
-      else if (d.geschlecht === "m") patientNameExplicit = `Herr ${kurz}`;
-      else                            patientNameExplicit = kurz;
-    }
+    const patientNameExplicit = buildPatientName(d.kuerzel, d.geschlecht);
 
     try {
       const jobId = await startJob("dokumentation", d.prompt, d.text || "", {

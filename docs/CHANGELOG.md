@@ -12,6 +12,20 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 Basis: `v19_QA_v02` @ `b89f6d8`. Schritte als Einzelpatches (S2, S3, …),
 jeweils ohne Verhaltensaenderung fuer Therapeut:innen.
 
+### S5 — Frontend-Panel-Skelett (P2, P2b, P3, P3b, P4, P6)
+
+Neu `frontend/src/workflow-run.jsx`: `useWorkflowRun()` (Output-State,
+attach/pollJob, Resume-Banner + Auto-Resume, cancel, start, reset, mit
+`onResult`/`onError`-Hooks fuer Panel-Spezifisches), `<WorkflowActionBar>`
+(Start/Abbrechen + optionale linke Controls) und `<KlientControls>`
+(♀/♂ + Kuerzel). `StyleSourceCard` (Stilvorlage Datei/Text) in `ui.jsx`,
+`buildPatientName()` in `shared.js` (P1/P2 nutzen es). Panels enthalten nur
+noch Formular, `run()` mit ihrer Feldzuordnung und Output-Komposition:
+P4 227→149, P3 441→281, P2 555→360, P6 507→461 Zeilen; jscpd 21→6 Klone
+(371→72 Zeilen). Kein Verhaltenswechsel; Nebeneffekt: P2 hat jetzt wie die
+anderen Panels den Doppel-Attach-Schutz (attachedRef). P1 bleibt auf seinem
+Multi-Draft-Modell (eigener Sprint).
+
 ### S1 — Prompt-Defaults: eine Quelle, Drift-Schutz **(fachliche Aenderung!)**
 
 **Befund.** Seit v18 gab es zwei handgepflegte Fassungen der Workflow-

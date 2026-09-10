@@ -2,7 +2,7 @@
 // src/panels/P5.jsx — extrahiert aus klinische-dokumentation.jsx (R4, 2026-07-01).
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState } from "react";
 import { apiFetch, getApiBase, getConfluenceUser } from "../api.js";
 import { useWorkflowManifest } from "../hooks.jsx";
 import { friendlyError } from "../shared.js";

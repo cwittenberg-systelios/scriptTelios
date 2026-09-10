@@ -75,7 +75,7 @@ Format-Helper sind zerstreut (`fmtSec`/`fmtMB` bei 923, `_fmtTime` bei 2798). Ni
 
 ---
 
-### Phase 2 – Helper-Extraktion (Single-File bleibt)
+### Phase 2 – Helper-Extraktion (Single-File bleibt) — **umgesetzt in v19.21 S5** (`src/workflow-run.jsx`, `StyleSourceCard`, `buildPatientName`, `buildJobFormData`)
 
 **Risiko:** gering. Keine Architektur-Änderung, keine Build-Änderung.
 **Win:** ~600 Zeilen weniger. Pro P-Komponente: 200–300 → 120–180 Zeilen.

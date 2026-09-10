@@ -20,13 +20,12 @@
 // Backend-Workflow: "ism_fragebogen" (result_text = JSON, siehe
 // app/services/ism.py).
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useRef, useEffect, useMemo } from "react";
-import { apiFetch, getApiBase, pollJob, startJob } from "../api.js";
+import { useState, useMemo } from "react";
 import { AudioInput } from "../audio.jsx";
-import { useDraftCache, useResumeWorkflowJob } from "../hooks.jsx";
+import { useDraftCache } from "../hooks.jsx";
 import { P_ISM } from "../prompt-defaults.jsx";
-import { clearActiveJob, friendlyError, loadActiveJob } from "../shared.js";
 import { Card, FeedbackButton, JobModelPicker, JobProgressBar, PromptEditor } from "../ui.jsx";
+import { useWorkflowRun, WorkflowActionBar } from "../workflow-run.jsx";
 
 
 // Faktoren-Anzeige (Spiegel von backend ISM_FAKTOREN - nur Darstellungsdaten,
@@ -143,9 +142,6 @@ function P6({ toast, resumeJob, onResumed }) {
   const [ism, setIsm] = useState(null);
   const [ismError, setIsmError] = useState(null);
   const [qc, setQc] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [currentJobId, setCurrentJobId] = useState(null);
-  const [lastJobId, setLastJobId] = useState(null);
   const [xmlBusy, setXmlBusy] = useState(false);
 
   function applyResult(j) {
@@ -164,61 +160,25 @@ function P6({ toast, resumeJob, onResumed }) {
     }
   }
 
-  const attachedRef = useRef(null);
-  function attach(jobId) {
-    if (attachedRef.current === jobId) return;
-    attachedRef.current = jobId;
-    setBusy(true);
-    setCurrentJobId(jobId);
-    pollJob(jobId, 1200)
-      .then((j) => {
-        if (!j) return; // cancelled
-        applyResult(j);
-        setLastJobId(jobId);
-      })
-      .catch((e) => { setIsm(null); setIsmError("Fehler: " + friendlyError(e)); })
-      .finally(() => { setBusy(false); setCurrentJobId(null); });
-  }
+  // v19.21 (S5d): Job-Skelett aus ../workflow-run.jsx. P6 zeigt keinen
+  // Fliesstext (wr.out ungenutzt), sondern parst result_text als Fragebogen
+  // (applyResult) und meldet Fehler in der ISM-Vorschau (onError).
+  const wr = useWorkflowRun({
+    workflow: "ism_fragebogen", page: "p6", resumeJob, onResumed,
+    onResult: applyResult,
+    onError: (msg) => { setIsm(null); setIsmError(msg); },
+  });
+  const { busy, currentJobId, lastJobId } = wr;
 
-  useEffect(() => {
-    if (!resumeJob || resumeJob.page !== "p6") return;
-    attach(resumeJob.jobId);
-    onResumed();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resumeJob]);
-
-  useResumeWorkflowJob("ism_fragebogen", attach, !resumeJob);
-
-  function cancelRun() {
-    const jobId = currentJobId || loadActiveJob()?.jobId;
-    if (jobId) {
-      apiFetch(`${getApiBase()}/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
-    }
-    clearActiveJob();
-    setBusy(false);
-    setCurrentJobId(null);
-    attachedRef.current = null;
-  }
-
-  async function run() {
-    setBusy(true);
+  function run() {
     setIsm(null); setIsmError(null); setQc(null);
-    setLastJobId(null);
-    attachedRef.current = null;
-    try {
-      const jobId = await startJob("ism_fragebogen", prompt, "", {
-        audio:       audio,                 // __p0recording -> p0_recording_id
-        bullets:     themen || null,
-        model:       jobModel || null,
-        patientName: kennung.trim(),        // -> patient_kuerzel (Job-Liste + XML-Name)
-        ismNItems:   nItems,
-      });
-      attach(jobId);
-    } catch (e) {
-      setIsmError("Fehler: " + friendlyError(e));
-      setBusy(false);
-      setCurrentJobId(null);
-    }
+    wr.start(prompt, "", {
+      audio:       audio,                 // __p0recording -> p0_recording_id
+      bullets:     themen || null,
+      model:       jobModel || null,
+      patientName: kennung.trim(),        // -> patient_kuerzel (Job-Liste + XML-Name)
+      ismNItems:   nItems,
+    });
   }
 
   // ── Editier-Helfer fuer die Vorschau ──────────────────────────────────
@@ -337,7 +297,14 @@ function P6({ toast, resumeJob, onResumed }) {
             <div className="field-note">Inhaltliche Anweisungen (Item-Form, Tonalität). JSON-Form, Faktorregeln und Quellenregel liegen im Backend und sind nicht editierbar.</div>
           </Card>
 
-          <div className="action-bar">
+          <WorkflowActionBar
+            busy={wr.busy} onRun={run} onCancel={wr.cancel}
+            runLabel="ISM-Fragebogen erstellen"
+            disabled={!canGenerate}
+            title={!hasP0 ? "Bitte ein Gespräch aus der P0-Aufnahmeliste auswählen"
+                    : !kennung.trim() ? "SNS-Kennung ist erforderlich (wird Fragebogenname im XML)"
+                    : ""}
+          >
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginRight: "auto", flexWrap: "wrap" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <span style={{ fontSize: 11, color: "var(--st-text-soft)" }}>
@@ -373,20 +340,7 @@ function P6({ toast, resumeJob, onResumed }) {
                 </select>
               </div>
             </div>
-            {busy
-              ? <button className="btn-secondary" onClick={cancelRun}>✕ Abbrechen</button>
-              : <button
-                  className="btn-primary"
-                  onClick={run}
-                  disabled={!canGenerate}
-                  title={
-                    !hasP0 ? "Bitte ein Gespräch aus der P0-Aufnahmeliste auswählen"
-                    : !kennung.trim() ? "SNS-Kennung ist erforderlich (wird Fragebogenname im XML)"
-                    : ""
-                  }
-                >ISM-Fragebogen erstellen</button>
-            }
-          </div>
+          </WorkflowActionBar>
 
           {/* ── Ergebnis: editierbare Vorschau ─────────────────────────── */}
           <div className="output-card">
@@ -492,8 +446,8 @@ function P6({ toast, resumeJob, onResumed }) {
               <button className="btn-secondary" onClick={() => {
                 setAudio(null);
                 clearDraft();
-                setIsm(null); setIsmError(null); setQc(null); setLastJobId(null);
-                attachedRef.current = null;
+                setIsm(null); setIsmError(null); setQc(null);
+                wr.reset();
                 toast("Formular zurückgesetzt");
               }}>+ Neuer ISM-Fragebogen</button>
             </div>
