@@ -12,6 +12,25 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 Basis: `v19_QA_v02` @ `b89f6d8`. Schritte als Einzelpatches (S2, S3, …),
 jeweils ohne Verhaltensaenderung fuer Therapeut:innen.
 
+### R7 — Stage-1-Verdichter auf gemeinsamem Geruest
+
+Neu `app/services/summary_runner.py`: `anti_think_suffix()`,
+`source_block()`, `wrap_no_think()`, `stage1_generate()` (gemeinsame
+generate_text-Parameter, Modell-Aufloesung), `run_chunked()` (Chunk-
+Orchestrierung mit Telemetrie-Merge), `word_count()`. `transcript_summary`,
+`verlauf_summary` und `document_summary` nutzen das Geruest; ihre fachlichen
+Unterschiede (Prompt-Texte, Zielwortzahlen, Retry-Politik, Audit-Felder)
+bleiben als Strategie im jeweiligen Modul. 1.436 -> 1.284 Zeilen, keine
+dreifachen Kopien mehr.
+
+**Regressionsnachweis:** Snapshot-Test `tests/unit/test_v1921_r7_summary_runner.py`
+- 8 Pfade (Haupt-Call, Chunking, Laengen-/Cap-Retry) x 3 Verdichter, 19
+LLM-Calls: System-/User-Prompts (SHA-256), max_tokens, Temperatur, Flags,
+Modell und Ergebnis-Kennzahlen sind byte-identisch zu v19.20. Einzige
+Aenderung: das Chunk-Ergebnis des Transkript-Verdichters liefert jetzt wie
+das des Verlauf-Verdichters `system_prompt`/`user_content` mit (prompts.log
+sieht damit auch gechunkte Transkript-Verdichtungen).
+
 ### S6 — `create_generate_job` zerlegt (Backend)
 
 **S6a** Neu `app/services/generation_pipeline.py`: `UploadBundle.read(**uploads)`
@@ -30,10 +49,15 @@ Phase 21 (vorher `_run` 101). Phasen sind einzeln aufrufbar - neue Tests
 in `tests/unit/test_v1921_s6_pipeline.py` (Transkript-Phase, Orchestrierung,
 ISM-Kurzpfad).
 
-**Nicht in S6 (Backlog S6c):** Verschieben der Pipeline und der Repair-/
-Stage-1-/ISM-Helfer aus `jobs.py` nach `services/`. Grund: 30+ Tests patchen
-`app.api.jobs.generate_text` u. a. - ein Umzug erfordert das Umschreiben der
-Patch-Ziele in einem eigenen Schritt.
+**S6c** `jobs.py` ist reines Routing (2.889 -> 674 Zeilen). Verschoben nach
+`app/services/`: `generation_pipeline.py` (run_generation + Phasen,
+Quellen-Gate, Budget-Guard, ISM-Kurzpfad), `stage1.py` (Verlauf-/Transkript-
+Verdichtung), `repair.py` (Repair-Flow), `prompt_log.py` (prompts.log).
+`jobs.py` re-exportiert die Unterstrich-Namen weiter (Tests/Skripte, die
+`from app.api.jobs import _x` nutzen, laufen unveraendert). Test-Patches auf
+Pipeline-Interna zeigen jetzt auf das Modul, das den Namen aufloest
+(`app.services.generation_pipeline.generate_text`, `app.services.stage1.
+summarize_verlauf`, `app.services.repair.generate_text`).
 
 ### S5 — Frontend-Panel-Skelett (P2, P2b, P3, P3b, P4, P6)
 

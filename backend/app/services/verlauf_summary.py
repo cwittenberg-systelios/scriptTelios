@@ -17,6 +17,10 @@ import logging
 import re
 from typing import Optional
 
+from app.services.summary_runner import (
+    anti_think_suffix, run_chunked, source_block, stage1_generate, wrap_no_think, word_count,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -246,6 +250,37 @@ def detect_summary_hallucination_signals(
 # Hauptfunktion: Stage-1-Service (Schritte 2 + 3 + 4)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# v19.2.2: Temperatur 0.4 statt 0.2 - bricht deterministische Reasoning-Loops.
+_TEMPERATURE = 0.4
+# v19.2.2: Anti-Think-Anweisung im System-Prompt (defense in depth, siehe
+# summary_runner.anti_think_suffix).
+_ANTI_THINK = anti_think_suffix(
+    "Zusammenfassung", "Beginne sofort mit dem ersten Abschnitt '### Übersicht'.",
+)
+
+
+def _system_prompt(focus_hint: str, extra: str = "") -> str:
+    return (
+        VERLAUF_SUMMARY_SYSTEM_PROMPT
+        + "\n\n"
+        + VERLAUF_SUMMARY_STRUCTURE
+        + (f"\n\nFOCUS: {focus_hint}\n" if focus_hint else "")
+        + extra
+        + _ANTI_THINK
+    )
+
+
+def _user_content(verlauf_text: str, patient_initial: Optional[str],
+                  target_words: int, min_acceptable: int, max_acceptable: int) -> str:
+    return wrap_no_think(
+        source_block(label="Verlaufsdokumentation", tag="VERLAUFSDOKU",
+                     text=verlauf_text, patient_initial=patient_initial)
+        + "Verdichte diese Verlaufsdokumentation jetzt. "
+        + f"Zielwortzahl: ca. {target_words} Wörter "
+        + f"(akzeptiert: {min_acceptable}–{max_acceptable})."
+    )
+
+
 async def summarize_verlauf(
     verlauf_text: str,
     workflow: Optional[str],
@@ -291,9 +326,6 @@ async def summarize_verlauf(
         Output liefert (< 50% Zielwortzahl). Der Aufrufer (Pipeline) faengt
         das ab und faellt auf das Original zurueck.
     """
-    # Lokal-Import um Zirkelimport zu vermeiden (llm.py kennt diese Datei nicht).
-    from app.services.llm import generate_text, resolve_summary_model
-
     if not verlauf_text or not verlauf_text.strip():
         raise RuntimeError("Stage 1: leerer Verlauf-Text")
 
@@ -335,35 +367,8 @@ async def summarize_verlauf(
     # Hintergrund (Eval-Lauf 14.05.2026): Stage-1 zeigte think_ratio=50-67%
     # bei 12962w-Inputs. Qwen3:32b ignoriert "think:False" + einmaliges
     # "/no_think" bei komplexen Verdichtungsaufgaben — defense in depth nötig.
-    anti_think_system = (
-        "\n\nWICHTIG: KEIN INNERES NACHDENKEN. "
-        "Schreibe direkt die Zusammenfassung. "
-        "KEINE <think>-Tags, KEINE Meta-Reflexion, KEINE Vorbemerkungen. "
-        "Beginne sofort mit dem ersten Abschnitt '### Übersicht'."
-    )
-    system_prompt = (
-        VERLAUF_SUMMARY_SYSTEM_PROMPT
-        + "\n\n"
-        + VERLAUF_SUMMARY_STRUCTURE
-        + (f"\n\nFOCUS: {focus_hint}\n" if focus_hint else "")
-        + anti_think_system
-    )
-
-    # v19.2.2: /no_think doppelt - Anfang UND Ende des user_content.
-    # llm.py haengt am Ende sowieso /no_think an (idempotent durch rstrip),
-    # aber am Anfang ist hier neu und wirkt staerker.
-    user_content = (
-        "/no_think\n\n"
-        + (f"AKTUELLER PATIENT: {patient_initial}\n\n" if patient_initial else "")
-        + "QUELLE — Verlaufsdokumentation:\n"
-        + ">>>VERLAUFSDOKU<<<\n"
-        + verlauf_text
-        + "\n>>>/VERLAUFSDOKU<<<\n\n"
-        + "Verdichte diese Verlaufsdokumentation jetzt. "
-        + f"Zielwortzahl: ca. {target_words} Wörter "
-        + f"(akzeptiert: {min_acceptable}–{max_acceptable}).\n\n"
-        + "/no_think"
-    )
+    system_prompt = _system_prompt(focus_hint)
+    user_content = _user_content(verlauf_text, patient_initial, target_words, min_acceptable, max_acceptable)
 
     # Erste Generierung — kein Workflow (kein BASE_PROMPT, kein Primer),
     # eigenes Token-Budget.
@@ -385,24 +390,14 @@ async def summarize_verlauf(
     # Siehe ollama/12907, ollama/14798 — "think":False allein ist bei Qwen3
     # nicht zuverlaessig.
     import time as _t
-    # v19.5.2: garantiert geladenes Verdichtungsmodell (statt stiller
-    # OLLAMA_MODEL-Default -> kein Ollama-404 durch stale/retired Config).
-    _summary_model = await resolve_summary_model()
     t0 = _t.time()
     # v19.19 (S1): 1.5x -> 2.2x target_words. Deutsch braucht ~1.4-1.6
     # Tokens/Wort; 1.5x Tokens entsprach ~1.0x Woertern, waehrend bis 2.5x
     # akzeptiert wird -> 7 von 21 Stage-1-Laeufen (Log 13.08.-09.09.) endeten
     # in tokens_hit_cap mitten im Satz. Angleichung an transcript_summary.
     _s1_max_tokens = max(2500, int(target_words * 2.2))
-    result = await generate_text(
-        system_prompt=system_prompt,
-        user_content=user_content,
-        max_tokens=_s1_max_tokens,
-        model=_summary_model,
-        workflow=None,
-        temperature_override=0.4,
-        skip_aggressive_dedup=True,
-        force_hard_no_think=True,
+    result = await stage1_generate(
+        system_prompt, user_content, max_tokens=_s1_max_tokens, temperature=_TEMPERATURE,
     )
     cap_retry_used = False
     if (result.get("telemetry") or {}).get("tokens_hit_cap"):
@@ -411,15 +406,8 @@ async def summarize_verlauf(
             "Stage 1 tokens_hit_cap bei max_tokens=%d - Retry mit %d",
             _s1_max_tokens, int(_s1_max_tokens * 1.5),
         )
-        _retry = await generate_text(
-            system_prompt=system_prompt,
-            user_content=user_content,
-            max_tokens=int(_s1_max_tokens * 1.5),
-            model=_summary_model,
-            workflow=None,
-            temperature_override=0.4,
-            skip_aggressive_dedup=True,
-            force_hard_no_think=True,
+        _retry = await stage1_generate(
+            system_prompt, user_content, max_tokens=int(_s1_max_tokens * 1.5), temperature=_TEMPERATURE,
         )
         cap_retry_used = True
         _rt = (_retry.get("text") or "").strip()
@@ -551,78 +539,32 @@ async def _summarize_verlauf_chunked(
 ) -> dict:
     """v19.19 (S2): Verdichtet jeden Teil separat (rekursiv ueber
     summarize_verlauf mit _is_chunk=True) und fuegt die Teil-Zusammen-
-    fassungen chronologisch zusammen. Zielwortzahl wird proportional zur
-    Teil-Laenge verteilt; Halluzinations-Check laeuft pro Teil."""
-    import time as _t
+    fassungen chronologisch zusammen. Orchestrierung: summary_runner.run_chunked
+    (R7); Zielwortzahl proportional zur Teil-Laenge, Halluzinations-Check pro Teil."""
     from app.services.staging import compute_verlauf_target_words
 
-    t0 = _t.time()
-    raw_words = len(verlauf_text.split())
+    raw_words = word_count(verlauf_text)
     total_target = target_words or compute_verlauf_target_words(raw_words)
-    chunk_words = [len(c.split()) for c in chunks]
-    n = len(chunks)
-    logger.info(
-        "Stage 1 chunked: %d Zeichen / %d Woerter -> %d Teile, Ziel gesamt %dw",
-        len(verlauf_text), raw_words, n, total_target,
-    )
 
-    parts: list[str] = []
-    telemetry_parts: list[dict] = []
-    issues: list = []
-    retry_used = cap_retry_used = degraded = False
-    sys_prompts: list[str] = []
-    user_contents: list[str] = []
-
-    for i, (chunk, cw) in enumerate(zip(chunks, chunk_words, strict=True), start=1):
-        share = max(300, int(total_target * (cw / max(raw_words, 1))))
-        res = await summarize_verlauf(
+    async def _part(chunk: str, share: int) -> dict:
+        return await summarize_verlauf(
             verlauf_text=chunk,
             workflow=workflow,
             patient_initial=patient_initial,
             target_words=share,
             _is_chunk=True,
         )
-        parts.append(f"### Teil {i}/{n} (chronologisch)\n\n{res['summary']}")
-        telemetry_parts.append(res.get("telemetry") or {})
-        issues.extend(res.get("issues") or [])
-        retry_used = retry_used or bool(res.get("retry_used"))
-        cap_retry_used = cap_retry_used or bool(res.get("cap_retry_used"))
-        degraded = degraded or bool(res.get("degraded"))
-        sys_prompts.append(res.get("system_prompt") or "")
-        user_contents.append(res.get("user_content") or "")
 
-    summary = (
-        f"[Verdichtet in {n} chronologischen Teilen - Reihenfolge entspricht "
-        f"dem Original-Verlauf.]\n\n" + "\n\n".join(parts)
+    return await run_chunked(
+        raw_text=verlauf_text,
+        chunks=chunks,
+        total_target=total_target,
+        summarize_part=_part,
+        part_heading="Teil {i}/{n} (chronologisch)",
+        header=("[Verdichtet in {n} chronologischen Teilen - Reihenfolge entspricht "
+                "dem Original-Verlauf.]"),
+        log_label="Stage 1",
     )
-    summary_words = len(summary.split())
-    merged_tel = {
-        "chunked": True,
-        "chunks": n,
-        "tokens_hit_cap": any(t.get("tokens_hit_cap") for t in telemetry_parts),
-        "input_truncated": any(t.get("input_truncated") for t in telemetry_parts),
-        "parts": telemetry_parts,
-    }
-    return {
-        "summary":              summary,
-        "system_prompt":        sys_prompts[0] if sys_prompts else "",
-        "user_content":         (
-            f"[CHUNKED: {n} Teile - hier Teil 1/{n}]\n\n"
-            + (user_contents[0] if user_contents else "")
-        ),
-        "raw_word_count":       raw_words,
-        "summary_word_count":   summary_words,
-        "compression_ratio":    round(summary_words / raw_words, 3) if raw_words else 0.0,
-        "duration_s":           round(_t.time() - t0, 1),
-        "telemetry":            merged_tel,
-        "retry_telemetry":      {},
-        "issues":               issues,
-        "retry_used":           retry_used,
-        "cap_retry_used":       cap_retry_used,
-        "degraded":             degraded,
-        "target_words":         total_target,
-        "min_acceptable":       0,
-    }
 
 
 async def _retry_stricter_summary(
@@ -641,8 +583,6 @@ async def _retry_stricter_summary(
     Returns:
         (retry_summary, retry_telemetry)
     """
-    from app.services.llm import generate_text, resolve_summary_model
-
     issue_summary = "; ".join(
         f"{i['type']}: {i['detail']}" for i in previous_issues
     )
@@ -653,53 +593,22 @@ async def _retry_stricter_summary(
     max_acceptable = int(target_words * 2.5)
 
     focus_hint = _build_focus_hint(workflow)
-    # v19.2.2: Anti-Think auch im retry-Pfad konsistent
-    anti_think_system = (
-        "\n\nWICHTIG: KEIN INNERES NACHDENKEN. "
-        "Schreibe direkt die Zusammenfassung. "
-        "KEINE <think>-Tags, KEINE Meta-Reflexion, KEINE Vorbemerkungen. "
-        "Beginne sofort mit dem ersten Abschnitt '### Übersicht'."
-    )
-    system_prompt = (
-        VERLAUF_SUMMARY_SYSTEM_PROMPT
-        + "\n\n"
-        + VERLAUF_SUMMARY_STRUCTURE
-        + (f"\n\nFOCUS: {focus_hint}\n" if focus_hint else "")
-        + "\n\n"
+    system_prompt = _system_prompt(
+        focus_hint,
+        extra="\n\n"
         + "WICHTIG: In einem vorherigen Versuch traten folgende "
         + f"Halluzinations-Probleme auf: {issue_summary}. "
         + "Vermeide diese diesmal strikt. Wenn du unsicher bist ob etwas in "
-        + "der Quelle steht, lass es weg."
-        + anti_think_system
+        + "der Quelle steht, lass es weg.",
     )
-
-    # v19.2.2: /no_think doppelt - Anfang UND Ende
-    user_content = (
-        "/no_think\n\n"
-        + (f"AKTUELLER PATIENT: {patient_initial}\n\n" if patient_initial else "")
-        + "QUELLE — Verlaufsdokumentation:\n"
-        + ">>>VERLAUFSDOKU<<<\n"
-        + verlauf_text
-        + "\n>>>/VERLAUFSDOKU<<<\n\n"
-        + "Verdichte diese Verlaufsdokumentation jetzt. "
-        + f"Zielwortzahl: ca. {target_words} Wörter "
-        + f"(akzeptiert: {min_acceptable}–{max_acceptable}).\n\n"
-        + "/no_think"
-    )
-
-    _summary_model = await resolve_summary_model()
+    user_content = _user_content(verlauf_text, patient_initial, target_words, min_acceptable, max_acceptable)
     try:
-        result = await generate_text(
-            system_prompt=system_prompt,
-            user_content=user_content,
+        # v19.2.2: Temperatur 0.3 statt 0.1 - selbst beim Halluzinations-Retry
+        # nicht zu deterministisch, sonst greift Anti-Think-Schutz nicht
+        result = await stage1_generate(
+            system_prompt, user_content,
             max_tokens=max(2500, int(target_words * 2.2)),  # v19.19 (S1)
-            model=_summary_model,
-            workflow=None,
-            # v19.2.2: Temperatur 0.3 statt 0.1 - selbst beim Halluzinations-Retry
-            # nicht zu deterministisch, sonst greift Anti-Think-Schutz nicht
-            temperature_override=0.3,
-            skip_aggressive_dedup=True,  # v19.2.1: konsistent zu summarize_verlauf
-            force_hard_no_think=True,    # v19.2.2: konsistent zu summarize_verlauf
+            temperature=0.3,
         )
     except Exception as e:
         logger.error("Stage 1 Retry-Call fehlgeschlagen: %s", e)

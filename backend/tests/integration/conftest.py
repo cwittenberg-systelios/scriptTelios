@@ -143,7 +143,7 @@ def _disable_pgvector_for_sqlite(request, monkeypatch):
         pass
     try:
         monkeypatch.setattr(
-            "app.api.jobs.retrieve_style_examples",
+            "app.services.generation_pipeline.retrieve_style_examples",
             AsyncMock(side_effect=_stub_retrieve),
             raising=False,
         )
@@ -192,7 +192,7 @@ def mock_llm():
     """LLM-Aufruf durch fixen Beispieltext ersetzen (alle Verwendungsorte)."""
     with patch("app.services.llm.generate_text",
                new=AsyncMock(return_value=_MOCK_LLM_RESPONSE)), \
-         patch("app.api.jobs.generate_text",
+         patch("app.services.generation_pipeline.generate_text",
                new=AsyncMock(return_value=_MOCK_LLM_RESPONSE)):
         yield
 
@@ -217,7 +217,7 @@ def mock_llm_anamnese():
     }
     with patch("app.services.llm.generate_text",
                new=AsyncMock(return_value=mock_response)), \
-         patch("app.api.jobs.generate_text",
+         patch("app.services.generation_pipeline.generate_text",
                new=AsyncMock(return_value=mock_response)):
         yield
 
@@ -246,7 +246,7 @@ def mock_extract_text():
     """PDF/DOCX-Extraktion durch realistischen Text ersetzen."""
     text = TXT_SELBST.read_text(encoding="utf-8") if TXT_SELBST.exists() else "Beispieltext."
     with patch("app.services.extraction.extract_text", new=AsyncMock(return_value=text)), \
-         patch("app.api.jobs.extract_text",            new=AsyncMock(return_value=text)), \
+         patch("app.services.generation_pipeline.extract_text",            new=AsyncMock(return_value=text)), \
          patch("app.api.style_embeddings.extract_text", new=AsyncMock(return_value=text)):
         yield
 

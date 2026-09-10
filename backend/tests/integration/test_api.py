@@ -112,7 +112,7 @@ def mock_llm_jobs():
         "duration_s": 1.5,
         "token_count": 80,
     }
-    with patch("app.api.jobs.generate_text",        new=AsyncMock(return_value=mock_response)), \
+    with patch("app.services.generation_pipeline.generate_text",        new=AsyncMock(return_value=mock_response)), \
          patch("app.services.llm.generate_text",     new=AsyncMock(return_value=mock_response)):
         yield
 
@@ -122,7 +122,7 @@ def mock_extract_jobs():
     """Mock für Textextraktion im jobs-Endpunkt."""
     with patch("app.services.extraction.extract_text",
                new=AsyncMock(return_value="Extrahierter Dokumententext für Tests.")), \
-         patch("app.api.jobs.extract_text",
+         patch("app.services.generation_pipeline.extract_text",
                new=AsyncMock(return_value="Extrahierter Dokumententext für Tests.")):
         yield
 
@@ -669,7 +669,7 @@ class TestStyleInfo:
         """Datei-Upload → style_info.source='file_upload' mit filename."""
         with patch("app.services.extraction.extract_style_context",
                    new=AsyncMock(return_value="Schreibe im Stil des Therapeuten.")), \
-             patch("app.api.jobs.extract_style_context",
+             patch("app.services.generation_pipeline.extract_style_context",
                    new=AsyncMock(return_value="Schreibe im Stil des Therapeuten.")):
             r = client.post("/api/jobs/generate",
                 data={"workflow": "dokumentation", "prompt": "test", "transcript": "t"},
@@ -687,7 +687,7 @@ class TestStyleInfo:
         """pgvector-Retrieval → style_info.source='style_library' mit therapeut_id."""
         with patch("app.services.embeddings.retrieve_style_examples",
                    new=AsyncMock(return_value="Stilbeispiel aus Bibliothek.")), \
-             patch("app.api.jobs.retrieve_style_examples",
+             patch("app.services.generation_pipeline.retrieve_style_examples",
                    new=AsyncMock(return_value="Stilbeispiel aus Bibliothek.")):
             r = client.post("/api/jobs/generate", data={
                 "workflow":     "dokumentation",

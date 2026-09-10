@@ -47,7 +47,7 @@ class TestRunVerlaufStage1:
             return dict(_SUMMARY_RESULT)
 
         long_text = "Wort " * 2000  # > 1500-Woerter-Schwelle
-        with patch("app.api.jobs.summarize_verlauf", _fake):
+        with patch("app.services.stage1.summarize_verlauf", _fake):
             text, audit = await _run_verlauf_stage1(
                 workflow="verlaengerung",
                 verlaufsdoku_text=long_text,
@@ -68,7 +68,7 @@ class TestRunVerlaufStage1:
             raise RuntimeError("Ollama down")
 
         long_text = "Wort " * 2000
-        with patch("app.api.jobs.summarize_verlauf", _boom):
+        with patch("app.services.stage1.summarize_verlauf", _boom):
             text, audit = await _run_verlauf_stage1(
                 workflow="verlaengerung",
                 verlaufsdoku_text=long_text,
@@ -104,7 +104,7 @@ class TestRunTranscriptStage1:
             return dict(_SUMMARY_RESULT)
 
         long_tr = "Wort " * 3000  # > 2800-Schwelle
-        with patch("app.api.jobs.summarize_transcript", _fake):
+        with patch("app.services.stage1.summarize_transcript", _fake):
             text, summary, audit = await _run_transcript_stage1(
                 workflow="dokumentation",
                 transkript_text=long_tr,
@@ -124,7 +124,7 @@ class TestRunTranscriptStage1:
             raise ValueError("kaputt")
 
         long_tr = "Wort " * 3000
-        with patch("app.api.jobs.summarize_transcript", _boom):
+        with patch("app.services.stage1.summarize_transcript", _boom):
             text, summary, audit = await _run_transcript_stage1(
                 workflow="dokumentation",
                 transkript_text=long_tr,

@@ -46,7 +46,7 @@ class _Job:
 class TestRepairCoroutine:
     @pytest.mark.asyncio
     async def test_noop_loest_retry_aus_und_uebernimmt_geaenderten_text(self):
-        from app.api import jobs as J
+        from app.services import repair as J
         orig = "Herr M. berichtete von Sorgen und Belastungen im Alltag. " * 40
         changed = orig + "Im Paargespräch wurden die Rollen reflektiert. " * 3
         calls = []
@@ -69,7 +69,7 @@ class TestRepairCoroutine:
 
     @pytest.mark.asyncio
     async def test_doppel_noop_gibt_original_mit_flag(self):
-        from app.api import jobs as J
+        from app.services import repair as J
         orig = "Herr M. berichtete von Sorgen. " * 40
         async def fake_gen(system, user, **kw):
             return {"text": orig, "telemetry": {}, "model_used": "m"}
@@ -86,7 +86,7 @@ class TestRepairCoroutine:
 
     @pytest.mark.asyncio
     async def test_kein_retry_ohne_anweisungen(self):
-        from app.api import jobs as J
+        from app.services import repair as J
         orig = "Herr M. berichtete von Sorgen. " * 40
         n = []
         async def fake_gen(system, user, **kw):
@@ -99,7 +99,7 @@ class TestRepairCoroutine:
 
     @pytest.mark.asyncio
     async def test_schrumpfung_bei_ergaenzung_geflaggt(self):
-        from app.api import jobs as J
+        from app.services import repair as J
         orig = "Herr M. berichtete ausführlich von Sorgen und Belastungen. " * 60
         short = "Herr M. berichtete von Sorgen. " * 25
         async def fake_gen(system, user, **kw):

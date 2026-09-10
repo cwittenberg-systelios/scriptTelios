@@ -127,7 +127,7 @@ async def test_resolve_transcript_ungueltige_p0_id():
 async def test_run_generation_ruft_phasen_in_reihenfolge(monkeypatch):
     """Orchestrierung: alle Phasen genau einmal, in Pipeline-Reihenfolge,
     ISM-Kurzpfad ueberspringt die Dokument-/Stil-/Prompt-Phasen."""
-    import app.api.jobs as J
+    import app.services.generation_pipeline as J
     order = []
 
     def fake(name, ret=None):

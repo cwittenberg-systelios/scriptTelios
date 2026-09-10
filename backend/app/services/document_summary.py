@@ -26,6 +26,10 @@ import logging
 import time
 from typing import Optional
 
+from app.services.summary_runner import (
+    anti_think_suffix, source_block, stage1_generate, wrap_no_think, word_count,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +69,11 @@ ABSOLUTE REGELN — JEDE VERLETZUNG IST EIN FEHLER:
 """
 
 
+# Dokument-Verdichtung: 0.3 (etwas deterministischer als Verlauf/Transkript).
+_TEMPERATURE = 0.3
+_ANTI_THINK = anti_think_suffix("Verdichtung")
+
+
 async def summarize_document(
     text: str,
     *,
@@ -100,7 +109,6 @@ async def summarize_document(
         RuntimeError wenn die Verdichtung leer ist oder auch nach Retry
         implausibel kurz bleibt.
     """
-    from app.services.llm import generate_text, resolve_summary_model
     from app.services.verlauf_summary import detect_summary_hallucination_signals
 
     if not text or not text.strip():
@@ -108,46 +116,28 @@ async def summarize_document(
 
     # v19.5.2: dediziertes, garantiert geladenes Verdichtungsmodell (nicht mehr
     # der stille OLLAMA_MODEL-Default -> kein Ollama-404 durch stale Config).
-    _summary_model = await resolve_summary_model()
 
-    raw_words = len(text.split())
+    raw_words = word_count(text)
     target_words = max(200, int(target_words))
     min_acceptable = max(150, int(target_words * 0.35))
     max_acceptable = int(target_words * 2.5)
 
-    anti_think_system = (
-        "\n\nWICHTIG: KEIN INNERES NACHDENKEN. "
-        "Schreibe direkt die Verdichtung. "
-        "KEINE <think>-Tags, KEINE Meta-Reflexion, KEINE Vorbemerkungen."
-    )
-    system_prompt = DOCUMENT_SUMMARY_SYSTEM_PROMPT + anti_think_system
+    system_prompt = DOCUMENT_SUMMARY_SYSTEM_PROMPT + _ANTI_THINK
 
     def _build_user(extra_hint: str = "") -> str:
-        return (
-            "/no_think\n\n"
-            + (f"AKTUELLER PATIENT: {patient_initial}\n\n" if patient_initial else "")
-            + (f"WORKFLOW-KONTEXT: {workflow}\n\n" if workflow else "")
-            + f"QUELLE — {doc_label}:\n"
-            + ">>>DOKUMENT<<<\n"
-            + text
-            + "\n>>>/DOKUMENT<<<\n\n"
+        return wrap_no_think(
+            source_block(label=doc_label, tag="DOKUMENT", text=text,
+                         patient_initial=patient_initial, workflow=workflow)
             + f"Verdichte dieses Dokument jetzt treu auf ca. {target_words} Woerter "
             + f"(akzeptiert: {min_acceptable}-{max_acceptable}). "
             + "Behalte alle klinisch relevanten Fakten."
             + (f" {extra_hint}" if extra_hint else "")
-            + "\n\n/no_think"
         )
 
     t0 = time.time()
-    result = await generate_text(
-        system_prompt=system_prompt,
-        user_content=_build_user(),
-        max_tokens=max(2500, int(target_words * 2.0)),
-        model=_summary_model,
-        workflow=None,
-        temperature_override=0.3,
-        skip_aggressive_dedup=True,
-        force_hard_no_think=True,
+    result = await stage1_generate(
+        system_prompt, _build_user(),
+        max_tokens=max(2500, int(target_words * 2.0)), temperature=_TEMPERATURE,
     )
 
     summary = (result.get("text") or "").strip()
@@ -171,15 +161,9 @@ async def summarize_document(
             "Vermeide diesmal jede Aussage, die nicht im Dokument steht."
         )
         try:
-            retry_result = await generate_text(
-                system_prompt=system_prompt,
-                user_content=_build_user(hint),
-                max_tokens=max(3000, int(target_words * 2.2)),
-                model=_summary_model,
-                workflow=None,
-                temperature_override=0.3,
-                skip_aggressive_dedup=True,
-                force_hard_no_think=True,
+            retry_result = await stage1_generate(
+                system_prompt, _build_user(hint),
+                max_tokens=max(3000, int(target_words * 2.2)), temperature=_TEMPERATURE,
             )
         except Exception as e:
             raise RuntimeError(

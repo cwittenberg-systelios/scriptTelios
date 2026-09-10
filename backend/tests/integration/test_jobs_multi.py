@@ -66,7 +66,7 @@ _MOCK_RESPONSE = {
 @pytest.fixture
 def mock_llm_jobs():
     """LLM-Mock - gleicher Patch-Pfad wie in test_api.py::mock_llm_jobs."""
-    with patch("app.api.jobs.generate_text",     new=AsyncMock(return_value=_MOCK_RESPONSE)), \
+    with patch("app.services.generation_pipeline.generate_text",     new=AsyncMock(return_value=_MOCK_RESPONSE)), \
          patch("app.services.llm.generate_text", new=AsyncMock(return_value=_MOCK_RESPONSE)):
         yield
 

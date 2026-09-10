@@ -358,7 +358,7 @@ class TestRunRepairCoroutine:
                 "degraded": False,
             }
 
-        with patch("app.api.jobs.generate_text", _fake_generate):
+        with patch("app.services.repair.generate_text", _fake_generate):
             result = await _run_repair_coroutine(
                 fake_job, "anamnese", "irrelevant prompt",
             )
@@ -390,7 +390,7 @@ class TestRunRepairCoroutine:
                 "degraded": False,
             }
 
-        with patch("app.api.jobs.generate_text", _fake_generate):
+        with patch("app.services.repair.generate_text", _fake_generate):
             result = await _run_repair_coroutine(
                 fake_job, "verlaengerung", "irrelevant",
             )
@@ -424,7 +424,7 @@ class TestRunRepairCoroutine:
                 "degraded": False,
             }
 
-        with patch("app.api.jobs.generate_text", _fake_generate):
+        with patch("app.services.repair.generate_text", _fake_generate):
             await _run_repair_coroutine(
                 fake_job, "dokumentation", "FINAL-REPAIR-PROMPT",
             )

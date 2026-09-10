@@ -25,6 +25,10 @@ import logging
 import time
 from typing import Optional
 
+from app.services.summary_runner import (
+    anti_think_suffix, run_chunked, source_block, stage1_generate, wrap_no_think, word_count,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,6 +114,24 @@ def _wir_hint(workflow: Optional[str]) -> str:
     return 'Schreibe im neutral-deskriptiven Stil ("Die Patientin/Der Patient berichtet...").'
 
 
+# v19.2.2: 0.4 statt 0.2 - bricht Reasoning-Loops.
+_TEMPERATURE = 0.4
+# Anti-Think-Schutz analog v19.2.2 (verlauf_summary.py): System-Prompt-Anhang
+# + /no_think doppelt im User-Content + Temperatur 0.4.
+_ANTI_THINK = anti_think_suffix(
+    "Verdichtung", "Beginne sofort mit '### 1. Auftragsklärung & Hauptanliegen'.",
+)
+
+
+def _user_content(transcript_text: str, patient_initial: Optional[str],
+                  workflow: Optional[str], task: str) -> str:
+    return wrap_no_think(
+        source_block(label="Sitzungstranskript", tag="TRANSKRIPT", text=transcript_text,
+                     patient_initial=patient_initial, workflow=workflow)
+        + task
+    )
+
+
 async def summarize_transcript(
     transcript_text: str,
     workflow: Optional[str],
@@ -156,8 +178,6 @@ async def summarize_transcript(
         Roh-Transkript zurueck (mit dem bekannten Sampling-Risiko).
     """
     # Lokal-Import um Zirkelimport zu vermeiden.
-    from app.services.llm import generate_text, resolve_summary_model
-
     if not transcript_text or not transcript_text.strip():
         raise RuntimeError("Transcript-Stage 1: leeres Transkript")
 
@@ -200,57 +220,26 @@ async def summarize_transcript(
     # Eval-Lauf 14.05.2026 zeigte: einmaliges /no_think reicht bei Qwen3:32b
     # nicht — defense in depth durch System-Prompt-Anhang + /no_think doppelt
     # im User-Content + Temperatur 0.4 statt 0.2.
-    anti_think_system = (
-        "\n\nWICHTIG: KEIN INNERES NACHDENKEN. "
-        "Schreibe direkt die Verdichtung. "
-        "KEINE <think>-Tags, KEINE Meta-Reflexion, KEINE Vorbemerkungen. "
-        "Beginne sofort mit '### 1. Auftragsklärung & Hauptanliegen'."
-    )
     system_prompt = (
         TRANSCRIPT_SUMMARY_SYSTEM_PROMPT
         + "\n\n"
         + TRANSCRIPT_SUMMARY_STRUCTURE
         + f"\n\nSTIL: {wir_hint}"
-        + anti_think_system
+        + _ANTI_THINK
     )
-
-    user_content = (
-        "/no_think\n\n"
-        + (f"AKTUELLER PATIENT: {patient_initial}\n\n" if patient_initial else "")
-        + (f"WORKFLOW-KONTEXT: {workflow}\n\n" if workflow else "")
-        + "QUELLE — Sitzungstranskript:\n"
-        + ">>>TRANSKRIPT<<<\n"
-        + transcript_text
-        + "\n>>>/TRANSKRIPT<<<\n\n"
-        + "Verdichte dieses Transkript jetzt in drei Sektionen wie vorgegeben. "
+    user_content = _user_content(
+        transcript_text, patient_initial, workflow,
+        "Verdichte dieses Transkript jetzt in drei Sektionen wie vorgegeben. "
         + f"Zielwortzahl: ca. {target_words} Woerter "
-        + f"(akzeptiert: {min_acceptable}-{max_acceptable}).\n\n"
-        + "/no_think"
+        + f"(akzeptiert: {min_acceptable}-{max_acceptable}).",
     )
-
-    # v19.5.2: garantiert geladenes Verdichtungsmodell (statt stiller
-    # OLLAMA_MODEL-Default -> kein Ollama-404 durch stale/retired Config).
-    _summary_model = await resolve_summary_model()
 
     t0 = time.time()
-    result = await generate_text(
-        system_prompt=system_prompt,
-        user_content=user_content,
-        # max_tokens-Heuristik: 2.0x target_words (Wort->Token-Faktor 1.3-1.6
-        # plus Puffer fuer Section-Header). Floor 2500 fuer kleine Targets.
-        max_tokens=max(2500, int(target_words * 2.0)),
-        model=_summary_model,
-        workflow=None,
-        # v19.2.2: 0.4 statt 0.2 — bricht Reasoning-Loops.
-        temperature_override=0.4,
-        # v19.2.1: strict_mode-Dedup, weil thematische Wiederholungen
-        # in Verdichtungen strukturell legitim sind (selbes Thema in
-        # Section 1+2). deduplicate_paragraphs wird intern aufgerufen.
-        skip_aggressive_dedup=True,
-        # v19.2.2: harter Anti-Think-Pfad direkt beim ersten Call.
-        # Konsistent mit verlauf_summary - Verdichtungs-Tasks triggern bei
-        # Qwen3 lange Think-Bloecke trotz "think":False+/no_think.
-        force_hard_no_think=True,
+    # max_tokens-Heuristik: 2.0x target_words (Wort->Token-Faktor 1.3-1.6
+    # plus Puffer fuer Section-Header). Floor 2500 fuer kleine Targets.
+    result = await stage1_generate(
+        system_prompt, user_content,
+        max_tokens=max(2500, int(target_words * 2.0)), temperature=_TEMPERATURE,
     )
 
     summary = (result.get("text") or "").strip()
@@ -321,30 +310,14 @@ async def summarize_transcript(
                 f"Behalte beim Retry die Zielwortzahl von ca. {target_words} "
                 f"Woertern bei (akzeptiert: {min_acceptable}-{max_acceptable})."
             )
-        retry_user = (
-            "/no_think\n\n"
-            + (f"AKTUELLER PATIENT: {patient_initial}\n\n" if patient_initial else "")
-            + (f"WORKFLOW-KONTEXT: {workflow}\n\n" if workflow else "")
-            + "QUELLE — Sitzungstranskript:\n"
-            + ">>>TRANSKRIPT<<<\n"
-            + transcript_text
-            + "\n>>>/TRANSKRIPT<<<\n\n"
-            + length_hint
-            + "\n\n/no_think"
-        )
+        retry_user = _user_content(transcript_text, patient_initial, workflow, length_hint)
 
         try:
-            retry_result = await generate_text(
-                system_prompt=retry_system_prompt,
-                user_content=retry_user,
-                max_tokens=max(3000, int(target_words * 2.2)),
-                model=_summary_model,
-                workflow=None,
-                # 0.3 statt 0.4 - etwas deterministischer beim Retry, aber
-                # nicht zu niedrig (sonst greift Anti-Think nicht mehr).
-                temperature_override=0.3,
-                skip_aggressive_dedup=True,
-                force_hard_no_think=True,  # v19.2.2: konsistent zum Hauptcall
+            # 0.3 statt 0.4 - etwas deterministischer beim Retry, aber
+            # nicht zu niedrig (sonst greift Anti-Think nicht mehr).
+            retry_result = await stage1_generate(
+                retry_system_prompt, retry_user,
+                max_tokens=max(3000, int(target_words * 2.2)), temperature=0.3,
             )
         except Exception as e:
             logger.error("Transcript-Stage 1 Retry-Call fehlgeschlagen: %s", e)
@@ -440,59 +413,27 @@ async def _summarize_transcript_chunked(
     chunks: list[str],
 ) -> dict:
     """v19.19 (S4): Teil-Verdichtung fuer ueberlange Transkripte, chronologisch
-    zusammengefuegt. Zielwortzahl proportional zur Teil-Laenge; Halluzinations-
-    Check laeuft pro Teil in summarize_transcript."""
-    import time as _t
+    zusammengefuegt (summary_runner.run_chunked, R7). Zielwortzahl proportional
+    zur Teil-Laenge; Halluzinations-Check laeuft pro Teil in summarize_transcript."""
     from app.services.staging import compute_transcript_target_words
 
-    t0 = _t.time()
-    raw_words = len(transcript_text.split())
-    total_target = target_words or compute_transcript_target_words(raw_words)
-    chunk_words = [len(c.split()) for c in chunks]
-    n = len(chunks)
-    logger.info(
-        "Transcript-Stage 1 chunked: %d Zeichen / %d Woerter -> %d Teile, Ziel %dw",
-        len(transcript_text), raw_words, n, total_target,
-    )
-    parts: list[str] = []
-    tel_parts: list[dict] = []
-    issues: list = []
-    retry_used = degraded = False
-    for i, (chunk, cw) in enumerate(zip(chunks, chunk_words, strict=True), start=1):
-        share = max(300, int(total_target * (cw / max(raw_words, 1))))
-        res = await summarize_transcript(
+    total_target = target_words or compute_transcript_target_words(word_count(transcript_text))
+
+    async def _part(chunk: str, share: int) -> dict:
+        return await summarize_transcript(
             transcript_text=chunk,
             workflow=workflow,
             target_words=share,
             patient_initial=patient_initial,
             _is_chunk=True,
         )
-        parts.append(f"### Gespraechsabschnitt {i}/{n} (chronologisch)\n\n{res['summary']}")
-        tel_parts.append(res.get("telemetry") or {})
-        issues.extend(res.get("issues") or [])
-        retry_used = retry_used or bool(res.get("retry_used"))
-        degraded = degraded or bool(res.get("degraded"))
-    summary = (
-        f"[Verdichtet in {n} chronologischen Gespraechsabschnitten.]\n\n"
-        + "\n\n".join(parts)
+
+    return await run_chunked(
+        raw_text=transcript_text,
+        chunks=chunks,
+        total_target=total_target,
+        summarize_part=_part,
+        part_heading="Gespraechsabschnitt {i}/{n} (chronologisch)",
+        header="[Verdichtet in {n} chronologischen Gespraechsabschnitten.]",
+        log_label="Transcript-Stage 1",
     )
-    summary_words = len(summary.split())
-    return {
-        "summary":              summary,
-        "raw_word_count":       raw_words,
-        "summary_word_count":   summary_words,
-        "compression_ratio":    round(summary_words / raw_words, 3) if raw_words else 0.0,
-        "duration_s":           round(_t.time() - t0, 1),
-        "telemetry":            {
-            "chunked": True, "chunks": n,
-            "tokens_hit_cap": any(t.get("tokens_hit_cap") for t in tel_parts),
-            "input_truncated": any(t.get("input_truncated") for t in tel_parts),
-            "parts": tel_parts,
-        },
-        "retry_telemetry":      {},
-        "issues":               issues,
-        "retry_used":           retry_used,
-        "degraded":             degraded,
-        "target_words":         total_target,
-        "min_acceptable":       0,
-    }
