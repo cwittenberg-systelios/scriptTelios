@@ -18,6 +18,18 @@ from tests.conftest import TXT_SELBST  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """v19.21 (S3): Der In-Memory-Limiter (100 Requests/Stunde pro User) ist ein
+    Modul-Singleton. Ueber die gesamte Suite (Job-Polling!) laeuft
+    'test-therapeut' sonst in 429 - erst sichtbar, seit die Suite ab Clone
+    komplett durchlaeuft."""
+    from app.middleware import ratelimit as _rl
+    _rl._limiter._windows.clear()
+    yield
+    _rl._limiter._windows.clear()
+
+
+@pytest.fixture(autouse=True)
 def init_test_db():
     """
     DB-Tabellen vor jedem Test anlegen, danach bereinigen.

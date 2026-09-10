@@ -189,16 +189,8 @@ def get(key: str) -> WorkflowSpec | None:
     return WORKFLOW_BY_KEY.get(key)
 
 
-def label_for(key: str) -> str:
-    """Lange Anzeigeform. Fallback: Key selbst."""
-    spec = WORKFLOW_BY_KEY.get(key)
-    return spec.label if spec else key
 
 
-def short_label_for(key: str) -> str:
-    """Kurze Anzeigeform fuer Tabellen. Fallback: Key selbst."""
-    spec = WORKFLOW_BY_KEY.get(key)
-    return spec.short_label if spec else key
 
 
 def word_limit_for(
@@ -222,10 +214,6 @@ def expected_tokens_for(key: str, fallback: int = 1500) -> int:
     return spec.expected_tokens if spec else fallback
 
 
-def color_for(key: str, fallback: str = "#999999") -> str:
-    """Hex-Farbe fuer Charts."""
-    spec = WORKFLOW_BY_KEY.get(key)
-    return spec.color_hex if spec else fallback
 
 
 def is_structural(key: str) -> bool:
@@ -234,9 +222,6 @@ def is_structural(key: str) -> bool:
     return bool(spec and spec.is_structural)
 
 
-def all_keys() -> list[str]:
-    """Liste aller Workflow-Keys (kopierbar, mutierbar)."""
-    return list(WORKFLOW_KEYS)
 
 
 def to_manifest() -> list[dict]:

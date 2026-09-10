@@ -92,7 +92,6 @@ _OLLAMA_DISABLE_ENV = {
     "OLLAMA_HOST": "http://127.0.0.1:1",
     # Test-DB
     "DATABASE_URL": "sqlite+aiosqlite:///./testrun.db",
-    "SECRET_KEY": "testrun-secret",
 }
 
 

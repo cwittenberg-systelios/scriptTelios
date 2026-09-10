@@ -135,9 +135,6 @@ class Settings(BaseSettings):
     # ── Datenbank ─────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://systelios:systelios@db:5432/systelios"
 
-    # ── Sicherheit ────────────────────────────────────────────────
-    SECRET_KEY:                    str = "BITTE-AENDERN-IN-PRODUKTION"
-
     # ── Datenschutz: Auth (K1) ───────────────────────────────────
     AUTH_ENABLED:                  bool = True
     CONFLUENCE_SHARED_SECRET:      str  = "CHANGE-ME-USE-secrets.token_urlsafe-32"
@@ -168,15 +165,9 @@ class Settings(BaseSettings):
     # ── Datenschutz: Audit-Log (E1) ──────────────────────────────
     AUDIT_LOG_PATH:                str  = "/workspace/audit.log"
 
-
-    # ── Retention (E2) ───────────────────────────────────────────
-    RETENTION_INTERVAL_HOURS: int = 6
-
     # ── Rate Limit (O1) ──────────────────────────────────────────
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_REQUESTS_PER_HOUR: int = 100
-    RATE_LIMIT_PARALLEL_JOBS: int = 5
-    ACCESS_TOKEN_EXPIRE_MINUTES:   int = 480   # 8 Stunden
 
     # ── v19.2 Two-Stage-Pipeline (Verlauf-Verdichtung) ───────────
     # Stage 1: separater LLM-Call der die rohe Verlaufsdokumentation auf

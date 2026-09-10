@@ -1,13 +1,9 @@
+// main.jsx – einziger Einstiegspunkt des Bundles (v19.21 S3).
+// Vorher gab es drei Mount-Varianten (entry.jsx, main.jsx, Inline-Mount am
+// Ende von klinische-dokumentation.jsx); nur der Inline-Mount auf
+// #systelios-app war produktiv (misc/confluence-user-macro.html).
 import { createRoot } from "react-dom/client";
 import App from "./klinische-dokumentation.jsx";
 
-// Warte auf DOM dann mounte in den Confluence-Container
-window.addEventListener("load", function() {
-  var container = document.querySelector('[id^="systelios-root-"]');
-  if (!container) {
-    container = document.createElement("div");
-    container.id = "systelios-root";
-    document.body.appendChild(container);
-  }
-  createRoot(container).render(<App />);
-});
+const container = document.getElementById("systelios-app");
+if (container) createRoot(container).render(<App />);

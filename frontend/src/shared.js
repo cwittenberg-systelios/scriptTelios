@@ -203,4 +203,4 @@ function getEmptyWarning(text) {
 const _recordingsCache = { data: [] };
 const _pendingLabels   = {};  // { [id]: label } — überlebt P0-Unmount
 
-export { MAX_UPLOAD_MB, fmtSec, fmtMB, IDB_NAME, OFFLINE_IDB_STORE, idbOpen, offlineQueueAdd, offlineQueueList, offlineQueueRemove, pickQualityCheck, JOB_STORAGE_KEY, saveActiveJob, loadActiveJob, clearActiveJob, friendlyError, getEmptyWarning, _recordingsCache, _pendingLabels };
+export { MAX_UPLOAD_MB, fmtSec, fmtMB, offlineQueueAdd, offlineQueueList, offlineQueueRemove, pickQualityCheck, JOB_STORAGE_KEY, saveActiveJob, loadActiveJob, clearActiveJob, friendlyError, getEmptyWarning, _recordingsCache, _pendingLabels };

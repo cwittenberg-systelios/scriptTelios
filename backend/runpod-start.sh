@@ -902,7 +902,6 @@ fi
 echo ""
 if [ ! -f "$BACKEND_DIR/.env" ]; then
     echo "${WARN}Keine .env - erstelle automatisch..."
-    SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
     # Confluence-URL: Argument > Default
     CONF_URL="${ARG_CONFLUENCE:-http://intranet.systelios.local}"
     # Modell: Argument > Default
@@ -924,7 +923,6 @@ WHISPER_COMPUTE_TYPE=float16
 # HF-Cache auf Network Volume (persistent, deckt Whisper + pyannote ab):
 HF_HOME=/workspace/hf-cache
 DATABASE_URL=postgresql+asyncpg://systelios:systelios@127.0.0.1:5432/systelios
-SECRET_KEY=${SECRET}
 DELETE_AUDIO_AFTER_TRANSCRIPTION=false
 LOG_LEVEL=INFO
 UPLOAD_DIR=/workspace/uploads
@@ -939,7 +937,7 @@ ALLOW_CLOUDFLARE_TUNNEL=true
 DIARIZATION_ENABLED=${DIAR_ENABLED}
 DIARIZATION_HF_TOKEN=${DIAR_TOKEN}
 ENVEOF
-    echo "${OK}.env erstellt (SECRET_KEY automatisch generiert)"
+    echo "${OK}.env erstellt"
 else
     # Sicherstellen dass korrekte DATABASE_URL gesetzt ist
     sed -i 's|@db:5432|@127.0.0.1:5432|g'        "$BACKEND_DIR/.env"

@@ -1,10 +1,8 @@
 // ────────────────────────────────────────────────────────────────────────────
-// src/api.jsx — extrahiert aus klinische-dokumentation.jsx (R4, 2026-07-01).
-// Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
+// src/api.js — API-Helfer (Fetch-Wrapper, Job-Start/-Polling, Repair, Downloads).
+// Extrahiert aus klinische-dokumentation.jsx (R4, 2026-07-01); v19.21 (S3):
+// generate() entfernt, buildJobFormData() als Single-Source fuer die Felder.
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { clearActiveJob, saveActiveJob } from "./shared.js";
-
 
 // sysTelios CI – angepasst an Confluence-Intranet-Screenshot:
 // Sidebar: Dunkelgrau/Anthrazit (#2c2c2c) / Highlight: Dunkelrot #8b1a1a / Neutral Grau-Töne / System-Schrift
@@ -84,13 +82,15 @@ async function pollJob(jobId, maxWaitSeconds = 1200, signal) {
   throw new Error("Timeout: Job dauert zu lange");
 }
 
-async function generate(workflow, prompt, userContent, files = {}, page = null) {
+// Baut die FormData fuer POST /jobs/generate. Pure Funktion, einziger Ort
+// fuer die Feld-Zuordnung (v19.21 S3: vorher zweimal in generate()/startJob(),
+// mit Drift - generate() kannte prozessreflexion und ism_n_items nicht).
+function buildJobFormData(workflow, prompt, userContent, files = {}) {
   const therapeutId = getConfluenceUser();
   const fd = new FormData();
   fd.append("workflow",   workflow);
-  // v18: Feld heisst jetzt 'workflow_instructions' (frueher 'prompt').
-  // Backend akzeptiert beide Namen, wir senden den neuen Namen als
-  // Single-Source-of-Truth.
+  // v18: Feld heisst 'workflow_instructions' (frueher 'prompt'). Backend
+  // akzeptiert beide Namen, wir senden den neuen Namen als Single-Source-of-Truth.
   fd.append("workflow_instructions", prompt);
   if (files.befundVorlage) fd.append("befund_vorlage", files.befundVorlage);
   if (therapeutId)       fd.append("therapeut_id",    therapeutId);
@@ -118,92 +118,29 @@ async function generate(workflow, prompt, userContent, files = {}, page = null) 
     fd.append("transcript", userContent);
   }
 
-  if (files.selbst)      fd.append("selbstauskunft",   files.selbst);
-  if (files.vorbef)      fd.append("vorbefunde",       files.vorbef);
-  if (files.verlauf)     fd.append("verlaufsdoku",     files.verlauf);
-  if (files.antragsvorlage) fd.append("antragsvorlage", files.antragsvorlage);
-  if (files.vorantrag)   fd.append("vorantrag",        files.vorantrag);
-  if (files.style)       fd.append("style_file",       files.style);
-  if (files.diagnosen)   fd.append("diagnosen",        files.diagnosen);
-  if (files.bullets)     fd.append("bullets",          files.bullets);
-  if (files.styleText)   fd.append("style_text",       files.styleText);
-  if (files.model)       fd.append("model",             files.model);
-
-  // Job starten
-  const r = await apiFetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.detail || r.statusText);
-
-  const jobId = d.job_id;
-  saveActiveJob(jobId, page);
-  if (files.onJobId) files.onJobId(jobId);
-
-  try {
-    const job = await pollJob(jobId, 1200, files.signal);
-    clearActiveJob();
-    if (!job) return null;  // abgebrochen
-    return {
-      text:        job.result_text   || "",
-      befundText:  job.befund_text   || "",
-      akutText:    job.akut_text     || "",
-      jobId,
-      hasTranscript: job.has_transcript || false,
-      // v19 Phase 1: QC-Bundle vom Backend. Null bei Pre-v19-Jobs oder QC-Fail.
-      qualityCheck: job.quality_check || null,
-    };
-  } catch (e) {
-    clearActiveJob();
-    throw e;
-  }
+  // v19.18 (PX): gewuenschte Itemanzahl fuer den ISM-Fragebogen (4-12).
+  if (files.ismNItems)        fd.append("ism_n_items",      String(files.ismNItems));
+  if (files.selbst)           fd.append("selbstauskunft",   files.selbst);
+  if (files.vorbef)           fd.append("vorbefunde",       files.vorbef);
+  if (files.verlauf)          fd.append("verlaufsdoku",     files.verlauf);
+  if (files.antragsvorlage)   fd.append("antragsvorlage",   files.antragsvorlage);
+  if (files.vorantrag)        fd.append("vorantrag",        files.vorantrag);
+  if (files.prozessreflexion) fd.append("prozessreflexion", files.prozessreflexion);
+  if (files.style)            fd.append("style_file",       files.style);
+  if (files.diagnosen)        fd.append("diagnosen",        files.diagnosen);
+  if (files.bullets)          fd.append("bullets",          files.bullets);
+  if (files.styleText)        fd.append("style_text",       files.styleText);
+  if (files.model)            fd.append("model",            files.model);
+  return fd;
 }
 
-// Sprint B (Multi-Job-Liste P1): non-blocking Variante von generate().
-// Sendet nur den POST und liefert die job_id sofort zurueck, OHNE auf
-// Abschluss zu warten. Polling/SSE fuer Status uebernimmt die aufrufende
-// Komponente (P1 ueber selectedJobId-useEffect). Bewusst nicht ueber
-// generate() refaktoriert, weil P2/P3/P4 weiterhin den blockierenden
-// Flow nutzen und buildJobFormData()-Extraktion ein eigener Sprint ist.
+// Startet einen Job (non-blocking): sendet nur den POST und liefert die
+// job_id sofort zurueck. Polling/SSE fuer Status uebernimmt die aufrufende
+// Komponente (pollJob / useResumeWorkflowJob). Alle Panels (P1-P6) nutzen
+// diesen Pfad; der fruehere blockierende generate()-Flow wurde in v19.21 (S3)
+// entfernt.
 async function startJob(workflow, prompt, userContent, files = {}) {
-  const therapeutId = getConfluenceUser();
-  const fd = new FormData();
-  fd.append("workflow",   workflow);
-  fd.append("workflow_instructions", prompt);
-  if (files.befundVorlage) fd.append("befund_vorlage", files.befundVorlage);
-  if (therapeutId)       fd.append("therapeut_id",    therapeutId);
-  if (files.patientName) fd.append("patientenname",   files.patientName);
-  // v19.8: strukturiertes Geschlecht - unabhaengig vom Kuerzel-Gate. Nur
-  // "w"/"m" senden. v19.12: "auto" existiert nicht mehr - ohne Wahl ("")
-  // extrahiert das Backend Geschlecht+Name aus der Antragsvorlage.
-  if (files.geschlecht === "w" || files.geschlecht === "m") fd.append("geschlecht", files.geschlecht);
-
-  if (files.audio && files.audio.__p0recording) {
-    fd.append("p0_recording_id", String(files.audio.id));
-    fd.append("priority", "high");
-    if (files.audio.transcript) fd.append("transcript", files.audio.transcript);
-  } else if (files.audio) {
-    fd.append("transcript", userContent);
-    fd.append("audio", files.audio);
-  } else if (files.txtFile) {
-    fd.append("transcript_file", files.txtFile);
-    if (userContent) fd.append("transcript", userContent);
-  } else {
-    fd.append("transcript", userContent);
-  }
-
-  // v19.18 (PX): gewuenschte Itemanzahl fuer den ISM-Fragebogen (4-12).
-  if (files.ismNItems)      fd.append("ism_n_items",     String(files.ismNItems));
-  if (files.selbst)         fd.append("selbstauskunft",  files.selbst);
-  if (files.vorbef)         fd.append("vorbefunde",      files.vorbef);
-  if (files.verlauf)        fd.append("verlaufsdoku",    files.verlauf);
-  if (files.antragsvorlage) fd.append("antragsvorlage",  files.antragsvorlage);
-  if (files.vorantrag)      fd.append("vorantrag",       files.vorantrag);
-  if (files.prozessreflexion) fd.append("prozessreflexion", files.prozessreflexion);
-  if (files.style)          fd.append("style_file",      files.style);
-  if (files.diagnosen)      fd.append("diagnosen",       files.diagnosen);
-  if (files.bullets)        fd.append("bullets",         files.bullets);
-  if (files.styleText)      fd.append("style_text",      files.styleText);
-  if (files.model)          fd.append("model",            files.model);
-
+  const fd = buildJobFormData(workflow, prompt, userContent, files);
   const r = await apiFetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
   const d = await r.json();
   if (!r.ok) throw new Error(d.detail || r.statusText);
@@ -311,4 +248,4 @@ function getConfluenceUser() {
   return "";
 }
 
-export { apiFetch, downloadViaApi, pollJob, generate, startJob, downloadTranscript, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser };
+export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser };

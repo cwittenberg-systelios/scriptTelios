@@ -314,4 +314,4 @@ function useWorkflowManifest() {
   return { workflows, structural, loaded };
 }
 
-export { useDraftCache, useResumeWorkflowJob, useJobResult, DOKUMENTTYPEN_FALLBACK, STRUCTURAL_WORKFLOWS_FALLBACK, useWorkflowManifest };
+export { useDraftCache, useResumeWorkflowJob, useJobResult, useWorkflowManifest };

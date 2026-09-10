@@ -105,7 +105,7 @@ async def _check_table_ownership() -> None:
 
 
 # ── Sanity-Check: alle benoetigten Tabellen vorhanden? ───────────────────────
-_REQUIRED_TABLES = ("jobs", "recordings", "style_profiles", "style_embeddings")
+_REQUIRED_TABLES = ("jobs", "recordings", "style_embeddings")
 
 _TABLE_CHECK_SQL = text("""
     SELECT tablename FROM pg_tables

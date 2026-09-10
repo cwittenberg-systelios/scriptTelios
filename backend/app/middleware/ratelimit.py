@@ -7,7 +7,6 @@ einfaches In-Memory-Token-Bucket pro User.
 
 Limits konfigurierbar via Settings:
     RATE_LIMIT_REQUESTS_PER_HOUR: int = 100
-    RATE_LIMIT_PARALLEL_JOBS: int = 5
 """
 import time
 from collections import defaultdict, deque

@@ -18,12 +18,12 @@ import {
   getApiBase,
   getConfluenceUser,
   pollJob,
-  generate,
+  buildJobFormData,
+  startJob,
   repairPreview,
   repairStart,
   fetchRepairResult,
 } from "../src/api.js";
-import { JOB_STORAGE_KEY } from "../src/shared.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -161,121 +161,110 @@ describe("pollJob()", () => {
   });
 });
 
-// ── generate ─────────────────────────────────────────────────────────────────
+// ── buildJobFormData / startJob ──────────────────────────────────────────────
+// v19.21 (S3): generate() entfernt (kein Aufrufer mehr). Die Feld-Zuordnung
+// lebt jetzt in buildJobFormData() und wird hier direkt getestet; startJob()
+// deckt POST + Fehlerpfad ab. localStorage-Persistenz des aktiven Jobs
+// uebernehmen die Panels (saveActiveJob in P1-P6), nicht mehr die API-Schicht.
 
-describe("generate()", () => {
-  beforeEach(() => jest.useFakeTimers());
-
-  /** POST + sofortiges done-Polling. */
-  function mockGenerateFlow(jobBody = { status: "done", result_text: "Text." }) {
-    return mockSignedFetch(
-      jsonResponse({ job_id: "gen-1" }),
-      jsonResponse(jobBody),
-    );
-  }
-
-  function sentFormData(fetchMock, callIdx = 0) {
-    return fetchMock.mock.calls[callIdx][1].body;
-  }
-
-  test("schickt workflow, workflow_instructions und transcript als FormData-Felder", async () => {
-    const fetchMock = mockGenerateFlow();
-    const p = generate("dokumentation", "PROMPT", "Transkripttext");
-    await jest.runAllTimersAsync();
-    await p;
-    const fd = sentFormData(fetchMock);
+describe("buildJobFormData()", () => {
+  test("schickt workflow, workflow_instructions und transcript als FormData-Felder", () => {
+    const fd = buildJobFormData("dokumentation", "PROMPT", "Transkripttext");
     expect(fd.get("workflow")).toBe("dokumentation");
     expect(fd.get("workflow_instructions")).toBe("PROMPT");
     expect(fd.get("transcript")).toBe("Transkripttext");
   });
 
-  test("schickt bullets als separates Feld – nicht in transcript eingebaut", async () => {
-    const fetchMock = mockGenerateFlow();
-    const p = generate("dokumentation", "P", "Haupttext", { bullets: "• Punkt 1" });
-    await jest.runAllTimersAsync();
-    await p;
-    const fd = sentFormData(fetchMock);
+  test("schickt bullets als separates Feld – nicht in transcript eingebaut", () => {
+    const fd = buildJobFormData("dokumentation", "P", "Haupttext", { bullets: "• Punkt 1" });
     expect(fd.get("bullets")).toBe("• Punkt 1");
     expect(fd.get("transcript")).toBe("Haupttext");
   });
 
-  test("geschlecht wird nur bei w/m gesendet — leer bleibt draussen (v19.12)", async () => {
-    let fetchMock = mockGenerateFlow();
-    let p = generate("dokumentation", "P", "T", { geschlecht: "w" });
-    await jest.runAllTimersAsync();
-    await p;
-    expect(sentFormData(fetchMock).get("geschlecht")).toBe("w");
-
-    fetchMock = mockGenerateFlow();
-    p = generate("dokumentation", "P", "T", { geschlecht: "" });
-    await jest.runAllTimersAsync();
-    await p;
-    expect(sentFormData(fetchMock).get("geschlecht")).toBeNull();
+  test("geschlecht wird nur bei w/m gesendet — leer bleibt draussen (v19.12)", () => {
+    expect(buildJobFormData("dokumentation", "P", "T", { geschlecht: "w" }).get("geschlecht")).toBe("w");
+    expect(buildJobFormData("dokumentation", "P", "T", { geschlecht: "m" }).get("geschlecht")).toBe("m");
+    expect(buildJobFormData("dokumentation", "P", "T", { geschlecht: "" }).get("geschlecht")).toBeNull();
+    expect(buildJobFormData("dokumentation", "P", "T", { geschlecht: "auto" }).get("geschlecht")).toBeNull();
   });
 
-  test("gibt { text, jobId, hasTranscript, qualityCheck } zurück", async () => {
-    mockGenerateFlow({
-      status: "done", result_text: "Ergebnis.", has_transcript: true,
-      quality_check: { issues: [] },
+  test("P0-Recording: p0_recording_id + priority, transcript nur wenn vorhanden", () => {
+    let fd = buildJobFormData("dokumentation", "P", "ignoriert", {
+      audio: { __p0recording: true, id: 42, transcript: "Aus P0" },
     });
-    const p = generate("dokumentation", "P", "T");
-    await jest.runAllTimersAsync();
-    const r = await p;
-    expect(r.text).toBe("Ergebnis.");
-    expect(r.jobId).toBe("gen-1");
-    expect(r.hasTranscript).toBe(true);
-    expect(r.qualityCheck).toEqual({ issues: [] });
+    expect(fd.get("p0_recording_id")).toBe("42");
+    expect(fd.get("priority")).toBe("high");
+    expect(fd.get("transcript")).toBe("Aus P0");
+    expect(fd.get("audio")).toBeNull();
+
+    fd = buildJobFormData("dokumentation", "P", "ignoriert", { audio: { __p0recording: true, id: 7 } });
+    expect(fd.get("transcript")).toBeNull();
   });
 
-  test("liefert qualityCheck=null wenn Backend kein quality_check hat", async () => {
-    mockGenerateFlow({ status: "done", result_text: "x" });
-    const p = generate("dokumentation", "P", "T");
-    await jest.runAllTimersAsync();
-    expect((await p).qualityCheck).toBeNull();
+  test("Audio-Upload geht ins audio-Feld, Transkript-Datei ins transcript_file-Feld", () => {
+    const audio = new File(["x"], "a.mp3", { type: "audio/mpeg" });
+    let fd = buildJobFormData("dokumentation", "P", "Text", { audio });
+    expect(fd.get("audio")).toBe(audio);
+    expect(fd.get("transcript")).toBe("Text");
+
+    const txt = new File(["t"], "t.txt", { type: "text/plain" });
+    fd = buildJobFormData("anamnese", "P", "", { txtFile: txt });
+    expect(fd.get("transcript_file")).toBe(txt);
+    expect(fd.get("transcript")).toBeNull();
+    fd = buildJobFormData("anamnese", "P", "Zusatz", { txtFile: txt });
+    expect(fd.get("transcript")).toBe("Zusatz");
   });
 
-  test("speichert Job-ID in localStorage während Polling läuft", async () => {
-    mockSignedFetch(
-      jsonResponse({ job_id: "gen-persist" }),
-      jsonResponse({ status: "running" }),
-      jsonResponse({ status: "done", result_text: "x" }),
-    );
-    const p = generate("dokumentation", "P", "T", {}, "p1");
-    // Nach dem POST, vor Abschluss: Job muss persistiert sein
-    await jest.advanceTimersByTimeAsync(3000);
-    const saved = JSON.parse(localStorage.getItem(JOB_STORAGE_KEY));
-    expect(saved.jobId).toBe("gen-persist");
-    expect(saved.page).toBe("p1");
-    await jest.runAllTimersAsync();
-    await p;
+  test("Dokument-Felder werden 1:1 gemappt (inkl. prozessreflexion, ism_n_items)", () => {
+    const f = (n) => new File(["d"], n);
+    const files = {
+      selbst: f("s.pdf"), vorbef: f("v.pdf"), verlauf: f("vd.pdf"),
+      antragsvorlage: f("a.docx"), vorantrag: f("va.docx"),
+      prozessreflexion: f("pr.pdf"), style: f("st.docx"),
+      befundVorlage: "BEFUND", patientName: "Frau M.", diagnosen: "F32.1",
+      styleText: "Stil", model: "gemma4:31b", ismNItems: 8,
+    };
+    const fd = buildJobFormData("entlassbericht", "P", "", files);
+    expect(fd.get("selbstauskunft")).toBe(files.selbst);
+    expect(fd.get("vorbefunde")).toBe(files.vorbef);
+    expect(fd.get("verlaufsdoku")).toBe(files.verlauf);
+    expect(fd.get("antragsvorlage")).toBe(files.antragsvorlage);
+    expect(fd.get("vorantrag")).toBe(files.vorantrag);
+    expect(fd.get("prozessreflexion")).toBe(files.prozessreflexion);
+    expect(fd.get("style_file")).toBe(files.style);
+    expect(fd.get("befund_vorlage")).toBe("BEFUND");
+    expect(fd.get("patientenname")).toBe("Frau M.");
+    expect(fd.get("diagnosen")).toBe("F32.1");
+    expect(fd.get("style_text")).toBe("Stil");
+    expect(fd.get("model")).toBe("gemma4:31b");
+    expect(fd.get("ism_n_items")).toBe("8");
   });
 
-  test("löscht Job-ID aus localStorage nach erfolgreichem Abschluss", async () => {
-    mockGenerateFlow();
-    const p = generate("dokumentation", "P", "T");
-    await jest.runAllTimersAsync();
-    await p;
-    expect(localStorage.getItem(JOB_STORAGE_KEY)).toBeNull();
+  test("therapeut_id kommt aus window.SYSTELIOS_USER", () => {
+    window.SYSTELIOS_USER = "dr.test";
+    try {
+      expect(buildJobFormData("dokumentation", "P", "T").get("therapeut_id")).toBe("dr.test");
+    } finally {
+      delete window.SYSTELIOS_USER;
+    }
+    expect(buildJobFormData("dokumentation", "P", "T").get("therapeut_id")).toBeNull();
+  });
+});
+
+describe("startJob()", () => {
+  test("POSTet FormData an /jobs/generate und liefert job_id", async () => {
+    const fetchMock = mockSignedFetch(jsonResponse({ job_id: "gen-1" }));
+    const jobId = await startJob("dokumentation", "PROMPT", "Text", { bullets: "b" });
+    expect(jobId).toBe("gen-1");
+    const [url, opts] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/jobs\/generate$/);
+    expect(opts.method).toBe("POST");
+    expect(opts.body.get("bullets")).toBe("b");
   });
 
-  test("löscht Job-ID auch bei Fehler (kein verwaister localStorage-Eintrag)", async () => {
-    mockSignedFetch(
-      jsonResponse({ job_id: "gen-fail" }),
-      jsonResponse({ status: "error", error_msg: "kaputt" }),
-    );
-    const p = generate("dokumentation", "P", "T");
-    const expectation = expect(p).rejects.toThrow("kaputt");
-    await jest.runAllTimersAsync();
-    await expectation;
-    expect(localStorage.getItem(JOB_STORAGE_KEY)).toBeNull();
-  });
-
-  test("wirft Fehler wenn Backend nicht erreichbar (non-ok POST)", async () => {
+  test("wirft Fehler mit Backend-detail wenn POST non-ok", async () => {
     mockSignedFetch(jsonResponse({ detail: "Service Unavailable" }, false, 503));
-    const p = generate("dokumentation", "P", "T");
-    const expectation = expect(p).rejects.toThrow("Service Unavailable");
-    await jest.runAllTimersAsync();
-    await expectation;
+    await expect(startJob("dokumentation", "P", "T")).rejects.toThrow("Service Unavailable");
   });
 });
 

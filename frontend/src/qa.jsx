@@ -5,26 +5,10 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { fetchRepairResult, repairPreview, repairStart } from "./api.js";
-import { useJobResult } from "./hooks.jsx";
 import { friendlyError } from "./shared.js";
 import { JobProgressBar } from "./ui.jsx";
 
 
-// Backwards-compat: useQualityCheck war der alte Hook-Name aus Sprint 2.
-// Pages koennen weiter useQualityCheck() nutzen, bekommen aber jetzt einen
-// reduzierten View (nur das was sie in Sprint 2 verwendet haben).
-// Sprint 4: Pages bekommen ueber das volle useJobResult() den Repair-Flow.
-function useQualityCheck() {
-  const [{ qualityCheck }, { applyOriginal, reset }] = useJobResult();
-  return [
-    qualityCheck,
-    {
-      apply: applyOriginal,
-      reset,
-      set: () => { throw new Error("set() ist deprecated - nutze apply()"); },
-    },
-  ];
-}
 
 // ── Sprint 4: interaktives QualityCheckPanel ───────────────────────
 // data:           QC-Bundle (oder null - dann rendert nichts)
@@ -344,4 +328,4 @@ function RepairBundle({ job, ops, toast }) {
   );
 }
 
-export { useQualityCheck, QualityCheckPanel, RepairPreviewModal, ResultVersionsTabs, RepairBundle };
+export { QualityCheckPanel, RepairPreviewModal, ResultVersionsTabs, RepairBundle };

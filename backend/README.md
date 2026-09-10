@@ -21,13 +21,12 @@ backend/
 │   │   └── logging.py           # Logging-Konfiguration
 │   ├── api/
 │   │   ├── health.py            # GET  /api/health
-│   │   ├── transcribe.py        # POST /api/transcribe
-│   │   ├── generate.py          # POST /api/generate[/with-files]
-│   │   ├── documents.py         # POST /api/documents/fill|style|extract
-│   │   ├── jobs.py              # POST /api/jobs/generate
-│   │   │                        # GET  /api/jobs/{job_id}
-│   │   └── style_embeddings.py  # POST /api/style/upload
-│   │                            # GET  /api/style/{therapeut_id}
+│   │   ├── jobs.py              # POST /api/jobs/generate, GET /api/jobs[/{job_id}], Repair
+│   │   ├── recordings.py        # P0-Aufnahmen: Upload, Transkription, Verwaltung
+│   │   ├── style_embeddings.py  # POST /api/style/upload, GET /api/style/{therapeut_id}
+│   │   ├── workflow_manifest.py # GET  /api/workflows
+│   │   ├── ism.py               # ISM-Fragebogen
+│   │   ├── feedback.py, activity.py, selfcheck.py, admin.py, testrun.py
 │   ├── models/
 │   │   ├── db.py                # SQLAlchemy-Tabellen
 │   │   └── schemas.py           # Pydantic Request/Response-Schemas
@@ -37,7 +36,6 @@ backend/
 │       │                        # Sprecher-Heuristik ([A]/[B]-Markierung)
 │       ├── llm.py               # Ollama (lokal)
 │       ├── extraction.py        # PDF/DOCX/Bild → Text (pdfplumber + OCR)
-│       ├── docx_fill.py         # DOCX-Vorlage befüllen
 │       ├── embeddings.py        # pgvector Stilprofil-Retrieval
 │       ├── job_queue.py         # Asynchrone Job-Queue (In-Memory)
 │       └── prompts.py           # System-Prompts für alle 4 Workflows
@@ -312,17 +310,17 @@ Beispiel-Eintrag:
 | Method | Pfad | Beschreibung |
 |--------|------|-------------|
 | GET | `/api/health` | Systemstatus, aktive Modelle |
-| POST | `/api/transcribe` | Audio → Transkript (Whisper) |
-| POST | `/api/generate` | Text generieren (JSON, kein Upload) |
-| POST | `/api/generate/with-files` | Text generieren + Datei-Uploads |
-| POST | `/api/jobs/generate` | Job asynchron starten, gibt sofort `job_id` zurück |
+| POST | `/api/jobs/generate` | Job asynchron starten (alle Workflows, Audio/Dateien/Text), gibt sofort `job_id` zurück |
 | GET | `/api/jobs/{job_id}` | Job-Status abfragen (Frontend pollt alle 2s) |
-| GET | `/api/jobs` | Alle Jobs auflisten (max. 50) |
-| POST | `/api/documents/fill` | DOCX-Vorlage mit generiertem Text befüllen |
-| POST | `/api/documents/style` | Stilprofil aus Beispieltext extrahieren und speichern |
-| GET | `/api/documents/download/{fn}` | Befülltes DOCX herunterladen |
+| GET | `/api/jobs` | Jobs auflisten, filterbar (`workflow`, `limit`) |
+| POST | `/api/jobs/{job_id}/repair/preview`, `/repair` | Reparatur-Flow (v19) |
+| POST | `/api/recordings` | P0-Aufnahme hochladen → Transkription (Queue) |
+| GET | `/api/recordings[/{id}]` | Aufnahmen auflisten / Status + Transkript |
+| GET | `/api/workflows` | Workflow-Manifest fuer das Frontend |
 | POST | `/api/style/upload` | Stilprofil-Beispiel hochladen (pgvector) |
 | GET | `/api/style/{therapeut_id}` | Stilprofil-Bibliothek eines Therapeuten abrufen |
+
+Die fruehereren Endpunkte `/api/transcribe`, `/api/generate[/with-files]` und `/api/documents/*` wurden in v19.21 entfernt (waren nicht mehr gemountet).
 
 ---
 

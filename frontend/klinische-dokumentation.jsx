@@ -384,8 +384,5 @@ export default function App() {
   );
 }
 
-// ── Mount ─────────────────────────────────────────────────────────────────────
-import { createRoot } from "react-dom/client";
-const container = document.getElementById("systelios-app");
-if (container) createRoot(container).render(<App />);
+// Mount: siehe main.jsx (einziger Einstiegspunkt, v19.21 S3).
 

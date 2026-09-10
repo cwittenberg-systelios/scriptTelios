@@ -230,15 +230,26 @@ class TestPrompts:
         assert r["min"] <= 350
 
     def test_v13_anchor_block_format(self):
-        """Anker-Block enthält ZIELLÄNGE, Bandbreite und harte Obergrenze."""
+        """Anker-Block enthält ZIELLÄNGE, Bandbreite und harte Obergrenze.
+
+        v19.21 (S3, Test aktualisiert): Der Entlassbericht hat seit v19.20 (M4)
+        einen eigenen Block OHNE Kürze-Priming (Vollständigkeit vor Kürze);
+        der Standard-Block gilt für die übrigen Workflows.
+        """
         from app.services.prompts import resolve_length_anchor
 
-        r = resolve_length_anchor("entlassbericht", None)
+        r = resolve_length_anchor("verlaengerung", None)
         block = r["anchor_block"]
         assert "ZIELLÄNGE" in block
         assert "akzeptierte Bandbreite" in block
         assert "Harte Obergrenze" in block
         assert "NIEMALS" in block
+
+        eb = resolve_length_anchor("entlassbericht", None)["anchor_block"]
+        assert "ZIELLÄNGE" in eb
+        assert "Obergrenze" in eb
+        assert "Vollständigkeit" in eb
+        assert "NIEMALS" not in eb          # kein Kürze-Priming im EB
 
     def test_v13_no_redundant_length_in_base_prompts(self):
         """v13: BASE_PROMPTS dürfen keine LÄNGE/Mindestens X Wörter mehr enthalten."""
@@ -381,14 +392,23 @@ class TestPrompts:
     # ── Bisherige Tests folgen ──────────────────────────────────────────────
 
     def test_system_prompt_enthaelt_ifs_glossar(self):
-        """Alle Workflows enthalten das IFS/systemische Fachglossar."""
+        """Glossar-Konditionalität (Issue-2, 2026-07-03; Test v19.21 aktualisiert):
+        Ohne source_text (Legacy) und bei Quellen MIT Teilearbeit-Vokabular
+        steht das volle klinische Glossar (IFS/Anteilemodell in Klinik-
+        Terminologie) im Prompt; bei Quellen OHNE solches Vokabular die
+        neutrale Variante (Priming-Vermeidung)."""
         from app.services.prompts import build_system_prompt
+        parts_source   = "Im Gespräch arbeiteten wir mit dem inneren Kind und einem Manager-Anteil."
+        neutral_source = "Die Klientin berichtet von Schlafproblemen und Konflikten am Arbeitsplatz."
         for wf in ["dokumentation", "anamnese", "verlaengerung", "entlassbericht"]:
-            p = build_system_prompt(workflow=wf)
-            assert "Manager-Anteile" in p, f"{wf}: Manager-Anteile fehlen"
-            assert "Self-Leadership" in p or "Self-Energy" in p,     f"{wf}: Self-Energy fehlt"
-            assert "Exile" in p,           f"{wf}: Exile fehlt"
-            assert "IFS" in p,             f"{wf}: IFS fehlt"
+            for src in (None, parts_source):
+                p = build_system_prompt(workflow=wf, source_text=src)
+                assert "IFS" in p and "Anteilemodell" in p, f"{wf}/{src!r}: volles Glossar fehlt"
+                assert "Verbannte" in p, f"{wf}/{src!r}: Verbannte fehlen"
+                assert "KEINE Teilearbeit" not in p
+            p = build_system_prompt(workflow=wf, source_text=neutral_source)
+            assert "KEINE Teilearbeit" in p, f"{wf}: neutrales Glossar fehlt"
+            assert "Anteilemodell" not in p, f"{wf}: Priming-Begriffe im neutralen Glossar"
 
     def test_system_prompt_enthaelt_systemische_begriffe(self):
         """Fachglossar enthält systemische und hypnosystemische Begriffe."""

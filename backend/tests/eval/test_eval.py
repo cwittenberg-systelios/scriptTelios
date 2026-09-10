@@ -45,12 +45,15 @@ def _load_or_transcribe(audio_path: Path, force_transcribe: bool = False) -> str
 
     - force_transcribe=False (Default):
         Liest <audio>.transcript.txt wenn vorhanden.
-        Nur wenn kein Cache → transkribiert via /api/transcribe und speichert.
+        Nur wenn kein Cache → transkribiert via P0-Recording-API und speichert.
     - force_transcribe=True (--transcribe):
         Immer neu transkribieren, Cache überschreiben.
 
     Transkription läuft server-seitig über den laufenden Backend-Server,
-    identisch zum normalen Produktiv-Workflow.
+    identisch zum normalen Produktiv-Workflow (P0): POST /api/recordings,
+    Poll GET /api/recordings/{id} bis status=="ready", Transkript aus dem
+    Antwortobjekt. v19.21 (S3): der frühere /api/transcribe-Endpoint wurde
+    entfernt (war in main.py nie gemountet).
     """
     cache = _transcript_cache_path(audio_path)
 
@@ -77,16 +80,33 @@ def _load_or_transcribe(audio_path: Path, force_transcribe: bool = False) -> str
     with httpx.Client(timeout=TIMEOUT) as http:
         with open(audio_path, "rb") as fh:
             resp = http.post(
-                f"{BACKEND_URL}/api/transcribe",
-                files={"file": (audio_path.name, fh, mime)},
+                f"{BACKEND_URL}/api/recordings",
+                files={"audio": (audio_path.name, fh, mime)},
+                data={"label": f"eval:{audio_path.stem}"},
             )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Recording-Upload fehlgeschlagen [{resp.status_code}]: {resp.text[:400]}"
+            )
+        rec_id = resp.json()["id"]
 
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"Transkription fehlgeschlagen [{resp.status_code}]: {resp.text[:400]}"
-        )
-
-    transcript = resp.json()["transcript"]
+        # Polling bis Transkription fertig (P0-Worker arbeitet die Queue ab)
+        deadline = time.time() + TIMEOUT
+        while True:
+            poll = http.get(f"{BACKEND_URL}/api/recordings/{rec_id}")
+            if poll.status_code != 200:
+                raise RuntimeError(
+                    f"Recording-Poll fehlgeschlagen [{poll.status_code}]: {poll.text[:400]}"
+                )
+            rec = poll.json()
+            if rec.get("status") == "ready" and rec.get("transcript"):
+                transcript = rec["transcript"]
+                break
+            if rec.get("status") == "error":
+                raise RuntimeError(f"Transkription fehlgeschlagen: {rec.get('error_msg')}")
+            if time.time() > deadline:
+                raise RuntimeError(f"Transkription Timeout nach {TIMEOUT}s (Recording {rec_id})")
+            time.sleep(5)
 
     # Atomisch schreiben (tmp → rename)
     tmp = cache.with_suffix(".tmp")

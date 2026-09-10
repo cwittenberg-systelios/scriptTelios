@@ -204,6 +204,9 @@ class JobState:
         self.repair_input  : Optional[dict] = None
         self._cancel_requested  : bool = False
         self.input_meta         : Optional[dict] = None
+        # v19.21 (S3): Referenz auf den Hintergrund-INSERT aus create_job(),
+        # damit _persist_job() vor dem UPDATE darauf warten kann.
+        self._db_insert_task    : Optional[asyncio.Task] = None
 
     def set_progress(self, pct: int, phase: str = "", detail: str = "") -> None:
         """Monotoner Progress (0-100). Thread-safe via atomic int write."""
@@ -277,8 +280,10 @@ class JobQueue:
         # raeumt auf und loggt Exceptions statt sie zu verschlucken.
         self._bg_tasks: set = set()
 
-    def _spawn_db_task(self, coro, what: str) -> None:
+    def _spawn_db_task(self, coro, what: str) -> Optional[asyncio.Task]:
         """Startet einen Hintergrund-DB-Task mit gehaltener Referenz.
+        Liefert den Task (oder None ohne laufenden Loop), damit Aufrufer
+        vor abhaengigen Schreibzugriffen darauf warten koennen (v19.21 S3).
 
         Ersetzt das nackte asyncio.ensure_future() (fire-and-forget):
           1. Referenz im Set -> kein GC-Verlust des laufenden Tasks.
@@ -308,7 +313,7 @@ class JobQueue:
                 "uebersprungen. Der Job existiert nur im Cache, NICHT in "
                 "der DB.", what,
             )
-            return
+            return None
 
         task = loop.create_task(coro)
         self._bg_tasks.add(task)
@@ -320,6 +325,7 @@ class JobQueue:
                              _what, t.exception())
 
         task.add_done_callback(_done)
+        return task
 
     def create_job(
         self,
@@ -346,7 +352,7 @@ class JobQueue:
 
         # DB-Insert asynchron im Hintergrund - mit gehaltener Task-Referenz
         # (siehe _spawn_db_task; vorher fire-and-forget mit GC-Verlust-Risiko)
-        self._spawn_db_task(self._db_insert_job(
+        state._db_insert_task = self._spawn_db_task(self._db_insert_job(
             job_id, workflow, description, therapeut_id, patient_kuerzel,
         ), what=f"insert_job {job_id}")
 
@@ -725,47 +731,91 @@ class JobQueue:
         logger.info("Job dauerhaft geloescht: %s", job_id)
         return {"job_id": job_id, "deleted": True, "reason": None}
 
+    @staticmethod
+    def _final_values(state: JobState) -> dict:
+        """Spaltenwerte des finalen Job-Zustands (fuer UPDATE und INSERT-Fallback)."""
+        return dict(
+            status=state.status,
+            cancel_requested=state._cancel_requested,
+            progress=state.progress,
+            progress_phase=state.progress_phase,
+            progress_detail=state.progress_detail,
+            result_text=state.result_text,
+            result_transcript=state.result_transcript,
+            result_befund=state.result_befund,
+            result_akut=state.result_akut,
+            result_file=state.result_file,
+            error_msg=state.error_msg,
+            started_at=state.started_at,
+            finished_at=state.finished_at,
+            model_used=state.model_used,
+            duration_s=state.duration_s,
+            style_info_json=json.dumps(state.style_info) if state.style_info else None,
+            generation_telemetry=state.generation_telemetry,
+            # v19.2: Stage-1-Pipeline-Felder
+            verlauf_summary_text=state.verlauf_summary_text,
+            verlauf_summary_audit=state.verlauf_summary_audit,
+            # v19.3: Repair-Kontext
+            source_verlauf_text=state.source_verlauf_text,
+            transcript_summary_text=state.transcript_summary_text,
+            source_antragsvorlage_text=state.source_antragsvorlage_text,
+            source_vorantrag_text=state.source_vorantrag_text,
+            source_prozessreflexion_text=state.source_prozessreflexion_text,
+            # v19 Phase 1 + C
+            quality_check_json=state.quality_check,
+            parent_job_id=state.parent_job_id,
+            repair_input_json=state.repair_input,
+        )
+
     async def _persist_job(self, state: JobState):
-        """Persistiert den finalen Job-Zustand in der DB."""
+        """Persistiert den finalen Job-Zustand in der DB.
+
+        v19.21 (S3): UPDATE-or-INSERT. Der initiale INSERT laeuft in
+        create_job() als Fire-and-forget-Task (_db_insert_job). Ist er noch
+        nicht durch oder fehlgeschlagen (DB-Hiccup; im TestClient: Request-
+        Loop bereits geschlossen), traf das UPDATE hier 0 Zeilen und der
+        fertige Job fehlte in der DB - unsichtbar in /api/jobs-Liste und nach
+        Restart. Jetzt wird die Zeile in dem Fall komplett angelegt.
+        """
+        # Auf den initialen INSERT warten, wenn er noch auf DIESEM Loop laeuft
+        # (er faengt seine Fehler selbst; ein fremder/geschlossener Loop wird
+        # uebersprungen - dann greift unten der INSERT-Fallback).
+        ins = state._db_insert_task
+        if ins is not None and not ins.done():
+            try:
+                if ins.get_loop() is asyncio.get_running_loop():
+                    await asyncio.shield(ins)
+            except Exception:
+                pass
         try:
+            from sqlalchemy.exc import IntegrityError
             from app.core.database import async_session_factory
             from app.models.db import Job as JobModel
             from sqlalchemy import update
+            values = self._final_values(state)
             async with async_session_factory() as db:
-                await db.execute(
-                    update(JobModel).where(JobModel.id == state.job_id).values(
-                        status=state.status,
-                        cancel_requested=state._cancel_requested,
-                        progress=state.progress,
-                        progress_phase=state.progress_phase,
-                        progress_detail=state.progress_detail,
-                        result_text=state.result_text,
-                        result_transcript=state.result_transcript,
-                        result_befund=state.result_befund,
-                        result_akut=state.result_akut,
-                        result_file=state.result_file,
-                        error_msg=state.error_msg,
-                        started_at=state.started_at,
-                        finished_at=state.finished_at,
-                        model_used=state.model_used,
-                        duration_s=state.duration_s,
-                        style_info_json=json.dumps(state.style_info) if state.style_info else None,
-                        generation_telemetry=state.generation_telemetry,
-                        # v19.2: Stage-1-Pipeline-Felder
-                        verlauf_summary_text=state.verlauf_summary_text,
-                        verlauf_summary_audit=state.verlauf_summary_audit,
-                        # v19.3: Repair-Kontext
-                        source_verlauf_text=state.source_verlauf_text,
-                        transcript_summary_text=state.transcript_summary_text,
-                        source_antragsvorlage_text=state.source_antragsvorlage_text,
-                        source_vorantrag_text=state.source_vorantrag_text,
-                        source_prozessreflexion_text=state.source_prozessreflexion_text,
-                        # v19 Phase 1 + C
-                        quality_check_json=state.quality_check,
-                        parent_job_id=state.parent_job_id,
-                        repair_input_json=state.repair_input,
-                    )
-                )
+                stmt = update(JobModel).where(JobModel.id == state.job_id).values(**values)
+                result = await db.execute(stmt)
+                if result.rowcount == 0:
+                    try:
+                        async with db.begin_nested():
+                            db.add(JobModel(
+                                id=state.job_id,
+                                workflow=state.workflow,
+                                description=state.description,
+                                therapeut_id=state.therapeut_id,
+                                patient_kuerzel=state.patient_kuerzel,
+                                created_at=state.created_at,
+                                **values,
+                            ))
+                            await db.flush()
+                        logger.info(
+                            "Job-DB-Persist: Zeile %s fehlte (Insert-Task nicht durch) - "
+                            "per Insert nachgelegt", state.job_id,
+                        )
+                    except IntegrityError:
+                        # Insert-Task hat gerade doch gewonnen -> nur updaten
+                        await db.execute(stmt)
                 await db.commit()
         except Exception as e:
             logger.warning("Job-DB-Persist fehlgeschlagen: %s", e)

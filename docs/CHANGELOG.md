@@ -7,6 +7,53 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.21] — Refactoring-Sprint (Code-Review 2026-09-09)
+
+Basis: `v19_QA_v02` @ `b89f6d8`. Schritte als Einzelpatches (S2, S3, …),
+jeweils ohne Verhaltensaenderung fuer Therapeut:innen.
+
+### S3 — Toter Code, Test-Infrastruktur
+
+**Entfernt (Backend).** `api/generate.py`, `api/documents.py`,
+`api/transcribe.py`, `services/docx_fill.py` — Router waren in `main.py` nie
+gemountet, die importierten Schemas existierten nicht mehr (Module waren nicht
+importierbar). ORM-Klasse `StyleProfile` samt `schema.sql`-DDL (bestehende
+Tabelle `style_profiles` in Produktions-DBs bleibt unberuehrt; manuell:
+`DROP TABLE IF EXISTS style_profiles;`). Ungenutzte Settings `SECRET_KEY`,
+`RETENTION_INTERVAL_HOURS`, `RATE_LIMIT_PARALLEL_JOBS`,
+`ACCESS_TOKEN_EXPIRE_MINUTES` (auch aus `.env.example`, `runpod-start.sh`,
+`testrun.py`). `workflows.py`-Helfer ohne Aufrufer. Leere `eval_data.tar.gz`.
+
+**Entfernt (Frontend).** `entry.jsx` und der Inline-Mount in
+`klinische-dokumentation.jsx` — `main.jsx` ist jetzt einziger Einstieg
+(mountet auf `#systelios-app`, wie das Confluence-Makro es liefert).
+`api.js::generate()` (blockierender Flow, kein Aufrufer, Feld-Drift gegenueber
+`startJob()`), ersetzt durch die pure Funktion `buildJobFormData()`.
+Ungenutzte Exporte in `shared.js`, `hooks.jsx`, `joblist.jsx`, `qa.jsx`
+(`useQualityCheck`-Alias).
+
+**Behoben.** `JobQueue._persist_job()` legt die Job-Zeile per INSERT an,
+wenn das UPDATE keine Zeile trifft (der initiale INSERT laeuft als
+Fire-and-forget-Task; fiel er aus, fehlte der fertige Job in `/api/jobs` und
+nach Restart).
+
+**Tests.** `tests/conftest.py` rekonstruiert (lag nicht im Repo; die
+Integration-Suite war ab Clone nicht startbar). Zwei veraltete Prompt-Tests
+an v19.20-M4 (EB-Laengenanker) und Issue-2 (konditionales Glossar)
+angepasst. `test_eval.py` Transkript-Cache auf die Recordings-API (P0)
+umgestellt. Jest: `buildJobFormData`/`startJob` statt `generate()`.
+
+### S2 — Lint-Gate + mechanische Fixes
+
+`scripts/lint_gate.sh` (ruff, Config `ruff.toml`, `F841` aktiv) als
+Pflichtschritt vor jedem Patch. 20x `B904` (`raise … from`), 7x `B905`
+(`zip(strict=True)`), `RUF006` in `recordings.py` (Task-Referenz +
+Fehler-Logging), `ASYNC240` (blockierende Datei-I/O in `retention`, `main`,
+`extraction` per `asyncio.to_thread`). Tote Zweige in `jobs.py`,
+`testrun.py`, `prompts.py`.
+
+---
+
 ## [v19.2] — Two-Stage-Pipeline (Verlauf-Verdichtung)
 
 **Motivation.** Bei Verlängerungs- und Entlassberichten lieferte das LLM

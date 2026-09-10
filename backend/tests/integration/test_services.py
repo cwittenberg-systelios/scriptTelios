@@ -1,10 +1,9 @@
 """
-Tests fuer Service-Schicht: llm, job_queue, docx_fill, embeddings.
+Tests fuer Service-Schicht: llm, job_queue, embeddings.
 
 Fokus auf bisher unabgedeckte Pfade:
   - llm.py:       Timeout, HTTPStatusError, leere Response
   - job_queue.py: Error-Pfad, Cleanup, to_dict-Felder
-  - docx_fill.py: find_placeholders, Platzhalter-Ersetzung, Append-Pfad
   - embeddings.py: get_embedding Fehlerfaelle, retrieve_style_examples Fallback
 """
 import asyncio
@@ -328,93 +327,6 @@ class TestJobQueueService:
 
 # ══════════════════════════════════════════════════════════════════
 # DOCX FILL SERVICE
-# ══════════════════════════════════════════════════════════════════
-
-class TestDocxFillService:
-
-    def test_find_placeholders_doppelte_klammern(self):
-        """{{FELDNAME}} wird korrekt erkannt."""
-        from app.services.docx_fill import find_placeholders
-        result = find_placeholders("Hallo {{NAME}}, dein Datum: {{DATUM}}")
-        assert "NAME" in result
-        assert "DATUM" in result
-
-    def test_find_placeholders_eckige_klammern(self):
-        """[FELDNAME] (nur Grossbuchstaben) wird korrekt erkannt."""
-        from app.services.docx_fill import find_placeholders
-        result = find_placeholders("Diagnose: [DIAGNOSE] Datum: [AUFNAHME DATUM]")
-        assert "DIAGNOSE" in result
-        assert "AUFNAHME DATUM" in result
-
-    def test_find_placeholders_gemischt(self):
-        """Beide Muster werden kombiniert erkannt."""
-        from app.services.docx_fill import find_placeholders
-        text = "{{PATIENT}} wurde am [AUFNAHMEDATUM] aufgenommen."
-        result = find_placeholders(text)
-        assert "PATIENT" in result
-        assert "AUFNAHMEDATUM" in result
-
-    def test_find_placeholders_keine_treffer(self):
-        """Text ohne Platzhalter ergibt leere Liste."""
-        from app.services.docx_fill import find_placeholders
-        assert find_placeholders("Normaler Text ohne Platzhalter.") == []
-
-    def test_find_placeholders_duplikate_werden_entfernt(self):
-        """Gleicher Platzhalter mehrfach ergibt nur einen Eintrag."""
-        from app.services.docx_fill import find_placeholders
-        result = find_placeholders("{{NAME}} und nochmal {{NAME}}")
-        assert result.count("NAME") == 1
-
-    @pytest.mark.asyncio
-    async def test_fill_docx_mit_platzhaltern(self, tmp_path):
-        """Vorlage mit Platzhaltern wird korrekt befuellt."""
-        from docx import Document
-        from app.services.docx_fill import fill_docx_template
-
-        # Vorlage mit Platzhalter erstellen
-        doc = Document()
-        doc.add_paragraph("Patient: {{NAME}}")
-        template_path = tmp_path / "vorlage.docx"
-        doc.save(str(template_path))
-
-        generated = "NAME: Max Mustermann\nDiagnose: F32.1"
-        result_path = await fill_docx_template(
-            template_path, "Verlauf...", generated, tmp_path, "test"
-        )
-
-        assert result_path.exists()
-        result_doc = Document(str(result_path))
-        full_text = " ".join(p.text for p in result_doc.paragraphs)
-        assert "{{NAME}}" not in full_text
-
-    @pytest.mark.asyncio
-    async def test_fill_docx_ohne_platzhalter_append(self, tmp_path):
-        """Vorlage ohne Platzhalter bekommt generierten Text angehaengt."""
-        from docx import Document
-        from app.services.docx_fill import fill_docx_template
-
-        doc = Document()
-        doc.add_paragraph("Bestehender Inhalt ohne Platzhalter.")
-        template_path = tmp_path / "vorlage.docx"
-        doc.save(str(template_path))
-
-        generated_text = "# Befund\nPatient stabil."
-        result_path = await fill_docx_template(
-            template_path, "Verlauf", generated_text, tmp_path, "test"
-        )
-
-        assert result_path.exists()
-        result_doc = Document(str(result_path))
-        full_text = " ".join(p.text for p in result_doc.paragraphs)
-        # Phase 2: Bestehender Inhalt bleibt erhalten, generierter Text wird
-        # angehaengt. Frueher pruefte der Test auf einen Literal-String
-        # 'Generierter Inhalt' der nie im Input stand.
-        assert "Bestehender Inhalt" in full_text
-        assert "Patient stabil" in full_text
-
-
-# ══════════════════════════════════════════════════════════════════
-# EMBEDDINGS SERVICE
 # ══════════════════════════════════════════════════════════════════
 
 class TestEmbeddingsService:

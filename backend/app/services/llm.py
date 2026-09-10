@@ -37,32 +37,17 @@ def _get_ollama_client() -> httpx.AsyncClient:
 # Maximale Zeichen im User-Content – nur noch als harte Notbremse
 # fuer extrem lange Audio-Transkripte (>500k Zeichen).
 # Fuer Verlaufsdokus greift stattdessen clean_verlauf_text() als Preprocessing.
-# num_ctx wird dynamisch berechnet, qwen2.5:32b hat 128k Token Kontextfenster.
+# num_ctx wird dynamisch berechnet (_estimate_num_ctx).
 MAX_USER_CONTENT_CHARS = 500_000
 
 # Modell-spezifische Generierungsparameter.
 # Match erfolgt auf Modellname-Prefix (case-insensitive).
 # Quantisierungssuffixe (:q6_K, :q4_K_M etc.) werden ignoriert – Prefix reicht.
 #
-# ── GPU-Empfehlungen (Stand März 2026) ──────────────────────────
-#
-# RTX Pro 4500 Blackwell (32GB):
-#   qwen3:32b-q4_K_M  ~19GB Modell + ~4GB KV-Cache = ~23GB    <- EMPFEHLUNG
-#   HINWEIS: Blackwell-GPUs (Compute 12.0, CUDA 13) benoetigen Ollama >= 0.17.
-#   Aeltere Ollama-Versionen fallen stillschweigend auf CPU zurueck!
-#   Pruefe mit: ollama ps → Processor-Spalte muss "100% GPU" zeigen.
-#   Bei Problemen: Ollama aktualisieren (curl -fsSL https://ollama.com/install.sh | sh)
-#
-# RTX 4090 (24GB):
-#   qwen3:32b-q4_K_S  ~18GB Modell, passt mit kleinem KV-Cache (num_ctx ≤ 6144)
-#   WICHTIG: q4_K_M (~19GB) + KV-Cache (~4.8GB bei 8k ctx) = 23.8GB → 100MB zu viel!
-#   Daher: q4_K_S verwenden (~1GB kleiner) ODER KV-Cache-Quantisierung aktivieren:
-#     OLLAMA_FLASH_ATTENTION=true + OLLAMA_KV_CACHE_TYPE=q8_0 (halbiert KV-Cache)
-#   Alternativ: qwen3:14b-q5_K_M (~10GB) – deutlich mehr Headroom, gute Qualitaet
-#
-# Fallback (beide GPUs):
-#   qwen3:14b          ~8.3GB  Sehr gute Qualitaet, grosszuegiger Kontext moeglich
-#   qwen3:30b-a3b      ~17GB   MoE, nur 3B aktive Params – schnell aber duennerer Fliesstext
+# Produktive Modelle: siehe settings.OLLAMA_MODEL / model_for_workflow()
+# (gemma4:31b fuer Doku/Anamnese/EB, mistral-small3.2 fuer Antraege).
+# GPU-Hinweis: Blackwell-GPUs (Compute 12.0, CUDA 13) benoetigen Ollama >= 0.17,
+# aeltere Versionen fallen stillschweigend auf CPU zurueck (ollama ps -> "100% GPU").
 #
 MODEL_PROFILES: dict[str, dict] = {
     # Reasoning-Modelle: groesserer Mindest-Kontext, niedrigere Temperatur

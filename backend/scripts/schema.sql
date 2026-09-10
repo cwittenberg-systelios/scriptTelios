@@ -84,16 +84,9 @@ CREATE TABLE IF NOT EXISTS recordings (
 -- v19.16 (T4): Coverage-Luecke am Aufnahme-Ende (Transkript unvollstaendig)
 ALTER TABLE recordings ADD COLUMN IF NOT EXISTS coverage_gap_s DOUBLE PRECISION;
 
--- StyleProfile: aggregierte Stilmerkmale eines Therapeuten
-CREATE TABLE IF NOT EXISTS style_profiles (
-    id              VARCHAR(36)              PRIMARY KEY,
-    therapeut_id    VARCHAR(128)             NOT NULL,
-    created_at      TIMESTAMPTZ              NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ              NOT NULL DEFAULT now(),
-    style_context   TEXT                     NOT NULL,
-    source_file     VARCHAR(512),
-    word_count      INTEGER
-);
+-- v19.21 (S3): Tabelle style_profiles entfernt (ORM-Klasse StyleProfile war
+-- ohne Aufrufer). Bestehende Tabellen bleiben unberuehrt; manuell droppbar:
+--   DROP TABLE IF EXISTS style_profiles;
 
 -- StyleEmbedding: Einzelner Beispieltext + Vektor
 -- dokumenttyp ist ein Enum (siehe Block A2). Existierende Tabellen aus
@@ -241,8 +234,6 @@ CREATE INDEX IF NOT EXISTS ix_recordings_therapeut_id
 CREATE INDEX IF NOT EXISTS idx_recordings_created
     ON recordings (created_at DESC) WHERE deleted_at IS NULL;
 
-CREATE INDEX IF NOT EXISTS ix_style_profiles_therapeut_id
-    ON style_profiles (therapeut_id);
 
 CREATE INDEX IF NOT EXISTS ix_style_embeddings_therapeut_id
     ON style_embeddings (therapeut_id);

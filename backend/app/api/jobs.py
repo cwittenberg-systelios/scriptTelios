@@ -160,6 +160,18 @@ def _missing_source_error(
     return None
 
 
+def _therapeut_for_log(job_id: str) -> str:
+    """v19.20: Therapeuten-Kennung fuer den prompts.log-Header. Lookup ueber
+    den Job-Cache der Queue; '-' wenn unbekannt (z.B. nach Neustart). Die
+    Log-Auswertung (misc/eval_*_from_log.py, feedback._collect_prompt_log_blocks)
+    matcht den Header mit '(.*)' hinter CALL und bleibt kompatibel."""
+    try:
+        job = job_queue.get_job(job_id)
+        return (getattr(job, "therapeut_id", None) or "-") if job else "-"
+    except Exception:
+        return "-"
+
+
 def _log_prompt(job_id: str, workflow: str, call_label: str,
                 system: str, user: str) -> None:
     """
@@ -167,13 +179,15 @@ def _log_prompt(job_id: str, workflow: str, call_label: str,
 
     call_label: z.B. 'anamnese', 'befund', 'verlaengerung' – unterscheidet
                 bei Anamnese den ersten vom zweiten LLM-Call.
+    v19.20: Header traegt zusaetzlich THERAPEUT: <id> - vorher war die
+    Nutzung pro Therapeut aus dem prompts.log nicht auswertbar.
     """
     sep = "=" * 80
     _prompt_logger.debug(
-        "\n%s\nJOB: %s  |  WORKFLOW: %s  |  CALL: %s\n%s\n"
+        "\n%s\nJOB: %s  |  WORKFLOW: %s  |  CALL: %s  |  THERAPEUT: %s\n%s\n"
         "--- SYSTEM ---\n%s\n"
         "--- USER ---\n%s\n%s\n",
-        sep, job_id, workflow, call_label, sep,
+        sep, job_id, workflow, call_label, _therapeut_for_log(job_id), sep,
         system, user, sep,
     )
 
@@ -203,8 +217,8 @@ def _log_output(job_id: str, workflow: str, call_label: str,
         except Exception:
             tele = ""
     _prompt_logger.debug(
-        "\n%s\nJOB: %s  |  WORKFLOW: %s  |  CALL: %s  (OUTPUT)%s\n%s\n%s\n%s\n",
-        sep, job_id, workflow, call_label, tele, sep, out, sep,
+        "\n%s\nJOB: %s  |  WORKFLOW: %s  |  CALL: %s  |  THERAPEUT: %s  (OUTPUT)%s\n%s\n%s\n%s\n",
+        sep, job_id, workflow, call_label, _therapeut_for_log(job_id), tele, sep, out, sep,
     )
 
 

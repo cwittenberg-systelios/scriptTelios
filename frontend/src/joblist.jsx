@@ -346,4 +346,4 @@ function JobDetailPane({ job, jobOps, jobState, toast, onCancel, onDelete, onBac
   );
 }
 
-export { JOB_STATUS_STYLE, _sectionForJob, _fmtTime, JobListPane, JobDetailPane };
+export { JobListPane, JobDetailPane };

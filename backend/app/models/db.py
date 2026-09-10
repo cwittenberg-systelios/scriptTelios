@@ -169,20 +169,6 @@ class Recording(Base):
     error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class StyleProfile(Base):
-    """Stilprofil eines Therapeuten (aus hochgeladenen Beispieltexten)."""
-
-    __tablename__ = "style_profiles"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    therapeut_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
-
-    # Extrahierte Stilmerkmale als Prompt-Fragment
-    style_context: Mapped[str] = mapped_column(Text, nullable=False)
-    source_file: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 # v13: DOKUMENTTYPEN und DOKUMENTTYP_LABELS werden jetzt aus der zentralen
