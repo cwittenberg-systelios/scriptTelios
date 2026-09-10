@@ -2,7 +2,7 @@
 // src/joblist.jsx — extrahiert aus klinische-dokumentation.jsx (R4, 2026-07-01).
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { downloadTranscript } from "./api.js";
 import { RepairBundle, ResultVersionsTabs } from "./qa.jsx";
 import { Output, copyFormatted, FeedbackButton } from "./ui.jsx";

@@ -2,9 +2,9 @@
 // src/audio.jsx — extrahiert aus klinische-dokumentation.jsx (R4, 2026-07-01).
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect } from "react";
 import { apiFetch, getApiBase } from "./api.js";
-import { MAX_UPLOAD_MB, _pendingLabels, fmtMB, fmtSec } from "./shared.js";
+import { _pendingLabels, fmtMB, fmtSec } from "./shared.js";
 
 function AudioRecorder({ onRecorded, onError }) {
   const [state, setState] = useState("idle"); // idle | recording | paused | finalizing
@@ -297,19 +297,15 @@ function AudioRecorder({ onRecorded, onError }) {
 
 /**
  * AudioInput - kombiniert Browser-Aufnahme und Upload bestehender Dateien.
- * Zeigt Warnung wenn Upload-Datei > MAX_UPLOAD_MB.
+ * (v19.21: Datei-Upload-Pfad entfernt - nur P0-Aufnahmen; Groessenwarnung liegt in P0.)
  */
 function AudioInput({ file, onFile }) {
-  const [mode, setMode] = useState("p0");
-  const [recError, setRecError] = useState(null);
-  const [sizeWarn, setSizeWarn] = useState(null);
   const [p0List, setP0List]       = useState([]);
   const [p0Loading, setP0Loading] = useState(false);
   const [p0Error, setP0Error]     = useState(null);
-  const [p0Selected, setP0Selected] = useState(null);
   const p0PollRef = useRef(null);
 
-  useEffect(() => { loadP0(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadP0(); }, []);
 
   // Polling (30s) bei pending Items + st-health-ok Event
   useEffect(() => {
@@ -321,13 +317,13 @@ function AudioInput({ file, onFile }) {
       p0PollRef.current = null;
     }
     return () => { if (p0PollRef.current) { clearInterval(p0PollRef.current); p0PollRef.current = null; } };
-  }, [p0List]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [p0List]);
 
   useEffect(() => {
     const handler = () => loadP0();
     window.addEventListener("st-health-ok", handler);
     return () => window.removeEventListener("st-health-ok", handler);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // v19.15 (Sprint E): Keep-Mounted-Fix. AudioInput mountet nur einmal beim
   // App-Start (Panels werden per display:none versteckt, nie unmounted).
@@ -347,19 +343,7 @@ function AudioInput({ file, onFile }) {
       window.removeEventListener("st-recordings-changed", onChanged);
       window.removeEventListener("st-page-changed", onPage);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function handleFile(f) {
-    setRecError(null);
-    if (!f) { setSizeWarn(null); onFile(null); return; }
-    const sizeMB = f.size / (1024 * 1024);
-    if (sizeMB > MAX_UPLOAD_MB) {
-      setSizeWarn(`Datei ist ${fmtMB(f.size)} MB groß. Upload-Limit liegt bei ${MAX_UPLOAD_MB} MB.`);
-      return;
-    }
-    setSizeWarn(null);
-    onFile(f);
-  }
+  }, []);
 
   // v19.18 (U1): In-flight-Guard - st-page-changed, st-recordings-changed und
   // das 30s-Polling koennen loadP0 ueberlappend ausloesen. Refs statt State
@@ -412,14 +396,11 @@ function AudioInput({ file, onFile }) {
     }
   }
 
-  function switchMode(m) { setMode(m); if (m === "p0") loadP0(); }
-
   function pickP0(rec) {
-    setP0Selected(rec);
     onFile({ __p0recording: true, transcript: rec.transcript, name: rec.label || `Aufnahme #${rec.id}`, id: rec.id });
   }
 
-  function clearP0() { setP0Selected(null); onFile(null); }
+  function clearP0() { onFile(null); }
 
   if (file) {
     if (file.__p0recording) {
@@ -449,7 +430,7 @@ function AudioInput({ file, onFile }) {
             a.href = url; a.download = file.name; a.click();
             URL.revokeObjectURL(url);
           }}>↓ Aufnahme speichern</button>
-          <button className="rec-btn rec-btn-pause" onClick={() => { setSizeWarn(null); onFile(null); }}>Entfernen</button>
+          <button className="rec-btn rec-btn-pause" onClick={() => onFile(null)}>Entfernen</button>
         </div>
       </div>
     );

@@ -63,7 +63,7 @@ function P1({ toast, resumeJob, onResumed }) {
   // nicht mehr als Option, alter Cache-Wert wird auf "" normalisiert.
   useEffect(() => {
     if (textCache.geschlecht === "auto") updateTextCache({ geschlecht: "" });
-  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // initialDraft wird einmalig beim Mount aus _emptyDraft() + textCache gebaut.
   // Wichtig: useMemo mit [] - textCache wird nur beim ersten Render konsumiert,
@@ -203,7 +203,6 @@ function P1({ toast, resumeJob, onResumed }) {
         jobOps.applyOriginal(j);
       }
     } catch (_) { /* still bleiben, JobProgressBar-Polling-Fallback laeuft eh */ }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobOps]);
 
   useEffect(() => {

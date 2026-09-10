@@ -12,6 +12,37 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 Basis: `v19_QA_v02` @ `b89f6d8`. Schritte als Einzelpatches (S2, S3, …),
 jeweils ohne Verhaltensaenderung fuer Therapeut:innen.
 
+### QC-Registry + Frontend-Lint/-Tests
+
+**QualityCheck-Registry.** `quality_check.CHECK_REGISTRY` listet alle 23
+Regeln in Ausfuehrungsreihenfolge mit den Issue-Codes, die sie erzeugen
+koennen; `run_quality_check()` baut einen `QCContext` und delegiert an
+`run_checks(ctx, only=...)`. `list_checks()` liefert den Katalog. Vorher
+standen Reihenfolge und Bedingungen als 24 `issues.extend`-Zeilen plus einem
+auseinandergelaufenen Docstring in der Funktion. Tests sichern Reihenfolge
+(identisch zu v19.20) und dass jede `ISSUE_CODE_*`-Konstante einer Regel
+zugeordnet ist.
+
+**ESLint (Frontend).** `frontend/eslint.config.js` (Flat Config: recommended
++ react + react-hooks; React-Compiler-Regeln bewusst aus), `npm run lint`
+als Pflichtschritt fuer Frontend-Patches (0 Fehler; 6 Warnungen
+`exhaustive-deps` sind dokumentierte Absicht). Der erste Lauf fand:
+- **Regression aus S5 behoben:** `P6.jsx` (ISM) hatte nach der Skelett-
+  Migration keine Imports mehr fuer `apiFetch`/`getApiBase`/`friendlyError`
+  - der XML-Export war seit S5 kaputt (ReferenceError). Mit dem S5-Bundle
+  noch nicht ausgerollt? Bitte pruefen; dieses Bundle enthaelt den Fix.
+- Toter Code: `saveUrl`/`urlInput` im App-Root (Settings-Dialog hat kein
+  URL-Feld mehr; die Funktion referenzierte ein nicht existierendes
+  `setBackendOffline`), Datei-Upload-Pfad in `AudioInput` (`handleFile`,
+  `switchMode`, drei States), ungenutzte React-Imports in sechs Modulen,
+  `ladebusy`/`structuralWfs` in P5.
+
+**React-Tests.** Jest laeuft jetzt ueber babel-jest (JSX), mit
+`@testing-library/react` + `jest-dom`. Neu `tests/workflow-run.test.jsx`
+(10 Tests): Start -> Poll -> Ergebnis, onResult/onError, Abbruch, Resume-
+Banner, Doppel-Attach-Schutz, Reset, ActionBar, KlientControls. 60 Tests
+gesamt.
+
 ### R7 — Stage-1-Verdichter auf gemeinsamem Geruest
 
 Neu `app/services/summary_runner.py`: `anti_think_suffix()`,

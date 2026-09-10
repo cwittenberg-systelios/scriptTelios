@@ -173,15 +173,15 @@ Testdaten (PDFs, Audio) werden aus `/workspace/eval_data/` geladen –
 **nicht im Git** (Datenschutz). Setup und Details:
 → **[tests/fixtures/eval/README.md](tests/fixtures/eval/README.md)**
 
-### Frontend (Jest)
-
-Unit-Tests für die reinen Logik-Funktionen in `frontend/utils/api.js`
-(kein React-Overhead, kein laufendes Backend nötig).
+### Frontend (ESLint + Jest) – Pflicht vor jedem Frontend-Patch
 
 ```bash
 cd frontend
 npm install
-npm test
+npm run lint     # ESLint (eslint.config.js): 0 Fehler erforderlich
+npm test         # Jest: api.js/shared.js (reine Logik) + React-Tests
+                 # (workflow-run.jsx via @testing-library/react, babel-jest)
+npm run build    # prebuild exportiert die Prompt-Defaults, dann vite build
 
 # Watch-Modus während der Entwicklung
 npm run test:watch

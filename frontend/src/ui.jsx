@@ -379,7 +379,7 @@ function modelFamily(name) {
   if (t.startsWith("gemma"))   return "gemma";
   if (t.startsWith("mistral")) return "mistral";
   if (t.startsWith("qwen"))    return "qwen";
-  return t.split(/[:\/]/)[0];
+  return t.split(/[:/]/)[0];
 }
 
 // Freundliches Label: Familienname; bei mehreren Modellen derselben Familie

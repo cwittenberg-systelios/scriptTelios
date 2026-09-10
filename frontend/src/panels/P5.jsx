@@ -9,7 +9,7 @@ import { friendlyError } from "../shared.js";
 import { Card, Dropzone, InputTabs } from "../ui.jsx";
 
 
-function P5({ toast, liste, ladebusy, ladeListe, loeschen }) {
+function P5({ toast, liste, ladeListe, loeschen }) {
   const [therapeutId] = useState(getConfluenceUser);  // read-only aus Confluence
   const [dokumenttyp, setDokumenttyp] = useState("dokumentation");
   const [istStatisch, setIstStatisch] = useState(false);
@@ -18,7 +18,7 @@ function P5({ toast, liste, ladebusy, ladeListe, loeschen }) {
   const [busy, setBusy] = useState(false);
 
   // v13: Workflow-Manifest dynamisch vom Backend laden (mit Fallback).
-  const { workflows: dokTypen, structural: structuralWfs } = useWorkflowManifest();
+  const { workflows: dokTypen } = useWorkflowManifest();
 
   // Abschnitte die für strukturelle Workflows relevant sind
   const ABSCHNITTE_HINWEIS = [

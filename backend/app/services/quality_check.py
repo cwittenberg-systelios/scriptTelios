@@ -36,7 +36,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field, asdict
-from typing import Any
+from typing import Any, Callable
 
 from app.core.workflows import word_limit_for
 from app.services.quality_specs import (
@@ -1344,20 +1344,9 @@ def run_quality_check(
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
-    Reihenfolge der Issues ist deterministisch (gut fuer Audit/Tests):
-      0a. SELBSTAUSKUNFT_LEER    (nur anamnese, wenn Selbstauskunft leer war)
-      0b. DATENSCHUTZ_NAME_LEAK  (nur wenn patient_name uebergeben wird)
-      0c. PATIENT_INITIAL_MISMATCH (v19.8: nur wenn patient_name.initial bekannt)
-      0d. GENDER_MISMATCH          (v19.8: nur wenn patient_name uebergeben wird)
-      1. THINK_BLOCK_LEAK
-      2. BEFUND_SEPARATOR_MISSING
-      3. LENGTH_TOO_SHORT       (nur bei Stub < 50% des Minimums)
-      4. MISSING_KEYWORD_*      (aktuell leer - siehe quality_specs)
-      5. MISSING_SECTION_*
-      6. MODALITY_NOT_COVERED_* (info; empfohlene Modalitaet nicht erwaehnt)
-      7. MISSING_STICHPUNKT     (nur wenn stichpunkte uebergeben werden)
-      8. KOMPOSITA_KLEBEBUG
-      9. SOURCE_FIDELITY        (nur wenn source_text uebergeben wird)
+    Reihenfolge der Issues ist deterministisch (gut fuer Audit/Tests) und
+    steht in CHECK_REGISTRY (v19.21) - dort auch Codes und Bedingungen je
+    Regel; list_checks() liefert den Katalog.
 
     v19.18 (PX): workflow == "ism_fragebogen" wird VOR allen Fliesstext-
     Checks an ism.run_ism_quality_check() delegiert - der Output ist JSON,
@@ -1419,41 +1408,18 @@ def run_quality_check(
             code_detail={"actual": 0},
         )]
 
-    issues: list[QualityIssue] = []
-    issues.extend(_check_selbstauskunft(workflow, selbstauskunft_empty))
-    # v19.15 (B3): Platzhalter in der Antragsvorlage (Muster-/Stilvorlage im
-    # falschen Slot) - Input-Level-Warnung, laeuft vor den Output-Checks.
-    issues.extend(_check_template_placeholder(workflow, antragsvorlage_text))
-    # v19.15 (C1): vermutlich abgeschnittene Quelldokumente (Input-Level).
-    issues.extend(_check_source_truncation(truncated_sources))
-    # v19.16 (T4): Recording-Transkript deckt das Audio nicht vollstaendig ab.
-    issues.extend(_check_transcript_coverage(workflow, transcript_coverage_gap_s))
-    # v19.19 (K2): Budget-Guard hat Quellen gekuerzt.
-    issues.extend(_check_input_truncated(input_truncated_chars))
-    # v19.19 (A2): Anamnese in indirekter Rede?
-    issues.extend(_check_konjunktiv(workflow, text))
-    # v19.19 (A3b): Diagnosekriterien abgebildet, Diagnose nicht genannt?
-    issues.extend(_check_diagnosekriterien(workflow, text, diagnosen))
-    # v19.19 (R1/R2): Repair-No-op / Repair-Schrumpfung.
-    issues.extend(_check_repair_flags(repair_flags))
-    # v19.17 (P-3/F6): Perspektive + Sprachstil der Einzelgespraechs-Doku.
-    issues.extend(_check_wir_form(workflow, text))
-    issues.extend(_check_pathologisierende_sprache(workflow, text))
-    # v19.13: Reflexions-Referenz-Check (nur entlassbericht, nur mit Flag)
-    issues.extend(_check_prozessreflexion(text, workflow, prozessreflexion_present))
-    issues.extend(_check_forbidden_names(text, patient_name))
-    # v19.8 Identitaets-Guard (O5: alle Workflows; no-op ohne patient_name)
-    issues.extend(_check_patient_initial(text, patient_name))
-    issues.extend(_check_gender(text, patient_name))
-    issues.extend(_check_think_blocks(text))
-    issues.extend(_check_befund_separator(text, workflow))
-    issues.extend(_check_length(text, workflow))
-    issues.extend(_check_required_keywords(text, workflow))
-    issues.extend(_check_required_sections(text, workflow))
-    issues.extend(_check_recommended_sections(text, workflow, source_text=source_text))
-    issues.extend(_check_stichpunkte(text, stichpunkte))
-    issues.extend(_check_kompositum_klebebugs(text))
-    issues.extend(_check_source_fidelity(text, source_text))
+    ctx = QCContext(
+        text=text, workflow=workflow, source_text=source_text,
+        stichpunkte=stichpunkte, patient_name=patient_name,
+        selbstauskunft_empty=selbstauskunft_empty,
+        prozessreflexion_present=prozessreflexion_present,
+        antragsvorlage_text=antragsvorlage_text,
+        truncated_sources=truncated_sources,
+        transcript_coverage_gap_s=transcript_coverage_gap_s,
+        input_truncated_chars=input_truncated_chars,
+        repair_flags=repair_flags, diagnosen=diagnosen,
+    )
+    issues = run_checks(ctx)
 
     logger.debug(
         "QualityCheck %s: %d Issues (%d critical, %d warning, %d info)",
@@ -1463,6 +1429,107 @@ def run_quality_check(
         sum(1 for i in issues if i.severity == SEVERITY_INFO),
     )
     return issues
+
+
+# ── Check-Registry (v19.21) ────────────────────────────────────────────────────
+# Alle Regeln in Ausfuehrungsreihenfolge an EINER Stelle. Vorher stand die
+# Reihenfolge als 24 handgeschriebene issues.extend(...)-Zeilen in
+# run_quality_check und die Liste in ihrem Docstring lief auseinander.
+# Jeder Eintrag nennt die Issue-Codes (bzw. Praefixe), die er erzeugen kann -
+# ein Test prueft, dass jede ISSUE_CODE_*-Konstante einer Regel zugeordnet ist.
+
+@dataclass(frozen=True)
+class QCContext:
+    """Alle Eingaben eines QualityCheck-Laufs (siehe run_quality_check)."""
+    text: str
+    workflow: str
+    source_text: str = ""
+    stichpunkte: "list[str] | None" = None
+    patient_name: "dict | None" = None
+    selbstauskunft_empty: "bool | None" = None
+    prozessreflexion_present: "bool | None" = None
+    antragsvorlage_text: "str | None" = None
+    truncated_sources: "list[dict] | None" = None
+    transcript_coverage_gap_s: "float | None" = None
+    input_truncated_chars: "tuple | list | None" = None
+    repair_flags: "dict | None" = None
+    diagnosen: "list[str] | None" = None
+
+
+@dataclass(frozen=True)
+class QCCheck:
+    name: str
+    run: "Callable[[QCContext], list[QualityIssue]]"
+    codes: tuple[str, ...]          # Issue-Codes oder Praefixe (enden auf "_")
+    note: str = ""                  # Herkunft/Bedingung (Doku)
+
+
+CHECK_REGISTRY: tuple[QCCheck, ...] = (
+    # ── Input-Level (laufen vor den Output-Checks) ─────────────────────────
+    QCCheck("selbstauskunft_leer", lambda c: _check_selbstauskunft(c.workflow, c.selbstauskunft_empty),
+            (ISSUE_CODE_SELBSTAUSKUNFT_LEER,), "nur anamnese, wenn Selbstauskunft leer war"),
+    QCCheck("template_placeholder", lambda c: _check_template_placeholder(c.workflow, c.antragsvorlage_text),
+            (ISSUE_CODE_TEMPLATE_PLACEHOLDER,), "v19.15 (B3): Muster-/Stilvorlage im falschen Slot"),
+    QCCheck("source_truncation", lambda c: _check_source_truncation(c.truncated_sources),
+            (ISSUE_CODE_SOURCE_POSSIBLY_TRUNCATED,), "v19.15 (C1): abgeschnittene Quelldokumente"),
+    QCCheck("transcript_coverage", lambda c: _check_transcript_coverage(c.workflow, c.transcript_coverage_gap_s),
+            (ISSUE_CODE_TRANSCRIPT_INCOMPLETE,), "v19.16 (T4): Recording-Transkript deckt Audio nicht ab"),
+    QCCheck("input_truncated", lambda c: _check_input_truncated(c.input_truncated_chars),
+            (ISSUE_CODE_INPUT_TRUNCATED,), "v19.19 (K2): Budget-Guard hat Quellen gekuerzt"),
+    # ── Output-Level ───────────────────────────────────────────────────────
+    QCCheck("konjunktiv", lambda c: _check_konjunktiv(c.workflow, c.text),
+            (ISSUE_CODE_KONJUNKTIV_QUOTE,), "v19.19 (A2): Anamnese in indirekter Rede"),
+    QCCheck("diagnosekriterien", lambda c: _check_diagnosekriterien(c.workflow, c.text, c.diagnosen),
+            (ISSUE_CODE_DIAGNOSEKRITERIEN_COVERAGE, ISSUE_CODE_DIAGNOSE_IM_TEXT), "v19.19 (A3b)"),
+    QCCheck("repair_flags", lambda c: _check_repair_flags(c.repair_flags),
+            (ISSUE_CODE_REPAIR_NO_CHANGE, ISSUE_CODE_REPAIR_SHRUNK), "v19.19 (R1/R2)"),
+    QCCheck("wir_form", lambda c: _check_wir_form(c.workflow, c.text),
+            (ISSUE_CODE_WIR_FORM_IN_DOKU,), "v19.17 (P-3): Perspektive der Einzelgespraechs-Doku"),
+    QCCheck("pathologisierende_sprache", lambda c: _check_pathologisierende_sprache(c.workflow, c.text),
+            (ISSUE_CODE_PATHOLOGISIERENDE_SPRACHE,), "v19.17 (F6)"),
+    QCCheck("prozessreflexion", lambda c: _check_prozessreflexion(c.text, c.workflow, c.prozessreflexion_present),
+            (ISSUE_CODE_PROZESSREFLEXION_NOT_REFERENCED,), "v19.13: nur entlassbericht mit Flag"),
+    QCCheck("forbidden_names", lambda c: _check_forbidden_names(c.text, c.patient_name),
+            (ISSUE_CODE_DATENSCHUTZ_NAME_LEAK,), "nur mit patient_name"),
+    QCCheck("patient_initial", lambda c: _check_patient_initial(c.text, c.patient_name),
+            (ISSUE_CODE_PATIENT_INITIAL_MISMATCH,), "v19.8 Identitaets-Guard"),
+    QCCheck("gender", lambda c: _check_gender(c.text, c.patient_name),
+            (ISSUE_CODE_GENDER_MISMATCH,), "v19.8 Identitaets-Guard"),
+    QCCheck("think_blocks", lambda c: _check_think_blocks(c.text),
+            (ISSUE_CODE_THINK_BLOCK_LEAK,)),
+    QCCheck("befund_separator", lambda c: _check_befund_separator(c.text, c.workflow),
+            (ISSUE_CODE_BEFUND_SEPARATOR_MISSING,)),
+    QCCheck("length", lambda c: _check_length(c.text, c.workflow),
+            (ISSUE_CODE_LENGTH_TOO_SHORT, ISSUE_CODE_LENGTH_TOO_LONG), "nur bei Stub < 50 % des Minimums"),
+    QCCheck("required_keywords", lambda c: _check_required_keywords(c.text, c.workflow),
+            (ISSUE_CODE_PREFIX_MISSING_KEYWORD,), "aktuell leer - siehe quality_specs"),
+    QCCheck("required_sections", lambda c: _check_required_sections(c.text, c.workflow),
+            (ISSUE_CODE_PREFIX_MISSING_SECTION,)),
+    QCCheck("recommended_sections", lambda c: _check_recommended_sections(c.text, c.workflow, source_text=c.source_text),
+            (ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED,), "info; empfohlene Modalitaet nicht erwaehnt"),
+    QCCheck("stichpunkte", lambda c: _check_stichpunkte(c.text, c.stichpunkte),
+            (ISSUE_CODE_MISSING_STICHPUNKT,), "nur mit stichpunkte"),
+    QCCheck("kompositum_klebebugs", lambda c: _check_kompositum_klebebugs(c.text),
+            (ISSUE_CODE_KOMPOSITA_KLEBEBUG,)),
+    QCCheck("source_fidelity", lambda c: _check_source_fidelity(c.text, c.source_text),
+            (ISSUE_CODE_SOURCE_FIDELITY,), "nur mit source_text"),
+)
+
+
+def run_checks(ctx: QCContext, *, only: "set[str] | None" = None) -> list[QualityIssue]:
+    """Fuehrt die Registry-Regeln in Reihenfolge aus. `only` = Teilmenge der
+    Regelnamen (Tests, gezielte Nachpruefung)."""
+    issues: list[QualityIssue] = []
+    for check in CHECK_REGISTRY:
+        if only is not None and check.name not in only:
+            continue
+        issues.extend(check.run(ctx))
+    return issues
+
+
+def list_checks() -> list[dict]:
+    """Regel-Katalog (Name, Codes, Hinweis) fuer Doku/Admin."""
+    return [{"name": c.name, "codes": list(c.codes), "note": c.note} for c in CHECK_REGISTRY]
 
 
 # ── (De)Serialisierung (DB <-> Python) ─────────────────────────────────────────

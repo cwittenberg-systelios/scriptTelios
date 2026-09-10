@@ -13,9 +13,9 @@
 
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// v19.21: Jest laeuft jetzt ueber babel-jest (CJS) - __dirname ist verfuegbar,
+// import.meta.url nicht mehr noetig.
 
 /** Erlaubte Ausnahmen: globale Custom-Properties und At-Rules. */
 const ALLOWED_EXACT = [":root"];

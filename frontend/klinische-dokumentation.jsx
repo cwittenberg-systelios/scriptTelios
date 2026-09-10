@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { apiFetch, getApiBase, getConfluenceUser } from "./src/api.js";
 import { P0 } from "./src/panels/P0.jsx";
@@ -59,11 +59,10 @@ export default function App() {
     await ladeStilListe();
   }, [ladeStilListe]);
 
-  const [backendUrl, setBackendUrl] = useState(() => {
-    try { return localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""; }
-    catch (_) { return window.SYSTELIOS_API_BASE || ""; }
-  });
-  const [urlInput, setUrlInput] = useState(() => {
+  // Backend-URL: Confluence-Makro (window.SYSTELIOS_API_BASE) oder aeltere
+  // localStorage-Einstellung. Der Settings-Dialog hat seit v19 kein URL-Feld
+  // mehr (saveUrl/urlInput in v19.21 als toter Code entfernt).
+  const [backendUrl] = useState(() => {
     try { return localStorage.getItem("systelios_backend_url") || window.SYSTELIOS_API_BASE || ""; }
     catch (_) { return window.SYSTELIOS_API_BASE || ""; }
   });
@@ -131,20 +130,7 @@ export default function App() {
     } catch (_) { /* ignorieren */ }
   }, [page]);
 
-  const saveUrl = () => {
-    let url = urlInput.trim().replace(/\/+$/, ""); // trailing slash entfernen
-    // https:// ergänzen falls kein Protokoll angegeben
-    if (url && !url.startsWith("http://") && !url.startsWith("https://")) {
-      url = "https://" + url;
-    }
-    try { localStorage.setItem("systelios_backend_url", url); } catch (_) {}
-    window.SYSTELIOS_API_BASE = url;
-    setBackendUrl(url);
-    setUrlInput(url);
-    setBackendOffline(false); // Reset – wird beim nächsten Health-Check aktualisiert
-    setShowSettings(false);
-    toast("Backend-URL gespeichert");
-  };
+
 
   const toast = useCallback((t, opts) => {
     setMsg(t);
@@ -173,7 +159,7 @@ export default function App() {
             wasOfflineRef.current = true;
             return;
           }
-          let status = "down";
+          let status;
           try {
             const data = await r.json();
             status = (data && data.status) || "down";

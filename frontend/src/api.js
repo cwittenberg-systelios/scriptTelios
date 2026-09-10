@@ -32,7 +32,7 @@ async function downloadViaApi(url, fallbackName) {
     return;
   }
   if (!r.ok) {
-    let detail = "";
+    let detail;
     try {
       const errJson = await r.json();
       detail = errJson.detail || JSON.stringify(errJson);
