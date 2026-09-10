@@ -426,49 +426,9 @@ class JobQueue:
                 db_job = result.scalar_one_or_none()
                 if not db_job:
                     return None
-                return {
-                    "job_id":          db_job.id,
-                    "workflow":        db_job.workflow,
-                    "description":     db_job.description or "",
-                    "therapeut_id":    db_job.therapeut_id,
-                    "patient_kuerzel": db_job.patient_kuerzel,
-                    "status":          db_job.status,
-                    "cancelled":       db_job.cancel_requested or False,
-                    "result_text":     db_job.result_text or "",
-                    "has_transcript":  db_job.result_transcript is not None,
-                    "progress":        db_job.progress or 0,
-                    "progress_phase":  db_job.progress_phase or "",
-                    "progress_detail": db_job.progress_detail or "",
-                    "befund_text":     db_job.result_befund or "",
-                    "akut_text":       db_job.result_akut or "",
-                    "result_file":     db_job.result_file,
-                    "error_msg":       db_job.error_msg,
-                    "created_at":      db_job.created_at.isoformat() if db_job.created_at else None,
-                    "started_at":      db_job.started_at.isoformat() if db_job.started_at else None,
-                    "finished_at":     db_job.finished_at.isoformat() if db_job.finished_at else None,
-                    "model_used":      db_job.model_used,
-                    "duration_s":      db_job.duration_s,
-                    "style_info":      json.loads(db_job.style_info_json) if db_job.style_info_json else None,
-                    "generation_telemetry": db_job.generation_telemetry,
-                    # v19.2: Two-Stage-Pipeline-Felder. None bei Jobs aus
-                    # Pre-v19.2-Zeit oder Workflows die Stage 1 nicht nutzen.
-                    "verlauf_summary_text":  db_job.verlauf_summary_text,
-                    "verlauf_summary_audit": db_job.verlauf_summary_audit,
-                    # v19.3: Repair-Kontext-Felder. None bei Pre-v19.3-Jobs
-                    # oder Workflows ohne entsprechende Quelle.
-                    # ACHTUNG: result_transcript ist hier bewusst NICHT
-                    # enthalten (Datenschutz - kein Transkript ueber API).
-                    # Fuer Repair-Coroutinen siehe get_repair_context().
-                    "source_verlauf_text":         db_job.source_verlauf_text,
-                    "transcript_summary_text":     db_job.transcript_summary_text,
-                    "source_antragsvorlage_text":  db_job.source_antragsvorlage_text,
-                    "source_vorantrag_text":       db_job.source_vorantrag_text,
-                    "source_prozessreflexion_text": db_job.source_prozessreflexion_text,
-                    # v19 Phase 1 + C: QualityCheck + Repair-Beziehung.
-                    "quality_check":   db_job.quality_check_json,
-                    "parent_job_id":   db_job.parent_job_id,
-                    "repair_input":    db_job.repair_input_json,
-                }
+                # v19.21 (S4): ein Konverter fuer Einzel-GET und Liste
+                # (vorher zwei handgepflegte Kopien desselben Dicts).
+                return self._db_job_to_dict(db_job)
         except Exception as e:
             logger.warning("Job-DB-Lookup fehlgeschlagen: %s", e)
             return None
@@ -601,10 +561,9 @@ class JobQueue:
     @staticmethod
     def _db_job_to_dict(db_job) -> dict:
         """Sprint B: zentraler Konverter SQLAlchemy-Job -> API-Dict.
-
-        Bewusste Duplikation der Felder aus get_job_from_db (gleiches Schema).
-        Wenn dort ein Feld dazukommt, hier auch ergaenzen - sonst sieht das
-        Frontend in list_filtered() weniger als in get_job().
+        Einzige Quelle fuer get_job_from_db() UND list_filtered() (v19.21 S4).
+        ACHTUNG: result_transcript bewusst NICHT enthalten (Datenschutz -
+        kein Transkript ueber die Job-API; Repair nutzt get_repair_context()).
         """
         return {
             "job_id":          db_job.id,

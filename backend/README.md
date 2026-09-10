@@ -118,8 +118,17 @@ Die Tunnel-URL ändert sich dabei – im Frontend unter ⚙ Backend-URL anpassen
 cd backend
 bash scripts/lint_gate.sh          # Exit != 0 => Patch nicht ausliefern
 ```
-`scripts/lint_gate.sh` prueft `app/` und `scripts/` gegen `ruff.toml` (E722, F, B, ASYNC, RUF006).
+`scripts/lint_gate.sh` prueft `app/` und `scripts/` gegen `ruff.toml` (E722, F, B, ASYNC, RUF006)
+und (v19.21 S1) ob `frontend/src/prompt-defaults.jsx` noch zu `prompts.py` passt.
 In `commit_patch.sh` als ersten Schritt aufrufen; Auto-Fixes: `ruff check app scripts --fix`.
+
+### Default-Prompts aendern (v19.21 S1)
+
+Einzige Quelle: `app/services/prompts.py` (`WORKFLOW_INSTRUCTIONS_DEFAULT`, `BEFUND_VORLAGE`).
+Nach jeder Aenderung `python3 scripts/export_prompt_defaults.py` ausfuehren (schreibt
+`frontend/src/prompt-defaults.jsx`; `npm run build` tut das automatisch als `prebuild`).
+`prompt-defaults.jsx` nie von Hand editieren - Lint-Gate und
+`tests/unit/test_prompt_defaults_sync.py` schlagen sonst fehl.
 
 ### Backend (pytest)
 

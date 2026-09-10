@@ -12,6 +12,52 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 Basis: `v19_QA_v02` @ `b89f6d8`. Schritte als Einzelpatches (S2, S3, …),
 jeweils ohne Verhaltensaenderung fuer Therapeut:innen.
 
+### S1 — Prompt-Defaults: eine Quelle, Drift-Schutz **(fachliche Aenderung!)**
+
+**Befund.** Seit v18 gab es zwei handgepflegte Fassungen der Workflow-
+Default-Anweisungen: `prompts.py::WORKFLOW_INSTRUCTIONS_DEFAULT` (Eval, Tests,
+ISM) und `frontend/src/prompt-defaults.jsx` (das, was Therapeut:innen im
+Prompt-Editor sehen und was produktiv ans LLM geht). Die Backend-Fassung
+enthielt spaetere Fixes, die das Frontend nie bekam.
+
+**Entscheidung (2026-09-10): Backend-Fassung gilt.** Damit aendern sich die
+produktiven Default-Prompts - bitte vor Rollout an echten Faellen pruefen:
+
+- *Dokumentation*: Abschnitt **Organisatorisches** (nur bei administrativen
+  Absprachen), Trennung Auftrag vs. Organisatorisches, **Einladungen nur wenn
+  tatsaechlich ausgesprochen** (Anti-Halluzination, Issue 1), jeder Abschnitt
+  als dichter Fliesstext. Der Frontend-Block "PERSPEKTIVE/Keine Wir-Form"
+  entfaellt - er ist seit v19.17 nicht editierbarer Pflichtkern des
+  System-Prompts.
+- *Akutantrag*: Argumentationsstruktur (Kernbegruendung, Belege, ambulante
+  Insuffizienz, Dringlichkeit) statt Symptomliste. Die Anweisung "Beginne
+  WOERTLICH mit der Standardformulierung" entfaellt - das Backend gibt den
+  Satz bereits als Primer vor (Completion-Modus); die Doppelung konnte den
+  Satz zweimal im Output erzeugen.
+- *Entlassbericht*: Hinweis auf Prae-/Post-Testwerte aus der Berichtsvorlage.
+- *Anamnese, Verlaengerung, Folgeverlaengerung*: nur Typografie; der
+  Rollensatz steht in `BASE_PROMPTS`.
+- *ISM, Befundvorlage*: unveraendert.
+
+**Mechanik.** `prompts.py` ist die einzige Quelle. `backend/scripts/
+export_prompt_defaults.py` generiert `prompt-defaults.jsx` (Kopfzeile
+"GENERIERT, NICHT EDITIEREN"); `npm run build` ruft ihn als `prebuild`;
+`lint_gate.sh` und `tests/unit/test_prompt_defaults_sync.py` schlagen bei
+Drift fehl. `GET /api/workflows` liefert zusaetzlich `instructions_default`
+je Workflow und `befund_vorlage`.
+
+### S4 — Kleine Struktur-Fixes (Backend)
+
+- `JobQueue.get_job_from_db()` nutzt `_db_job_to_dict()` (vorher zwei
+  handgepflegte Kopien desselben 33-Feld-Dicts fuer Einzel-GET und Liste).
+- `recordings.py`: `_load_owned_recording(session, rec_id, user)` ersetzt
+  sechs identische Query+404+Owner-Bloecke.
+- `extraction.py`: `_match_heading()` / `_is_section_end()` als gemeinsame
+  Bausteine von `extract_docx_section` und `_extract_section_by_text`.
+- Upload-Bereinigung nur noch im Retention-Task (`retention.cleanup_uploads`,
+  alle 6h, Datei-I/O per `asyncio.to_thread`); die zweite stuendliche
+  Schleife in `main.py` entfaellt.
+
 ### S3 — Toter Code, Test-Infrastruktur
 
 **Entfernt (Backend).** `api/generate.py`, `api/documents.py`,

@@ -21,42 +21,6 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
-async def _cleanup_old_uploads():
-    """
-    Loescht Upload-Dateien aelter als 24 Stunden.
-    Laeuft als Hintergrund-Task alle 60 Minuten.
-    Audio-Dateien werden separat per DELETE_AUDIO_AFTER_TRANSCRIPTION behandelt,
-    aber PDFs/DOCXs bleiben sonst fuer immer liegen.
-    """
-    MAX_AGE_HOURS = 24
-
-    while True:
-        try:
-            # Blockierende Datei-I/O ausserhalb des Event-Loops
-            count = await asyncio.to_thread(
-                _delete_stale_uploads, Path(settings.UPLOAD_DIR), MAX_AGE_HOURS * 3600
-            )
-            if count > 0:
-                logger.info("Upload-Bereinigung: %d Dateien aelter als %dh geloescht", count, MAX_AGE_HOURS)
-        except Exception as e:
-            logger.debug("Upload-Bereinigung fehlgeschlagen: %s", e)
-        await asyncio.sleep(3600)  # alle 60 Minuten
-
-
-def _delete_stale_uploads(upload_path: Path, max_age_s: float) -> int:
-    """Synchroner Kern von _cleanup_old_uploads. Liefert Anzahl geloeschter Dateien."""
-    import time
-    if not upload_path.exists():
-        return 0
-    cutoff = time.time() - max_age_s
-    count = 0
-    for f in upload_path.iterdir():
-        if f.is_file() and f.stat().st_mtime < cutoff:
-            f.unlink(missing_ok=True)
-            count += 1
-    return count
-
-
 ORPHAN_MSG = ("Verwaist: Der Pod wurde gestoppt, waehrend der Job in der "
               "Warteschlange stand oder lief. Bitte erneut starten.")
 
@@ -126,8 +90,9 @@ async def lifespan(app: FastAPI):
     from app.api.recordings import p0_queue, p0_worker
     p0_worker_task = asyncio.create_task(p0_worker())
     app.state.p0_queue = p0_queue
-    # Upload-Bereinigung im Hintergrund starten
-    cleanup_task = asyncio.create_task(_cleanup_old_uploads())
+    # Upload-Bereinigung laeuft seit v19.21 (S4) ausschliesslich im
+    # Retention-Task (retention.cleanup_uploads) - vorher zwei Schleifen
+    # mit demselben Ziel (hier stuendlich, dort alle 6h).
     from app.services.retention import retention_task
     retention_task_handle = asyncio.create_task(retention_task())
     # v18: Embedding-Modell beim Start prüfen → klare Warnung wenn nicht geladen
@@ -166,7 +131,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     yield
-    cleanup_task.cancel()
     try: p0_worker_task.cancel()
     except Exception: pass
     try: retention_task_handle.cancel()

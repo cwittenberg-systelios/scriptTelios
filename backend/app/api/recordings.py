@@ -287,6 +287,22 @@ def _assert_owner(rec: Recording, therapeut_id: str) -> None:
         raise HTTPException(status_code=403, detail="Zugriff verweigert")
 
 
+async def _load_owned_recording(session, rec_id: int, therapeut_id: str) -> Recording:
+    """Laedt ein nicht geloeschtes Recording aus der uebergebenen Session,
+    404 wenn unbekannt, 403 wenn es einem anderen Therapeuten gehoert.
+    v19.21 (S4): ersetzt sechs identische Query+404+Owner-Bloecke in den
+    Endpunkten; Aufrufer, die schreiben, bleiben in derselben Session."""
+    result = await session.execute(
+        select(Recording)
+        .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
+    )
+    rec = result.scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recording nicht gefunden")
+    _assert_owner(rec, therapeut_id)
+    return rec
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @router.post("", response_model=RecordingOut, status_code=201)
@@ -395,14 +411,7 @@ async def update_recording(
 ):
     """Label einer Aufnahme nachträglich ändern."""
     async with async_session_factory() as session:
-        result = await session.execute(
-            select(Recording)
-            .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
-        )
-        rec = result.scalar_one_or_none()
-        if not rec:
-            raise HTTPException(status_code=404, detail="Recording nicht gefunden")
-        _assert_owner(rec, current_user)
+        rec = await _load_owned_recording(session, rec_id, current_user)
         rec.label = body.label.strip()[:120] if body.label and body.label.strip() else None
         await session.commit()
         await session.refresh(rec)
@@ -415,14 +424,7 @@ async def get_recording(
     current_user: str = Depends(get_current_user),
 ):
     async with async_session_factory() as session:
-        result = await session.execute(
-            select(Recording)
-            .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
-        )
-        rec = result.scalar_one_or_none()
-    if not rec:
-        raise HTTPException(status_code=404, detail="Recording nicht gefunden")
-    _assert_owner(rec, current_user)
+        rec = await _load_owned_recording(session, rec_id, current_user)
     return _rec_to_out(rec)
 
 
@@ -435,14 +437,7 @@ async def delete_recording(
     Transkript bleibt in DB bis deleted_at-Bereinigung.
     """
     async with async_session_factory() as session:
-        result = await session.execute(
-            select(Recording)
-            .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
-        )
-        rec = result.scalar_one_or_none()
-        if not rec:
-            raise HTTPException(status_code=404, detail="Recording nicht gefunden")
-        _assert_owner(rec, current_user)
+        rec = await _load_owned_recording(session, rec_id, current_user)
 
         audio_path = recordings_dir() / rec.filename
         if audio_path.exists():
@@ -460,14 +455,7 @@ async def download_recording(
 ):
     """Audiodatei herunterladen. Audio wird 24h nach Transkription aufbewahrt."""
     async with async_session_factory() as session:
-        result = await session.execute(
-            select(Recording)
-            .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
-        )
-        rec = result.scalar_one_or_none()
-    if not rec:
-        raise HTTPException(status_code=404, detail="Recording nicht gefunden")
-    _assert_owner(rec, current_user)
+        rec = await _load_owned_recording(session, rec_id, current_user)
 
     audio_path = recordings_dir() / rec.filename
     if not audio_path.exists():
@@ -501,14 +489,7 @@ async def retry_recording(
     inzwischen wieder Kapazitaet hat.
     """
     async with async_session_factory() as session:
-        result = await session.execute(
-            select(Recording)
-            .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
-        )
-        rec = result.scalar_one_or_none()
-        if not rec:
-            raise HTTPException(status_code=404, detail="Recording nicht gefunden")
-        _assert_owner(rec, current_user)
+        rec = await _load_owned_recording(session, rec_id, current_user)
 
         if rec.status != "error":
             raise HTTPException(
@@ -548,14 +529,7 @@ async def download_transcript(
     Auch dann verfügbar wenn Audio bereits gelöscht wurde.
     """
     async with async_session_factory() as session:
-        result = await session.execute(
-            select(Recording)
-            .where(Recording.id == rec_id, Recording.deleted_at.is_(None))
-        )
-        rec = result.scalar_one_or_none()
-    if not rec:
-        raise HTTPException(status_code=404, detail="Recording nicht gefunden")
-    _assert_owner(rec, current_user)
+        rec = await _load_owned_recording(session, rec_id, current_user)
 
     if not rec.transcript:
         raise HTTPException(

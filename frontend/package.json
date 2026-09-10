@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev":     "vite",
+    "prebuild": "python3 ../backend/scripts/export_prompt_defaults.py",
     "build":   "vite build",
     "preview": "vite preview",
     "test":    "node --experimental-vm-modules node_modules/.bin/jest --coverage",

@@ -34,7 +34,7 @@ import logging
 import re
 import unicodedata
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 import httpx
 from PIL import Image, ImageEnhance, ImageFilter
@@ -88,6 +88,37 @@ STYLE_SECTION_HEADINGS = {
 }
 
 
+# v19.21 (S4): gemeinsame Bausteine der beiden Abschnitts-Extraktoren
+# (extract_docx_section per Style/Bold, _extract_section_by_text als
+# Plain-Text-Fallback) - vorher zweimal identisch inline.
+_SECTION_END_MARKERS = (
+    "wir bitten daher um", "daher bitten wir um", "vor diesem hintergrund bitten wir",
+    "wir bitten um", "fuer rueckfragen", "für rückfragen",
+    "mit freundlichem gruß", "mit freundlichen grüßen",
+)
+
+
+def _is_section_end(text_lower: str) -> bool:
+    return any(text_lower.startswith(m) for m in _SECTION_END_MARKERS)
+
+
+def _match_heading(text_lower: str, headings_lower: list[str]) -> Optional[str]:
+    """Liefert das erste passende Heading (spezifischste/laengste zuerst) oder
+    None. Lange Headings (>20 Zeichen) matchen per Substring in beide
+    Richtungen (Ueberschrift darf um ein Wort kuerzer sein), kurze exakt
+    bzw. als Praefix."""
+    for h in sorted(headings_lower, key=len, reverse=True):
+        if len(h) > 20:
+            matched = h in text_lower or (
+                text_lower in h and len(text_lower.split()) >= len(h.split()) - 1
+            )
+        else:
+            matched = text_lower == h or text_lower.startswith(h)
+        if matched:
+            return h
+    return None
+
+
 def extract_docx_section(file_path: Path, workflow: str) -> str:
     """
     Extrahiert den relevanten Abschnitt aus einem DOCX basierend auf dem Workflow.
@@ -116,19 +147,13 @@ def extract_docx_section(file_path: Path, workflow: str) -> str:
 
     def _extract_from(start_idx: int, start_level: int | None) -> str:
         """Sammelt Text ab start_idx bis zur naechsten Heading/End-Marker."""
-        end_markers = [
-            "wir bitten daher um", "daher bitten wir um", "vor diesem hintergrund bitten wir",
-            "wir bitten um", "fuer rueckfragen", "für rückfragen",
-            "mit freundlichem gruß", "mit freundlichen grüßen",
-        ]
         section_lines = []
         for p in paragraphs[start_idx:]:
             text = p.text.strip()
             if not text:
                 section_lines.append("")
                 continue
-            text_lower = text.lower()
-            if any(text_lower.startswith(m) for m in end_markers):
+            if _is_section_end(text.lower()):
                 break
             style_name = (p.style.name or "").lower()
             is_heading = "heading" in style_name or style_name.startswith("überschrift")
@@ -155,19 +180,11 @@ def extract_docx_section(file_path: Path, workflow: str) -> str:
         is_bold = all(run.bold for run in p.runs if run.text.strip()) if p.runs else False
 
         if is_heading or is_bold:
-            text_lower = text.lower().rstrip(":")
-            for h in sorted(headings_lower, key=len, reverse=True):
-                if len(h) > 20:
-                    matched = h in text_lower or (
-                        text_lower in h and len(text_lower.split()) >= len(h.split()) - 1
-                    )
-                else:
-                    matched = text_lower == h or text_lower.startswith(h)
-                if matched:
-                    level_match = re.search(r"(\d)", style_name)
-                    lvl = int(level_match.group(1)) if level_match else 2
-                    candidates.append((i + 1, lvl, h))
-                    break
+            h = _match_heading(text.lower().rstrip(":"), headings_lower)
+            if h is not None:
+                level_match = re.search(r"(\d)", style_name)
+                lvl = int(level_match.group(1)) if level_match else 2
+                candidates.append((i + 1, lvl, h))
 
     # Sortiere Kandidaten nach Heading-Prioritaet (Position in headings-Liste)
     # Je frueher in der Liste, desto hoeher die Prioritaet
@@ -218,40 +235,22 @@ def _extract_section_by_text(file_path: Path, headings: list[str]) -> str:
         text = p.text.strip().lower().rstrip(":")
         if not text:
             continue
-        # Spezifischste zuerst (laengere Headings)
-        for h in sorted(headings_lower, key=len, reverse=True):
-            if len(h) > 20:
-                matched = h in text or (
-                    text in h and len(text.split()) >= len(h.split()) - 1
-                )
-                if matched:
-                    start_idx = i + 1
-                    break
-            else:
-                if text == h or text.startswith(h):
-                    start_idx = i + 1
-                    break
-        if start_idx is not None:
+        if _match_heading(text, headings_lower) is not None:
+            start_idx = i + 1
             break
 
     if start_idx is None:
         return ""
 
     # Text sammeln bis zur naechsten kurzen Zeile die wie Ueberschrift aussieht
-    end_markers = [
-        "wir bitten daher um", "daher bitten wir um", "vor diesem hintergrund bitten wir",
-        "wir bitten um", "fuer rueckfragen", "für rückfragen",
-        "mit freundlichem gruß", "mit freundlichen grüßen",
-    ]
     section_lines = []
     for p in paragraphs[start_idx:]:
         text = p.text.strip()
         if not text:
             section_lines.append("")
             continue
-        text_lower = text.lower()
         # End-Marker erkennen
-        if any(text_lower.startswith(m) for m in end_markers):
+        if _is_section_end(text.lower()):
             break
         # Kurze Zeile nach substanziellem Text → wahrscheinlich naechste Ueberschrift
         if len(text.split()) <= 8 and len(section_lines) > 3 and any(len(l.split()) > 10 for l in section_lines[-3:]):

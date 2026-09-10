@@ -99,20 +99,34 @@ async def cleanup_recordings_audio() -> int:
     return count
 
 
+def _delete_stale_files(directory: Path, max_age_s: float) -> int:
+    """Synchroner Kern von cleanup_uploads (blockierende Datei-I/O, laeuft
+    per asyncio.to_thread). Liefert die Anzahl geloeschter Dateien."""
+    if not directory.exists():
+        return 0
+    cutoff = time.time() - max_age_s
+    count = 0
+    for f in directory.iterdir():
+        if not f.is_file():
+            continue
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink(missing_ok=True)
+                count += 1
+        except Exception as e:
+            logger.warning("Cleanup-Fehler %s: %s", f.name, e)
+    return count
+
+
 async def cleanup_uploads() -> int:
-    """Löscht alte Dateien aus dem Upload-Verzeichnis."""
+    """Löscht alte Dateien aus dem Upload-Verzeichnis (v19.21 S4: einziger
+    Upload-Cleanup; die zweite Schleife in main.py wurde entfernt)."""
     from app.core.files import upload_dir
-    cutoff = time.time() - RETENTION["uploads_documents"]
     count = 0
     try:
-        for f in upload_dir().iterdir():
-            if not f.is_file(): continue
-            try:
-                if f.stat().st_mtime < cutoff:
-                    f.unlink(missing_ok=True)
-                    count += 1
-            except Exception as e:
-                logger.warning("Cleanup-Fehler %s: %s", f.name, e)
+        count = await asyncio.to_thread(
+            _delete_stale_files, Path(upload_dir()), RETENTION["uploads_documents"]
+        )
     except Exception as e:
         logger.warning("Upload-Cleanup fehlgeschlagen: %s", e)
     if count:

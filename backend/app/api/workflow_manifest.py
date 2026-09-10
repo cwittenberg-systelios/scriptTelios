@@ -46,14 +46,24 @@ def list_workflows() -> dict:
             "word_limit": [280, 650],
             "max_tokens": 3000,
             "expected_tokens": 1500,
-            "color_hex": "#2d7a3a"
+            "color_hex": "#2d7a3a",
+            "instructions_default": "Erstelle eine vollständige ..."   # v19.21 S1
           },
           ...
-        ]
+        ],
+        "befund_vorlage": "Im Gespräch offen, wach, ..."               # v19.21 S1
       }
 
     Wenn ein Workflow ergaenzt/umbenannt/umkalibriert wird, taucht das
     automatisch hier auf - keine separate Frontend-Aenderung noetig
     (ausser fuer workflow-spezifische UI-Logik).
     """
-    return {"workflows": to_manifest()}
+    # v19.21 (S1): Default-Anweisungen aus prompts.py mitliefern - dieselbe
+    # Quelle, aus der frontend/src/prompt-defaults.jsx generiert wird. Damit
+    # koennen Tools/Eval/Confluence-Makros den produktiven Default abfragen,
+    # statt eine eigene Kopie zu pflegen. Lazy-Import: prompts.py ist gross.
+    from app.services.prompts import BEFUND_VORLAGE, WORKFLOW_INSTRUCTIONS_DEFAULT
+    workflows = to_manifest()
+    for w in workflows:
+        w["instructions_default"] = WORKFLOW_INSTRUCTIONS_DEFAULT.get(w["key"], "")
+    return {"workflows": workflows, "befund_vorlage": BEFUND_VORLAGE}

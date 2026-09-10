@@ -15,4 +15,6 @@ fi
 
 echo "[lint_gate] ruff check app scripts"
 ruff check app scripts
+echo "[lint_gate] prompt-defaults Drift-Check (prompts.py -> frontend/src/prompt-defaults.jsx)"
+python3 scripts/export_prompt_defaults.py --check
 echo "[lint_gate] OK - keine Verstoesse"
