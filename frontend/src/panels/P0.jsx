@@ -3,7 +3,7 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useCallback, useEffect } from "react";
-import { apiFetch, downloadViaApi, getApiBase, getConfluenceUser } from "../api.js";
+import { apiFetch, downloadViaApi, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState } from "../api.js";
 import { AudioRecorder } from "../audio.jsx";
 import { _pendingLabels, _recordingsCache, offlineQueueAdd, offlineQueueList, offlineQueueRemove } from "../shared.js";
 import { Card, Dropzone } from "../ui.jsx";
@@ -192,7 +192,17 @@ function P0({ toast }) {
       try {
         await offlineQueueAdd(file, label);
         await loadOfflineQueue();
-        toast("Server nicht erreichbar – Aufnahme lokal gespeichert. Upload erfolgt automatisch wenn der Server wieder erreichbar ist.");
+        // v19.21 (B9): Start-on-Intent — Server anstossen; die Offline-Queue
+        // flusht beim st-health-ok automatisch.
+        let msg = "Server nicht erreichbar – Aufnahme lokal gespeichert. Upload erfolgt automatisch, sobald der Server erreichbar ist.";
+        if (isServerDownError(e) && getProxyBase()) {
+          const ens = await ensureServer();
+          announceServerState(ens);
+          if (ens.status === "starting") msg = "Server wird gestartet (ca. 3–6 min) – Aufnahme lokal gespeichert, Upload erfolgt automatisch.";
+          else if (ens.status === "no_server") msg = "Kein Server verfügbar (10 min keine GPU frei) – Aufnahme lokal gespeichert. Bitte später erneut starten.";
+          else if (ens.status === "blocked_night") msg = "Nachtsperre (23–5 Uhr) – Aufnahme lokal gespeichert, Upload erfolgt automatisch beim nächsten Serverstart.";
+        }
+        toast(msg);
       } catch (e2) {
         toast("Speichern fehlgeschlagen: " + e.message);
       }

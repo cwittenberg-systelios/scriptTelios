@@ -170,3 +170,78 @@ Modellen oder wenig Platz; sonst `ok`. Modell-Match: mit Tag exakt (`gemma4:31b`
 ohne Tag tag-agnostisch (`mistral-small3.2` ~ `…:latest`).
 
 Tests: `backend/tests/unit/test_selfcheck.py` (Matching + Aggregation + gemockte Probes).
+
+---
+
+## v19.21 — Pod-Lifecycle v2: Terminate & Redeploy
+
+### Warum
+Ein **gestoppter** Pod bleibt an seinen Host gebunden; beim Resume muss genau dessen
+GPU frei sein („no GPU available"). Bisher hieß das: neuen Pod von Hand anlegen,
+ID über `/setPodId` eintragen. Ab v19.21 **terminiert** jeder Stopp den Pod und jeder
+Start legt per `podFindAndDeployOnDemand` einen neuen an — RunPod sucht dabei
+RZ-weit nach einer freien RTX PRO 4500 (kein Fallback auf andere GPU-Typen).
+Alles Zustandsbehaftete liegt auf dem Network Volume (`/workspace`: Modelle,
+`.env` mit Tunnel-Token, venv, HF-Cache); `runpod-start.sh` ist auf ephemere
+Container-Disk ausgelegt. Der Cloudflare-Tunnel zeigt nach dem Boot automatisch
+auf den neuen Pod.
+
+### Aktivierung (einmalig, bei LAUFENDEM Pod)
+1. Worker deployen (`misc/cloudflareworker.js`), Makro aktualisieren.
+2. Optional zuerst Env `DRY_RUN=1` setzen: Terminate/Deploy werden nur
+   protokolliert; `/start`/`/stop` liefern das geplante GraphQL-Payload.
+3. Confluence-Makro → **„Spec aus laufendem Pod übernehmen"** (`POST /spec/capture`).
+   Der Worker liest Image, Docker-Args, Ports, Container-Disk, Volume, Datacenter,
+   GPU-Typ, CPU/RAM aus dem laufenden Pod und speichert sie als `state:podSpec`.
+   Secrets werden **nicht** ins KV übernommen (Keys mit TOKEN/SECRET/KEY/PASS…,
+   RunPod-Auto-Variablen); die Env kommt beim Boot aus `/workspace/.env`.
+4. „Spec anzeigen" prüfen: `imageName`, `networkVolumeId`, `gpuTypeId`,
+   `dataCenterId` müssen gesetzt sein. Fehlt etwas → `POST /spec/set {spec:{…}}`.
+5. `DRY_RUN` entfernen. Ab jetzt: Lifecycle-Panel zeigt „Terminate & Redeploy".
+
+**Rollback:** „Spec löschen" (`POST /spec/clear`) → Worker verhält sich wieder wie
+v19.10 (Stop/Resume). Der `/recover`-Pfad mit manuellem ID-Swap bleibt erhalten.
+
+### Endpunkte
+| Endpoint | Zweck |
+|---|---|
+| `GET /spec` | gespeicherte Spec anzeigen (`invalidRaw` = KV-Inhalt unparsebar) |
+| `POST /spec/capture` | Spec aus laufendem Pod lesen und speichern |
+| `POST /spec/set` | `{ spec: {...} }` — Felder ergänzen/korrigieren (Merge) |
+| `POST /spec/clear` | Spec löschen → Resume-Modus |
+| `POST /ensure` | idempotenter Start (siehe unten) |
+| `GET /state` | enthält jetzt `lifecycle: {mode, dryRun, gpuTypeId, specCapturedAt, wantRunning, noServerSince}` |
+
+### `/ensure` — Start-on-Intent
+Antworten: `ok` (läuft), `starting` (Deploy ausgelöst oder Boot < 5 min; bei
+`reason: "no_gpu"` läuft das Retry-Fenster), `no_server` (10 min lang keine GPU
+frei; `retry_allowed: true`), `blocked_night` (23–05 Uhr), `error`.
+Aufrufer: Confluence-Makro (Start-Button im Redeploy-Modus, „Erneut versuchen"),
+scriptTelios-App (`startJob()` bei Generieren, P0-Upload bei Fehlschlag) und der
+15-min-Cron (führt ein offenes Retry-Fenster fort, falls niemand mehr pollt).
+
+Retry-Fenster: `state:wantRunning = {since, attempts, lastAttempt}`, höchstens ein
+Deploy-Versuch pro Minute, nach 10 Minuten `state:noServerSince` + Telegram.
+Ein erneuter `/ensure` nach `no_server` öffnet ein frisches Fenster.
+
+### App-Seite (Confluence-User-Makro)
+Neuer Makro-Parameter **Pod-Proxy URL** (`proxyUrl`) → `window.SYSTELIOS_PROXY_BASE`.
+Ohne den Parameter verhält sich die App wie bisher (kein Auto-Start). Mit Parameter:
+- Sidebar-Statusbox: grau „Kein Server aktiv — wird beim ersten Auftrag automatisch
+  gestartet", blau „Server startet …", rot „Kein Server verfügbar" + Button,
+  rot „Keine sichere Verbindung — bitte über https aufrufen" (Seite per http geladen;
+  Ursache: CORS-Allowlist des Workers kennt nur den https-Origin).
+- Generieren bei gestopptem Pod: der Auftrag wartet in der App (Formular + Dateien
+  im Speicher) und wird beim `st-health-ok` automatisch abgeschickt. **Seite bis
+  dahin nicht neu laden** (Dateien wären weg).
+- Aufnahme-Upload bei gestopptem Pod: Offline-Queue (IndexedDB) wie bisher, plus
+  Server-Anstoß; Upload folgt automatisch.
+
+### KV-Keys (neu)
+`state:podSpec`, `state:wantRunning`, `state:noServerSince`. `state:podId` zeigt
+nach einem Deploy auf den neuen Pod; nach Terminate bleibt die alte ID stehen
+(RunPod liefert dafür `NO_STATUS`, der Worker wertet das als „gestoppt").
+
+### Kosten-Guard
+Vor jedem Deploy prüft `/pods`, dass kein anderer Pod läuft (`OTHER_RUNNING` →
+kein Deploy). Nach jedem Terminate wird die alte ID nicht mehr resümiert.

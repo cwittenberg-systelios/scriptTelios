@@ -139,12 +139,85 @@ function buildJobFormData(workflow, prompt, userContent, files = {}) {
 // Komponente (pollJob / useResumeWorkflowJob). Alle Panels (P1-P6) nutzen
 // diesen Pfad; der fruehere blockierende generate()-Flow wurde in v19.21 (S3)
 // entfernt.
+// ── v19.21 Pod-Lifecycle v2 / Start-on-Intent ──────────────────────────────
+// Der Worker (RunPod-Proxy) wird ueber dieselbe HMAC-Signatur wie das Backend
+// angesprochen. Basis-URL kommt vom Confluence-Makro (window.SYSTELIOS_PROXY_BASE).
+function getProxyBase() {
+  const w = (typeof window !== "undefined" && window.SYSTELIOS_PROXY_BASE) || "";
+  return w ? w.replace(/\/$/, "") : "";
+}
+
+// Fehler, die "Server aus / Tunnel down" bedeuten: Netzwerkfehler (TypeError
+// bei fetch) oder Cloudflare-Origin-Fehler (52x/530). Backend-eigene 5xx
+// (Server laeuft, Dienst kaputt) sind es NICHT.
+function isServerDownError(errOrResponse) {
+  if (!errOrResponse) return false;
+  if (typeof errOrResponse.status === "number") return [502, 521, 522, 523, 524, 530].includes(errOrResponse.status);
+  return errOrResponse instanceof TypeError || /Failed to fetch|NetworkError|Load failed/i.test(String(errOrResponse.message || errOrResponse));
+}
+
+// POST /ensure → { status: ok|starting|no_server|blocked_night|error, ... }
+async function ensureServer() {
+  const base = getProxyBase();
+  if (!base) return { status: "no_proxy" };
+  try {
+    const r = await apiFetch(`${base}/ensure`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const d = await r.json().catch(() => ({}));
+    return d && d.status ? d : { status: "error", detail: r.status };
+  } catch (e) {
+    return { status: "error", detail: String(e && e.message || e) };
+  }
+}
+
+const SERVER_STATE_EVENT = "st-server-state";
+function announceServerState(detail) {
+  try { window.dispatchEvent(new CustomEvent(SERVER_STATE_EVENT, { detail })); } catch (_) {}
+}
+
+// Wartet auf das bestehende st-health-ok-Event (Sidebar-Poller) — max. maxMs.
+function waitForHealthOk(maxMs = 8 * 60 * 1000) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const onOk = () => { if (done) return; done = true; window.removeEventListener("st-health-ok", onOk); resolve(true); };
+    window.addEventListener("st-health-ok", onOk);
+    setTimeout(() => { if (done) return; done = true; window.removeEventListener("st-health-ok", onOk);
+      reject(new Error("Der Server ist nach dem Start nicht erreichbar geworden. Bitte Status in Confluence pruefen.")); }, maxMs);
+  });
+}
+
+// Start-on-Intent: Ist der Server aus, wird er ueber den Proxy angelegt und der
+// Auftrag wartet, bis /selfcheck wieder ok meldet. Der Aufruf bleibt fuer die
+// Panels transparent (await startJob(...) dauert dann eben 3–6 min); die
+// Sidebar-Box zeigt derweil "Server startet ...". Nachtsperre/kein Server →
+// verstaendlicher Fehler statt stillem Fehlschlag.
 async function startJob(workflow, prompt, userContent, files = {}) {
   const fd = buildJobFormData(workflow, prompt, userContent, files);
-  const r = await apiFetch(`${getApiBase()}/jobs/generate`, { method: "POST", body: fd });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.detail || r.statusText);
-  return d.job_id;
+  const url = `${getApiBase()}/jobs/generate`;
+  let r;
+  try {
+    r = await apiFetch(url, { method: "POST", body: fd });
+  } catch (e) {
+    if (!isServerDownError(e) || !getProxyBase()) throw e;
+    r = null;
+  }
+  if (r && !isServerDownError(r)) {
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    return d.job_id;
+  }
+  // Server aus → Start-on-Intent
+  const ens = await ensureServer();
+  announceServerState(ens);
+  if (ens.status === "starting" || ens.status === "ok") {
+    await waitForHealthOk();
+    const r2 = await apiFetch(url, { method: "POST", body: fd });
+    const d2 = await r2.json();
+    if (!r2.ok) throw new Error(d2.detail || r2.statusText);
+    return d2.job_id;
+  }
+  if (ens.status === "no_server") throw new Error("Kein Server verfuegbar: 10 Minuten lang war keine GPU frei. Bitte spaeter erneut versuchen.");
+  if (ens.status === "blocked_night") throw new Error("Zwischen 23 und 5 Uhr wird kein Server automatisch gestartet. Bitte ab 5 Uhr erneut versuchen.");
+  throw new Error("Server ist nicht erreichbar und konnte nicht gestartet werden.");
 }
 
 
@@ -248,4 +321,4 @@ function getConfluenceUser() {
   return "";
 }
 
-export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser };
+export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { apiFetch, getApiBase, getConfluenceUser } from "./src/api.js";
+import { apiFetch, getApiBase, getConfluenceUser , ensureServer, announceServerState, isServerDownError, SERVER_STATE_EVENT } from "./src/api.js";
 import { P0 } from "./src/panels/P0.jsx";
 import { P1 } from "./src/panels/P1.jsx";
 import { P2, P2b } from "./src/panels/P2.jsx";
@@ -146,16 +146,37 @@ export default function App() {
   // Aggregatzustand aller Subsysteme (ollama/models/db/disk/gpu) zeigen kann.
   //   serverStatus: null (noch unbekannt) | "ok" | "degraded" | "down"
   const [serverStatus, setServerStatus] = useState(null);
+  // v19.21 (B6/B9): Lifecycle-Zustand der Statusbox — "stopped" (Pod aus,
+  // wird beim ersten Auftrag gestartet), "starting" (Deploy laeuft),
+  // "no_server" (10 min keine GPU), "blocked_night", "insecure" (kein https).
+  const [lifecycle, setLifecycle] = useState(null);
+  const insecure = (() => {
+    try { return typeof window !== "undefined" && window.location.protocol !== "https:" && !/^(localhost|127\.0\.0\.1)$/.test(window.location.hostname); }
+    catch (_) { return false; }
+  })();
   const wasOfflineRef = useRef(false);
+  const startingSinceRef = useRef(0);
+  // Start-on-Intent-Ereignisse aus api.js/P0 (ensureServer-Antworten)
   useEffect(() => {
-    if (!backendUrl) return;
+    const onState = (e) => {
+      const st = e.detail && e.detail.status;
+      if (st === "starting") { startingSinceRef.current = Date.now(); setLifecycle("starting"); }
+      else if (st === "no_server") setLifecycle("no_server");
+      else if (st === "blocked_night") setLifecycle("blocked_night");
+    };
+    window.addEventListener(SERVER_STATE_EVENT, onState);
+    return () => window.removeEventListener(SERVER_STATE_EVENT, onState);
+  }, []);
+  useEffect(() => {
+    if (!backendUrl || insecure) return;
     let cancelled = false;
     const check = () => {
       apiFetch(`${getApiBase()}/selfcheck`, { signal: AbortSignal.timeout(8000) })
         .then(async r => {
           if (cancelled) return;
           if (!r.ok) {
-            setServerStatus("down");
+            // Cloudflare-Origin-Fehler (Tunnel down) = Pod aus, kein Serverfehler.
+            setServerStatus(isServerDownError(r) ? "stopped" : "down");
             wasOfflineRef.current = true;
             return;
           }
@@ -171,18 +192,36 @@ export default function App() {
           if (!offline && wasOfflineRef.current) {
             window.dispatchEvent(new CustomEvent("st-health-ok"));
           }
+          if (!offline) { setLifecycle(null); startingSinceRef.current = 0; }
           wasOfflineRef.current = offline;
         })
-        .catch(() => { if (!cancelled) { setServerStatus("down"); wasOfflineRef.current = true; } });
+        .catch((e) => {
+          if (cancelled) return;
+          // Netzwerkfehler = Tunnel/Pod aus → "stopped" (kein Fehler, nur aus)
+          setServerStatus(isServerDownError(e) ? "stopped" : "down");
+          wasOfflineRef.current = true;
+        });
     };
     check();
-    const interval = setInterval(check, 30000);
+    // Waehrend eines Starts haeufiger pollen (10 s), sonst 30 s.
+    const interval = setInterval(() => {
+      const starting = startingSinceRef.current && (Date.now() - startingSinceRef.current) < 10 * 60 * 1000;
+      if (starting || (Date.now() % 30000) < 10000) check();
+    }, 10000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [backendUrl]);
+  }, [backendUrl, insecure]);
 
   // Rückwärtskompatibler Alias: mehrere Stellen (Overlay-Schließen etc.)
   // fragen weiterhin "ist der Server offline?".
-  const backendOffline = serverStatus === "down";
+  const backendOffline = serverStatus === "down" || serverStatus === "stopped";
+  // Effektiver Anzeige-Zustand der Box
+  const boxState = insecure ? "insecure"
+    : (serverStatus === "stopped" || serverStatus === "down") && lifecycle ? lifecycle
+    : serverStatus;
+  const retryStart = async () => {
+    const ens = await ensureServer();
+    announceServerState(ens);
+  };
 
   return (
     <div id="st-root" className="st-scope" style={{
@@ -221,13 +260,52 @@ export default function App() {
             ● Server l&#228;uft — einzelne Dienste eingeschr&#228;nkt
           </div>
         )}
-        {serverStatus === "down" && (
+        {boxState === "down" && (
           <div style={{
             background:"rgba(168,40,30,0.3)", border:"1px solid rgba(168,40,30,0.6)",
             borderRadius:4, padding:"8px 10px", marginBottom:10,
             fontSize:11, color:"rgba(255,200,200,0.9)", lineHeight:1.5
           }}>
-            ⚠ Server nicht erreichbar
+            ⚠ Server läuft, antwortet aber fehlerhaft
+          </div>
+        )}
+        {/* v19.21 (B6): Lifecycle-Zustaende — Ruhezustand grau und kompakt, nur echte Probleme rot */}
+        {boxState === "stopped" && (
+          <div style={{ padding:"4px 2px", marginBottom:10, fontSize:11, color:"rgba(255,255,255,0.5)", lineHeight:1.5 }}>
+            ○ Kein Server aktiv — wird beim ersten Auftrag automatisch gestartet (ca. 3–6 min)
+          </div>
+        )}
+        {boxState === "starting" && (
+          <div style={{
+            background:"rgba(30,90,160,0.3)", border:"1px solid rgba(60,130,220,0.6)",
+            borderRadius:4, padding:"8px 10px", marginBottom:10,
+            fontSize:11, color:"rgba(200,225,255,0.95)", lineHeight:1.5
+          }}>
+            ◐ Server startet … Auftrag startet automatisch, sobald der Server bereit ist. Seite nicht neu laden.
+          </div>
+        )}
+        {boxState === "no_server" && (
+          <div style={{
+            background:"rgba(168,40,30,0.3)", border:"1px solid rgba(168,40,30,0.6)",
+            borderRadius:4, padding:"8px 10px", marginBottom:10,
+            fontSize:11, color:"rgba(255,200,200,0.9)", lineHeight:1.5
+          }}>
+            ⚠ Kein Server verfügbar — 10 min lang keine GPU frei.
+            <button onClick={retryStart} style={{marginTop:6,display:"block",padding:"3px 8px",fontSize:11,cursor:"pointer"}}>Erneut versuchen</button>
+          </div>
+        )}
+        {boxState === "blocked_night" && (
+          <div style={{ padding:"4px 2px", marginBottom:10, fontSize:11, color:"rgba(255,255,255,0.5)", lineHeight:1.5 }}>
+            ○ Kein Server aktiv — Auto-Start erst ab 5 Uhr
+          </div>
+        )}
+        {boxState === "insecure" && (
+          <div style={{
+            background:"rgba(168,40,30,0.3)", border:"1px solid rgba(168,40,30,0.6)",
+            borderRadius:4, padding:"8px 10px", marginBottom:10,
+            fontSize:11, color:"rgba(255,200,200,0.9)", lineHeight:1.5
+          }}>
+            ⚠ Keine sichere Verbindung — bitte die Seite über https aufrufen
           </div>
         )}
 

@@ -26,6 +26,7 @@
 ## ════════════════════════════════════════════════════════════════════════
 ## @param backendUrl:title=Backend URL|type=string|required=false|default=|desc=URL des scriptTelios-Backends (z.B. https://abc123-8000.proxy.runpod.net). Wenn gesetzt, müssen Therapeuten nichts konfigurieren.
 ## @param authSecret:title=Auth Secret|type=string|required=false|default=|desc=Shared-Secret für die HMAC-Authentifizierung mit dem Backend (siehe AUTH-MIGRATION.md). Muss identisch mit CONFLUENCE_SHARED_SECRET im Backend sein.
+## @param proxyUrl:title=Pod-Proxy URL|type=string|required=false|default=|desc=URL des Cloudflare-Workers (RunPod-Proxy), z.B. https://runpod-proxy.example.workers.dev. Wenn gesetzt, startet die App den Server automatisch beim ersten Auftrag (v19.21 Start-on-Intent).
 
 ## Container – äusserer Wrapper (vom Macro befüllt) + innerer leerer Mount-Punkt
 <div id="systelios-root-$action.hashCode()" data-api="$!{parambackendUrl}">
@@ -44,6 +45,8 @@
 
   // Auth-Secret (HMAC-Shared-Secret mit Backend)
   window.SYSTELIOS_AUTH_SECRET = "$!{paramauthSecret}".trim();
+  // v19.21: Pod-Proxy (Cloudflare Worker) fuer Start-on-Intent — gleiche HMAC-Signatur.
+  window.SYSTELIOS_PROXY_BASE = "$!{paramproxyUrl}".trim();
 
   // HMAC-SHA256 via Web Crypto API
   window._hmacSign = async function(user, timestamp) {

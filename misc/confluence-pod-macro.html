@@ -49,6 +49,21 @@
 
   <div class="stpod-msg"></div>
 
+  <!-- v19.21 Pod-Lifecycle v2: Terminate & Redeploy -->
+  <div class="stpod-lifecycle">
+    <div class="stpod-lc-head">
+      <span class="stpod-lc-title">Pod-Lifecycle</span>
+      <span class="stpod-lc-mode"></span>
+    </div>
+    <div class="stpod-lc-body"></div>
+    <div class="stpod-lc-actions">
+      <button type="button" class="stpod-btn stpod-ghost stpod-spec-capture" title="Konfiguration des laufenden Pods als Vorlage f&uuml;r Neu-Deploys speichern">Spec aus laufendem Pod &uuml;bernehmen</button>
+      <button type="button" class="stpod-btn stpod-ghost stpod-spec-show">Spec anzeigen</button>
+      <button type="button" class="stpod-btn stpod-ghost stpod-spec-clear" title="Zur&uuml;ck zu Stop/Resume">Spec l&ouml;schen</button>
+    </div>
+    <pre class="stpod-lc-spec" style="display:none"></pre>
+  </div>
+
   <div class="stpod-podid-row">
     <span class="stpod-podid-label">Pod-ID</span>
     <input type="text" class="stpod-podid-input" placeholder="neue Pod-ID" spellcheck="false" autocomplete="off" />
@@ -105,6 +120,13 @@
   #stpod-root .stpod-podid { font-size: 12px; color: #6b778c; margin-top: 2px; }
   #stpod-root .stpod-updated { font-size: 11px; color: #97a0af; white-space: nowrap; }
 
+  #stpod-root .stpod-lifecycle { margin:10px 0; padding:8px 10px; border:1px solid #e3e3e3; border-radius:6px; background:#fafafa; font-size:12px; }
+  #stpod-root .stpod-lc-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+  #stpod-root .stpod-lc-title { font-weight:600; }
+  #stpod-root .stpod-lc-mode { font-size:11px; color:#555; }
+  #stpod-root .stpod-lc-body { color:#333; line-height:1.5; }
+  #stpod-root .stpod-lc-actions { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+  #stpod-root .stpod-lc-spec { margin-top:6px; max-height:220px; overflow:auto; font-size:10.5px; background:#fff; border:1px solid #ddd; padding:6px; }
   #stpod-root .stpod-warn {
     margin-top: 12px; padding: 10px 12px; background: #fffae6;
     border: 1px solid #ffe380; border-radius: 6px; font-size: 13px; color: #7a5c00;
@@ -200,6 +222,10 @@
   var badge = q(".stpod-badge"), statusText = q(".stpod-status-text"), podIdEl = q(".stpod-podid");
   var updatedEl = q(".stpod-updated"), warnEl = q(".stpod-warn"), nogpuEl = q(".stpod-nogpu"), msgEl = q(".stpod-msg");
   var btnStart = q(".stpod-start"), btnStop = q(".stpod-stop"), btnRefresh = q(".stpod-refresh");
+  // v19.21 Lifecycle v2
+  var lcModeEl = q(".stpod-lc-mode"), lcBodyEl = q(".stpod-lc-body"), lcSpecEl = q(".stpod-lc-spec");
+  var btnSpecCapture = q(".stpod-spec-capture"), btnSpecShow = q(".stpod-spec-show"), btnSpecClear = q(".stpod-spec-clear");
+  var lifecycleMode = "resume";
   var podIdInput = q(".stpod-podid-input"), btnSetId = q(".stpod-setid"), btnMigrate = q(".stpod-migrate");
   var logBody = q(".stpod-log-body");
   var scBody = q(".stpod-sc-body"), scOverall = q(".stpod-sc-overall");
@@ -331,9 +357,33 @@
       else if (s.anyRunning) { cls = "amber"; txt = "Anderer Pod l\u00E4uft"; }
       else                   { cls = "grey";  txt = "gestoppt"; }
     }
+    // v19.21: Lifecycle-Zustaende ueberlagern den Basisstatus
+    var lc = s && s.lifecycle;
+    if (lc) {
+      lifecycleMode = lc.mode || "resume";
+      lcModeEl.textContent = (lc.mode === "redeploy" ? "Terminate & Redeploy" : "Stop & Resume (keine Spec)") + (lc.dryRun ? " \u00B7 DRY RUN" : "");
+      if (lc.mode === "redeploy") {
+        lcBodyEl.textContent = "Jeder Stopp terminiert den Pod, jeder Start legt ihn neu an (" + (lc.gpuTypeId || "GPU laut Spec") + ", RZ-weite Suche). Spec vom " + (lc.specCapturedAt ? new Date(lc.specCapturedAt).toLocaleString("de-DE") : "?") + ".";
+      } else {
+        lcBodyEl.textContent = "Klassischer Stop/Resume \u2014 gestoppter Pod bleibt an seinen Host gebunden. F\u00FCr Terminate & Redeploy zuerst bei LAUFENDEM Pod die Spec \u00FCbernehmen.";
+      }
+      var running0 = !!s.anyRunning;
+      if (!running0 && lc.wantRunning) {
+        cls = "amber";
+        var mins = Math.round((Date.now() - Number(lc.wantRunning.since || Date.now())) / 60000);
+        txt = "Warte auf freie GPU \u2014 Versuch " + (lc.wantRunning.attempts || 1) + ", seit " + mins + " min (max. 10)";
+      } else if (!running0 && lc.noServerSince) {
+        cls = "red"; txt = "Kein Server verf\u00FCgbar \u2014 10 min lang keine GPU frei";
+      }
+      btnSpecCapture.disabled = busy || !running0;
+      btnSpecClear.disabled = busy || lc.mode !== "redeploy";
+    }
     badge.className = "stpod-badge stpod-" + cls;
     statusText.textContent = txt;
     podIdEl.textContent = (s && s.podId) ? ("Pod-ID: " + s.podId) : "";
+    if (lc && !s.anyRunning && lc.noServerSince) {
+      showNoServer();
+    }
 
     renderWarn((s && s.otherRunning) || []);
     if (s && s.anyRunning && !autoRetry) showNoGpu(false);   // laeuft wieder etwas → No-GPU-Hinweis weg (nicht waehrend Auto-Retry)
@@ -342,6 +392,7 @@
     var tracked = s ? !!s.trackedRunning : false;
     btnStart.disabled  = busy || running;
     btnStop.disabled   = busy || !tracked;
+    btnStop.textContent = lifecycleMode === "redeploy" ? "Server stoppen (terminiert)" : "Server stoppen";
     btnSetId.disabled  = busy;
     btnMigrate.disabled = busy;
     // dynamische Banner-Buttons mit busy synchronisieren (Auto-Retry-Stopp bleibt aktiv)
@@ -465,6 +516,51 @@
       .then(function (res) { handleResult(res, label); })
       .catch(function () { setMsg(label + " fehlgeschlagen \u2014 Proxy nicht erreichbar.", "err"); })
       .then(function () { busy = false; refreshState(); refreshLogs(); refreshSelfcheck(); });
+  }
+
+  // v19.21: Start-on-Intent-Endpunkt fuer den manuellen Start im Redeploy-Modus
+  function runEnsure(label) {
+    if (busy || !configOk()) return;
+    busy = true; setControlsBusy(true);
+    setMsg((label || "Start") + " l\u00E4uft\u2026", "info");
+    signedFetch("/ensure", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+      .then(function (r) { return r.json(); })
+      .then(function (b) {
+        var st = b && b.status;
+        if (st === "ok") setMsg("Server l\u00E4uft bereits.", "info");
+        else if (st === "starting" && b.reason === "no_gpu") setMsg("Keine GPU frei \u2014 automatischer Neuversuch jede Minute, bis zu 10 min (Versuch " + (b.attempt || 1) + ").", "warn");
+        else if (st === "starting") setMsg("Pod wird angelegt" + (b.dryRun ? " (DRY RUN \u2014 nichts ausgef\u00FChrt)" : "") + " \u2014 Boot ca. " + Math.round((b.eta_s || 300) / 60) + " min.", "info");
+        else if (st === "no_server") { setMsg("Kein Server verf\u00FCgbar \u2014 10 Minuten lang keine GPU frei.", "err"); showNoServer(); }
+        else if (st === "blocked_night") setMsg("Nachtsperre: kein Auto-Start zwischen 23 und 5 Uhr.", "warn");
+        else setMsg("Start fehlgeschlagen: " + JSON.stringify(b), "err");
+      })
+      .catch(function () { setMsg("Start fehlgeschlagen \u2014 Proxy nicht erreichbar.", "err"); })
+      .then(function () { busy = false; stateDelay = STATE_MIN; refreshState(); refreshLogs(); });
+  }
+
+  function showNoServer() {
+    nogpuEl.innerHTML = "";
+    var t = document.createElement("div");
+    t.textContent = "Kein Server verf\u00FCgbar: 10 Minuten lang war keine RTX PRO 4500 im Rechenzentrum frei. ";
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "stpod-btn stpod-keepenabled"; b.textContent = "Erneut versuchen";
+    b.addEventListener("click", function () { runEnsure("Erneut versuchen"); });
+    t.appendChild(b); nogpuEl.appendChild(t); nogpuEl.style.display = "";
+  }
+
+  function specCapture() {
+    if (!confirm("Konfiguration des LAUFENDEN Pods als Deploy-Vorlage speichern? Danach terminiert jeder Stopp den Pod und jeder Start legt ihn neu an.")) return;
+    runAction("/spec/capture", {}, "Spec \u00FCbernehmen");
+  }
+  function specShow() {
+    if (lcSpecEl.style.display !== "none") { lcSpecEl.style.display = "none"; return; }
+    signedFetch("/spec", { method: "GET" }).then(function (r) { return r.json(); })
+      .then(function (b) { lcSpecEl.textContent = JSON.stringify(b && b.spec ? b.spec : b, null, 2); lcSpecEl.style.display = ""; })
+      .catch(function () { setMsg("Spec konnte nicht geladen werden.", "err"); });
+  }
+  function specClear() {
+    if (!confirm("Spec l\u00F6schen? Der Worker f\u00E4llt auf Stop/Resume zur\u00FCck.")) return;
+    runAction("/spec/clear", {}, "Spec l\u00F6schen");
   }
 
   function adopt(id)      { runAction("/setPodId", { podId: id }, "\u00DCbernehmen"); }
@@ -601,7 +697,12 @@
     autoRetryTimer = setTimeout(autoRetryAttempt, RETRY_INTERVAL_MS);
   }
 
-  btnStart.addEventListener("click", function () { runAction("/start", {}, "Start"); });
+  btnStart.addEventListener("click", function () {
+    if (lifecycleMode === "redeploy") runEnsure("Start"); else runAction("/start", {}, "Start");
+  });
+  btnSpecCapture.addEventListener("click", specCapture);
+  btnSpecShow.addEventListener("click", specShow);
+  btnSpecClear.addEventListener("click", specClear);
   btnStop.addEventListener("click", function () { runAction("/stop", {}, "Stopp"); });
   btnRefresh.addEventListener("click", function () { refreshState(); refreshLogs(); refreshSelfcheck(); });
   btnSetId.addEventListener("click", setPodIdManual);
