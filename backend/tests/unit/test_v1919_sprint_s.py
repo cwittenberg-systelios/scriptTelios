@@ -121,3 +121,20 @@ class TestS2S4Chunking:
         assert res["telemetry"]["chunked"] is True
         assert res["telemetry"]["chunks"] >= 3
         assert "Gespraechsabschnitt 1/" in res["summary"]
+
+
+class TestS4bTranscriptChunkLimit:
+    def test_transkript_grenze_niedriger_als_verlauf(self):
+        from app.services.staging import stage1_transcript_chunk_chars, stage1_chunk_chars
+        assert stage1_transcript_chunk_chars() < stage1_chunk_chars()
+        assert stage1_transcript_chunk_chars() == 28_000
+
+    def test_9k_woerter_transkript_wird_gechunkt(self, monkeypatch):
+        # Betriebsfall 11.09. (8f7f80e0): 9.157 Woerter ≈ 52k Zeichen lagen
+        # unter der 55k-Verlaufsgrenze -> ein Call -> 524 W. -> Fallback.
+        from app.services.staging import chunk_text_by_blocks, stage1_transcript_chunk_chars
+        text = "".join(f"[{'AB'[i % 2]}]: " + ("Rede. " * 60) + "\n" for i in range(150))  # ~9k Woerter
+        assert 45_000 < len(text) < 60_000
+        chunks = chunk_text_by_blocks(text, stage1_transcript_chunk_chars())
+        assert len(chunks) >= 2
+        assert all(len(c) <= 28_000 for c in chunks)

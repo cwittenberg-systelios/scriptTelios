@@ -410,9 +410,27 @@ def chunk_text_by_blocks(text: str, max_chars: int) -> list[str]:
 
 
 def stage1_chunk_chars() -> int:
-    """Konfigurierbare Chunk-Grenze (STAGE1_CHUNK_CHARS in settings/.env)."""
+    """Konfigurierbare Chunk-Grenze fuer VERLAEUFE (STAGE1_CHUNK_CHARS)."""
     try:
         from app.core.config import settings
         return int(getattr(settings, "STAGE1_CHUNK_CHARS", STAGE1_CHUNK_CHARS_DEFAULT))
     except Exception:
         return STAGE1_CHUNK_CHARS_DEFAULT
+
+
+# v19.21b (S4b): Eigene, niedrigere Grenze fuer TRANSKRIPTE. Betrieb 11.09.:
+# Das Modell verdichtet ein Transkript auf ~500 Woerter, unabhaengig vom Ziel -
+# bei 9.157 Woertern (Ziel 1.500, Minimum 600) kamen 524 -> Fallback Rohtext;
+# bei 5.994 Woertern reichte der Retry knapp (498 > 479). Ab ~4.500 Woertern
+# pro Teil liegt das Teil-Ziel bei ~750 und das Minimum bei 300 - das erreicht
+# das Modell zuverlaessig, die Summe der Teile bei ~1.000 statt ~500.
+STAGE1_TRANSCRIPT_CHUNK_CHARS_DEFAULT = 28_000
+
+
+def stage1_transcript_chunk_chars() -> int:
+    """Chunk-Grenze fuer Transkripte (STAGE1_TRANSCRIPT_CHUNK_CHARS)."""
+    try:
+        from app.core.config import settings
+        return int(getattr(settings, "STAGE1_TRANSCRIPT_CHUNK_CHARS", STAGE1_TRANSCRIPT_CHUNK_CHARS_DEFAULT))
+    except Exception:
+        return STAGE1_TRANSCRIPT_CHUNK_CHARS_DEFAULT

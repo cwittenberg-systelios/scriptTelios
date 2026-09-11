@@ -186,8 +186,8 @@ async def summarize_transcript(
     # selbst das Budget; 9 von 20 P1-Jobs (Log 13.08.-09.09.) liefen deshalb
     # auf roh gesampelten Transkripten.
     if not _is_chunk:
-        from app.services.staging import chunk_text_by_blocks, stage1_chunk_chars
-        _chunk_limit = stage1_chunk_chars()
+        from app.services.staging import chunk_text_by_blocks, stage1_transcript_chunk_chars
+        _chunk_limit = stage1_transcript_chunk_chars()   # v19.21b (S4b): 28k statt 55k
         if len(transcript_text) > _chunk_limit:
             return await _summarize_transcript_chunked(
                 transcript_text=transcript_text,
