@@ -856,7 +856,22 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "darstellen), Modalitaeten von Transfer-/Angehoerigengespraechen, Kontakt- und "
         "Verwaltungswege. Ein bis wenige Saetze genuegen; keine therapeutische "
         "Deutung. Gab es nichts Organisatorisches, LASSE diesen Abschnitt komplett weg "
-        "(keine Ueberschrift, kein Platzhaltersatz)."
+        "(keine Ueberschrift, kein Platzhaltersatz).\n\n"
+        # v19.22: Pflicht-Hinweis Suizidalitaet. Der Standardsatz fuer den
+        # Fall "war kein Thema" wird NICHT vom Modell geschrieben, sondern
+        # deterministisch in services/suizidalitaet.py ergaenzt - das Modell
+        # soll ihn nicht erfinden und keine Einschaetzung behaupten, die im
+        # Gespraech nicht gefallen ist.
+        "**Zum Schluss: Suizidalität**\n"
+        "Wurde im Gespräch Suizidalität, Lebensmüdigkeit, ein Todeswunsch oder "
+        "die Absprachefähigkeit thematisiert, gib das als letzten Absatz der "
+        "Dokumentation wieder - ohne eigene Überschrift, im Fliesstext, "
+        "ausschliesslich das, was tatsächlich gesagt wurde (auch eine "
+        "ausdrückliche Verneinung durch die Klientin/den Klienten gehört "
+        "hierher). Ergänze KEINE eigene Einschätzung zu Absprachefähigkeit oder "
+        "Suizidalität, die im Gespräch nicht gefallen ist. War es KEIN Thema, "
+        "schreibe dazu nichts - der Standardsatz wird in diesem Fall automatisch "
+        "angehängt."
     ),
 
     "anamnese": (

@@ -15,7 +15,7 @@ def test_registry_reihenfolge_entspricht_v1920():
         "patient_initial", "gender", "think_blocks", "befund_separator",
         "length", "required_keywords", "required_sections",
         "recommended_sections", "stichpunkte", "kompositum_klebebugs",
-        "source_fidelity",
+        "source_fidelity", "suizid_note",
     ]
     assert len(set(names)) == len(names)
 

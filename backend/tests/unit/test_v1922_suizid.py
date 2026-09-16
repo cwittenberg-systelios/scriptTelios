@@ -200,14 +200,15 @@ def test_leerer_output_wird_nicht_zum_reinen_hinweistext():
     assert out == ""
 
 
-# ── S1-Abgrenzung: noch nicht verdrahtet ──────────────────────────────────────
+# ── Verdrahtung ───────────────────────────────────────────────────────────────
 
-def test_modul_ist_in_s1_noch_nicht_verdrahtet():
-    """S1 liefert nur das Modul. Der Einbau in die Pipeline ist S2, die
-    QC-Regeln sind S3 - bis dahin darf sich am Produktionsverhalten nichts
-    aendern."""
+def test_modul_ist_ueberall_verdrahtet():
+    """Alle vier Konsumenten des Moduls (Generierung, QualityCheck, Repair,
+    Prompt-Anweisung). Faellt auf, wenn ein Pfad beim Refactoring abreisst."""
     import pathlib
 
     root = pathlib.Path(__file__).resolve().parents[2] / "app" / "services"
-    for name in ("generation_pipeline.py", "quality_check.py"):
-        assert "suizidalitaet" not in (root / name).read_text(encoding="utf-8")
+    for name in ("generation_pipeline.py", "quality_check.py", "repair.py"):
+        assert "suizidalitaet" in (root / name).read_text(encoding="utf-8"), name
+    prompts = (root / "prompts.py").read_text(encoding="utf-8")
+    assert "Suizidalität" in prompts

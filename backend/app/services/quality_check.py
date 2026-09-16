@@ -39,6 +39,10 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Callable
 
 from app.core.workflows import word_limit_for
+from app.services.suizidalitaet import (
+    STATUS_NO_NAME as SUIZID_STATUS_NO_NAME,
+    STATUS_SOURCE_CONFLICT as SUIZID_STATUS_SOURCE_CONFLICT,
+)
 from app.services.quality_specs import (
     BEFUND_SEPARATOR,
     keyword_present,
@@ -175,6 +179,22 @@ ISSUE_CODE_REPAIR_SHRUNK = "REPAIR_SHRUNK"
 # beruecksichtigt" = Diagnosekriterien kommen nicht ausreichend vor.
 ISSUE_CODE_DIAGNOSEKRITERIEN_COVERAGE = "DIAGNOSEKRITERIEN_COVERAGE"
 ISSUE_CODE_DIAGNOSE_IM_TEXT = "DIAGNOSE_IM_TEXT"
+
+# v19.22 (S3): Pflicht-Hinweis zur Suizidalitaet in der Gespraechsdoku.
+# Der Normalfall (Standardsatz ergaenzt) ist per Entscheid D1=A bewusst
+# STILL - es gibt dafuer KEIN Issue. Gemeldet werden nur die beiden
+# Faelle, in denen die Doku OHNE Hinweis herausgeht:
+#
+# QUELLE_NICHT_UEBERNOMMEN (D2=B): Transkript/Stichpunkte thematisieren
+#   Suizidalitaet, der generierte Text nicht. Der Standardsatz wird dann
+#   bewusst NICHT ergaenzt - er waere inhaltlich falsch. Critical, weil
+#   hier ein sicherheitsrelevanter Gespraechsinhalt verloren ging; durch
+#   Repair behebbar (der Repair-Kontext enthaelt die Quellen).
+# SUIZIDHINWEIS_FEHLT (D4=C): kein belastbares Namenskuerzel, also keine
+#   Anrede fuer den Standardsatz. Warning - das ist ein Datenproblem
+#   (Pflichtfeld leer), nicht durch Neu-Generierung behebbar.
+ISSUE_CODE_SUIZIDALITAET_QUELLE_NICHT_UEBERNOMMEN = "SUIZIDALITAET_QUELLE_NICHT_UEBERNOMMEN"
+ISSUE_CODE_SUIZIDHINWEIS_FEHLT = "SUIZIDHINWEIS_FEHLT"
 
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
@@ -1296,6 +1316,57 @@ def _check_stichpunkte(
     return issues
 
 
+# ── v19.22 (S3): Pflicht-Hinweis Suizidalitaet ────────────────────────────────
+
+def _check_suizid_note(
+    workflow: str, suizid_note_status: "str | None",
+) -> list[QualityIssue]:
+    """Wertet den Status aus generation_pipeline._finalize aus.
+
+    None (andere Workflows, Repair-Jobs ohne Status, aeltere Jobs) und die
+    unauffaelligen Status "present"/"appended" erzeugen KEIN Issue (D1=A).
+    """
+    if workflow != "dokumentation" or not suizid_note_status:
+        return []
+
+    if suizid_note_status == SUIZID_STATUS_SOURCE_CONFLICT:
+        return [QualityIssue(
+            code=ISSUE_CODE_SUIZIDALITAET_QUELLE_NICHT_UEBERNOMMEN,
+            severity=SEVERITY_CRITICAL,
+            message=(
+                "Suizidalität war Gesprächsthema, kommt im Text aber nicht vor. "
+                "Der Standardsatz wurde deshalb NICHT ergänzt - bitte den "
+                "Gesprächsinhalt selbst dokumentieren."
+            ),
+            repair_hint=(
+                "Die Quellen (Transkript/Stichpunkte) thematisieren Suizidalität, "
+                "Lebensmüdigkeit oder Absprachefähigkeit. Gib diesen Gesprächsinhalt "
+                "am Ende der Dokumentation wieder - ausschliesslich das, was "
+                "tatsächlich besprochen wurde, ohne Einschätzung zu ergänzen, die "
+                "im Gespräch nicht gefallen ist."
+            ),
+            code_detail={"status": suizid_note_status},
+        )]
+
+    if suizid_note_status == SUIZID_STATUS_NO_NAME:
+        return [QualityIssue(
+            code=ISSUE_CODE_SUIZIDHINWEIS_FEHLT,
+            severity=SEVERITY_WARNING,
+            message=(
+                "Pflicht-Hinweis zur Suizidalität fehlt: ohne Namenskürzel kann "
+                "der Standardsatz nicht gebildet werden. Kürzel nachtragen und "
+                "neu generieren, oder den Satz von Hand ergänzen."
+            ),
+            repair_hint=(
+                "Nicht durch Neu-Generierung behebbar - es fehlt das Namenskürzel "
+                "des Klienten/der Klientin (Pflichtfeld im Formular)."
+            ),
+            code_detail={"status": suizid_note_status},
+        )]
+
+    return []
+
+
 def _check_source_fidelity(text: str, source_text: str) -> list[QualityIssue]:
     """Quellentreue: aufgestuelptes Verfahrens-/Methoden-Vokabular (IFS-/Ego-State-
     Anteilssprache etc.) bzw. erfundene Standard-Hausaufgaben - im Output, aber NICHT
@@ -1341,6 +1412,7 @@ def run_quality_check(
     input_truncated_chars: "tuple | list | None" = None,
     repair_flags: "dict | None" = None,
     diagnosen: "list[str] | None" = None,
+    suizid_note_status: "str | None" = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
@@ -1381,6 +1453,10 @@ def run_quality_check(
                   new_words} aus _run_repair_coroutine. None -> entfaellt.
     diagnosen:    v19.19 (A3b): Einweisungsdiagnosen (P2). Steuert den
                   Kriterien-Abdeckungs-Check und DIAGNOSE_IM_TEXT.
+    suizid_note_status: v19.22 (S3): Status des Pflicht-Hinweises zur
+                  Suizidalitaet aus generation_pipeline._finalize
+                  (present/appended/source_conflict/no_name). None ->
+                  Check entfaellt.
 
     Idempotent (kein State, keine Seiteneffekte ausser logging).
     """
@@ -1418,6 +1494,7 @@ def run_quality_check(
         transcript_coverage_gap_s=transcript_coverage_gap_s,
         input_truncated_chars=input_truncated_chars,
         repair_flags=repair_flags, diagnosen=diagnosen,
+        suizid_note_status=suizid_note_status,
     )
     issues = run_checks(ctx)
 
@@ -1454,6 +1531,7 @@ class QCContext:
     input_truncated_chars: "tuple | list | None" = None
     repair_flags: "dict | None" = None
     diagnosen: "list[str] | None" = None
+    suizid_note_status: "str | None" = None   # v19.22 (S3)
 
 
 @dataclass(frozen=True)
@@ -1513,6 +1591,10 @@ CHECK_REGISTRY: tuple[QCCheck, ...] = (
             (ISSUE_CODE_KOMPOSITA_KLEBEBUG,)),
     QCCheck("source_fidelity", lambda c: _check_source_fidelity(c.text, c.source_text),
             (ISSUE_CODE_SOURCE_FIDELITY,), "nur mit source_text"),
+    QCCheck("suizid_note", lambda c: _check_suizid_note(c.workflow, c.suizid_note_status),
+            (ISSUE_CODE_SUIZIDALITAET_QUELLE_NICHT_UEBERNOMMEN,
+             ISSUE_CODE_SUIZIDHINWEIS_FEHLT),
+            "v19.22: nur dokumentation; still bei present/appended (D1=A)"),
 )
 
 

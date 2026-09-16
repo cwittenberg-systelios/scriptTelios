@@ -31,6 +31,7 @@ from app.services.document_summary import summarize_document
 from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_style_context, extract_text
 from app.services.llm import clean_verlauf_text, deduplicate_paragraphs, generate_text, substitute_patient_placeholders, truncate_style_context
+from app.services.suizidalitaet import resolve_suizid_note
 from app.services.prompt_log import _log_output, _log_prompt
 from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
 from app.services.stage1 import _run_transcript_stage1, _run_verlauf_stage1
@@ -172,6 +173,7 @@ class PipelineState:
     result:                         Any = None  # LLM-Ergebnis (text, telemetry, ...)
     selbstauskunft_empty:           Any = None
     selbstauskunft_text:            Any = None
+    suizid_note_status:             Any = None  # v19.22: Status des Suizidalitaets-Hinweises
     style_context:                  Any = None  # Stilbeispiele fuer den Prompt
     style_info:                     Any = None  # Meta (Quelle, Anzahl) der Stilbeispiele
     style_is_example:               Any = None  # True = Volltext-Beispiel statt Stichworte
@@ -1539,6 +1541,32 @@ async def _finalize(ctx: PipelineInput, job, st: PipelineState) -> dict:
                 st.result["akut_text"], st.patient_name
             )
 
+    # v19.22 (S2): Pflicht-Hinweis zur Suizidalitaet in der Gespraechsdoku.
+    # Laeuft NACH der Platzhalter-Substitution (der Standardsatz nennt die
+    # anonymisierte Referenzform) und nach dem Hard-Cap in postprocessing -
+    # so kann der Satz nicht weggekappt werden.
+    # Quelle fuer den Konflikt-Check (D2=B): Roh-Transkript, ggf. Stage-1-
+    # verdichtetes Transkript und die Stichpunkte des Therapeuten. Sprechen
+    # die Quellen ueber Suizidalitaet, der Output aber nicht, wird bewusst
+    # NICHT ergaenzt - der Standardsatz waere dann inhaltlich falsch.
+    if ctx.workflow == "dokumentation":
+        _suizid_quelle = "\n\n".join(
+            t for t in (
+                st._transkript_raw_for_result,
+                st.transkript_text,
+                ctx.bullets,
+            ) if t and t.strip()
+        )
+        raw, st.suizid_note_status = resolve_suizid_note(
+            raw,
+            source_text=_suizid_quelle,
+            patient_name=st.patient_name,
+        )
+        logger.info(
+            "Job %s Suizidalitaets-Hinweis: status=%s",
+            job.job_id, st.suizid_note_status,
+        )
+
     # Anamnese-Workflow: Befund kommt bereits separat aus dem zweiten LLM-Call.
     # Fuer alle anderen Workflows: kein Befund/Akut-Splitting noetig.
     if ctx.workflow == "anamnese":
@@ -1570,6 +1598,10 @@ async def _finalize(ctx: PipelineInput, job, st: PipelineState) -> dict:
         # weiter oben in _run).
         "transcript":  st._transkript_raw_for_result or None,
         "model_used":  st.result["model_used"],
+        # v19.22 (S2): Status des Pflicht-Hinweises zur Suizidalitaet.
+        # None fuer alle Workflows ausser "dokumentation". Wird in run_job
+        # als Job-Attribut gespiegelt und in S3 vom QualityCheck ausgewertet.
+        "suizid_note_status": st.suizid_note_status,
         "style_info":  st.style_info,
         # P2: OCR-Validator-Warnungen ans Frontend durchreichen.
         # UI kann eine Warnbanner anzeigen wenn diese Liste nicht leer ist.

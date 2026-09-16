@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from app.core.workflows import max_tokens_for
 from app.services.job_queue import job_queue
 from app.services.llm import generate_text
+from app.services.suizidalitaet import resolve_suizid_note
 from app.services.prompt_log import _log_output, _log_prompt
 from app.services.prompts import REPAIR_SYSTEM_PROMPT
 from app.services.quality_check import build_repair_prompt, combined_result_text, deserialize_issues
@@ -356,6 +357,24 @@ async def _run_repair_coroutine(
                 job.job_id[:8], ow, nw,
             )
 
+    # ── v19.22 (S5): Pflicht-Hinweis Suizidalitaet auch nach dem Repair ──
+    # Der Repair-Pfad laeuft NICHT durch generation_pipeline._finalize; ohne
+    # diesen Block kann ein Repair den Schlusssatz ersatzlos wegschreiben.
+    # Quelle fuer den Konflikt-Check: die Parent-Quellen, die repair_execute
+    # als qc_source_text auf den Repair-Job legt (getattr-Lesepfad wie
+    # patient_name).
+    suizid_note_status = None
+    if workflow == "dokumentation":
+        raw, suizid_note_status = resolve_suizid_note(
+            raw,
+            source_text=getattr(job, "qc_source_text", None) or "",
+            patient_name=getattr(job, "patient_name", None),
+        )
+        logger.info(
+            "Repair %s Suizidalitaets-Hinweis: status=%s",
+            job.job_id[:8], suizid_note_status,
+        )
+
     # Wenn Anamnese-Workflow und der Output enthaelt ###BEFUND###:
     # in zwei Felder splitten (analog zur normalen Pipeline). Frontend zeigt
     # dann Tabs Anamnese/Befund - genauso wie beim originalen Job.
@@ -375,6 +394,8 @@ async def _run_repair_coroutine(
             "repair_run":      True,  # Marker fuer perf_log
             "repair_flags":    repair_flags,  # v19.19 (R1/R2) -> QC
         },
+        # v19.22 (S5): Status fuer den QualityCheck des Repair-Jobs.
+        "suizid_note_status": suizid_note_status,
         # Stage 1 laeuft beim Repair definitiv nicht:
         "verlauf_summary_text":  None,
         "verlauf_summary_audit": None,

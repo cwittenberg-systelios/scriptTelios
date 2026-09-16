@@ -825,6 +825,10 @@ class JobQueue:
             job.source_antragsvorlage_text  = result.get("source_antragsvorlage_text")
             job.source_vorantrag_text       = result.get("source_vorantrag_text")
             job.source_prozessreflexion_text = result.get("source_prozessreflexion_text")
+            # v19.22 (S2): Status des Suizidalitaets-Hinweises. In-process-
+            # Attribut (kein DB-Feld), analog patient_name/fokus_themen -
+            # der QualityCheck liest es in S3 per getattr.
+            job.suizid_note_status = result.get("suizid_note_status")
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
 
             if job._cancel_requested:
@@ -908,6 +912,9 @@ class JobQueue:
                     # v19.19 (R1/R2, A3b): Repair-Flags + Diagnosen.
                     _repair_flags = (job.generation_telemetry or {}).get("repair_flags")
                     _dx = getattr(job, "diagnosen_qc", None)
+                    # v19.22 (S3): Status des Suizidalitaets-Hinweises
+                    # (in-process Attribut aus run_job, siehe oben).
+                    _suizid = getattr(job, "suizid_note_status", None)
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
@@ -919,6 +926,7 @@ class JobQueue:
                         input_truncated_chars=_in_trunc,
                         repair_flags=_repair_flags,
                         diagnosen=_dx,
+                        suizid_note_status=_suizid,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(

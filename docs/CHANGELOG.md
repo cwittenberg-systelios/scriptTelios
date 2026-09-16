@@ -7,6 +7,67 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.22] — Pflicht-Hinweis Suizidalitaet in der Gespraechsdokumentation
+
+Basis: `v19_QA_v02` @ `712c4f2`. Featurerequest c.wittenberg 2026-09-11.
+
+### Regel
+
+Jede Gespraechsdokumentation (Workflow `dokumentation`) enthaelt einen
+Hinweis zur Suizidalitaet. Entweder der Text gibt Gespraechsinhalte dazu
+wieder - oder es wird als letzter Absatz ergaenzt:
+
+> `Frau M. ist glaubhaft absprachefaehig, keine Anzeichen von akuter Suizidalitaet.`
+
+Gilt ausschliesslich fuer `dokumentation`; Anamnese/Befund haben mit
+`BEFUND_VORLAGE` bereits eine eigene Formulierung.
+
+### Umsetzung
+
+**`services/suizidalitaet.py` (neu).** Regelbasiert, kein LLM, idempotent.
+`resolve_suizid_note(text, source_text, patient_name)` liefert Text und
+einen Status: `present` (Inhalt schon da), `appended` (Satz ergaenzt),
+`source_conflict`, `no_name`.
+
+**Marker bewusst eng.** Ein Falsch-Positiv wuerde den Pflichtsatz
+unterdruecken, ein Falsch-Negativ ergaenzt ihn nur zusaetzlich. Deshalb
+KEINE Marker: `sterben`/`tod` (Trauerkontext) und `krisenplan` (wird auch
+fuer nicht-suizidale Krisen vereinbart). Selbstverletzung/NSSV erfuellt die
+Anforderung nicht (klinisch etwas anderes).
+
+**Aufrufstellen.** `generation_pipeline._finalize` (nach der Platzhalter-
+Substitution und nach dem Hard-Cap) und `repair._run_repair_coroutine` -
+der Repair-Pfad laeuft nicht durch `_finalize` und koennte den Satz sonst
+ersatzlos wegschreiben.
+
+**Prompt.** `WORKFLOW_INSTRUCTIONS_DEFAULT["dokumentation"]` weist das
+Modell an, tatsaechlich besprochene Suizidalitaet (auch eine ausdrueckliche
+Verneinung) als Schlussabsatz wiederzugeben und KEINE eigene Einschaetzung
+zu ergaenzen. Den Standardsatz schreibt nicht das Modell, sondern der
+deterministische Pfad.
+
+### Getroffene Entscheidungen
+
+| # | Entscheidung |
+|---|---|
+| D1 | Ergaenzung laeuft still - kein QC-Hinweis im Normalfall |
+| D2 | Quelle thematisiert Suizidalitaet, Output nicht -> NICHT ergaenzen (der Satz waere falsch), stattdessen QC-critical |
+| D3 | Freier Schlusssatz, keine eigene Ueberschrift, keine Pflichtsektion |
+| D4 | Ohne belastbares Namenskuerzel keine Ergaenzung, QC-warning |
+| D5 | Selbstverletzung/NSSV erfuellt die Anforderung nicht |
+
+### QualityCheck
+
+Zwei neue Codes, beide nur fuer `dokumentation`:
+- `SUIZIDALITAET_QUELLE_NICHT_UEBERNOMMEN` (critical) - sicherheits-
+  relevanter Gespraechsinhalt ging verloren; per Repair behebbar.
+- `SUIZIDHINWEIS_FEHLT` (warning) - Namenskuerzel fehlt; nicht durch
+  Neu-Generierung behebbar.
+
+Registry-Regel `suizid_note` (letzter Eintrag in `CHECK_REGISTRY`).
+
+---
+
 ## [v19.21] — Refactoring-Sprint (Code-Review 2026-09-09)
 
 Basis: `v19_QA_v02` @ `b89f6d8`. Schritte als Einzelpatches (S2, S3, …),
