@@ -5,7 +5,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { apiFetch, downloadViaApi, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState } from "../api.js";
 import { AudioRecorder } from "../audio.jsx";
-import { _pendingLabels, _recordingsCache, offlineQueueAdd, offlineQueueList, offlineQueueRemove } from "../shared.js";
+import { _pendingLabels, _recordingsCache, offlineQueueAdd, offlineQueueList, offlineQueueRemove, saveRecordingsCache, loadRecordingsCache, fmtCacheAge } from "../shared.js";
 import { Card, Dropzone } from "../ui.jsx";
 
 
@@ -122,13 +122,41 @@ function P0({ toast }) {
 
       setRecordings(data);
       setError(null);
+      setCachedAt(null);
+      saveRecordingsCache(data);               // v19.22: Metadaten-Cache
       flushOfflineQueue();
     } catch (e) {
+      // v19.22: Server aus -> letzte bekannte Liste; Start nur per Button.
+      const cached = loadRecordingsCache();
+      if (isServerDownError(e) && cached && cached.items.length) {
+        setRecordings(cached.items.map(r => ({ ...r, transcript: null })));
+        setCachedAt(cached.savedAt);
+      } else if (isServerDownError(e)) {
+        setCachedAt(0);
+      }
       setError(null);
     } finally {
       setLoading(false);
     }
   }, [flushOfflineQueue]);
+
+  // v19.22: null = live; Zahl = Cache-Stand (0 = Server aus, kein Cache)
+  const [cachedAt, setCachedAt] = useState(null);
+  const [serverStarting, setServerStarting] = useState(false);
+  async function refreshOrStart() {
+    if (cachedAt === null || !getProxyBase()) { loadRecordings(); return; }
+    setServerStarting(true);
+    const ens = await ensureServer(); announceServerState(ens);
+    if (ens.status === "ok") { setServerStarting(false); loadRecordings(); return; }
+    if (ens.status !== "starting") { setServerStarting(false); return; }
+    const poll = setInterval(async () => {
+      const e2 = await ensureServer(); announceServerState(e2);
+      if (e2.status !== "starting" && e2.status !== "ok") { clearInterval(poll); setServerStarting(false); }
+    }, 60000);
+    const done = () => { clearInterval(poll); setServerStarting(false); window.removeEventListener("st-health-ok", done); };
+    window.addEventListener("st-health-ok", done);   // loadRecordings laeuft ueber den bestehenden st-health-ok-Handler
+    setTimeout(() => { clearInterval(poll); setServerStarting(false); }, 15 * 60 * 1000);
+  }
 
   useEffect(() => { loadRecordings(); }, [loadRecordings]);
 
@@ -345,6 +373,22 @@ function P0({ toast }) {
             )}
             {loading && <div className="p0-hint">Lade…</div>}
             {error   && <div className="upload-warn">{error}</div>}
+            {/* v19.22: Server aus -> Cache-Stand + Aktualisieren (kein Auto-Start) */}
+            {cachedAt !== null && !loading && (
+              <div className="p0-hint" style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                <span style={{color:"#666"}}>
+                  {serverStarting
+                    ? "◐ Server startet … Liste wird automatisch aktualisiert."
+                    : (cachedAt ? `○ Server aus — Liste vom ${fmtCacheAge(cachedAt)}. Neue Aufnahmen werden lokal gespeichert und später hochgeladen.` : "○ Server aus — noch keine gespeicherte Liste.")}
+                </span>
+                {!serverStarting && (
+                  <button className="btn-secondary" style={{fontSize:12,padding:"4px 12px"}} onClick={refreshOrStart}
+                    title="Startet den Server (ca. 2 min) und lädt die Liste neu">
+                    ↻ Aktualisieren{getProxyBase() ? " (startet Server)" : ""}
+                  </button>
+                )}
+              </div>
+            )}
             {!loading && recordings.length === 0 && offlineQueue.length === 0 && (
               <div className="p0-hint">Noch keine Aufnahmen vorhanden.</div>
             )}

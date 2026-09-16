@@ -3,8 +3,8 @@
 // Chunk-Inhalte byte-identisch verschoben; nur Import/Export-Header sind neu.
 // ────────────────────────────────────────────────────────────────────────────
 import { useState, useRef, useEffect } from "react";
-import { apiFetch, getApiBase } from "./api.js";
-import { _pendingLabels, fmtMB, fmtSec } from "./shared.js";
+import { apiFetch, getApiBase, ensureServer, announceServerState, isServerDownError, getProxyBase } from "./api.js";
+import { _pendingLabels, fmtMB, fmtSec, saveRecordingsCache, loadRecordingsCache, fmtCacheAge } from "./shared.js";
 
 function AudioRecorder({ onRecorded, onError }) {
   const [state, setState] = useState("idle"); // idle | recording | paused | finalizing
@@ -351,6 +351,26 @@ function AudioInput({ file, onFile }) {
   // Erst-Render-Closure aufgerufen wird (stale p0List).
   const p0InFlightRef = useRef(false);
   const p0HasDataRef  = useRef(false);
+  // v19.22: null = live vom Server; Zahl = savedAt des Caches (0 = Server aus, kein Cache)
+  const [p0Cached, setP0Cached] = useState(null);
+  const [p0Starting, setP0Starting] = useState(false);
+
+  // "Aktualisieren": bei ausgeschaltetem Server -> Server starten (NUR auf Klick)
+  async function refreshOrStart() {
+    if (p0Cached === null || !getProxyBase()) { loadP0(); return; }
+    setP0Starting(true);
+    const ens = await ensureServer();
+    announceServerState(ens);
+    if (ens.status === "ok") { setP0Starting(false); loadP0(); return; }
+    if (ens.status !== "starting") { setP0Starting(false); return; }
+    const poll = setInterval(async () => {
+      const e2 = await ensureServer(); announceServerState(e2);
+      if (e2.status !== "starting" && e2.status !== "ok") { clearInterval(poll); setP0Starting(false); }
+    }, 60000);
+    const done = () => { clearInterval(poll); setP0Starting(false); window.removeEventListener("st-health-ok", done); loadP0(); };
+    window.addEventListener("st-health-ok", done);
+    setTimeout(() => { clearInterval(poll); setP0Starting(false); }, 15 * 60 * 1000);
+  }
 
   async function loadP0() {
     if (p0InFlightRef.current) return;
@@ -386,10 +406,26 @@ function AudioInput({ file, onFile }) {
       const withLabels = all.map(r =>
         _pendingLabels[r.id] !== undefined ? { ...r, label: _pendingLabels[r.id] } : r
       );
-      setP0List(withLabels.filter(r => r.status !== "deleted"));
+      const live = withLabels.filter(r => r.status !== "deleted");
+      setP0List(live);
       p0HasDataRef.current = true;
+      setP0Cached(null);
+      saveRecordingsCache(live);              // v19.22: Metadaten-Cache aktualisieren
     } catch (e) {
-      setP0Error("Aufnahmen konnten nicht geladen werden.");
+      // v19.22: Server aus -> letzte bekannte Liste aus dem Cache zeigen,
+      // kein Auto-Start; Start nur ueber den Button "Aktualisieren".
+      const cached = loadRecordingsCache();
+      if (isServerDownError(e) && cached && cached.items.length) {
+        setP0List(cached.items);
+        p0HasDataRef.current = true;
+        setP0Cached(cached.savedAt);
+        setP0Error(null);
+      } else if (isServerDownError(e)) {
+        setP0Cached(0);
+        setP0Error(null);
+      } else {
+        setP0Error("Aufnahmen konnten nicht geladen werden.");
+      }
     } finally {
       setP0Loading(false);
       p0InFlightRef.current = false;
@@ -397,7 +433,7 @@ function AudioInput({ file, onFile }) {
   }
 
   function pickP0(rec) {
-    onFile({ __p0recording: true, transcript: rec.transcript, name: rec.label || `Aufnahme #${rec.id}`, id: rec.id });
+    onFile({ __p0recording: true, transcript: rec.transcript, name: rec.label || `Aufnahme #${rec.id}`, id: rec.id, __cached: !!rec.__cached });
   }
 
   function clearP0() { onFile(null); }
@@ -409,7 +445,9 @@ function AudioInput({ file, onFile }) {
         <div className="recorder-box" style={{ background: "var(--st-red-pale)", borderColor: "var(--st-red)", borderStyle: "solid" }}>
           <div className="rec-status">&#127897; {file.name}</div>
           <div className="rec-info">
-            {isPending
+            {file.__cached
+              ? <span style={{color:"#666"}}>○ Aus gespeicherter Liste – Transkript wird beim Generieren vom Server geladen</span>
+              : isPending
               ? <span style={{color:"#0060c0"}}>⏳ Transkription läuft – wird beim Generieren priorisiert</span>
               : `Transkript aus der Aufnahmeliste · ${Math.round(file.transcript.split(" ").length)} Wörter`}
           </div>
@@ -441,7 +479,23 @@ function AudioInput({ file, onFile }) {
       <div className="p0-picker">
         {p0Loading && <div className="p0-hint">Lade Aufnahmen…</div>}
         {p0Error   && <div className="upload-warn">{p0Error}</div>}
-        {!p0Loading && !p0Error && p0List.length === 0 && (
+        {/* v19.22: Server aus -> Cache-Stand + Aktualisieren-Button (kein Auto-Start) */}
+        {p0Cached !== null && !p0Loading && (
+          <div className="p0-hint" style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span style={{color:"#666"}}>
+              {p0Starting
+                ? "◐ Server startet … Liste wird automatisch aktualisiert."
+                : (p0Cached ? `○ Server aus — Liste vom ${fmtCacheAge(p0Cached)}. Auswahl und Generieren sind möglich.` : "○ Server aus — noch keine gespeicherte Liste.")}
+            </span>
+            {!p0Starting && (
+              <button className="btn-secondary" style={{fontSize:12,padding:"4px 12px"}} onClick={refreshOrStart}
+                title="Startet den Server (ca. 2 min) und lädt die Liste neu">
+                ↻ Aktualisieren{getProxyBase() ? " (startet Server)" : ""}
+              </button>
+            )}
+          </div>
+        )}
+        {!p0Loading && !p0Error && p0List.length === 0 && p0Cached === null && (
           <div className="p0-hint" style={{display:"flex",flexDirection:"column",gap:8,alignItems:"center"}}>
             <span>Noch keine Aufnahmen vorhanden.</span>
             <button className="btn-secondary" style={{fontSize:12,padding:"4px 12px"}}

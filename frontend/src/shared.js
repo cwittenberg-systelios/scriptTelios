@@ -201,6 +201,50 @@ function getEmptyWarning(text) {
 // Modul-level Cache: überlebt P0-Unmount beim Tab-Wechsel.
 // Wird beim Mount als Initialwert genutzt → Liste sofort sichtbar, kein Flackern.
 const _recordingsCache = { data: [] };
+
+// ── v19.22: Persistenter Aufnahmen-Cache (localStorage, pro Therapeut) ──────
+// Zweck: Bei ausgeschaltetem Pod sofort die zuletzt bekannte Liste zeigen,
+// statt "Server nicht erreichbar". NUR Metadaten (keine Transkripte, keine
+// Fehlermeldungen), damit keine Gespraechsinhalte im Browser liegen. Die
+// Liste kann sich bei ausgeschaltetem Server nicht aendern (Uploads gehen in
+// die Offline-Queue) - der Cache ist also nie "falsch", nur ggf. veraltet.
+const RECORDINGS_CACHE_PREFIX = "st_recordings_";
+const RECORDINGS_CACHE_FIELDS = ["id", "label", "duration_s", "status", "created_at", "coverage_gap_s", "has_audio"];
+
+function _recordingsCacheKey() {
+  let user = "";
+  try { user = (typeof window !== "undefined" && window.SYSTELIOS_USER) || ""; } catch (_) {}
+  return RECORDINGS_CACHE_PREFIX + (user || "anon");
+}
+
+function saveRecordingsCache(list) {
+  try {
+    const slim = (list || [])
+      .filter(r => r && r.status !== "deleted" && typeof r.id === "number")
+      .map(r => { const o = {}; for (const k of RECORDINGS_CACHE_FIELDS) if (r[k] !== undefined) o[k] = r[k]; return o; });
+    localStorage.setItem(_recordingsCacheKey(), JSON.stringify({ savedAt: Date.now(), items: slim }));
+  } catch (_) { /* Quota/Privacy-Mode: ignorieren */ }
+}
+
+// → { savedAt: number, items: [...] } | null
+function loadRecordingsCache() {
+  try {
+    const raw = localStorage.getItem(_recordingsCacheKey());
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.items)) return null;
+    // Cache-Eintraege tragen kein Transkript -> im Picker als "ready ohne Text"
+    // erkennbar; startJob holt das Transkript ueber p0_recording_id vom Server.
+    return { savedAt: Number(parsed.savedAt) || 0, items: parsed.items.map(r => ({ ...r, transcript: null, __cached: true })) };
+  } catch (_) { return null; }
+}
+
+function fmtCacheAge(savedAt) {
+  if (!savedAt) return "";
+  const d = new Date(savedAt);
+  return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) + ", " +
+         d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+}
 const _pendingLabels   = {};  // { [id]: label } — überlebt P0-Unmount
 
 // v19.21 (S5): explizites Patienten-Kuerzel fuer das Backend (P1/P2-Konvention).
@@ -215,4 +259,4 @@ function buildPatientName(kuerzel, geschlecht) {
   return kurz;
 }
 
-export { buildPatientName, MAX_UPLOAD_MB, fmtSec, fmtMB, offlineQueueAdd, offlineQueueList, offlineQueueRemove, pickQualityCheck, JOB_STORAGE_KEY, saveActiveJob, loadActiveJob, clearActiveJob, friendlyError, getEmptyWarning, _recordingsCache, _pendingLabels };
+export { buildPatientName, MAX_UPLOAD_MB, fmtSec, fmtMB, offlineQueueAdd, offlineQueueList, offlineQueueRemove, pickQualityCheck, JOB_STORAGE_KEY, saveActiveJob, loadActiveJob, clearActiveJob, friendlyError, getEmptyWarning, _recordingsCache, _pendingLabels, saveRecordingsCache, loadRecordingsCache, fmtCacheAge };
