@@ -558,6 +558,7 @@ async def create_generate_job(
     transcript:       Annotated[Optional[str], Form()] = None,
     p0_recording_id:  Annotated[Optional[str], Form(description="P0-Recording-ID: Transkript wird aus DB geholt, ggf. priorisiert transkribiert.")] = None,
     bullets:          Annotated[Optional[str], Form(description="Stichpunkte (P1) oder Fokus-Themen (P3/P4)")] = None,
+    interview_protokoll: Annotated[Optional[str], Form(description="P1 (v19.23): Protokoll des Interview-Dialogs als JSON ({set, set_label, eintraege:[{key, frage, antwort, rueckfrage, rueckfrage_antwort}]}). Dritter Quelltyp neben Audio/Transkript und Stichpunkten.")] = None,
     style_text:       Annotated[Optional[str], Form()] = None,
     model:            Annotated[Optional[str], Form()] = None,
     # ── Datei-Uploads (jedes Feld hat genau EINE Bedeutung) ──────────
@@ -585,7 +586,7 @@ async def create_generate_job(
     Frontend pollt GET /api/jobs/{job_id} bis status="done".
 
     Input-Zuordnung pro Workflow:
-      P1 (dokumentation):       audio + transcript + bullets
+      P1 (dokumentation):       audio + transcript + bullets + interview_protokoll (v19.23)
       P2 (anamnese):            selbstauskunft + vorbefunde + audio + diagnosen + befund_vorlage
       P3 (verlaengerung):       verlaufsdoku + antragsvorlage + bullets (Fokus-Themen)
       P3b (folgeverlaengerung): verlaufsdoku + antragsvorlage + vorantrag + bullets
@@ -635,6 +636,23 @@ async def create_generate_job(
     from app.services.llm import ensure_generation_model
     model = await ensure_generation_model(model, workflow)
 
+    # v19.23: Interview-Protokoll VOR dem Job-Anlegen validieren - ein
+    # ungueltiges oder unvollstaendiges Protokoll (fehlende Pflichtfrage)
+    # ist ein 422, kein fehlgeschlagener Job.
+    # (HTTPException lokal aliasen: die Closure oben importiert den Namen
+    # lokal, wodurch er in dieser Funktion vor dem Import ungebunden ist.)
+    from fastapi import HTTPException as _HTTPException
+    from app.services.interview_protokoll import InterviewProtokollError, parse_protokoll
+    try:
+        interview = parse_protokoll(interview_protokoll)
+    except InterviewProtokollError as e:
+        raise _HTTPException(status_code=422, detail=str(e)) from e
+    if interview is not None and workflow != "dokumentation":
+        raise _HTTPException(
+            status_code=422,
+            detail="Ein Interview-Protokoll wird nur im Workflow 'dokumentation' unterstützt.",
+        )
+
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht
     # thread-safe) und alle Eingaben buendeln (v19.21 S6a: PipelineInput).
     uploads = await UploadBundle.read(
@@ -656,13 +674,16 @@ async def create_generate_job(
         style_text=style_text,
         dx_list=parse_dx_list(diagnosen),
         ism_n_items=ism_n_items,
+        interview_protokoll=interview,
         uploads=uploads,
     )
 
     # Job anlegen
     job = job_queue.create_job(
         workflow=workflow,
-        description=f"Workflow: {workflow}" + (f" | Audio: {uploads.audio_name}" if uploads.audio_name else ""),
+        description=f"Workflow: {workflow}"
+                    + (f" | Audio: {uploads.audio_name}" if uploads.audio_name else "")
+                    + (f" | Interview: {interview.set_label or interview.set}" if interview else ""),
         therapeut_id=therapeut_id,
         patient_kuerzel=ctx.patient_kuerzel,
     )

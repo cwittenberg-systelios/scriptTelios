@@ -209,6 +209,34 @@ _DOKU_WENDUNGEN_BLOCK = """Gesprächsnahe Wendungen (Einzelgesprächs-Dokumentat
 - 'Ein therapeutisches Angebot für die Zwischenzeit ...'
 """
 
+# v19.23: Zusatzregeln, wenn die Quelle der Gespraechsdoku KEIN Transkript,
+# sondern das Protokoll der therapeutischen Nachbefragung (Interview-Modus)
+# ist. Wird von build_system_prompt(interview_mode=True) hinter die
+# Workflow-Anweisungen gehaengt.
+INTERVIEW_MODUS_REGELN = (
+    "QUELLENLAGE – NACHBEFRAGUNG STATT TRANSKRIPT:\n"
+    "Es liegt KEIN Transkript des Gesprächs vor. Die einzige Quelle ist das "
+    "Protokoll einer Nachbefragung des Behandlers (Frage – Antwort). Daraus "
+    "folgt:\n"
+    "- Zitiere NIEMALS wörtlich, was Klient/in gesagt haben soll – es gibt "
+    "keine Belege für Wortlaute. Keine Anführungszeichen mit Klientenzitaten.\n"
+    "- Trenne sprachlich Beobachtung und Deutung: was der Behandler "
+    "wahrgenommen hat ('Wir erlebten …', 'Im Gestalten zeigte sich …') und "
+    "was Hypothese ist ('Wir verstehen das als …', 'Es lässt sich als … "
+    "lesen').\n"
+    "- Was im Protokoll als '(nicht erhoben)' steht oder nicht vorkommt, "
+    "wird NICHT ergänzt, nicht umschrieben und nicht aus Erfahrung "
+    "aufgefüllt. Ein knapper Abschnitt ist korrekt; ein erfundener nicht.\n"
+    "- Jede Antwort ist einem Zielabschnitt zugeordnet; ordne die Inhalte "
+    "entsprechend zu. Die Antwort zur Selbstgefährdung gehört als eigener "
+    "Schlussabsatz ans Ende der Dokumentation – auch wenn es keine Hinweise "
+    "gab, wird das ausdrücklich gesagt.\n"
+    "- Nonverbale Verfahren (Kunst, Musik, Körperarbeit, Körpertherapie): "
+    "beschreibe Methode, Material, Prozess und Ausdruck konkret; verwende "
+    "die Fachsprache des jeweiligen Verfahrens nur, soweit der Behandler "
+    "sie selbst verwendet hat.\n"
+)
+
 _WENDUNGEN_RE = re.compile(
     r"Klinik-typische Wendungen \(im realen Korpus belegt [–-] nur wenn "
     r"sachlich passend\):\n.*?(?=\nHäufige Beobachtungs-Vokabeln)",
@@ -1968,6 +1996,9 @@ def build_system_prompt(
     # oder die neutralen Varianten (Priming-Vermeidung). None = altes
     # Verhalten (volles Glossar) fuer Legacy-Aufrufe und Tests.
     source_text: Optional[str] = None,
+    # v19.23: True, wenn die Quelle das Interview-Protokoll ist (statt
+    # Transkript). Haengt INTERVIEW_MODUS_REGELN hinter die Anweisungen.
+    interview_mode: bool = False,
 ) -> str:
     """
     Baut den finalen System-Prompt zusammen.
@@ -2046,6 +2077,8 @@ def build_system_prompt(
             "\nAUFTRAG / INHALTLICHE ANWEISUNGEN:\n"
             + workflow_instructions.strip()
         )
+    if interview_mode and workflow == "dokumentation":
+        parts.append("\n" + INTERVIEW_MODUS_REGELN)
 
     # Wenn strukturelle Schablone vorhanden: Längenhinweis aus BASE_PROMPT
     # wird durch "ähnliche Länge wie das Beispiel" ersetzt (kommt weiter unten).
@@ -2233,6 +2266,9 @@ def build_user_content(
     prozessreflexion_text: Optional[str] = None,
     diagnosen: Optional[list[str]] = None,
     patient_name: Optional[dict] = None,
+    # v19.23: gerendertes Interview-Protokoll (interview_protokoll.render_protokoll)
+    # als dritter Quelltyp der Gespraechsdoku neben transcript/fokus_themen.
+    interview_text: Optional[str] = None,
     # Backwards-Compat: alter Parameter custom_prompt wurde mit v18 entfernt
     # (Workflow-Anweisungen leben jetzt im System-Prompt). Wir akzeptieren
     # ihn weiterhin in der Signatur, ignorieren ihn aber bewusst, damit
@@ -2356,6 +2392,17 @@ def build_user_content(
                 else "TRANSKRIPT DES GESPRÄCHS:"
             )
             parts.append(f"{label}\n{transcript}")
+        # v19.23: Interview-Protokoll als Quelle. Steht nach den Stichpunkten
+        # (die bleiben verbindlich) und vor der Sandwich-Erinnerung.
+        if interview_text and interview_text.strip():
+            parts.append(
+                "PROTOKOLL DER THERAPEUTISCHEN NACHBEFRAGUNG "
+                "(einzige inhaltliche Quelle – kein Transkript vorhanden):\n"
+                "Jede Frage nennt ihren Zielabschnitt. Verarbeite jede Antwort im "
+                "genannten Abschnitt; '(nicht erhoben)' bedeutet: dazu nichts "
+                "schreiben.\n\n"
+                f"{interview_text.strip()}"
+            )
         # Sandwich-Erinnerung
         if fokus_themen:
             parts.append(

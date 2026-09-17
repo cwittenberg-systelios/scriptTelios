@@ -5,6 +5,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { apiFetch, getApiBase, startJob } from "../api.js";
 import { AudioInput } from "../audio.jsx";
+import { InterviewDialog, INTERVIEW_DEFAULT, buildInterviewProtokoll, interviewHasContent } from "../interview.jsx";
 import { useDraftCache, useJobResult } from "../hooks.jsx";
 import { JobDetailPane, JobListPane } from "../joblist.jsx";
 import { P_DOKU } from "../prompt-defaults.jsx";
@@ -29,6 +30,8 @@ function _emptyDraft() {
     prompt: P_DOKU,
     geschlecht: "",
     kuerzel: "",
+    quelle: "audio",               // v19.23: aktiver Quell-Tab (audio|file|text|interview)
+    interview: { ...INTERVIEW_DEFAULT },   // v19.23: Dialog-Zustand (JSON, Draft-Cache)
     starting: false,
     createdAt: Date.now(),
   };
@@ -41,6 +44,7 @@ function _emptyDraft() {
 const P1_DRAFT_TEXT_DEFAULT = {
   text: "", bullets: "", kuerzel: "", geschlecht: "",
   prompt: P_DOKU, styleText: "",
+  quelle: "audio", interview: { ...INTERVIEW_DEFAULT },
 };
 const P1_TEXT_FIELDS = Object.keys(P1_DRAFT_TEXT_DEFAULT);
 
@@ -155,7 +159,7 @@ function P1({ toast, resumeJob, onResumed }) {
     const running = jobs.find(j => j.status === "pending" || j.status === "running");
     if (!running) return;
     const d = selected?.type === "draft" ? drafts.find(x => x.id === selected.id) : null;
-    const draftLeer = d && !d.text && !d.bullets && !d.audio && !d.txtFile;
+    const draftLeer = d && !d.text && !d.bullets && !d.audio && !d.txtFile && !interviewHasContent(d.interview);
     if (draftLeer) setSelected({ type: "job", id: running.job_id });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs, listLoading]);
@@ -247,11 +251,17 @@ function P1({ toast, resumeJob, onResumed }) {
     // Kuerzel-Beispiel. Die Frontend-Strings schalteten den besseren
     // Backend-Pfad ueber den Marker-Guard aus.
     const patientNameExplicit = buildPatientName(d.kuerzel, d.geschlecht);
+    // v19.23: Im Interview-Tab ist das Protokoll die einzige Gespraechsquelle;
+    // Audio/Transkript/Text der anderen Tabs werden dann NICHT mitgeschickt
+    // (ein Job hat genau eine Gespraechsquelle - plus optionale Stichpunkte).
+    const isInterview = d.quelle === "interview";
+    const protokoll = isInterview ? buildInterviewProtokoll(d.interview) : null;
 
     try {
-      const jobId = await startJob("dokumentation", d.prompt, d.text || "", {
-        audio:        d.audio,
-        txtFile:      d.txtFile || null,
+      const jobId = await startJob("dokumentation", d.prompt, isInterview ? "" : (d.text || ""), {
+        audio:        isInterview ? null : d.audio,
+        txtFile:      isInterview ? null : (d.txtFile || null),
+        interviewProtokoll: protokoll,
         style:        d.style,
         styleText:    d.styleText || null,
         bullets:      d.bullets || null,
@@ -310,21 +320,36 @@ function P1({ toast, resumeJob, onResumed }) {
   // currentDraft ist garantiert non-null wenn dieser Zweig gerendert wird
   // (run() und discardDraft() ersetzen den Entwurf, sie loeschen ihn nie -
   // damit existiert immer genau ein Entwurf).
-  const formCanGenerate = currentDraft &&
-    (currentDraft.audio || currentDraft.txtFile || currentDraft.text) &&
-    currentDraft.kuerzel.trim();
+  // v19.23: Quelle haengt am aktiven Tab - im Interview-Tab zaehlt nur ein
+  // abgeschlossenes Interview, in den anderen Tabs nur Audio/Datei/Text.
+  const isInterviewTab = currentDraft?.quelle === "interview";
+  const hasSource = currentDraft && (isInterviewTab
+    ? !!buildInterviewProtokoll(currentDraft.interview)
+    : !!(currentDraft.audio || currentDraft.txtFile || currentDraft.text));
+  const formCanGenerate = currentDraft && hasSource && currentDraft.kuerzel.trim();
 
   const formPane = currentDraft ? (
     <div className="workflow">
       <Card num="A" title="Gesprächsmaterial" badge="req" open={true}>
         <InputTabs
           tabs={[
-            { id:"audio", icon:"🎙", label:"Aufnahme" },
-            { id:"file",  icon:"📄", label:"Datei"    },
-            { id:"text",  icon:"✏️", label:"Text"     },
+            { id:"audio",     icon:"🎙", label:"Aufnahme"  },
+            { id:"file",      icon:"📄", label:"Datei"     },
+            { id:"text",      icon:"✏️", label:"Text"      },
+            { id:"interview", icon:"💬", label:"Interview" },
           ]}
+          defaultTab={currentDraft.quelle || "audio"}
+          onChange={(id) => updateDraft(currentDraft.id, { quelle: id })}
         >
           {(activeTab) => (<>
+            {activeTab === "interview" && (
+              <InterviewDialog
+                value={currentDraft.interview}
+                onChange={(iv) => updateDraft(currentDraft.id, { interview: iv })}
+                toast={toast}
+                model={jobModel || null}
+              />
+            )}
             {activeTab === "audio" && (
               <AudioInput file={currentDraft.audio} onFile={(f) => updateDraft(currentDraft.id, { audio: f })} />
             )}
@@ -436,8 +461,10 @@ function P1({ toast, resumeJob, onResumed }) {
               onClick={run}
               disabled={!formCanGenerate}
               title={
-                (!currentDraft.audio && !currentDraft.txtFile && !currentDraft.text)
-                  ? "Gespraechsmaterial erforderlich (Audio, Transkript oder Text)"
+                !hasSource
+                  ? (isInterviewTab
+                      ? "Interview erst abschliessen (alle Fragen beantworten)"
+                      : "Gespraechsmaterial erforderlich (Audio, Transkript oder Text)")
                   : !currentDraft.kuerzel.trim()
                     ? "Patientenkuerzel ist erforderlich"
                     : ""
@@ -487,7 +514,7 @@ function P1({ toast, resumeJob, onResumed }) {
       <div className="page-header">
         <div className="page-eyebrow">Workflow 1</div>
         <h2>Gespr&auml;chsdokumentation</h2>
-        <p>Strukturierte Verlaufsnotizen aus Aufnahmen oder Transkripten</p>
+        <p>Strukturierte Verlaufsnotizen aus Aufnahmen, Transkripten oder dem Interview nach der Sitzung</p>
       </div>
       <div className="page-body" style={{maxWidth:"none", paddingRight:24}}>
         <div style={{display:"grid", gridTemplateColumns:"240px minmax(0, 1fr)", gap:14, alignItems:"start"}}>

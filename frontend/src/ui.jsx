@@ -231,7 +231,9 @@ function ModelSelector({ model, onChange, apiBase }) {
   );
 }
 
-function InputTabs({ tabs, children, defaultTab }) {
+// v19.23: optionaler onChange(id) - P1 merkt sich den aktiven Quell-Tab im
+// Draft (der Interview-Tab bestimmt, welche Quelle an den Job geht).
+function InputTabs({ tabs, children, defaultTab, onChange }) {
   const [active, setActive] = useState(defaultTab || tabs[0]?.id);
   return (
     <div className="input-tabs-wrap">
@@ -240,7 +242,7 @@ function InputTabs({ tabs, children, defaultTab }) {
           <button
             key={t.id}
             className={"input-tab" + (active === t.id ? " active" : "")}
-            onClick={() => setActive(t.id)}
+            onClick={() => { setActive(t.id); onChange && onChange(t.id); }}
             type="button"
           >
             <span className="input-tab-icon">{t.icon}</span>

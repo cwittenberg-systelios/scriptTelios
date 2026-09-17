@@ -129,6 +129,8 @@ function buildJobFormData(workflow, prompt, userContent, files = {}) {
   if (files.style)            fd.append("style_file",       files.style);
   if (files.diagnosen)        fd.append("diagnosen",        files.diagnosen);
   if (files.bullets)          fd.append("bullets",          files.bullets);
+  // v19.23: Interview-Protokoll (Objekt) als JSON-String - dritter Quelltyp P1.
+  if (files.interviewProtokoll) fd.append("interview_protokoll", JSON.stringify(files.interviewProtokoll));
   if (files.styleText)        fd.append("style_text",       files.styleText);
   if (files.model)            fd.append("model",            files.model);
   return fd;
@@ -220,6 +222,65 @@ async function startJob(workflow, prompt, userContent, files = {}) {
   throw new Error("Server ist nicht erreichbar und konnte nicht gestartet werden.");
 }
 
+
+// ── v19.23: Interview-Modus ────────────────────────────────────────────────
+// Drei kleine Aufrufe fuer den Dialog nach der Sitzung. Alle drei laufen wie
+// startJob ueber Start-on-Intent: ist der Pod aus, wird er angelegt und der
+// Aufruf wartet auf /selfcheck. Das erste Diktat einer Sitzung kann deshalb
+// einige Minuten dauern - das UI zeigt den Server-Status.
+async function _postEnsured(url, init) {
+  let r;
+  try {
+    r = await apiFetch(url, init);
+  } catch (e) {
+    if (!isServerDownError(e) || !getProxyBase()) throw e;
+    r = null;
+  }
+  if (r && !isServerDownError(r)) return r;
+  const ens = await ensureServer();
+  announceServerState(ens);
+  if (ens.status === "starting" || ens.status === "ok") {
+    await waitForHealthOk();
+    return apiFetch(url, init);
+  }
+  if (ens.status === "no_server") throw new Error("Kein Server verfuegbar: 10 Minuten lang war keine GPU frei. Bitte spaeter erneut versuchen.");
+  if (ens.status === "blocked_night") throw new Error("Zwischen 23 und 5 Uhr wird kein Server automatisch gestartet. Bitte ab 5 Uhr erneut versuchen.");
+  throw new Error("Server ist nicht erreichbar und konnte nicht gestartet werden.");
+}
+
+async function _jsonOrThrow(r) {
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const detail = d.detail;
+    if (detail && typeof detail === "object") throw new Error(detail.msg || JSON.stringify(detail));
+    throw new Error(detail || r.statusText);
+  }
+  return d;
+}
+
+// GET /api/interview/sets -> { default_set, abschnitte, sets:[...] }
+async function fetchInterviewSets() {
+  const r = await apiFetch(`${getApiBase()}/interview/sets`);
+  return _jsonOrThrow(r);
+}
+
+// POST /api/interview/transcribe (Kurzdiktat) -> { transcript, duration_seconds, word_count }
+async function interviewTranscribe(file) {
+  const fd = new FormData();
+  fd.append("audio", file);
+  const r = await _postEnsured(`${getApiBase()}/interview/transcribe`, { method: "POST", body: fd });
+  return _jsonOrThrow(r);
+}
+
+// POST /api/interview/turn -> { rueckfrage: string|null, fehlende_aspekte, quelle, model_used }
+async function interviewTurn(payload) {
+  const r = await _postEnsured(`${getApiBase()}/interview/turn`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return _jsonOrThrow(r);
+}
 
 // Laedt das Transkript eines Jobs vom Backend und speichert es als .txt
 async function downloadTranscript(jobId, filename = "transkript.txt") {
@@ -321,4 +382,4 @@ function getConfluenceUser() {
   return "";
 }
 
-export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };
+export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, fetchInterviewSets, interviewTranscribe, interviewTurn, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };

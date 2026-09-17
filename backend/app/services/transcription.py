@@ -931,6 +931,69 @@ async def _transcribe_local(file_path: Path) -> dict:
         raise RuntimeError(f"Transkription fehlgeschlagen: {e}") from e
 
 
+# ── v19.23: Kurzdiktat (Interview-Modus) ─────────────────────────────────────
+
+DICTATION_MAX_SECONDS = 300   # 5 Minuten je Antwort - laenger ist kein Diktat mehr
+
+
+async def transcribe_dictation(file_path: Path) -> dict:
+    """Transkribiert ein kurzes Behandler-Diktat (eine Interview-Antwort).
+
+    Unterschiede zu transcribe_audio():
+      - KEINE Diarisierung und keine Sprecher-Marker ([A]:/[B]:) - es
+        spricht genau eine Person.
+      - KEIN _preprocess_transcript: der Fuellwort-Filter wuerde ganze
+        Segmente wie "Nein." oder "Ja." loeschen - genau das ist bei der
+        Pflichtfrage zur Selbstgefaehrdung die Antwort.
+      - KEIN VRAM-Freigeben nach dem Call: im Dialog folgen viele kurze
+        Diktate aufeinander; Whisper (~3 GB) bleibt neben dem LLM geladen
+        (32 GB VRAM auf dem Pod). Die uebliche Freigabe uebernimmt der
+        naechste regulaere Transkriptions-Job.
+      - Laenge hart auf DICTATION_MAX_SECONDS begrenzt (422 im Endpoint).
+    """
+    import asyncio
+
+    try:
+        from faster_whisper import WhisperModel  # noqa: F401
+    except ImportError:
+        raise RuntimeError(
+            "faster-whisper nicht installiert. "
+            "Bitte 'pip install faster-whisper' ausfuehren."
+        ) from None
+
+    def _run() -> dict:
+        duration = _get_duration(file_path)
+        if duration > DICTATION_MAX_SECONDS:
+            raise ValueError(
+                f"Diktat zu lang ({duration / 60:.1f} Min). "
+                f"Maximum: {DICTATION_MAX_SECONDS // 60} Minuten je Antwort."
+            )
+        model = _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
+        segments, info, _beam = _transcribe_audio_segment(
+            model, str(file_path), timeout=int(max(duration, 1.0) * 1.5) + 30
+        )
+        texts: list[str] = []
+        for seg in segments:
+            t = (getattr(seg, "text", "") or "").strip()
+            if not t:
+                continue
+            # Nur exakte, unmittelbar aufeinanderfolgende Wiederholungen
+            # entfernen (Whisper-Halluzination bei Stille).
+            if texts and texts[-1] == t:
+                continue
+            texts.append(t)
+        text = " ".join(texts).strip()
+        return {
+            "transcript": text,
+            "language": getattr(info, "language", None),
+            "duration_seconds": duration,
+            "word_count": len(text.split()),
+        }
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _run)
+
+
 def _assign_speakers(segments) -> str:
     """
     Einfache Sprecher-Heuristik via Pausen zwischen Segmenten.

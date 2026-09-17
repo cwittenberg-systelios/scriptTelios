@@ -7,6 +7,74 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.23] — Interview-Modus der Gespraechsdokumentation (2026-09-16)
+
+Basis: `v19_QA_v02` @ `1f5d935`. Ein Patch (Backend + Frontend) plus
+`backend/static/systelios.js`.
+
+**Warum.** Nonverbale Verfahren (Kunst, Musik, Koerperarbeit,
+Koerpertherapie) liefern kein Transkript; ohne Aufzeichnungseinwilligung
+gibt es keine Aufnahme. Statt Transkript fuehrt das System nach der Sitzung
+einen kurzen Dialog mit dem Behandler (Frage – Antwort – ggf. EINE
+Rueckfrage – Weiter). Das Protokoll ist die Quelle der Doku.
+
+### Backend
+
+- `core/interview_sets.py` — Single Source of Truth der fuenf Fragen-Sets
+  (Gespraech, Kunst, Musik, Koerperarbeit, Koerpertherapie), Fragen mit
+  Zielabschnitt der Hospidea-Gliederung und Pflichtaspekten; Pflichtfrage
+  Selbstgefaehrdung in jedem Set (nicht editierbar).
+- `services/interview_protokoll.py` — Validierung des Protokolls (422 ohne
+  Pflichtfrage / ohne jede Antwort), `render_protokoll()` (Quellblock mit
+  „(nicht erhoben)“), `protokoll_plaintext()` (nur Antworten – damit die
+  Fragen selbst keine Marker der Glossar-/Suizid-Logik ausloesen).
+- `services/interview_dialog.py` — Rueckfrage-Entscheidung (D1=C):
+  Structured-Output-Call (JSON-Schema) prueft die Pflichtaspekte; leere
+  Pflichtantwort -> deterministische Rueckfrage ohne LLM; LLM-Fehler ->
+  keine Rueckfrage (der Dialog bleibt nie haengen). Max. eine Rueckfrage.
+- `api/interview.py` — `GET /api/interview/sets`,
+  `POST /api/interview/transcribe`, `POST /api/interview/turn`.
+- `transcription.transcribe_dictation()` — Whisper ohne Diarisierung und
+  ohne Fuellwortfilter (der haette „Nein.“ als Antwort geloescht), 5-Minuten-
+  Limit, Tempdatei wird sofort geloescht.
+- `prompts.py` — `INTERVIEW_MODUS_REGELN` (keine erfundenen Klientenzitate,
+  Beobachtung/Deutung trennen, Luecken nicht auffuellen, Schlussabsatz
+  Selbstgefaehrdung); `build_system_prompt(interview_mode=)`,
+  `build_user_content(interview_text=)`.
+- `generation_pipeline.py` / `jobs.py` — Form-Feld `interview_protokoll`
+  (nur Workflow `dokumentation`), Validierung VOR dem Job-Anlegen, Quellen-
+  Gate akzeptiert das Protokoll, `input_meta.has_interview`; ohne Transkript
+  landet das Protokoll in `result_transcript` (Transkript-Tab, Repair-Kontext).
+- Tests: `tests/unit/test_v1923_interview.py` (44 Tests).
+
+### Frontend
+
+- `src/interview.jsx` — `InterviewDialog`: Set-Auswahl (je Nutzer gemerkt),
+  Fragen im UI editierbar mit Reset auf Server-Default, Push-to-talk je
+  Antwort oder Text, Vorlesen ueber Browser-TTS (`speechSynthesis`,
+  abschaltbar), Rueckfrage-Anzeige, Zurueck/Ueberspringen (nicht bei
+  Pflicht), Abschluss-Uebersicht mit Nachbearbeitung. Zustand liegt im
+  P1-Draft und ueberlebt Reload (Draft-Cache), kein Server-State (D4=A).
+- `P1.jsx` — vierter Quell-Tab „Interview“; der aktive Tab bestimmt die
+  Gespraechsquelle des Jobs (Interview-Protokoll statt Audio/Transkript/
+  Text); Generieren erst nach abgeschlossenem Interview.
+- `api.js` — `fetchInterviewSets`, `interviewTranscribe`, `interviewTurn`
+  (mit Start-on-Intent wie `startJob`), `interviewProtokoll` in
+  `buildJobFormData`. `ui.InputTabs` bekommt `onChange`.
+- Tests: `tests/interview.test.jsx` (6 Tests).
+
+### Bekannte Punkte
+
+- Suizid-Pflichthinweis (v19.22): Quelle fuer den Konflikt-Check ist im
+  Interview-Modus `st.interview_plain` (nur Antworten), nicht das gerenderte
+  Protokoll - die Pflichtfrage selbst enthaelt das Wort „Suizidalitaet“.
+- Gliederung (E2) bleibt ueber den vorhandenen Prompt-Editor je Nutzer
+  aenderbar; die Fragen tragen nur den Zielabschnitt.
+- Datenschutzaudit: neuer Quelltyp (nur Behandlerstimme, keine
+  Klientenaufzeichnung) ist in v3 nachzutragen.
+
+---
+
 ## [v19.22] — Pflicht-Hinweis Suizidalitaet in der Gespraechsdokumentation
 
 Basis: `v19_QA_v02` @ `712c4f2`. Featurerequest c.wittenberg 2026-09-11.

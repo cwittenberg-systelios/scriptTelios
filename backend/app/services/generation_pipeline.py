@@ -112,6 +112,9 @@ class PipelineInput:
     style_text:      Optional[str] = None
     dx_list:         list[str] = field(default_factory=list)
     ism_n_items:     Optional[int] = None
+    # v19.23: validiertes Interview-Protokoll (services.interview_protokoll)
+    # - dritter Quelltyp der Gespraechsdoku. None = kein Interview-Modus.
+    interview_protokoll: Any = None
     uploads:         UploadBundle = field(default_factory=UploadBundle)
 
     # Upload-Attribute direkt am Input verfuegbar machen (ctx.audio_bytes ...),
@@ -142,6 +145,8 @@ class PipelineInput:
             "has_style":            bool(u.style_bytes) or bool(self.style_text and self.style_text.strip()),
             "has_transcript":       bool(self.transcript and self.transcript.strip()),
             "has_fokus_themen":     bool(self.bullets and self.bullets.strip()),
+            "has_interview":        self.interview_protokoll is not None,
+            "interview_set":        getattr(self.interview_protokoll, "set", None),
             "diagnosen":            self.dx_list,
             "model_requested":      self.model or "default",
         }
@@ -165,6 +170,8 @@ class PipelineState:
     _transcript_stage1_audit:       Any = None  # Audit der Transkript-Stage-1
     _transcript_summary_text:       Any = None  # Stage-1-Verdichtung des Transkripts
     _transkript_raw_for_result:     Any = None  # Roh-Transkript fuer result_transcript
+    interview_text:                 str = ""    # v19.23: gerendertes Protokoll (Prompt-Quellblock)
+    interview_plain:                str = ""    # v19.23: nur die Antworten (Glossar/Stil/Suizid-Check)
     antragsvorlage_text:            Any = None
     bands:                          Any = None  # Progress-Bands je Phase (progress_bands.compute_bands)
     patient_name:                   Any = None  # Aufgeloester Patientenname/Anrede
@@ -228,6 +235,7 @@ def _missing_source_error(
     vorbefunde_text: str = "",
     bullets: str = "",
     transcript_failure_reason: "str | None" = None,
+    interview_text: str = "",
 ) -> "str | None":
     """v19.16 (G1): Quellen-Gate gegen Konfabulation.
 
@@ -251,7 +259,8 @@ def _missing_source_error(
     reason_suffix = f" {transcript_failure_reason}" if transcript_failure_reason else ""
 
     if workflow == "dokumentation":
-        if not _has(transkript_text) and not _has(bullets):
+        # v19.23: das Interview-Protokoll ist eine vollwertige Quelle.
+        if not _has(transkript_text) and not _has(bullets) and not _has(interview_text):
             return (
                 "Kein Gespraechsinhalt verfuegbar - die Dokumentation wurde "
                 "NICHT erstellt, um ein erfundenes Dokument zu verhindern."
@@ -525,6 +534,13 @@ async def run_generation(ctx: PipelineInput, job) -> dict:
     st._has_docs = bool(ctx.verlaufsdoku_bytes or ctx.antragsvorlage_bytes or ctx.selbstauskunft_bytes)
     st.bands = compute_bands(ctx.workflow, has_audio=st._has_audio, has_docs=st._has_docs)
     st.phase_times = {}
+
+    # v19.23: Interview-Protokoll rendern (dritter Quelltyp der P1-Doku).
+    if ctx.interview_protokoll is not None:
+        from app.services.interview_protokoll import protokoll_plaintext, render_protokoll
+        st.interview_text = render_protokoll(ctx.interview_protokoll)
+        st.interview_plain = protokoll_plaintext(ctx.interview_protokoll)
+        job.interview_set = getattr(ctx.interview_protokoll, "set", None)
 
     await _resolve_transcript(ctx, job, st)
 
@@ -810,6 +826,10 @@ async def _extract_sources(ctx: PipelineInput, job, st: PipelineState) -> None:
     # waehrend die LLM-Pipeline (build_user_content, P2-Befund) mit der
     # Verdichtung weiterarbeitet.
     st._transkript_raw_for_result = st.transkript_text
+    # v19.23: Ohne Transkript zeigt der "Transkript"-Tab der Job-Ansicht das
+    # Interview-Protokoll (Quelle des Jobs; auch fuer den Repair-Kontext).
+    if not (st.transkript_text or "").strip() and st.interview_text:
+        st._transkript_raw_for_result = st.interview_text
     (
         st.transkript_text,
         st._transcript_summary_text,   # v19.3: fuer Repair-Kontext persistieren
@@ -872,7 +892,7 @@ async def _extract_sources(ctx: PipelineInput, job, st: PipelineState) -> None:
                     st.antragsvorlage_text, st.vorantrag_text, st.prozessreflexion_text]
     if st._ocr_warnings and not any(s and len(s.strip()) > 100 for s in _all_sources):
         # Wir haben kein Transkript noch keinen Text - Hard-Stop.
-        if not (st.transkript_text or ctx.transcript or ctx.bullets):
+        if not (st.transkript_text or ctx.transcript or ctx.bullets or st.interview_text):
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -947,7 +967,7 @@ async def _resolve_style(ctx: PipelineInput, job, st: PipelineState) -> None:
         # NICHT die Request-Session nutzen – die ist nach Request-Ende geschlossen.
         from app.core.database import async_session_factory
         async with async_session_factory() as db:
-            query_text = st.transkript_text or ctx.transcript or ctx.bullets or ""
+            query_text = st.transkript_text or ctx.transcript or st.interview_plain or ctx.bullets or ""
             st.style_context = await retrieve_style_examples(
                 db, ctx.therapeut_id.strip(), ctx.workflow, query_text
             )
@@ -1152,6 +1172,7 @@ async def _resolve_patient_and_gates(ctx: PipelineInput, job, st: PipelineState)
         vorbefunde_text=st.vorbefunde_text,
         bullets=ctx.bullets or "",
         transcript_failure_reason=st.transcript_failure_reason,
+        interview_text=st.interview_text,
     )
     if _gate_msg:
         logger.error("Quellen-Gate (%s): %s", ctx.workflow, _gate_msg)
@@ -1185,7 +1206,7 @@ async def _build_prompts(ctx: PipelineInput, job, st: PipelineState) -> None:
     st._glossar_source = "\n".join(t for t in (
         st.transkript_text, st.verlaufsdoku_text, st.selbstauskunft_text,
         st.vorbefunde_text, st.antragsvorlage_text, st.vorantrag_text,
-        st.prozessreflexion_text,
+        st.prozessreflexion_text, st.interview_plain,
     ) if t)
     st.system = build_system_prompt(
         workflow=ctx.workflow,
@@ -1196,6 +1217,7 @@ async def _build_prompts(ctx: PipelineInput, job, st: PipelineState) -> None:
         patient_name=st.patient_name,
         word_limits=st.word_limits,
         source_text=st._glossar_source,
+        interview_mode=bool(st.interview_text),
     )
     # ── v19.4: Kombinierter Input-Budget-Guard ───────────────────────────
     # Nach allen isolierten Stage-1-Verdichtungen: prueft die SUMME aller
@@ -1248,6 +1270,7 @@ async def _build_prompts(ctx: PipelineInput, job, st: PipelineState) -> None:
         # (Workflow-Anweisungen leben jetzt im System-Prompt). Parameter
         # bleibt fuer Backwards-Compat in der Signatur.
         patient_name=st.patient_name,
+        interview_text=st.interview_text or None,
     )
 
 
@@ -1550,11 +1573,21 @@ async def _finalize(ctx: PipelineInput, job, st: PipelineState) -> dict:
     # die Quellen ueber Suizidalitaet, der Output aber nicht, wird bewusst
     # NICHT ergaenzt - der Standardsatz waere dann inhaltlich falsch.
     if ctx.workflow == "dokumentation":
+        # v19.23: Im Interview-Modus zaehlen nur die ANTWORTEN als Quelle
+        # (interview_plain) - das gerenderte Protokoll (in
+        # _transkript_raw_for_result fuer den Transkript-Tab) enthaelt die
+        # Pflichtfrage mit dem Wort "Suizidalitaet" und wuerde sonst immer
+        # einen Konflikt (D2=B) ausloesen.
+        _raw_for_suizid = (
+            "" if (st.interview_text and st._transkript_raw_for_result == st.interview_text)
+            else st._transkript_raw_for_result
+        )
         _suizid_quelle = "\n\n".join(
             t for t in (
-                st._transkript_raw_for_result,
+                _raw_for_suizid,
                 st.transkript_text,
                 ctx.bullets,
+                st.interview_plain,
             ) if t and t.strip()
         )
         raw, st.suizid_note_status = resolve_suizid_note(
