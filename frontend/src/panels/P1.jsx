@@ -348,6 +348,13 @@ function P1({ toast, resumeJob, onResumed }) {
                 onChange={(iv) => updateDraft(currentDraft.id, { interview: iv })}
                 toast={toast}
                 model={jobModel || null}
+                onKlient={(k) => {
+                  // v19.24 (B2): Klient-Frage fuellt Kuerzel/Geschlecht, wenn leer.
+                  const p = {};
+                  if (!currentDraft.kuerzel.trim() && k.initial) p.kuerzel = k.initial;
+                  if (!currentDraft.geschlecht && k.gender) p.geschlecht = k.gender;
+                  if (Object.keys(p).length) updateDraft(currentDraft.id, p);
+                }}
               />
             )}
             {activeTab === "audio" && (

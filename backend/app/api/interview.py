@@ -20,6 +20,7 @@ sofort geloescht, nichts davon landet in der DB oder im Prompt-Log
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -106,6 +107,12 @@ class TurnIn(BaseModel):
     rueckfrage_bereits: bool = False
     bisherige: list[dict] = Field(default_factory=list, max_length=30)
     model: Optional[str] = None
+    # v19.24
+    trigger_stufe: int = Field(default=0, ge=0, le=2)
+    anrede: Optional[str] = Field(default=None, max_length=32)
+    frage_index: int = Field(default=0, ge=0, le=99)
+    vorherige_phrase: Optional[str] = Field(default=None, max_length=120)
+    session_id: Optional[str] = Field(default=None, max_length=64)
 
 
 class TurnOut(BaseModel):
@@ -113,6 +120,12 @@ class TurnOut(BaseModel):
     fehlende_aspekte: list[str]
     quelle: str
     model_used: Optional[str] = None
+    # v19.24
+    rueckfrage_typ: Optional[str] = None
+    trigger_stufe: int = 0
+    quittung: Optional[str] = None
+    ueberleitung: Optional[str] = None
+    klient: Optional[dict] = None
 
 
 @router.post("/interview/turn", response_model=TurnOut)
@@ -127,13 +140,19 @@ async def interview_turn(
         pflichtaspekte=list(req.pflichtaspekte),
         rueckfrage_bereits=req.rueckfrage_bereits,
         bisherige=[b for b in req.bisherige if isinstance(b, dict)],
+        trigger_stufe=req.trigger_stufe,
+        anrede=req.anrede,
+        frage_index=req.frage_index,
+        vorherige_phrase=req.vorherige_phrase,
     )
     model = None
     if req.model and req.model.strip():
         from app.services.llm import ensure_generation_model
         model = await ensure_generation_model(req.model, "dokumentation")
 
-    call_id = f"interview-{uuid.uuid4().hex[:8]}"
+    # v19.24: eine Session-ID fuer alle Calls eines Dialogs (Prompt-Log +
+    # Feedback-Fallkopie finden zusammen). Fallback: je Call.
+    call_id = _session_call_id(req.session_id)
     res = await decide_turn(turn, model=model)
     if res.quelle in ("llm", "llm_fehler"):
         # Prompt-Log nur fuer echte LLM-Calls, gleiche Datei wie alle anderen
@@ -157,7 +176,80 @@ async def interview_turn(
         fehlende_aspekte=res.fehlende_aspekte,
         quelle=res.quelle,
         model_used=res.model_used,
+        rueckfrage_typ=res.rueckfrage_typ,
+        trigger_stufe=res.trigger_stufe,
+        quittung=res.quittung,
+        ueberleitung=res.ueberleitung,
+        klient=res.klient,
     )
+
+
+_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{4,64}$")
+
+
+def _session_call_id(session_id: Optional[str]) -> str:
+    if session_id and _SESSION_RE.match(session_id):
+        return f"interview-{session_id}"
+    return f"interview-{uuid.uuid4().hex[:8]}"
+
+
+# ── v19.24 (B4): Abschluss-Check ─────────────────────────────────────────────
+
+class AbschlussIn(BaseModel):
+    protokoll: dict
+    model: Optional[str] = None
+    session_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class AbschlussPunktOut(BaseModel):
+    typ: str
+    bezug: list[str]
+    frage: str
+
+
+class AbschlussOut(BaseModel):
+    punkte: list[AbschlussPunktOut]
+    model_used: Optional[str] = None
+
+
+@router.post("/interview/abschluss", response_model=AbschlussOut)
+async def interview_abschluss(
+    req: AbschlussIn,
+    current_user: str = Depends(get_current_user),
+) -> AbschlussOut:
+    """Einmaliger Check ueber das ganze Protokoll: bis zu drei Fragen an
+    den Behandler (Widerspruch, Luecke, Plausibilitaet)."""
+    import json as _json
+    from app.services.interview_abschluss import (
+        SYSTEM_PROMPT as _ABS_SYS, build_user_content as _abs_user, pruefe_abschluss,
+    )
+    from app.services.interview_protokoll import InterviewProtokollError, parse_protokoll
+    try:
+        p = parse_protokoll(_json.dumps(req.protokoll))
+    except InterviewProtokollError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if p is None:
+        raise HTTPException(status_code=422, detail="Leeres Protokoll.")
+
+    model = None
+    if req.model and req.model.strip():
+        from app.services.llm import ensure_generation_model
+        model = await ensure_generation_model(req.model, "dokumentation")
+
+    call_id = _session_call_id(req.session_id)
+    punkte, model_used = await pruefe_abschluss(p, model=model)
+    try:
+        k = p.klient()
+        _anrede = f"{k['anrede']} {k['initial']}" if k else None
+        _log_prompt(call_id, "dokumentation", f"interview_abschluss:{p.set}",
+                    _ABS_SYS, _abs_user(p, _anrede))
+        _log_output(call_id, "dokumentation", f"interview_abschluss:{p.set}",
+                    _json.dumps(punkte, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        logger.debug("Interview-Abschluss: Prompt-Log fehlgeschlagen", exc_info=True)
+    logger.info("Interview-Abschluss %s (user=%s set=%s): %d Punkte",
+                call_id, current_user, p.set, len(punkte))
+    return AbschlussOut(punkte=[AbschlussPunktOut(**x) for x in punkte], model_used=model_used)
 
 
 def _aspekte_for_log(turn: TurnRequest) -> tuple[bool, list[str]]:

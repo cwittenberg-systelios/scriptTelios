@@ -1,10 +1,9 @@
 /**
- * scriptTelios Frontend – Tests fuer src/interview.jsx (v19.23).
+ * scriptTelios Frontend – Tests fuer src/interview.jsx (v19.23 + v19.24).
  *
- * Dialog-Ablauf Start -> Frage -> Antwort -> Rueckfrage -> Weiter -> fertig,
- * Pflichtfrage ohne Antwort, Rueckfrage-Check-Fehler blockiert nicht,
- * Protokoll-Aufbau fuer /jobs/generate. api.js gemockt; kein Mikrofon,
- * kein speechSynthesis in jsdom (speak() faellt still durch).
+ * Dialog-Ablauf inkl. Klient-Frage, Rueckfrage, Suizidalitaets-Trigger-Kette,
+ * Abschluss-Check mit "So lassen", Sprachsequenzen (gemockter Provider),
+ * Feedback-Button, Protokoll-Aufbau. api.js gemockt; kein Mikrofon.
  */
 import { useState } from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -13,41 +12,54 @@ jest.mock("../src/api.js", () => ({
   fetchInterviewSets: jest.fn(),
   interviewTranscribe: jest.fn(),
   interviewTurn: jest.fn(),
+  interviewAbschluss: jest.fn(),
+  apiFetch: jest.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) })),
+  getApiBase: () => "http://api",
 }));
 
-import { fetchInterviewSets, interviewTurn } from "../src/api.js";
-import { InterviewDialog, INTERVIEW_DEFAULT, buildInterviewProtokoll, interviewHasContent, speak } from "../src/interview.jsx";
+import { fetchInterviewSets, interviewTurn, interviewAbschluss } from "../src/api.js";
+import { _setSpeechProvider } from "../src/speech.js";
+import { InterviewDialog, INTERVIEW_DEFAULT, buildInterviewProtokoll, interviewHasContent } from "../src/interview.jsx";
 
 const MANIFEST = {
   default_set: "gespraech",
-  abschnitte: { auftragsklaerung: "Auftragsklärung", inhalte: "Inhalte", schluss: "Schluss" },
+  abschnitte: { meta: "Organisatorisch", auftragsklaerung: "Auftragsklärung", inhalte: "Inhalte", schluss: "Schluss" },
   sets: [
     { key: "gespraech", label: "Gespräch", beschreibung: "", fragen: [
+      { key: "klient", text: "Um wen geht es?", ziel_abschnitt: "meta", pflicht: true, pflichtaspekte: [], hinweis: "" },
       { key: "anliegen", text: "Worum ging es?", ziel_abschnitt: "auftragsklaerung", pflicht: false, pflichtaspekte: ["Anliegen"], hinweis: "" },
       { key: "selbstgefaehrdung", text: "Gab es Hinweise auf Selbstgefährdung?", ziel_abschnitt: "schluss", pflicht: true, pflichtaspekte: ["Aussage"], hinweis: "Pflicht" },
     ] },
     { key: "kunst", label: "Kunst", beschreibung: "", fragen: [
+      { key: "klient", text: "Um wen geht es?", ziel_abschnitt: "meta", pflicht: true, pflichtaspekte: [], hinweis: "" },
       { key: "methode", text: "Welche Methode?", ziel_abschnitt: "inhalte", pflicht: false, pflichtaspekte: [], hinweis: "" },
       { key: "selbstgefaehrdung", text: "Gab es Hinweise auf Selbstgefährdung?", ziel_abschnitt: "schluss", pflicht: true, pflichtaspekte: ["Aussage"], hinweis: "" },
     ] },
   ],
 };
 
-function Harness({ onState, toast = () => {} }) {
+const NONE = { rueckfrage: null, fehlende_aspekte: [], quelle: "keine", ueberleitung: "Danke.", quittung: null, rueckfrage_typ: null, trigger_stufe: 0, klient: null };
+const KLIENT = { ...NONE, quelle: "klient", klient: { anrede: "Herr", initial: "M.", gender: "m" } };
+
+let spoken;
+function Harness({ onState, onKlient, toast = () => {} }) {
   const [v, setV] = useState({ ...INTERVIEW_DEFAULT });
   const onChange = (nv) => { setV(nv); onState && onState(nv); };
-  return <InterviewDialog value={v} onChange={onChange} toast={toast} model={null} />;
+  return <InterviewDialog value={v} onChange={onChange} toast={toast} model={null} onKlient={onKlient} />;
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
   localStorage.clear();
   fetchInterviewSets.mockResolvedValue(MANIFEST);
+  interviewAbschluss.mockResolvedValue({ punkte: [], model_used: "m" });
+  spoken = [];
+  _setSpeechProvider({ name: "test", available: () => true, say: async (parts) => { spoken.push(parts.filter(Boolean)); return true; }, cancel: () => {} });
 });
 
-async function startDialog(toast) {
+async function startDialog(opts = {}) {
   const states = [];
-  render(<Harness onState={(s) => states.push(s)} toast={toast} />);
+  render(<Harness onState={(s) => states.push(s)} {...opts} />);
   await screen.findByTestId("interview-start");
   fireEvent.click(screen.getByText("Interview starten"));
   await screen.findByTestId("interview-dialog");
@@ -57,6 +69,10 @@ async function startDialog(toast) {
 function answerAndNext(text) {
   fireEvent.change(screen.getByTestId("interview-antwort"), { target: { value: text } });
   fireEvent.click(screen.getByTestId("interview-weiter"));
+}
+
+async function expectFrage(text) {
+  await waitFor(() => expect(screen.getByTestId("interview-frage").textContent).toContain(text));
 }
 
 describe("InterviewDialog", () => {
@@ -69,81 +85,146 @@ describe("InterviewDialog", () => {
     expect(localStorage.getItem("st_interview_set")).toBe("kunst");
   });
 
-  test("Ablauf: Antwort -> Rueckfrage -> Antwort -> Pflichtfrage -> fertig; Protokoll vollstaendig", async () => {
+  test("Klient-Frage fuellt Kuerzel, Rueckfrage mit Quittung, Abschluss ohne Punkte -> fertig; Protokoll vollstaendig", async () => {
+    const onKlient = jest.fn();
     interviewTurn
-      .mockResolvedValueOnce({ rueckfrage: "Und was war das Ziel?", fehlende_aspekte: ["Ziel"], quelle: "llm" })
-      .mockResolvedValueOnce({ rueckfrage: null, fehlende_aspekte: [], quelle: "llm" });
-    const states = await startDialog();
-    expect(screen.getByTestId("interview-frage").textContent).toContain("Worum ging es?");
+      .mockResolvedValueOnce(KLIENT)
+      .mockResolvedValueOnce({ ...NONE, rueckfrage: "Und was war das Ziel?", fehlende_aspekte: ["Ziel"], quelle: "llm", rueckfrage_typ: "aspekt", quittung: "Verstanden.", ueberleitung: null })
+      .mockResolvedValueOnce(NONE);
+    const states = await startDialog({ onKlient });
+    expect(spoken[0]).toEqual(["Um wen geht es?"]);
+
+    answerAndNext("Herr Müller");
+    await expectFrage("Worum ging es?");
+    expect(onKlient).toHaveBeenCalledWith({ anrede: "Herr", initial: "M.", gender: "m" });
+    expect(screen.getByTestId("interview-klient").textContent).toBe("Herr M.");
+    expect(spoken[spoken.length - 1]).toEqual(["Danke.", "Worum ging es?"]);
 
     answerAndNext("Umgang mit Scham.");
-    await screen.findByText(/Und was war das Ziel\?/);
-    expect(interviewTurn).toHaveBeenCalledWith(expect.objectContaining({
-      set: "gespraech", frage_key: "anliegen", antwort: "Umgang mit Scham.",
-      pflichtaspekte: ["Anliegen"], rueckfrage_bereits: false, bisherige: [],
+    await expectFrage("Und was war das Ziel?");
+    expect(spoken[spoken.length - 1]).toEqual(["Verstanden.", "Und was war das Ziel?"]);
+    expect(interviewTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      set: "gespraech", frage_key: "anliegen", antwort: "Umgang mit Scham.", anrede: "Herr M.",
+      trigger_stufe: 0, rueckfrage_bereits: false, bisherige: [], frage_index: 1,
     }));
 
     answerAndNext("Mehr Selbstwert.");
-    await waitFor(() => expect(screen.getByTestId("interview-frage").textContent).toContain("Selbstgefährdung"));
-    // Rueckfrage-Antwort fuehrt zu KEINEM zweiten turn-Call (max. eine Rueckfrage)
-    expect(interviewTurn).toHaveBeenCalledTimes(1);
+    await expectFrage("Selbstgefährdung");
+    expect(interviewTurn).toHaveBeenCalledTimes(2);   // Aspekt-Rueckfrage: kein zweiter Check
 
     answerAndNext("Nein, keine Hinweise.");
     await screen.findByTestId("interview-fertig");
-    expect(interviewTurn).toHaveBeenCalledTimes(2);
-    expect(interviewTurn.mock.calls[1][0].bisherige).toEqual([{ frage: "Worum ging es?", antwort: "Umgang mit Scham." }]);
+    expect(interviewAbschluss).toHaveBeenCalledTimes(1);
+    expect(interviewAbschluss.mock.calls[0][0].protokoll.eintraege[2].antwort).toBe("Nein, keine Hinweise.");
 
-    const last = states[states.length - 1];
-    const p = buildInterviewProtokoll(last);
-    expect(p).toEqual({
-      set: "gespraech", set_label: "Gespräch",
-      eintraege: [
-        { key: "anliegen", frage: "Worum ging es?", antwort: "Umgang mit Scham.", rueckfrage: "Und was war das Ziel?", rueckfrage_antwort: "Mehr Selbstwert.", ziel_abschnitt: "auftragsklaerung" },
-        { key: "selbstgefaehrdung", frage: "Gab es Hinweise auf Selbstgefährdung?", antwort: "Nein, keine Hinweise.", rueckfrage: "", rueckfrage_antwort: "", ziel_abschnitt: "schluss" },
-      ],
-    });
-    expect(interviewHasContent(last)).toBe(true);
+    const p = buildInterviewProtokoll(states[states.length - 1]);
+    expect(p.set).toBe("gespraech");
+    expect(p.session_id).toMatch(/^s/);
+    expect(p.eintraege[0]).toEqual({ key: "klient", frage: "Um wen geht es?", antwort: "Herr Müller", nachfragen: [], ziel_abschnitt: "meta" });
+    expect(p.eintraege[1].nachfragen).toEqual([{ typ: "aspekt", frage: "Und was war das Ziel?", antwort: "Mehr Selbstwert." }]);
+    expect(p.abschluss).toEqual([]);
+    expect(interviewHasContent(states[states.length - 1])).toBe(true);
+    expect(screen.getByText(/Feedback zur Ausgabe/)).toBeTruthy();
   });
 
-  test("Pflichtfrage ohne Antwort: Toast, kein Weiter, kein turn-Call", async () => {
-    interviewTurn.mockResolvedValue({ rueckfrage: null, fehlende_aspekte: [], quelle: "keine" });
-    const toast = jest.fn();
-    await startDialog(toast);
+  test("Suizidalitaets-Trigger-Kette 0 -> 1 -> 2 -> weiter, Anrede in den Calls", async () => {
+    interviewTurn
+      .mockResolvedValueOnce(KLIENT)
+      .mockResolvedValueOnce({ ...NONE, rueckfrage: "Gab es konkrete Pläne, und ist Herr M. absprachefähig?", quelle: "trigger", rueckfrage_typ: "trigger:suizidalitaet", trigger_stufe: 1, quittung: "Ja, verstanden.", ueberleitung: null })
+      .mockResolvedValueOnce({ ...NONE, rueckfrage: "Was wurde vereinbart – Kooperationsbedingung?", quelle: "trigger", rueckfrage_typ: "trigger:suizidalitaet", trigger_stufe: 2, quittung: "Verstanden.", ueberleitung: null })
+      .mockResolvedValueOnce({ ...NONE, quelle: "keine" })
+      .mockResolvedValueOnce(NONE);
+    const states = await startDialog();
+    answerAndNext("Herr Müller");
+    await expectFrage("Worum ging es?");
+    answerAndNext("Lebensmüde Gedanken geäußert.");
+    await expectFrage("konkrete Pläne");
+    expect(screen.getByText(/Nachfrage Suizidalität/)).toBeTruthy();
+    answerAndNext("Keine Pläne, aber unsicher absprachefähig.");
+    await expectFrage("Kooperationsbedingung");
+    expect(interviewTurn).toHaveBeenLastCalledWith(expect.objectContaining({ trigger_stufe: 1, rueckfrage_bereits: true, antwort: "Keine Pläne, aber unsicher absprachefähig." }));
+    answerAndNext("Kooperationsbedingung und Nachtdienst.");
+    await expectFrage("Selbstgefährdung");
+    expect(interviewTurn).toHaveBeenLastCalledWith(expect.objectContaining({ trigger_stufe: 2 }));
+    answerAndNext("Siehe oben, distanziert.");
+    await screen.findByTestId("interview-fertig");
+    const p = buildInterviewProtokoll(states[states.length - 1]);
+    expect(p.eintraege[1].nachfragen.map(n => n.typ)).toEqual(["trigger:suizidalitaet", "trigger:suizidalitaet"]);
+    expect(p.eintraege[1].nachfragen[1].antwort).toBe("Kooperationsbedingung und Nachtdienst.");
+  });
+
+  test("Abschluss-Check: Punkt beantworten, Punkt so lassen, Sprachsequenz", async () => {
+    interviewTurn.mockResolvedValueOnce(KLIENT).mockResolvedValue(NONE);
+    interviewAbschluss.mockResolvedValueOnce({ punkte: [
+      { typ: "widerspruch", bezug: ["1", "2"], frage: "Wurde etwas vereinbart oder nicht?" },
+      { typ: "luecke", bezug: ["1"], frage: "Welche Übung genau?" },
+    ], model_used: "m" });
+    const states = await startDialog();
+    answerAndNext("Frau K.");
+    await expectFrage("Worum ging es?");
     answerAndNext("Thema X.");
-    await waitFor(() => expect(screen.getByTestId("interview-frage").textContent).toContain("Selbstgefährdung"));
-    expect(screen.queryByText("Überspringen")).toBeNull();   // Pflichtfrage nicht ueberspringbar
+    await expectFrage("Selbstgefährdung");
+    answerAndNext("Keine.");
+    await screen.findByTestId("interview-abschluss");
+    expect(spoken[spoken.length - 1]).toEqual(["Danke.", "Ich habe noch 2 Fragen zum Ganzen.", "Wurde etwas vereinbart oder nicht?"]);
+    expect(screen.getByText(/Widerspruch/)).toBeTruthy();
+    answerAndNext("Doch, eine Atemübung.");
+    await expectFrage("Welche Übung genau?");
+    fireEvent.click(screen.getByTestId("interview-belassen"));
+    await screen.findByTestId("interview-fertig");
+    expect(screen.getByText(/1 Punkt bewusst offen gelassen/)).toBeTruthy();
+    const p = buildInterviewProtokoll(states[states.length - 1]);
+    expect(p.abschluss).toEqual([
+      { typ: "widerspruch", bezug: ["1", "2"], frage: "Wurde etwas vereinbart oder nicht?", antwort: "Doch, eine Atemübung.", belassen: false },
+      { typ: "luecke", bezug: ["1"], frage: "Welche Übung genau?", antwort: "", belassen: true },
+    ]);
+  });
+
+  test("Abschluss-Check-Fehler blockiert nicht; Pflichtfrage ohne Antwort haelt an", async () => {
+    interviewTurn.mockResolvedValueOnce(KLIENT).mockResolvedValue(NONE);
+    interviewAbschluss.mockRejectedValueOnce(new Error("down"));
+    const toast = jest.fn();
+    await startDialog({ toast });
+    answerAndNext("Frau K.");
+    await expectFrage("Worum ging es?");
+    answerAndNext("Thema.");
+    await expectFrage("Selbstgefährdung");
+    expect(screen.queryByText("Überspringen")).toBeNull();
     fireEvent.click(screen.getByTestId("interview-weiter"));
     expect(toast).toHaveBeenCalledWith(expect.stringMatching(/Pflichtfrage/));
-    expect(interviewTurn).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("interview-dialog")).toBeTruthy();
+    answerAndNext("Keine.");
+    await screen.findByTestId("interview-fertig");
+    expect(toast).toHaveBeenCalledWith(expect.stringMatching(/Abschluss-Prüfung nicht möglich/));
+  });
+
+  test("Klient nicht erkannt: eine Rueckfrage, dann weiter ohne Klient (D4=B)", async () => {
+    interviewTurn
+      .mockResolvedValueOnce({ ...NONE, rueckfrage: "Ich habe kein Kürzel erkannt …", quelle: "klient", rueckfrage_typ: "klient", quittung: "Okay.", ueberleitung: null })
+      .mockResolvedValueOnce({ ...NONE, quelle: "klient" })
+      .mockResolvedValue(NONE);
+    const onKlient = jest.fn();
+    await startDialog({ onKlient });
+    answerAndNext("keine Ahnung");
+    await expectFrage("kein Kürzel erkannt");
+    answerAndNext("weiss nicht");
+    await expectFrage("Worum ging es?");
+    expect(onKlient).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("interview-klient")).toBeNull();
   });
 
   test("Rueckfrage-Check-Fehler blockiert den Dialog nicht", async () => {
-    interviewTurn.mockRejectedValueOnce(new Error("Ollama down"))
-      .mockResolvedValueOnce({ rueckfrage: null, fehlende_aspekte: [], quelle: "llm" });
+    interviewTurn.mockResolvedValueOnce(KLIENT).mockRejectedValueOnce(new Error("Ollama down")).mockResolvedValue(NONE);
     const toast = jest.fn();
-    await startDialog(toast);
+    await startDialog({ toast });
+    answerAndNext("Frau K.");
+    await expectFrage("Worum ging es?");
     answerAndNext("Thema X.");
-    await waitFor(() => expect(screen.getByTestId("interview-frage").textContent).toContain("Selbstgefährdung"));
+    await expectFrage("Selbstgefährdung");
     expect(toast).toHaveBeenCalledWith(expect.stringMatching(/weiter ohne Rückfrage/));
   });
 
-  test("Ueberspringen einer Nicht-Pflichtfrage rendert '(nicht erhoben)' im Protokoll", async () => {
-    interviewTurn.mockResolvedValue({ rueckfrage: null, fehlende_aspekte: [], quelle: "keine" });
-    const states = await startDialog();
-    fireEvent.click(screen.getByText("Überspringen"));
-    await waitFor(() => expect(screen.getByTestId("interview-frage").textContent).toContain("Selbstgefährdung"));
-    expect(interviewTurn).not.toHaveBeenCalled();
-    answerAndNext("Keine.");
-    await screen.findByTestId("interview-fertig");
-    const p = buildInterviewProtokoll(states[states.length - 1]);
-    expect(p.eintraege[0].antwort).toBe("");
-    expect(screen.getByText("nicht erhoben")).toBeTruthy();
-  });
-
-  test("buildInterviewProtokoll ist null vor Abschluss; speak() faellt ohne TTS still durch", () => {
+  test("buildInterviewProtokoll ist null vor Abschluss", () => {
     expect(buildInterviewProtokoll({ ...INTERVIEW_DEFAULT })).toBeNull();
     expect(buildInterviewProtokoll(null)).toBeNull();
-    expect(speak("Hallo")).toBe(false);
   });
 });

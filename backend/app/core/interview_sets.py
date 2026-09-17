@@ -46,9 +46,12 @@ ABSCHNITTE: dict[str, str] = {
     "hypothesen":       "Hypothesen und Entwicklungsperspektiven",
     "einladungen":      "Einladungen",
     "schluss":          "Schlussabsatz (Hinweis zur Suizidalität)",
+    # v19.24 (B2): Meta-Fragen (Klient) - werden NICHT in den Prompt gerendert.
+    "meta":             "Organisatorisch (nicht in der Dokumentation)",
 }
 
 SELBSTGEFAEHRDUNG_KEY = "selbstgefaehrdung"
+KLIENT_KEY = "klient"
 
 
 @dataclass(frozen=True)
@@ -83,6 +86,16 @@ FRAGE_SELBSTGEFAEHRDUNG = InterviewFrage(
     hinweis="Pflichtfrage – die Doku enthält immer einen Satz dazu.",
 )
 
+# v19.24 (B2): erste Frage jedes Sets. Antwort fuellt Kuerzel und Geschlecht
+# des Jobs; Rueckfragen duerfen danach die Anrede verwenden. Nicht editierbar.
+FRAGE_KLIENT = InterviewFrage(
+    key=KLIENT_KEY,
+    text="Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
+    ziel_abschnitt="meta",
+    pflicht=True,
+    hinweis="Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
+)
+
 _FRAGE_VEREINBARUNG = InterviewFrage(
     key="vereinbarung",
     text="Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, "
@@ -99,6 +112,7 @@ def _nonverbal_set(key: str, label: str, beschreibung: str, *,
     return InterviewSet(
         key=key, label=label, beschreibung=beschreibung,
         fragen=(
+            FRAGE_KLIENT,
             InterviewFrage(
                 key="anliegen",
                 text="Was war das erarbeitete Anliegen? Womit kam die Person in die Stunde?",
@@ -138,6 +152,7 @@ INTERVIEW_SETS: tuple[InterviewSet, ...] = (
         label="Gespräch (ohne Aufzeichnung)",
         beschreibung="Einzelgespräch ohne Aufnahme, z.B. ohne Einwilligung zur Aufzeichnung.",
         fragen=(
+            FRAGE_KLIENT,
             InterviewFrage(
                 key="anliegen",
                 text="Worum ging es im Gespräch? Was war das Anliegen der Person "

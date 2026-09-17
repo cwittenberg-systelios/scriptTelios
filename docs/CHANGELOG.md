@@ -7,6 +7,69 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.24] — Interview-Dialog: Gespraechsfuehrung, Trigger, Abschluss-Check (2026-09-18)
+
+Basis: `v19_QA_v02` @ `1f5d935` + v19.23. Ein Patch (Backend + Frontend)
+plus `backend/static/systelios.js`.
+
+**Warum.** Der Dialog nach der Sitzung soll sich wie ein Gespraech anfuehlen,
+fachlich zwingende Nachfragen zuverlaessig stellen und am Ende einmal ueber
+das Ganze schauen - ohne dass das LLM Fachurteile faellt.
+
+### Backend
+
+- `core/interview_phrasen.py` (B1/C2) - Quittungen (nur vor Rueckfragen,
+  ruhigere Varianten vor Trigger-Nachfragen) und Ueberleitungen (nur bei
+  gegebener Antwort), 3-5 Varianten, ohne direkte Wiederholung, kein LLM.
+- `core/interview_sets.py` (B2) - Frage `klient` als erste Frage jedes Sets
+  (Pflicht, Abschnitt `meta`, nicht im Prompt). `interview_protokoll.
+  extract_klient()` liefert Anrede/Initiale/Geschlecht; voller Nachname wird
+  auf die Initiale gekuerzt (Kuerzel-Regel). `jobs.py` uebernimmt Kuerzel und
+  Geschlecht aus der Klient-Frage, wenn das UI nichts schickt.
+- `services/interview_trigger.py` (B3) - Suizidalitaets-Kette, regelbasiert
+  (Marker aus v19.22 + NSSV): Glied 1 Plaene/Handlungen + Absprachefaehigkeit,
+  Glied 2 Vereinbarung (Kooperationsbedingung, aerztliche Information,
+  Nachtdienst). Laeuft fuer jede Frage; Trigger vor Aspekt-Check (C1);
+  Nachfragen zaehlen nicht auf die Grenze "eine LLM-Rueckfrage je Frage".
+- `services/interview_dialog.py` - `TurnResult` um `rueckfrage_typ`,
+  `trigger_stufe`, `quittung`, `ueberleitung`, `klient` erweitert; Anrede
+  geht als `PERSON:` in den LLM-Kontext der Aspekt-Rueckfragen.
+- `services/interview_abschluss.py` + `POST /api/interview/abschluss` (B4/C3)
+  - einmaliger Check ueber das ganze Protokoll, bis zu drei Punkte
+  (widerspruch | luecke | plausibilitaet), ausschliesslich Fragen; LLM-Fehler
+  -> keine Punkte.
+- `services/interview_protokoll.py` - `eintraege[].nachfragen[{typ, frage,
+  antwort}]` (Legacy `rueckfrage`/`rueckfrage_antwort` bleiben lesbar),
+  `abschluss[{typ, bezug, frage, antwort, belassen}]`, `session_id`.
+  Rendering: "NACHFRAGE (Suizidalitaet)", "ABSCHLUSS-CHECK", belassene Punkte
+  als "Bewusst offen gelassen - NICHT ergaenzen". `protokoll_plaintext`
+  enthaelt alle Antworten (v19.22-Konfliktcheck sieht die Trigger-Antworten).
+- `api/interview.py` - `session_id` buendelt die Prompt-Log-Eintraege eines
+  Dialogs (`interview-<session>`), dieselbe ID nutzt der Feedback-Button.
+- Tests: `tests/unit/test_v1924_dialog.py` (48), v19.23-Tests angepasst.
+
+### Frontend
+
+- `src/speech.js` - `SpeechProvider` mit Warteschlange (`say(parts)`,
+  `cancel()`); Provider `browser` (speechSynthesis), Auswahl ueber
+  `window.SYSTELIOS_TTS` (Server-TTS spaeter nur als weiterer Provider).
+- `src/interview.jsx` - spricht Quittung + Rueckfrage bzw. Ueberleitung +
+  naechste Frage als Sequenz; Nachfragen-Liste je Eintrag mit Typ-Badge
+  "Suizidalitaet"; Klient-Frage fuellt Kuerzel/Geschlecht in P1
+  (`onKlient`); Abschluss-Phase (Antworten / So lassen / Alles
+  ueberspringen); Uebersicht inkl. Nachfragen und Abschluss-Check;
+  `FeedbackButton` (`jobId = interview-<session>`, `context =
+  interview_dialog`).
+- `api.js` - `interviewAbschluss`. Tests: `tests/interview.test.jsx` (8).
+
+### Bekannte Punkte
+
+- Der Feedback-Endpoint akzeptiert unbekannte Job-IDs (job = null); die
+  Fallkopie findet die Dialog-Prompts ueber `interview-<session>`.
+- Der Eintrag in `docs/interview_modus.md` ist ergaenzt.
+
+---
+
 ## [v19.23] — Interview-Modus der Gespraechsdokumentation (2026-09-16)
 
 Basis: `v19_QA_v02` @ `1f5d935`. Ein Patch (Backend + Frontend) plus

@@ -1,92 +1,87 @@
 // ────────────────────────────────────────────────────────────────────────────
-// src/interview.jsx — Interview-Modus der Gespraechsdokumentation (v19.23).
+// src/interview.jsx — Interview-Modus der Gespraechsdokumentation.
 //
-// Dialog nach der Sitzung: Frage -> Antwort (Diktat oder Text) -> ggf. EINE
-// Rueckfrage (Backend, D1=C) -> Weiter -> naechste Frage. Am Ende entsteht
-// ein Protokoll, das P1 als `interviewProtokoll` an /jobs/generate schickt.
+// v19.23: Dialog nach der Sitzung: Frage -> Antwort (Diktat oder Text) ->
+//         ggf. EINE Rueckfrage (Backend, D1=C) -> Weiter. Am Ende entsteht
+//         ein Protokoll, das P1 als `interviewProtokoll` an /jobs/generate
+//         schickt.
+// v19.24: Gespraechsfuehrung (Quittung/Ueberleitung, speech.js),
+//         Klient-Frage als erste Frage (fuellt Kuerzel/Geschlecht),
+//         Suizidalitaets-Trigger-Kette (Nachfragen-Liste je Eintrag),
+//         Abschluss-Check (bis zu drei Fragen, "So lassen"), Feedback.
 //
 // Zustand lebt komplett im Draft von P1 (D4=A) und ueberlebt Reload ueber
 // den Draft-Cache: `value` ist ein reines JSON-Objekt, `onChange(patch)`
-// merged. Kein serverseitiger Session-State.
-//
-// Vorlesen (D2 = beides): Browser-TTS (speechSynthesis). Kein Server-TTS -
-// die Fragen enthalten keine Klientendaten und muessen auch bei
-// ausgeschaltetem Pod vorlesbar sein.
+// merged. Kein serverseitiger Session-State; `sessionId` buendelt nur die
+// Prompt-Log-Eintraege und die Feedback-Fallkopie.
 // ────────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchInterviewSets, interviewTranscribe, interviewTurn } from "./api.js";
+import { fetchInterviewSets, interviewAbschluss, interviewTranscribe, interviewTurn } from "./api.js";
 import { friendlyError } from "./shared.js";
+import { getSpeechProvider } from "./speech.js";
+import { FeedbackButton } from "./ui.jsx";
 
 const LS_SET_KEY = "st_interview_set";       // gemerktes Set je Nutzer (E3)
 const LS_VORLESEN = "st_interview_vorlesen"; // Schalter "Vorlesen"
+const KLIENT_KEY = "klient";
 
 // ── Leerer Interview-Zustand (Default fuer den Draft-Cache) ────────────────
 const INTERVIEW_DEFAULT = {
+  sessionId: "",
   setKey: "",
   setLabel: "",
-  fragen: [],      // editierbare Kopie der Server-Defaults: {key,text,ziel_abschnitt,pflicht,pflichtaspekte,hinweis}
-  eintraege: [],   // {key, frage, antwort, rueckfrage, rueckfrage_antwort, ziel_abschnitt}
+  fragen: [],      // editierbare Kopie der Server-Defaults
+  eintraege: [],   // {key, frage, antwort, nachfragen:[{typ,frage,antwort}], ziel_abschnitt, trigger_stufe}
   idx: 0,          // aktuelle Frage
-  phase: "start",  // start | antwort | rueckfrage | fertig
+  phase: "start",  // start | antwort | nachfrage | abschluss | fertig
+  abschluss: [],   // {typ, bezug, frage, antwort, belassen}
+  abschlussIdx: 0,
+  klient: null,    // {anrede, initial, gender}
+  lastPhrase: "",
 };
 
-function emptyInterview() { return { ...INTERVIEW_DEFAULT, fragen: [], eintraege: [] }; }
+function newSessionId() {
+  return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
 
-// Protokoll fuer /jobs/generate. null solange das Interview nicht fertig ist.
-function buildInterviewProtokoll(v) {
-  if (!v || v.phase !== "fertig" || !v.eintraege?.length) return null;
+function emptyInterview() { return { ...INTERVIEW_DEFAULT, fragen: [], eintraege: [], abschluss: [] }; }
+
+// Protokoll fuer /jobs/generate und /interview/abschluss.
+function buildInterviewProtokoll(v, { requireFertig = true } = {}) {
+  if (!v || !v.eintraege?.length) return null;
+  if (requireFertig && v.phase !== "fertig") return null;
   return {
     set: v.setKey,
     set_label: v.setLabel || v.setKey,
+    session_id: v.sessionId || "",
     eintraege: v.eintraege.map(e => ({
       key: e.key, frage: e.frage, antwort: e.antwort || "",
-      rueckfrage: e.rueckfrage || "", rueckfrage_antwort: e.rueckfrage_antwort || "",
+      nachfragen: (e.nachfragen || []).map(n => ({ typ: n.typ || "aspekt", frage: n.frage, antwort: n.antwort || "" })),
       ziel_abschnitt: e.ziel_abschnitt || undefined,
+    })),
+    abschluss: (v.abschluss || []).map(a => ({
+      typ: a.typ, bezug: a.bezug || [], frage: a.frage, antwort: a.antwort || "", belassen: !!a.belassen,
     })),
   };
 }
 
 function interviewHasContent(v) {
-  return !!(v && v.phase && v.phase !== "start" && v.eintraege?.some(e => (e.antwort || e.rueckfrage_antwort || "").trim()));
+  return !!(v && v.phase && v.phase !== "start" && v.eintraege?.some(e =>
+    (e.antwort || "").trim() || (e.nachfragen || []).some(n => (n.antwort || "").trim())));
 }
 
-// Eintraege aus der (ggf. editierten) Fragenliste aufbauen.
 function eintraegeFromFragen(fragen) {
   return fragen.map(f => ({
-    key: f.key, frage: f.text, antwort: "", rueckfrage: "", rueckfrage_antwort: "",
-    ziel_abschnitt: f.ziel_abschnitt,
+    key: f.key, frage: f.text, antwort: "", nachfragen: [], ziel_abschnitt: f.ziel_abschnitt, trigger_stufe: 0,
   }));
 }
 
-// ── Browser-TTS ─────────────────────────────────────────────────────────────
-function pickGermanVoice() {
-  try {
-    const voices = window.speechSynthesis?.getVoices?.() || [];
-    return voices.find(v => /^de/i.test(v.lang) && /google|microsoft|premium|enhanced/i.test(v.name))
-        || voices.find(v => /^de/i.test(v.lang)) || null;
-  } catch { return null; }
+function anredeOf(klient) {
+  return klient && klient.anrede && klient.initial ? `${klient.anrede} ${klient.initial}` : null;
 }
 
-function speak(text) {
-  try {
-    if (!("speechSynthesis" in window) || !text) return false;
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "de-DE";
-    u.rate = 1.0;
-    const v = pickGermanVoice();
-    if (v) u.voice = v;
-    window.speechSynthesis.speak(u);
-    return true;
-  } catch { return false; }
-}
-
-function stopSpeaking() {
-  try { window.speechSynthesis?.cancel(); } catch { /* ignoriert */ }
-}
-
-// ── Push-to-talk (ein Clip je Antwort, ohne Pegel-Meter/Heartbeat) ─────────
-function useDictation({ onText, onError }) {
+// ── Push-to-talk (ein Clip je Antwort) ─────────────────────────────────────
+function useDictation({ onText, onError, onStart }) {
   const [state, setState] = useState("idle"); // idle | recording | transcribing
   const recRef = useRef(null);
   const chunksRef = useRef([]);
@@ -105,7 +100,7 @@ function useDictation({ onText, onError }) {
       return;
     }
     try {
-      stopSpeaking();
+      onStart?.();
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
@@ -157,17 +152,18 @@ function useDictation({ onText, onError }) {
 }
 
 // ── Komponente ──────────────────────────────────────────────────────────────
-function InterviewDialog({ value, onChange, toast, model }) {
+// onKlient({anrede, initial, gender}) - P1 fuellt Kuerzel/Geschlecht (B2).
+function InterviewDialog({ value, onChange, toast, model, onKlient }) {
   const v = value && value.fragen ? value : emptyInterview();
   const [manifest, setManifest] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
-  const [busy, setBusy] = useState(null);        // null | "turn"
+  const [busy, setBusy] = useState(null);        // null | "turn" | "abschluss"
   const [editFragen, setEditFragen] = useState(false);
   const [vorlesen, setVorlesen] = useState(() => {
     try { return localStorage.getItem(LS_VORLESEN) !== "0"; } catch { return true; }
   });
-  const [draftText, setDraftText] = useState("");   // Textfeld der aktuellen Antwort
-  const lastSpokenRef = useRef("");
+  const [draftText, setDraftText] = useState("");
+  const speech = getSpeechProvider();
 
   const patch = useCallback((p) => onChange({ ...v, ...p }), [onChange, v]);
 
@@ -185,47 +181,50 @@ function InterviewDialog({ value, onChange, toast, model }) {
     let key = "";
     try { key = localStorage.getItem(LS_SET_KEY) || ""; } catch { /* ignoriert */ }
     const set = manifest.sets.find(s => s.key === key) || manifest.sets.find(s => s.key === manifest.default_set) || manifest.sets[0];
-    if (set) patch({ setKey: set.key, setLabel: set.label, fragen: set.fragen.map(f => ({ ...f })), eintraege: [], idx: 0, phase: "start" });
+    if (set) patch({ setKey: set.key, setLabel: set.label, fragen: set.fragen.map(f => ({ ...f })), eintraege: [], idx: 0, phase: "start", abschluss: [], klient: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifest]);
 
   const current = v.eintraege[v.idx] || null;
   const frage = v.fragen[v.idx] || null;
   const total = v.eintraege.length;
+  const lastNachfrage = current && current.nachfragen?.length ? current.nachfragen[current.nachfragen.length - 1] : null;
+  const abschlussPunkt = v.phase === "abschluss" ? (v.abschluss[v.abschlussIdx] || null) : null;
 
   // Textfeld an Phase/Frage koppeln
   useEffect(() => {
-    if (!current) { setDraftText(""); return; }
-    setDraftText(v.phase === "rueckfrage" ? (current.rueckfrage_antwort || "") : (current.antwort || ""));
+    if (v.phase === "nachfrage") setDraftText(lastNachfrage?.antwort || "");
+    else if (v.phase === "abschluss") setDraftText(abschlussPunkt?.antwort || "");
+    else setDraftText(current?.antwort || "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [v.idx, v.phase]);
+  }, [v.idx, v.phase, v.abschlussIdx, current?.nachfragen?.length]);
 
-  // Vorlesen der aktuellen Frage bzw. Rueckfrage
-  const spokenText = !current ? "" : (v.phase === "rueckfrage" ? current.rueckfrage : (v.phase === "antwort" ? current.frage : ""));
-  useEffect(() => {
-    if (!vorlesen || !spokenText || spokenText === lastSpokenRef.current) return;
-    lastSpokenRef.current = spokenText;
-    speak(spokenText);
-  }, [spokenText, vorlesen]);
-  useEffect(() => () => stopSpeaking(), []);
+  useEffect(() => () => speech.cancel(), [speech]);
+
+  // Sprechen einer Sequenz (Quittung -> Rueckfrage, Ueberleitung -> Frage)
+  const say = useCallback((parts) => {
+    if (!vorlesen) return;
+    speech.say(parts);
+  }, [vorlesen, speech]);
 
   const dict = useDictation({
     onText: (t) => { if (t) setDraftText(prev => (prev.trim() ? prev.trim() + " " + t : t)); },
     onError: (m) => toast && toast(m),
+    onStart: () => speech.cancel(),
   });
 
   function toggleVorlesen() {
     const next = !vorlesen;
     setVorlesen(next);
     try { localStorage.setItem(LS_VORLESEN, next ? "1" : "0"); } catch { /* ignoriert */ }
-    if (!next) stopSpeaking();
+    if (!next) speech.cancel();
   }
 
   function chooseSet(key) {
     const set = manifest?.sets.find(s => s.key === key);
     if (!set) return;
     try { localStorage.setItem(LS_SET_KEY, key); } catch { /* ignoriert */ }
-    patch({ setKey: set.key, setLabel: set.label, fragen: set.fragen.map(f => ({ ...f })), eintraege: [], idx: 0, phase: "start" });
+    patch({ setKey: set.key, setLabel: set.label, fragen: set.fragen.map(f => ({ ...f })), eintraege: [], idx: 0, phase: "start", abschluss: [], klient: null });
   }
 
   function resetFragen() {
@@ -234,87 +233,194 @@ function InterviewDialog({ value, onChange, toast, model }) {
   }
 
   function startInterview() {
-    stopSpeaking();
-    lastSpokenRef.current = "";
-    patch({ eintraege: eintraegeFromFragen(v.fragen), idx: 0, phase: "antwort" });
+    speech.cancel();
+    const eintraege = eintraegeFromFragen(v.fragen);
+    patch({ sessionId: newSessionId(), eintraege, idx: 0, phase: "antwort", abschluss: [], abschlussIdx: 0, klient: null, lastPhrase: "" });
+    say([eintraege[0]?.frage]);
   }
 
-  function commitEintrag(i, p) {
-    const eintraege = v.eintraege.map((e, k) => (k === i ? { ...e, ...p } : e));
-    return eintraege;
+  function withEintrag(eintraege, i, p) {
+    return eintraege.map((e, k) => (k === i ? { ...e, ...p } : e));
   }
 
-  function advance(eintraege) {
-    stopSpeaking();
-    if (v.idx + 1 >= eintraege.length) patch({ eintraege, phase: "fertig" });
-    else patch({ eintraege, idx: v.idx + 1, phase: "antwort" });
+  // Weiter zur naechsten Frage bzw. in den Abschluss-Check.
+  async function advance(eintraege, extra = {}, ueberleitung = null) {
+    speech.cancel();
+    const next = v.idx + 1;
+    if (next < eintraege.length) {
+      patch({ eintraege, idx: next, phase: "antwort", lastPhrase: ueberleitung || v.lastPhrase, ...extra });
+      say([ueberleitung, eintraege[next].frage]);
+      return;
+    }
+    // Abschluss-Check (C3: automatisch, ueberspringbar)
+    patch({ eintraege, ...extra });
+    setBusy("abschluss");
+    let punkte = [];
+    try {
+      const protokoll = buildInterviewProtokoll({ ...v, eintraege, ...extra, phase: "fertig" });
+      const d = await interviewAbschluss({ protokoll, model: model || null, session_id: v.sessionId || null });
+      punkte = Array.isArray(d.punkte) ? d.punkte : [];
+    } catch (e) {
+      toast && toast("Abschluss-Prüfung nicht möglich (" + friendlyError(e) + ") – Interview abgeschlossen.");
+    } finally {
+      setBusy(null);
+    }
+    if (!punkte.length) {
+      patch({ eintraege, ...extra, phase: "fertig", abschluss: [] });
+      say(["Danke, das war die letzte Frage."]);
+      return;
+    }
+    const abschluss = punkte.map(p => ({ ...p, antwort: "", belassen: false }));
+    patch({ eintraege, ...extra, phase: "abschluss", abschluss, abschlussIdx: 0 });
+    say([ueberleitung, "Ich habe noch " + (abschluss.length === 1 ? "eine Frage" : abschluss.length + " Fragen") + " zum Ganzen.", abschluss[0].frage]);
+  }
+
+  function pushNachfrage(eintraege, i, res, antwort) {
+    const nf = { typ: res.rueckfrage_typ || "aspekt", frage: res.rueckfrage, antwort: "" };
+    const e = eintraege[i];
+    return withEintrag(eintraege, i, {
+      antwort: antwort !== undefined ? antwort : e.antwort,
+      nachfragen: [...(e.nachfragen || []), nf],
+      trigger_stufe: res.trigger_stufe || 0,
+    });
+  }
+
+  async function callTurn(req) {
+    setBusy("turn");
+    try {
+      return await interviewTurn({
+        set: v.setKey, model: model || null, session_id: v.sessionId || null,
+        anrede: anredeOf(v.klient), frage_index: v.idx, vorherige_phrase: v.lastPhrase || null,
+        bisherige: v.eintraege.slice(0, v.idx).filter(e => e.key !== KLIENT_KEY).map(e => ({ frage: e.frage, antwort: e.antwort })),
+        ...req,
+      });
+    } catch (e) {
+      toast && toast("Rückfrage-Prüfung nicht möglich (" + friendlyError(e) + ") – weiter ohne Rückfrage.");
+      return null;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function applyKlient(res) {
+    if (res?.klient) {
+      onKlient && onKlient(res.klient);
+      return { klient: res.klient };
+    }
+    return {};
   }
 
   async function weiter() {
     if (!current || !frage) return;
     if (dict.state === "recording") { dict.stop(); return; }
     const text = draftText.trim();
-    if (v.phase === "rueckfrage") {
-      advance(commitEintrag(v.idx, { rueckfrage_antwort: text }));
+
+    // ── Phase "nachfrage": Antwort auf Rueckfrage/Nachfrage ─────────────
+    if (v.phase === "nachfrage" && lastNachfrage) {
+      const ni = current.nachfragen.length - 1;
+      let eintraege = withEintrag(v.eintraege, v.idx, {
+        nachfragen: current.nachfragen.map((n, k) => (k === ni ? { ...n, antwort: text } : n)),
+      });
+      const typ = lastNachfrage.typ || "aspekt";
+      if (typ.startsWith("trigger")) {
+        const res = await callTurn({ frage_key: frage.key, frage_text: current.frage, antwort: text,
+          pflicht: !!frage.pflicht, pflichtaspekte: [], trigger_stufe: current.trigger_stufe || 1, rueckfrage_bereits: true });
+        if (res?.rueckfrage) {
+          eintraege = pushNachfrage(eintraege, v.idx, res);
+          patch({ eintraege, phase: "nachfrage", lastPhrase: res.quittung || v.lastPhrase });
+          say([res.quittung, res.rueckfrage]);
+          return;
+        }
+        await advance(eintraege, {}, res?.ueberleitung || null);
+        return;
+      }
+      if (typ === "klient") {
+        const res = await callTurn({ frage_key: KLIENT_KEY, frage_text: current.frage, antwort: text,
+          pflicht: true, pflichtaspekte: [], rueckfrage_bereits: true });
+        await advance(eintraege, applyKlient(res), res?.ueberleitung || null);   // D4=B: sonst bleibt das Feld Pflicht
+        return;
+      }
+      await advance(eintraege);   // aspekt/pflicht: kein zweiter Check
       return;
     }
-    // Phase "antwort": Rueckfrage-Check (max. eine je Frage)
-    if (current.rueckfrage) {           // kam schon mal vor (Zurueck-Navigation)
-      advance(commitEintrag(v.idx, { antwort: text }));
-      return;
-    }
-    if (!text && frage.pflicht) {
+
+    // ── Phase "antwort" ─────────────────────────────────────────────────
+    const hatSchonAspekt = (current.nachfragen || []).some(n => n.typ === "aspekt" || n.typ === "pflicht");
+    if (!text && frage.pflicht && frage.key !== KLIENT_KEY) {
       toast && toast("Diese Frage ist eine Pflichtfrage – bitte kurz beantworten.");
       return;
     }
-    setBusy("turn");
-    let rueckfrage = null;
-    try {
-      const d = await interviewTurn({
-        set: v.setKey, frage_key: frage.key, frage_text: current.frage,
-        antwort: text, pflicht: !!frage.pflicht, pflichtaspekte: frage.pflichtaspekte || [],
-        rueckfrage_bereits: false,
-        bisherige: v.eintraege.slice(0, v.idx).map(e => ({ frage: e.frage, antwort: e.antwort })),
-        model: model || null,
-      });
-      rueckfrage = d.rueckfrage || null;
-    } catch (e) {
-      // Rueckfrage-Check darf den Dialog nie blockieren.
-      toast && toast("Rückfrage-Prüfung nicht möglich (" + friendlyError(e) + ") – weiter ohne Rückfrage.");
-    } finally {
-      setBusy(null);
+    const res = await callTurn({ frage_key: frage.key, frage_text: current.frage, antwort: text,
+      pflicht: !!frage.pflicht, pflichtaspekte: frage.pflichtaspekte || [],
+      trigger_stufe: 0, rueckfrage_bereits: hatSchonAspekt });
+    let eintraege = withEintrag(v.eintraege, v.idx, { antwort: text });
+    if (res?.rueckfrage) {
+      eintraege = pushNachfrage(eintraege, v.idx, res, text);
+      patch({ eintraege, phase: "nachfrage", lastPhrase: res.quittung || v.lastPhrase, ...applyKlient(res) });
+      say([res.quittung, res.rueckfrage]);
+      return;
     }
-    if (rueckfrage) {
-      patch({ eintraege: commitEintrag(v.idx, { antwort: text, rueckfrage }), phase: "rueckfrage" });
-    } else {
-      advance(commitEintrag(v.idx, { antwort: text }));
-    }
+    await advance(eintraege, applyKlient(res), res?.ueberleitung || null);
   }
 
   function ueberspringen() {
     if (!frage || frage.pflicht) return;
-    advance(commitEintrag(v.idx, v.phase === "rueckfrage" ? { rueckfrage_antwort: "" } : { antwort: "" }));
+    const eintraege = withEintrag(v.eintraege, v.idx, v.phase === "nachfrage" && lastNachfrage
+      ? { nachfragen: current.nachfragen.map((n, k) => (k === current.nachfragen.length - 1 ? { ...n, antwort: "" } : n)) }
+      : { antwort: "" });
+    advance(eintraege);
   }
 
   function zurueck() {
     if (v.idx === 0 && v.phase === "antwort") return;
-    stopSpeaking();
+    speech.cancel();
     const text = draftText.trim();
-    const eintraege = commitEintrag(v.idx, v.phase === "rueckfrage" ? { rueckfrage_antwort: text } : { antwort: text });
-    if (v.phase === "rueckfrage") patch({ eintraege, phase: "antwort" });
-    else patch({ eintraege, idx: v.idx - 1, phase: "antwort" });
+    if (v.phase === "nachfrage" && lastNachfrage) {
+      const ni = current.nachfragen.length - 1;
+      const eintraege = withEintrag(v.eintraege, v.idx, {
+        nachfragen: current.nachfragen.map((n, k) => (k === ni ? { ...n, antwort: text } : n)),
+      });
+      patch({ eintraege, phase: "antwort" });
+      return;
+    }
+    patch({ eintraege: withEintrag(v.eintraege, v.idx, { antwort: text }), idx: v.idx - 1, phase: "antwort" });
+  }
+
+  // ── Abschluss-Check ─────────────────────────────────────────────────────
+  function abschlussNext(abschluss, i) {
+    speech.cancel();
+    if (i + 1 < abschluss.length) {
+      patch({ abschluss, abschlussIdx: i + 1 });
+      say([abschluss[i + 1].frage]);
+    } else {
+      patch({ abschluss, phase: "fertig" });
+      say(["Danke, das war alles."]);
+    }
+  }
+  function abschlussAntworten() {
+    if (dict.state === "recording") { dict.stop(); return; }
+    const i = v.abschlussIdx;
+    const abschluss = v.abschluss.map((a, k) => (k === i ? { ...a, antwort: draftText.trim(), belassen: !draftText.trim() } : a));
+    abschlussNext(abschluss, i);
+  }
+  function abschlussBelassen() {
+    const i = v.abschlussIdx;
+    abschlussNext(v.abschluss.map((a, k) => (k === i ? { ...a, antwort: "", belassen: true } : a)), i);
+  }
+  function abschlussUeberspringen() {
+    speech.cancel();
+    patch({ abschluss: v.abschluss.map((a, k) => (k >= v.abschlussIdx && !(a.antwort || "").trim() ? { ...a, belassen: true } : a)), phase: "fertig" });
   }
 
   function bearbeiten(i) {
-    stopSpeaking();
+    speech.cancel();
     patch({ idx: i, phase: "antwort" });
   }
 
   function neuStarten() {
     if (interviewHasContent(v) && !confirm("Interview verwerfen und neu beginnen?")) return;
-    stopSpeaking();
-    lastSpokenRef.current = "";
-    patch({ eintraege: [], idx: 0, phase: "start" });
+    speech.cancel();
+    patch({ eintraege: [], idx: 0, phase: "start", abschluss: [], abschlussIdx: 0, klient: null, sessionId: "", lastPhrase: "" });
   }
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -332,8 +438,9 @@ function InterviewDialog({ value, onChange, toast, model }) {
         data-testid="interview-set">
         {manifest.sets.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
       </select>
+      {anredeOf(v.klient) && <span style={{ ...soft, fontWeight: 600 }} data-testid="interview-klient">{anredeOf(v.klient)}</span>}
       <label style={{ ...soft, display: "flex", alignItems: "center", gap: 4, marginLeft: "auto", cursor: "pointer" }}>
-        <input type="checkbox" checked={vorlesen} onChange={toggleVorlesen} /> Fragen vorlesen
+        <input type="checkbox" checked={vorlesen} onChange={toggleVorlesen} /> Vorlesen
       </label>
       {v.phase === "start" && (
         <button className="btn-xs" type="button" onClick={() => setEditFragen(e => !e)}>
@@ -341,6 +448,20 @@ function InterviewDialog({ value, onChange, toast, model }) {
         </button>
       )}
     </div>
+  );
+
+  const recording = dict.state === "recording";
+  const transcribing = dict.state === "transcribing";
+
+  const antwortFeld = (placeholder) => (
+    <textarea rows={5} value={draftText} onChange={e => setDraftText(e.target.value)}
+      placeholder={recording ? "Aufnahme läuft …" : placeholder}
+      disabled={transcribing} style={{ marginTop: 8 }} data-testid="interview-antwort" />
+  );
+  const micButton = (
+    !recording
+      ? <button type="button" className="rec-btn rec-btn-start" onClick={dict.start} disabled={transcribing || busy !== null}>🎙 Aufnehmen</button>
+      : <button type="button" className="rec-btn rec-btn-stop" onClick={dict.stop}>■ Stopp ({dict.seconds}s)</button>
   );
 
   if (v.phase === "start") {
@@ -351,7 +472,7 @@ function InterviewDialog({ value, onChange, toast, model }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {v.fragen.map((f, i) => (
               <div key={f.key}>
-                <div style={soft}>Frage {i + 1} · Zielabschnitt: {manifest.abschnitte[f.ziel_abschnitt] || f.ziel_abschnitt}{f.pflicht ? " · Pflicht" : ""}</div>
+                <div style={soft}>Frage {i + 1} · {manifest.abschnitte[f.ziel_abschnitt] || f.ziel_abschnitt}{f.pflicht ? " · Pflicht" : ""}</div>
                 <textarea rows={2} value={f.text} disabled={!!f.pflicht}
                   onChange={e => patch({ fragen: v.fragen.map((x, k) => (k === i ? { ...x, text: e.target.value } : x)) })}
                   style={{ marginTop: 2 }} />
@@ -359,7 +480,7 @@ function InterviewDialog({ value, onChange, toast, model }) {
             ))}
             <div style={btnRow}>
               <button className="btn-xs" type="button" onClick={resetFragen}>Auf Standard zurücksetzen</button>
-              <span style={soft}>Die Pflichtfrage zur Selbstgefährdung ist nicht änderbar.</span>
+              <span style={soft}>Pflichtfragen (Klient, Selbstgefährdung) sind nicht änderbar.</span>
             </div>
           </div>
         ) : (
@@ -375,59 +496,103 @@ function InterviewDialog({ value, onChange, toast, model }) {
     );
   }
 
-  if (v.phase === "fertig") {
+  if (v.phase === "abschluss" && abschlussPunkt) {
+    const typLabel = { widerspruch: "Widerspruch", luecke: "Lücke", plausibilitaet: "Plausibilität" }[abschlussPunkt.typ] || abschlussPunkt.typ;
     return (
-      <div data-testid="interview-fertig">
+      <div data-testid="interview-abschluss">
         {header}
-        <div className="info-note" style={{ marginBottom: 8 }}>Interview abgeschlossen – die Antworten sind die Quelle für die Dokumentation. Zum Ändern eine Frage anklicken.</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {v.eintraege.map((e, i) => (
-            <div key={e.key} onClick={() => bearbeiten(i)} style={{ cursor: "pointer", padding: "6px 8px", border: "1px solid var(--st-gray-border)", borderRadius: 4, background: "var(--st-bg)" }}>
-              <div style={{ ...soft, fontWeight: 600 }}>{i + 1}. {e.frage}</div>
-              <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{(e.antwort || "").trim() || <em style={soft}>nicht erhoben</em>}</div>
-              {e.rueckfrage && (
-                <div style={{ marginTop: 4 }}>
-                  <div style={{ ...soft, fontStyle: "italic" }}>Rückfrage: {e.rueckfrage}</div>
-                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{(e.rueckfrage_antwort || "").trim() || <em style={soft}>nicht erhoben</em>}</div>
-                </div>
-              )}
-            </div>
-          ))}
+        <div style={{ ...soft, marginBottom: 4 }}>Kurz durchgesehen · Punkt {v.abschlussIdx + 1} von {v.abschluss.length} · {typLabel}{abschlussPunkt.bezug?.length ? ` · Fragen ${abschlussPunkt.bezug.join(", ")}` : ""}</div>
+        <div style={{ fontSize: 15, lineHeight: 1.4, fontWeight: 600, color: "var(--st-text)" }} data-testid="interview-frage">
+          {abschlussPunkt.frage}
+          <button type="button" className="btn-xs" title="Nochmal vorlesen" onClick={() => say([abschlussPunkt.frage])} style={{ marginLeft: 8 }}>🔊</button>
         </div>
+        {antwortFeld("Antwort einsprechen oder tippen – oder „So lassen“, wenn es so bleiben soll …")}
         <div style={btnRow}>
-          <button className="btn-secondary" type="button" onClick={neuStarten}>Neu beginnen</button>
+          {micButton}
+          {transcribing && <span style={soft}>Transkribiere …</span>}
+          <span style={{ marginLeft: "auto" }} />
+          <button type="button" className="btn-secondary" onClick={abschlussUeberspringen} disabled={recording || transcribing}>Alles überspringen</button>
+          <button type="button" className="btn-secondary" onClick={abschlussBelassen} disabled={recording || transcribing} data-testid="interview-belassen">So lassen</button>
+          <button type="button" className="btn-primary" onClick={abschlussAntworten} disabled={transcribing} data-testid="interview-weiter">
+            {recording ? "Stopp" : "Antworten"}
+          </button>
         </div>
       </div>
     );
   }
 
-  // Phase antwort | rueckfrage
-  const istRueckfrage = v.phase === "rueckfrage";
-  const recording = dict.state === "recording";
-  const transcribing = dict.state === "transcribing";
+  if (v.phase === "fertig") {
+    const offen = (v.abschluss || []).filter(a => a.belassen).length;
+    return (
+      <div data-testid="interview-fertig">
+        {header}
+        <div className="info-note" style={{ marginBottom: 8 }}>
+          Interview abgeschlossen – die Antworten sind die Quelle für die Dokumentation. Zum Ändern eine Frage anklicken.
+          {offen > 0 && ` ${offen} ${offen === 1 ? "Punkt" : "Punkte"} bewusst offen gelassen.`}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {v.eintraege.map((e, i) => (
+            <div key={e.key} onClick={() => bearbeiten(i)} style={{ cursor: "pointer", padding: "6px 8px", border: "1px solid var(--st-gray-border)", borderRadius: 4, background: "var(--st-bg)" }}>
+              <div style={{ ...soft, fontWeight: 600 }}>{i + 1}. {e.frage}</div>
+              <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{(e.antwort || "").trim() || <em style={soft}>nicht erhoben</em>}</div>
+              {(e.nachfragen || []).map((n, k) => (
+                <div key={k} style={{ marginTop: 4 }}>
+                  <div style={{ ...soft, fontStyle: "italic" }}>
+                    {(n.typ || "").startsWith("trigger") && <span style={{ color: "var(--st-red)", fontWeight: 600, marginRight: 4 }}>Suizidalität ·</span>}
+                    {n.frage}
+                  </div>
+                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{(n.antwort || "").trim() || <em style={soft}>nicht erhoben</em>}</div>
+                </div>
+              ))}
+            </div>
+          ))}
+          {(v.abschluss || []).length > 0 && (
+            <div style={{ padding: "6px 8px", border: "1px dashed var(--st-gray-border)", borderRadius: 4 }}>
+              <div style={{ ...soft, fontWeight: 600 }}>Abschluss-Check</div>
+              {v.abschluss.map((a, k) => (
+                <div key={k} style={{ marginTop: 4 }}>
+                  <div style={{ ...soft, fontStyle: "italic" }}>{a.frage}</div>
+                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{a.belassen || !(a.antwort || "").trim() ? <em style={soft}>so gelassen</em> : a.antwort}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div style={btnRow}>
+          <button type="button" className="btn-secondary" onClick={neuStarten}>Neu beginnen</button>
+        </div>
+        <FeedbackButton jobId={v.sessionId ? `interview-${v.sessionId}` : null} workflow="dokumentation" context="interview_dialog" toast={toast} />
+      </div>
+    );
+  }
+
+  // Phase antwort | nachfrage
+  const istNachfrage = v.phase === "nachfrage" && !!lastNachfrage;
+  const istTrigger = istNachfrage && (lastNachfrage.typ || "").startsWith("trigger");
   return (
     <div data-testid="interview-dialog">
       {header}
-      <div style={{ ...soft, marginBottom: 4 }}>Frage {v.idx + 1} von {total}{frage?.pflicht ? " · Pflichtfrage" : ""}</div>
-      <div style={{ fontSize: 15, lineHeight: 1.4, fontWeight: 600, color: "var(--st-text)" }} data-testid="interview-frage">
-        {istRueckfrage ? current.rueckfrage : current.frage}
-        <button type="button" className="btn-xs" title="Nochmal vorlesen" onClick={() => speak(istRueckfrage ? current.rueckfrage : current.frage)} style={{ marginLeft: 8 }}>🔊</button>
+      <div style={{ ...soft, marginBottom: 4 }}>
+        Frage {v.idx + 1} von {total}{frage?.pflicht ? " · Pflichtfrage" : ""}
+        {istTrigger && <span style={{ color: "var(--st-red)", fontWeight: 600 }}> · Nachfrage Suizidalität</span>}
+        {istNachfrage && !istTrigger && " · Rückfrage"}
       </div>
-      {istRueckfrage && <div style={{ ...soft, marginTop: 2 }}>Rückfrage zu: {current.frage}</div>}
-      {!istRueckfrage && frage?.hinweis && <div style={{ ...soft, marginTop: 2 }}>{frage.hinweis}</div>}
+      <div style={{ fontSize: 15, lineHeight: 1.4, fontWeight: 600, color: "var(--st-text)" }} data-testid="interview-frage">
+        {istNachfrage ? lastNachfrage.frage : current.frage}
+        <button type="button" className="btn-xs" title="Nochmal vorlesen" onClick={() => say([istNachfrage ? lastNachfrage.frage : current.frage])} style={{ marginLeft: 8 }}>🔊</button>
+      </div>
+      {istNachfrage && <div style={{ ...soft, marginTop: 2 }}>Zu: {current.frage}</div>}
+      {!istNachfrage && frage?.hinweis && <div style={{ ...soft, marginTop: 2 }}>{frage.hinweis}</div>}
 
-      <textarea rows={5} value={draftText} onChange={e => setDraftText(e.target.value)}
-        placeholder={recording ? "Aufnahme läuft …" : "Antwort einsprechen (Mikrofon) oder hier tippen …"}
-        disabled={transcribing} style={{ marginTop: 8 }} data-testid="interview-antwort" />
+      {antwortFeld("Antwort einsprechen (Mikrofon) oder hier tippen …")}
 
       <div style={btnRow}>
-        {!recording
-          ? <button type="button" className="rec-btn rec-btn-start" onClick={dict.start} disabled={transcribing || busy !== null}>🎙 Aufnehmen</button>
-          : <button type="button" className="rec-btn rec-btn-stop" onClick={dict.stop}>■ Stopp ({dict.seconds}s)</button>}
+        {micButton}
         {transcribing && <span style={soft}>Transkribiere …</span>}
         {busy === "turn" && <span style={soft}>Prüfe Antwort …</span>}
+        {busy === "abschluss" && <span style={soft}>Schaue kurz über alles …</span>}
         <span style={{ marginLeft: "auto" }} />
-        <button type="button" className="btn-secondary" onClick={zurueck} disabled={(v.idx === 0 && !istRueckfrage) || busy !== null || recording}>Zurück</button>
+        <button type="button" className="btn-secondary" onClick={zurueck} disabled={(v.idx === 0 && !istNachfrage) || busy !== null || recording}>Zurück</button>
         {!frage?.pflicht && <button type="button" className="btn-secondary" onClick={ueberspringen} disabled={busy !== null || recording || transcribing}>Überspringen</button>}
         <button type="button" className="btn-primary" onClick={weiter} disabled={busy !== null || transcribing} data-testid="interview-weiter">
           {recording ? "Stopp" : (v.idx + 1 >= total ? "Abschließen" : "Weiter")}
@@ -437,4 +602,4 @@ function InterviewDialog({ value, onChange, toast, model }) {
   );
 }
 
-export { InterviewDialog, INTERVIEW_DEFAULT, emptyInterview, buildInterviewProtokoll, interviewHasContent, eintraegeFromFragen, speak, pickGermanVoice };
+export { InterviewDialog, INTERVIEW_DEFAULT, emptyInterview, buildInterviewProtokoll, interviewHasContent, eintraegeFromFragen, anredeOf };

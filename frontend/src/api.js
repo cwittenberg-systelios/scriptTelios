@@ -282,6 +282,16 @@ async function interviewTurn(payload) {
   return _jsonOrThrow(r);
 }
 
+// v19.24: POST /api/interview/abschluss -> { punkte:[{typ,bezug,frage}], model_used }
+async function interviewAbschluss(payload) {
+  const r = await _postEnsured(`${getApiBase()}/interview/abschluss`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return _jsonOrThrow(r);
+}
+
 // Laedt das Transkript eines Jobs vom Backend und speichert es als .txt
 async function downloadTranscript(jobId, filename = "transkript.txt") {
   const r = await apiFetch(`${getApiBase()}/jobs/${jobId}/transcript`);
@@ -382,4 +392,4 @@ function getConfluenceUser() {
   return "";
 }
 
-export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, fetchInterviewSets, interviewTranscribe, interviewTurn, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };
+export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, fetchInterviewSets, interviewTranscribe, interviewTurn, interviewAbschluss, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };

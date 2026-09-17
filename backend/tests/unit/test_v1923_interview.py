@@ -36,7 +36,8 @@ def _protokoll(set_key="kunst", *, mit_pflicht=True, antworten=None) -> dict:
         if f.key == SELBSTGEFAEHRDUNG_KEY and not mit_pflicht:
             eintraege.append({"key": f.key, "frage": f.text, "antwort": ""})
             continue
-        default = "Keine Hinweise auf Suizidalität." if f.key == SELBSTGEFAEHRDUNG_KEY else f"Antwort zu {f.key}"
+        default = ("Keine Hinweise auf Suizidalität." if f.key == SELBSTGEFAEHRDUNG_KEY
+                   else "Frau K." if f.key == "klient" else f"Antwort zu {f.key}")
         eintraege.append({
             "key": f.key, "frage": f.text,
             "antwort": (antworten or {}).get(f.key, default),
@@ -61,7 +62,7 @@ async def _llm(fehlend, rueckfrage, *, raise_exc=None, parse_error=False):
 
 class TestSets:
     def test_fuenf_sets_mit_eindeutigen_keys(self):
-        keys = [s.key for s in INTERVIEW_SETS]
+        keys = [s.key for s in INTERVIEW_SETS]  # noqa: F841
         assert keys == ["gespraech", "kunst", "musik", "koerperarbeit", "koerpertherapie"]
         assert DEFAULT_SET_KEY in keys
 
@@ -143,15 +144,15 @@ class TestProtokoll:
 
     def test_render_mit_rueckfrage(self):
         p = _protokoll()
-        p["eintraege"][0]["rueckfrage"] = "Und das Anliegen?"
-        p["eintraege"][0]["rueckfrage_antwort"] = "Umgang mit Scham."
+        p["eintraege"][1]["rueckfrage"] = "Und das Anliegen?"
+        p["eintraege"][1]["rueckfrage_antwort"] = "Umgang mit Scham."
         text = render_protokoll(parse_protokoll(json.dumps(p)))
         assert "RÜCKFRAGE 1: Und das Anliegen?" in text
         assert "ANTWORT AUF RÜCKFRAGE 1: Umgang mit Scham." in text
 
     def test_ziel_abschnitt_aus_frontend_gewinnt(self):
         p = _protokoll()
-        p["eintraege"][0]["ziel_abschnitt"] = "einladungen"
+        p["eintraege"][1]["ziel_abschnitt"] = "einladungen"
         text = render_protokoll(parse_protokoll(json.dumps(p)))
         assert "FRAGE 1 [Zielabschnitt: Einladungen]" in text
 
@@ -324,8 +325,10 @@ class TestEndpoints:
             "antwort": "Viel Rot.", "bisherige": [{"frage": "A?", "antwort": "a"}],
         })
         assert r.status_code == 200
-        assert r.json() == {"rueckfrage": "Wie war der Kontakt?", "fehlende_aspekte": ["Kontakt"],
-                            "quelle": "llm", "model_used": "m"}
+        d = r.json()
+        assert {k: d[k] for k in ("rueckfrage", "fehlende_aspekte", "quelle", "model_used")} == {
+            "rueckfrage": "Wie war der Kontakt?", "fehlende_aspekte": ["Kontakt"],
+            "quelle": "llm", "model_used": "m"}
 
     def test_transcribe_gemockt_und_tempdatei_weg(self, client, monkeypatch):
         import app.services.transcription as tr

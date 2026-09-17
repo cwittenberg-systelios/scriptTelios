@@ -652,6 +652,15 @@ async def create_generate_job(
             status_code=422,
             detail="Ein Interview-Protokoll wird nur im Workflow 'dokumentation' unterstützt.",
         )
+    # v19.24 (B2): Kuerzel/Geschlecht aus der Klient-Frage, falls das UI
+    # nichts geschickt hat (das UI fuellt die Felder normalerweise selbst).
+    if interview is not None:
+        _k = interview.klient()
+        if _k:
+            if not (patientenname and patientenname.strip()):
+                patientenname = f"{_k['anrede']} {_k['initial']}"
+            if geschlecht_norm is None:
+                geschlecht_norm = _k["gender"]
 
     # Dateien sofort einlesen (vor Background-Task, da UploadFile nicht
     # thread-safe) und alle Eingaben buendeln (v19.21 S6a: PipelineInput).

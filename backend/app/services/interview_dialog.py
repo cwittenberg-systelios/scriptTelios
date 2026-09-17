@@ -37,7 +37,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
-from app.core.interview_sets import get_frage
+from app.core.interview_phrasen import quittung, ueberleitung
+from app.core.interview_sets import KLIENT_KEY, get_frage
+from app.services.interview_trigger import pruefe_trigger
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,8 @@ SYSTEM_PROMPT = (
     "der Du-Form (ein Satz, maximal 25 Woerter), die nur nach dem Fehlenden fragt.\n"
     "- Bewerte nicht die fachliche Qualitaet, gib keine Ratschlaege, "
     "erfinde keine Inhalte.\n"
+    "- Ist eine Anrede der Person angegeben (z.B. 'Herr M.'), verwende sie "
+    "in der Rueckfrage statt 'die Person'.\n"
     "- Antworte ausschliesslich als JSON gemaess Schema."
 )
 
@@ -82,14 +86,25 @@ class TurnRequest:
     pflichtaspekte: list[str] = field(default_factory=list)
     rueckfrage_bereits: bool = False
     bisherige: list[dict] = field(default_factory=list)   # [{frage, antwort}]
+    # v19.24
+    trigger_stufe: int = 0          # 0 = normale Antwort, 1/2 = Antwort auf Trigger-Glied
+    anrede: str | None = None       # "Herr M." aus der Klient-Frage (B2)
+    frage_index: int = 0            # Seed fuer Phrasen-Variation
+    vorherige_phrase: str | None = None
 
 
 @dataclass
 class TurnResult:
     rueckfrage: str | None
     fehlende_aspekte: list[str]
-    quelle: str          # "keine" | "deterministisch" | "llm" | "llm_fehler"
+    quelle: str          # "keine" | "deterministisch" | "llm" | "llm_fehler" | "trigger" | "klient"
     model_used: str | None = None
+    # v19.24
+    rueckfrage_typ: str | None = None   # "aspekt" | "trigger:suizidalitaet" | "pflicht" | "klient"
+    trigger_stufe: int = 0              # naechste Stufe der Trigger-Kette (0 = keine)
+    quittung: str | None = None         # gesprochen VOR der Rueckfrage
+    ueberleitung: str | None = None     # gesprochen VOR der naechsten Frage
+    klient: dict | None = None          # {anrede, initial, gender} bei der Klient-Frage
 
 
 def _resolve_aspekte(req: TurnRequest) -> tuple[bool, list[str]]:
@@ -110,6 +125,22 @@ def deterministic_rueckfrage(frage_text: str) -> str:
             f"({frage_text.strip().rstrip('?')}?)")
 
 
+KLIENT_RUECKFRAGE = ("Ich habe kein Kürzel erkannt. Magst du Anrede und "
+                     "Anfangsbuchstaben nennen, zum Beispiel „Frau K.“?")
+
+
+def _mit_phrasen(res: "TurnResult", req: "TurnRequest", *, antwort_leer: bool) -> "TurnResult":
+    """B1/C2: Quittung nur vor einer Rueckfrage; Ueberleitung nur, wenn keine
+    Rueckfrage folgt und tatsaechlich geantwortet wurde."""
+    seed = req.frage_index * 31 + req.trigger_stufe * 7 + len(req.antwort or "")
+    if res.rueckfrage:
+        ernst = bool(res.rueckfrage_typ and res.rueckfrage_typ.startswith("trigger"))
+        res.quittung = quittung(seed, ernst=ernst, vorherige=req.vorherige_phrase)
+    elif not antwort_leer:
+        res.ueberleitung = ueberleitung(seed, vorherige=req.vorherige_phrase)
+    return res
+
+
 def build_user_content(req: TurnRequest, aspekte: list[str]) -> str:
     parts = []
     if req.bisherige:
@@ -120,6 +151,8 @@ def build_user_content(req: TurnRequest, aspekte: list[str]) -> str:
             if fq:
                 parts.append(f"- {fq}\n  -> {an}")
         parts.append("")
+    if req.anrede:
+        parts.append(f"PERSON: {req.anrede}")
     parts.append(f"AKTUELLE FRAGE: {req.frage_text.strip()}")
     parts.append("PFLICHTASPEKTE:")
     parts.extend(f"- {a}" for a in aspekte)
@@ -143,19 +176,45 @@ async def decide_turn(req: TurnRequest, *, model: str | None = None,
 
     generate_fn: Injektionspunkt fuer Tests (Signatur wie llm.generate_text).
     """
-    if req.rueckfrage_bereits:
-        return TurnResult(None, [], "keine")
-
     pflicht, aspekte = _resolve_aspekte(req)
     antwort = (req.antwort or "").strip()
 
+    # ── v19.24 (B2): Klient-Frage - deterministisch, kein LLM ────────────
+    if req.frage_key == KLIENT_KEY:
+        from app.services.interview_protokoll import extract_klient
+        k = extract_klient(antwort)
+        if k:
+            res = TurnResult(None, [], "klient", klient=k)
+            return _mit_phrasen(res, req, antwort_leer=False)
+        if req.rueckfrage_bereits:
+            # D4=B: einmal nachfragen, danach bleibt das Kuerzel-Feld Pflicht.
+            return TurnResult(None, [], "klient")
+        res = TurnResult(KLIENT_RUECKFRAGE, [], "klient", rueckfrage_typ="klient")
+        return _mit_phrasen(res, req, antwort_leer=not antwort)
+
+    # ── v19.24 (B3/C1): Trigger-Kette zuerst, fuer jede Frage ─────────────
+    tr = pruefe_trigger(antwort, stufe=req.trigger_stufe, anrede=req.anrede)
+    if tr.nachfrage:
+        res = TurnResult(tr.nachfrage, [], "trigger",
+                         rueckfrage_typ=f"trigger:{tr.trigger}", trigger_stufe=tr.stufe)
+        return _mit_phrasen(res, req, antwort_leer=False)
+    if req.trigger_stufe > 0:
+        # Antwort auf ein Trigger-Glied ohne weiteres Glied: Kette zu Ende,
+        # kein Aspekt-Check mehr fuer diese Frage (C1).
+        return _mit_phrasen(TurnResult(None, [], "keine"), req, antwort_leer=not antwort)
+
+    if req.rueckfrage_bereits:
+        return _mit_phrasen(TurnResult(None, [], "keine"), req, antwort_leer=not antwort)
+
     if not antwort:
         if pflicht:
-            return TurnResult(deterministic_rueckfrage(req.frage_text), aspekte, "deterministisch")
+            res = TurnResult(deterministic_rueckfrage(req.frage_text), aspekte,
+                             "deterministisch", rueckfrage_typ="pflicht")
+            return _mit_phrasen(res, req, antwort_leer=True)
         return TurnResult(None, [], "keine")
 
     if not aspekte:
-        return TurnResult(None, [], "keine")
+        return _mit_phrasen(TurnResult(None, [], "keine"), req, antwort_leer=False)
 
     if generate_fn is None:
         from app.services.llm import ensure_generation_model, generate_text
@@ -164,6 +223,7 @@ async def decide_turn(req: TurnRequest, *, model: str | None = None,
             model = await ensure_generation_model(None, "dokumentation")
 
     user = build_user_content(req, aspekte)
+    _leer = not antwort
     try:
         result = await generate_fn(
             SYSTEM_PROMPT, user, max_tokens=200, model=model,
@@ -172,12 +232,14 @@ async def decide_turn(req: TurnRequest, *, model: str | None = None,
         )
     except Exception as e:  # noqa: BLE001 - Dialog darf nie haengen bleiben
         logger.warning("interview_dialog: LLM-Check fehlgeschlagen (%s) - keine Rueckfrage", e)
-        return TurnResult(None, [], "llm_fehler", model)
+        return _mit_phrasen(TurnResult(None, [], "llm_fehler", model), req, antwort_leer=_leer)
 
     data = result.get("structured_data") if isinstance(result, dict) else None
     if not isinstance(data, dict):
         logger.warning("interview_dialog: kein parsebares JSON - keine Rueckfrage")
-        return TurnResult(None, [], "llm_fehler", result.get("model_used") if isinstance(result, dict) else model)
+        return _mit_phrasen(
+            TurnResult(None, [], "llm_fehler", result.get("model_used") if isinstance(result, dict) else model),
+            req, antwort_leer=_leer)
 
     fehlend = [str(a).strip() for a in (data.get("fehlende_aspekte") or []) if str(a).strip()]
     rueckfrage = _clean_rueckfrage(str(data.get("rueckfrage") or ""))
@@ -187,5 +249,7 @@ async def decide_turn(req: TurnRequest, *, model: str | None = None,
         # Inkonsistente LLM-Antwort (fehlend ohne Frage oder Frage ohne
         # fehlend) wird als "nichts fehlt" gewertet - konservativ Richtung
         # weniger Rueckfragen.
-        return TurnResult(None, fehlend if rueckfrage else [], "llm", model_used)
-    return TurnResult(rueckfrage, fehlend, "llm", model_used)
+        return _mit_phrasen(TurnResult(None, fehlend if rueckfrage else [], "llm", model_used),
+                            req, antwort_leer=_leer)
+    return _mit_phrasen(TurnResult(rueckfrage, fehlend, "llm", model_used, rueckfrage_typ="aspekt"),
+                        req, antwort_leer=_leer)
