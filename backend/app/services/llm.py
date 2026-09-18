@@ -1081,6 +1081,7 @@ async def generate_text(
     # ── Postprocessing (v19.1: ausgelagert in _postprocess_text, damit
     # ein etwaiger Retry den exakt gleichen Pfad durchlaeuft) ──────────────
     raw_first_pass = result.get("text") or ""
+    _grammar_stats: dict = {}   # v19.25 (G3)
     result["text"] = _postprocess_text(
         text=raw_first_pass,
         assistant_primer=assistant_primer,
@@ -1088,6 +1089,7 @@ async def generate_text(
         max_words=max_words,
         expected_keywords=expected_keywords,
         strict_dedup=skip_aggressive_dedup,
+        grammar_stats=_grammar_stats,
     )
 
     # ── v19.1: Think-Block-Detection + ggf. Retry ────────────────────────
@@ -1118,6 +1120,7 @@ async def generate_text(
 
         # Retry-Output ebenfalls durch Postprocessing
         retry_raw = retry_result.get("text") or ""
+        _grammar_stats = {}
         retry_processed = _postprocess_text(
             text=retry_raw,
             assistant_primer=assistant_primer,
@@ -1125,6 +1128,7 @@ async def generate_text(
             max_words=max_words,
             expected_keywords=expected_keywords,
             strict_dedup=skip_aggressive_dedup,
+            grammar_stats=_grammar_stats,
         )
 
         retry_words = len(retry_processed.split()) if retry_processed else 0
@@ -1171,6 +1175,8 @@ async def generate_text(
     _tel["input_truncated"] = input_truncated
     _tel["input_truncated_chars"] = input_truncated_chars
     _tel["output_budget_reduced"] = max_tokens < _original_max_tokens
+    if _grammar_stats.get("total"):
+        _tel["grammar_fixes"] = _grammar_stats   # v19.25 (G3)
 
     logger.info(
         "Generierung: %d Tokens in %.1fs (Modell: %s)%s",
@@ -1531,6 +1537,7 @@ def _postprocess_text(
     expected_keywords: Optional[list[str]],
     *,
     strict_dedup: bool = False,
+    grammar_stats: Optional[dict] = None,
 ) -> str:
     """
     Wendet den gesamten Postprocessing-Pfad auf einen Rohtext an.
@@ -1606,6 +1613,7 @@ def _postprocess_text(
                 workflow=workflow,
                 max_words=max_words,
                 expected_keywords=expected_keywords,
+                stats=grammar_stats,
             )
         except ImportError:
             logger.debug("postprocessing-Modul nicht verfuegbar - v16-Cleanups uebersprungen")

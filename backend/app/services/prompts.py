@@ -405,15 +405,177 @@ def parse_befund_slots(vorlage: str) -> list[str]:
     return slots
 
 
-def build_befund_slot_schema(slots: list[str]) -> dict:
+# v19.25 (Sprint B): Slot-Klassifikation. Ein Slot ist "standalone", wenn
+# er in der Vorlage einen EIGENEN Satz bildet ("... Dissoziation). {Zwänge}.
+# {vermeidung}. Kein Anhalt ..."), sonst "inline" ("Antrieb {antrieb}.").
+# Hintergrund (Log-Audit 15.09.2026, Job 7d548664): das Modell liefert fuer
+# Standalone-Slots Kurzwerte ("reduziert", "nein") oder - regelkonform -
+# "nicht erhoben"; 1:1 eingesetzt entstehen Satzfragmente ("nicht erhoben.
+# reduziert. ausgepraegt."). Standalone-Slots ohne belastbaren Wert werden
+# daher samt Satzpunkt WEGGELASSEN (Regel "Fehlendes weglassen", A3a), und
+# das Schema sagt dem Modell pro Slot, welche Form erwartet wird.
+# Zwei Okkurrenz-Formen: am Textanfang ("{slot}. Rest") und im Text
+# (". {slot}. Rest"). Gruppe 1 = umgebender Whitespace (bleibt bei Ersetzung
+# erhalten, faellt beim Weglassen mit weg).
+_BEFUND_STANDALONE_START_TMPL = r"^\{%s\}\.(\s+|$)"
+_BEFUND_STANDALONE_MID_TMPL = r"(?<=[.!?;:])(\s+)\{%s\}\.(?=\s|$)"
+
+# Werte, die "keine Quelle" bedeuten (normalisiert: lower, ohne Satzpunkt).
+BEFUND_EMPTY_VALUES: frozenset[str] = frozenset({
+    "", "nicht erhoben", "nicht erwaehnt", "nicht erwähnt", "nicht bekannt",
+    "nicht angegeben", "keine angabe", "keine angaben", "k.a", "k. a",
+    "unbekannt", "-", "–", "—", "n/a", "na", "null", "none",
+})
+
+# Kurzantworten, die als Standalone-Satz einen Label-Praefix brauchen.
+_BEFUND_SHORT_VALUE_MAP = {"nein": "verneint", "ja": "bejaht"}
+
+# Lesbare Labels der Default-Slots fuer die Form "Label: Kurzwert."
+# (wenn das Modell fuer einen Standalone-Slot nur 1-2 Woerter liefert).
+# Unbekannte Slots: Slot-Name mit Leerzeichen, erster Buchstabe gross.
+BEFUND_SLOT_LABELS: dict[str, str] = {
+    "phobien_angst": "Phobien/Ängste",
+    "Zwänge": "Zwänge",
+    "vermeidung": "Vermeidungsverhalten",
+    "freud_interessen": "Freude und Interessen",
+    "erschöpfung": "Erschöpfung",
+    "hoffnung_insuffizienz": "Hoffnungslosigkeit/Insuffizienzgefühle",
+    "schuldgefühle": "Schuldgefühle",
+    "ambivalenz": "Ambivalenz",
+    "innere_unruhe": "Innere Unruhe",
+    "zirkadian": "Zirkadiane Rhythmik",
+    "schlaf": "Schlaf",
+    "aggressiv_selbstverletzend": "Aggressive/selbstverletzende Impulse",
+    "sozialer_rückzug": "Sozialer Rückzug",
+    "suchtverhalten": "Suchtverhalten",
+    "somatisierung": "Somatisierung",
+    "suizidalität_vergangenheit": "Suizidalität in der Vorgeschichte",
+}
+
+
+def befund_slot_label(slot: str) -> str:
+    if slot in BEFUND_SLOT_LABELS:
+        return BEFUND_SLOT_LABELS[slot]
+    lab = slot.replace("_", " ").strip()
+    return lab[:1].upper() + lab[1:]
+
+
+def _norm_befund_value(val: str) -> str:
+    return (val or "").strip().rstrip(".").strip().lower()
+
+
+def befund_value_is_empty(val: Optional[str]) -> bool:
+    """True, wenn der Slot-Wert keine belastbare Aussage traegt."""
+    if val is None:
+        return True
+    n = _norm_befund_value(str(val))
+    if n in BEFUND_EMPTY_VALUES:
+        return True
+    # "nicht erhoben (keine Angabe in der Selbstauskunft)" u.ae.
+    return n.startswith("nicht erhoben") or n.startswith("nicht erwähnt") \
+        or n.startswith("nicht erwaehnt")
+
+
+def classify_befund_slots(vorlage: str) -> dict[str, str]:
+    """Slot -> 'standalone' | 'inline' (siehe _BEFUND_STANDALONE_RE_TMPL).
+
+    Ein Slot gilt als standalone, wenn MINDESTENS eine seiner Okkurrenzen
+    einen eigenen Satz bildet; bei Mehrfach-Okkurrenzen wird pro Okkurrenz
+    entschieden (fill_befund_vorlage)."""
+    out: dict[str, str] = {}
+    for slot in parse_befund_slots(vorlage):
+        esc = re.escape(slot)
+        st = re.compile(_BEFUND_STANDALONE_START_TMPL % esc)
+        md = re.compile(_BEFUND_STANDALONE_MID_TMPL % esc)
+        out[slot] = "standalone" if (st.search(vorlage or "") or md.search(vorlage or "")) else "inline"
+    return out
+
+
+def _befund_slot_context(vorlage: str, slot: str, width: int = 6) -> tuple[str, str]:
+    """(Woerter vor, Woerter nach) der ERSTEN Okkurrenz des Slots."""
+    v = vorlage or ""
+    i = v.find("{" + slot + "}")
+    if i < 0:
+        return ("", "")
+    before = v[:i].split()[-width:]
+    after = v[i + len(slot) + 2:].split()[:width]
+    # andere Slots im Kontext neutral darstellen
+    b = _BEFUND_SLOT_RE.sub("…", " ".join(before))
+    a = _BEFUND_SLOT_RE.sub("…", " ".join(after))
+    return (b, a)
+
+
+def build_befund_slot_schema(slots: list[str], vorlage: Optional[str] = None) -> dict:
     """JSON-Schema fuer Ollamas format-Parameter: ein String-Feld pro Slot,
     alle Felder required (fehlende Werte soll das Modell als 'nicht erhoben'
-    liefern, nicht weglassen)."""
+    liefern, nicht weglassen).
+
+    v19.25 (B2): mit `vorlage` bekommt jedes Feld eine `description`, die
+    die erwartete Form nennt - vollstaendiger Satz fuer Standalone-Slots,
+    reine Kurzform (ohne Wiederholung der Nachbarwoerter) fuer Inline-Slots.
+    """
+    props: dict[str, dict] = {}
+    kinds = classify_befund_slots(vorlage) if vorlage else {}
+    for s in slots:
+        prop: dict = {"type": "string"}
+        kind = kinds.get(s)
+        if kind == "standalone":
+            prop["description"] = (
+                "Eigenstaendiger, vollstaendiger Satz mit Subjekt "
+                "(z.B. 'Keine Zwaenge.' oder 'Ausgepraegte innere Unruhe.'). "
+                "Ohne Quelle exakt 'nicht erhoben' (der Satz wird dann weggelassen)."
+            )
+        elif kind == "inline":
+            before, after = _befund_slot_context(vorlage or "", s)
+            prop["description"] = (
+                "NUR der fehlende Wert (Adjektiv/Partizip/Kurzphrase), der in "
+                f"den Satz passt: '... {before} [WERT]{'' if after[:1] in '.,;:' else ' '}{after} ...'. Die "
+                "Nachbarwoerter NICHT wiederholen. Ohne Quelle exakt 'nicht erhoben'."
+            )
+        props[s] = prop
     return {
         "type": "object",
-        "properties": {s: {"type": "string"} for s in slots},
+        "properties": props,
         "required": list(slots),
     }
+
+
+def _dedupe_slot_value(vorlage: str, slot: str, val: str) -> str:
+    """v19.25 (B3): entfernt Wiederholungen der Nachbarwoerter aus dem Wert
+    ('Konzentration subjektiv {k}' + 'subjektiv eingeschraenkt' ->
+    'eingeschraenkt'; 'bei insgesamt {a} Affektlage' + 'labiler Affektlage'
+    -> 'labiler')."""
+    before, after = _befund_slot_context(vorlage, slot, width=3)
+    words = val.split()
+    bw = [w.strip(".,;:").lower() for w in before.split()]
+    aw = [w.strip(".,;:").lower() for w in after.split()]
+    changed = True
+    while changed and len(words) > 1:
+        changed = False
+        if bw and words[0].strip(".,;:").lower() == bw[-1]:
+            words = words[1:]; changed = True
+        if aw and words and words[-1].strip(".,;:").lower() == aw[0]:
+            words = words[:-1]; changed = True
+    return " ".join(words)
+
+
+def _standalone_sentence(slot: str, val: str) -> str:
+    """Formt einen Standalone-Wert zu einem vollstaendigen Satz (ohne Punkt).
+
+    - 'nein'/'ja' -> 'verneint'/'bejaht'
+    - Kurzwert (ein Wort, oder zwei Woerter in Kleinschreibung wie
+      'reduziert', 'deutlich erhoeht', 'Durchschlafstoerungen') ->
+      'Label: Kurzwert'; 'Keine Zwaenge' bleibt ein Satz
+    - sonst: Wert, erster Buchstabe gross
+    """
+    v = val.strip().rstrip(".").strip()
+    low = v.lower()
+    if low in _BEFUND_SHORT_VALUE_MAP:
+        v = _BEFUND_SHORT_VALUE_MAP[low]
+    words = v.split()
+    if ":" not in v and (len(words) == 1 or (len(words) == 2 and v[:1].islower())):
+        return f"{befund_slot_label(slot)}: {v}"
+    return v[:1].upper() + v[1:]
 
 
 def fill_befund_vorlage(vorlage: str, values: dict) -> str:
@@ -421,17 +583,44 @@ def fill_befund_vorlage(vorlage: str, values: dict) -> str:
 
     - Safe-Replace pro Slot (kein .format(): geschweifte Klammern im
       Kliniktext duerfen nicht crashen).
-    - Fehlende, leere oder None-Werte -> 'nicht erhoben' (Quellenregel-
-      Default). Garantiert: kein roher {slot} bleibt im Output stehen.
+    - Inline-Slots: fehlende, leere oder None-Werte -> 'nicht erhoben'
+      (Quellenregel-Default). Garantiert: kein roher {slot} bleibt im
+      Output stehen.
+    - v19.25 (B1): Standalone-Slots ("{slot}." als eigener Satz) ohne
+      belastbaren Wert werden samt Satzpunkt entfernt statt als Fragment
+      ("nicht erhoben.") stehen zu bleiben. Standalone-Werte beginnen gross,
+      ein eigener Satzpunkt im Wert wird nicht verdoppelt.
+    - v19.25 (B3): Wiederholte Nachbarwoerter im Wert werden entfernt.
     - Unbekannte Extra-Keys im values-Dict werden ignoriert.
     """
     out = vorlage or ""
     for slot in parse_befund_slots(vorlage):
         raw = values.get(slot)
         val = str(raw).strip() if raw is not None else ""
-        if not val:
-            val = "nicht erhoben"
-        out = out.replace("{" + slot + "}", val)
+        empty = befund_value_is_empty(val)
+        esc = re.escape(slot)
+        st = re.compile(_BEFUND_STANDALONE_START_TMPL % esc)
+        md = re.compile(_BEFUND_STANDALONE_MID_TMPL % esc)
+        # 1) Standalone-Okkurrenzen
+        if empty:
+            out = st.sub("", out)
+            out = md.sub("", out)
+        else:
+            sval = _standalone_sentence(slot, _dedupe_slot_value(vorlage, slot, val))
+            out = st.sub(lambda m, sv=sval: sv + "." + m.group(1), out)
+            out = md.sub(lambda m, sv=sval: m.group(1) + sv + ".", out)
+        # 2) Inline-Okkurrenzen (Rest)
+        if "{" + slot + "}" in out:
+            if empty:
+                ival = "nicht erhoben"
+            else:
+                ival = _dedupe_slot_value(vorlage, slot, val)
+                if out.find("{" + slot + "}.") >= 0:
+                    ival = ival.rstrip(".").strip()
+            out = out.replace("{" + slot + "}", ival)
+    # Aufraeumen: doppelte Leerzeichen / Leerzeichen vor Satzzeichen
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r" +([.,;:])", r"\1", out)
     return out
 
 
@@ -463,7 +652,7 @@ def build_befund_structured_prompt(
     slots = parse_befund_slots(vorlage)
     if not slots:
         return ("", [], {})
-    schema = build_befund_slot_schema(slots)
+    schema = build_befund_slot_schema(slots, vorlage)
 
     diag_str = ", ".join(diagnosen) if diagnosen else "noch nicht festgelegt"
     _parts_work = True if source_text is None else source_mentions_parts_work(source_text)
@@ -487,6 +676,14 @@ def build_befund_structured_prompt(
         "REGELN PRO FELD:\n"
         "- Der Wert muss grammatikalisch in die Satzumgebung der Vorlage "
         "passen. Prüfe dazu den umgebenden Satz in der Vorlage.\n"
+        "- Steht der Platzhalter als EIGENER Satz ('. {feld}. '), liefere "
+        "einen vollständigen Satz mit Subjekt (z.B. 'Keine Zwänge.', "
+        "'Ausgeprägte innere Unruhe mit Anspannung.'). Steht er INNERHALB "
+        "eines Satzes ('Antrieb {feld}.'), liefere NUR das fehlende Wort bzw. "
+        "die Kurzphrase und wiederhole die Nachbarwörter NICHT.\n"
+        "- Ein Feld mit 'nicht erhoben' wird vom System weggelassen, wenn es "
+        "ein eigener Satz ist - schreibe also nie 'nicht erhoben' in einen "
+        "Satz hinein, sondern nur als vollständigen Feldwert.\n"
         "- Bei Mehrfachoptionen: NUR die zutreffende Variante als Wert, "
         "nicht alle Optionen.\n"
         "- QUELLENREGEL: Jeder Wert MUSS auf eine konkrete Stelle in den "
@@ -1646,6 +1843,11 @@ def split_style_examples(combined: str) -> list:
     return cleaned if cleaned else [combined.strip()]
 
 
+# v19.25 (Sprint L): explizite EB-Mindestlaenge (L2) und QC-Schwelle (L1).
+EB_MIN_WORDS_EXPLICIT = 600
+EB_LENGTH_QC_THRESHOLD = 550
+
+
 def render_length_anchor_block(workflow: str, anchor_min: int, anchor_max: int) -> str:
     """EINZIGER Renderer des ZIELLAENGE-Blocks (v19.20 M4) - genutzt von
     resolve_length_anchor (Default-Pfad) UND build_system_prompt
@@ -1657,12 +1859,20 @@ def render_length_anchor_block(workflow: str, anchor_min: int, anchor_max: int) 
         # 380-686 Woerter (Fenster 500-900), dokumentierte Modalitaeten
         # fehlten - 'Lieber praezise als ausschweifend' drueckte ans untere
         # Ende. Vollstaendigkeit vor Kuerze.
+        # v19.25 (L2): explizite Mindestlaenge. Nach M4 lagen 10 EB (11.-15.09.)
+        # bei 464-649 Woertern (Median ~560) - der Richtwert 700 allein zog
+        # gemma nicht nach oben. Untergrenze = max(anchor_min, 600), aber
+        # mindestens 100 unter der Obergrenze (Style-abgeleitete Fenster).
+        eb_floor = max(anchor_min, min(EB_MIN_WORDS_EXPLICIT, anchor_max - 100))
         return (
-            f"\nZIELLÄNGE: {anchor_min}–{anchor_max} Wörter, Richtwert ca. {target}. "
+            f"\nZIELLÄNGE: {eb_floor}–{anchor_max} Wörter, Richtwert ca. {max(target, eb_floor + 100)}. "
+            f"Mindestlänge: {eb_floor} Wörter – ein Entlassbericht unter {eb_floor} Wörtern "
+            "gilt als unvollständig. "
             f"Obergrenze: {anchor_max} Wörter. Innerhalb dieser Bandbreite hat die "
             "Vollständigkeit aller dokumentierten Sektionen und Modalitäten "
             "Vorrang vor Kürze – lasse keinen belegten Absatz weg, um kürzer "
-            "zu werden.\n"
+            "zu werden; führe Einzeltherapie, Gruppentherapie und nonverbale "
+            "Verfahren jeweils in einem eigenen, quellengedeckten Absatz aus.\n"
         )
     return (
         f"\nZIELLÄNGE: ca. {target} Wörter (akzeptierte Bandbreite {anchor_min}–{anchor_max} Wörter). "

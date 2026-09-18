@@ -72,6 +72,10 @@ _VALID_SEVERITIES = frozenset({SEVERITY_CRITICAL, SEVERITY_WARNING, SEVERITY_INF
 
 ISSUE_CODE_LENGTH_TOO_SHORT = "LENGTH_TOO_SHORT"
 ISSUE_CODE_LENGTH_TOO_LONG = "LENGTH_TOO_LONG"
+# v19.25 (Sprint L1): Entlassbericht unter der Zielmindestlaenge (550w) -
+# warning mit Repair-Hint, KEIN automatischer Repair (D5: Repair-Ausgaben
+# sind erfahrungsgemaess nicht besser als das Original; Therapeut entscheidet).
+ISSUE_CODE_LENGTH_BELOW_TARGET = "LENGTH_BELOW_TARGET"
 ISSUE_CODE_THINK_BLOCK_LEAK = "THINK_BLOCK_LEAK"
 ISSUE_CODE_BEFUND_SEPARATOR_MISSING = "BEFUND_SEPARATOR_MISSING"
 ISSUE_CODE_KOMPOSITA_KLEBEBUG = "KOMPOSITA_KLEBEBUG"
@@ -196,6 +200,25 @@ ISSUE_CODE_DIAGNOSE_IM_TEXT = "DIAGNOSE_IM_TEXT"
 ISSUE_CODE_SUIZIDALITAET_QUELLE_NICHT_UEBERNOMMEN = "SUIZIDALITAET_QUELLE_NICHT_UEBERNOMMEN"
 ISSUE_CODE_SUIZIDHINWEIS_FEHLT = "SUIZIDHINWEIS_FEHLT"
 
+
+# v19.25 (Sprint G3): Postprocessing hat Grammatik deterministisch korrigiert
+# ("von Herr G." -> "von Herrn G.", "Aufenthaltsvon" -> "Aufenthalts von").
+# Info-Issue, damit der Effekt im Log/Feedback messbar bleibt.
+ISSUE_CODE_GRAMMAR_AUTOFIXED = "GRAMMAR_AUTOFIXED"
+
+# v19.25 (Sprint Q): Quellen-Plausibilitaet (source_plausibility.py).
+# VERLAUF_UNPLAUSIBEL: Verlaufsdoku ohne therapeutisches Vokabular (Fremd-
+#   dokument, z.B. Kammer-Formular am 13.09.2026) - warning, Job laeuft (D4).
+# SOURCE_ENCODING_DAMAGED: HTML-Tags/Mojibake in einer Quelle - warning.
+# STYLE_EXAMPLE_TOO_SHORT: Stilvorlage ohne Textbeispiel - info.
+ISSUE_CODE_VERLAUF_UNPLAUSIBEL = "VERLAUF_UNPLAUSIBEL"
+ISSUE_CODE_SOURCE_ENCODING_DAMAGED = "SOURCE_ENCODING_DAMAGED"
+ISSUE_CODE_STYLE_EXAMPLE_TOO_SHORT = "STYLE_EXAMPLE_TOO_SHORT"
+
+# v19.25 (Sprint B4): Satzfragmente im strukturierten Befund (P2, Call 2).
+# Sicherheitsnetz hinter fill_befund_vorlage(): Saetze mit <= 2 Woertern
+# ("reduziert.", "nicht erhoben.") oder Satzanfang in Kleinschreibung.
+ISSUE_CODE_BEFUND_FRAGMENT = "BEFUND_FRAGMENT"
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
 # Wird in serialize_issues + Pydantic-Schemas (Phase C) genutzt.
@@ -1102,6 +1125,32 @@ def _check_length(text: str, workflow: str) -> list[QualityIssue]:
     return []
 
 
+def _check_eb_length_below_target(text: str, workflow: str) -> list[QualityIssue]:
+    """v19.25 (L1): nur entlassbericht; < EB_LENGTH_QC_THRESHOLD Woerter."""
+    if workflow != "entlassbericht":
+        return []
+    from app.services.prompts import EB_LENGTH_QC_THRESHOLD, EB_MIN_WORDS_EXPLICIT
+    n = len((text or "").split())
+    if n == 0 or n >= EB_LENGTH_QC_THRESHOLD:
+        return []
+    return [QualityIssue(
+        code=ISSUE_CODE_LENGTH_BELOW_TARGET,
+        severity=SEVERITY_WARNING,
+        message=(
+            f"Entlassbericht mit {n} Woertern unter der Zielmindestlaenge "
+            f"({EB_MIN_WORDS_EXPLICIT}, Hinweis ab < {EB_LENGTH_QC_THRESHOLD}). "
+            "Verlaufsabschnitte sind moeglicherweise zu knapp."
+        ),
+        repair_hint=(
+            "Verlaufsabschnitte (Einzeltherapie, Gruppentherapie, nonverbale "
+            "Verfahren) inhaltlich erweitern - AUSSCHLIESSLICH mit Inhalten, die "
+            "durch die Quellen gedeckt sind; keine Fuellsaetze, keine neuen "
+            "Sachverhalte. Bestehende Absaetze nicht kuerzen."
+        ),
+        code_detail={"actual": n, "threshold": EB_LENGTH_QC_THRESHOLD, "target_min": EB_MIN_WORDS_EXPLICIT},
+    )]
+
+
 def _check_required_keywords(text: str, workflow: str) -> list[QualityIssue]:
     issues: list[QualityIssue] = []
     for kw in required_keywords_for(workflow):
@@ -1247,6 +1296,117 @@ def _check_befund_separator(text: str, workflow: str) -> list[QualityIssue]:
             "eigene Zeile, ohne weitere Zeichen drumherum."
         ),
         code_detail={"separator": BEFUND_SEPARATOR},
+    )]
+
+
+_BEFUND_EMPTY_MARKERS = frozenset({"nicht erhoben", "nicht erwähnt", "nicht erwaehnt", "nicht bekannt", "keine angabe"})
+_BEFUND_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# Abkuerzungen, die ein Satzende vortaeuschen ("z.B.", "u.a.", "ggf.").
+_BEFUND_ABBREV_RE = re.compile(r"\b(z\.B|u\.a|ggf|bzw|ca|evtl|inkl|o\.g|s\.o|s\.u|v\.a)\.$", re.I)
+
+
+_SOURCE_WARNING_CODES = {
+    ISSUE_CODE_VERLAUF_UNPLAUSIBEL, ISSUE_CODE_SOURCE_ENCODING_DAMAGED, ISSUE_CODE_STYLE_EXAMPLE_TOO_SHORT,
+}
+_SOURCE_WARNING_HINTS = {
+    ISSUE_CODE_VERLAUF_UNPLAUSIBEL: (
+        "Nicht durch Neu-Generierung behebbar: richtige Verlaufsdokumentation "
+        "hochladen und den Auftrag neu starten."
+    ),
+    ISSUE_CODE_SOURCE_ENCODING_DAMAGED: (
+        "Nicht durch Neu-Generierung behebbar: Quelle als sauberes PDF/DOCX "
+        "neu exportieren; Umlaute im Bericht pruefen."
+    ),
+    ISSUE_CODE_STYLE_EXAMPLE_TOO_SHORT: (
+        "Keine Aktion im Bericht noetig. Fuer eine eigene Gliederung die "
+        "Fokus-Themen/Hinweise nutzen; Stilvorlage durch einen echten Beispieltext ersetzen."
+    ),
+}
+
+
+def _check_source_plausibility(source_warnings: "list | None") -> list[QualityIssue]:
+    """v19.25 (Sprint Q): Warn-Dicts aus source_plausibility.collect_source_warnings
+    (auf dem Job hinterlegt) in QualityIssues uebersetzen."""
+    out: list[QualityIssue] = []
+    for w in source_warnings or []:
+        code = str(w.get("code") or "")
+        if code not in _SOURCE_WARNING_CODES:
+            continue
+        sev = w.get("severity") or SEVERITY_WARNING
+        if sev not in (SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_CRITICAL):
+            sev = SEVERITY_WARNING
+        out.append(QualityIssue(
+            code=code,
+            severity=sev,
+            message=str(w.get("message") or code),
+            repair_hint=_SOURCE_WARNING_HINTS.get(code, ""),
+            code_detail={"source": w.get("source"), **(w.get("detail") or {})},
+        ))
+    return out
+
+
+def _check_grammar_autofixed(grammar_fixes: "dict | None") -> list[QualityIssue]:
+    """v19.25 (G3): Telemetrie-basiert, info."""
+    if not grammar_fixes or not int(grammar_fixes.get("total") or 0):
+        return []
+    total = int(grammar_fixes.get("total") or 0)
+    parts = []
+    if grammar_fixes.get("herrn"):
+        parts.append(f"{grammar_fixes['herrn']}x 'Herr' -> 'Herrn'")
+    if grammar_fixes.get("klebebugs"):
+        parts.append(f"{grammar_fixes['klebebugs']}x Klebefehler")
+    return [QualityIssue(
+        code=ISSUE_CODE_GRAMMAR_AUTOFIXED,
+        severity=SEVERITY_INFO,
+        message=f"{total} Grammatik-Korrektur(en) automatisch angewendet: {', '.join(parts)}.",
+        repair_hint="Keine Aktion noetig - bereits korrigiert.",
+        code_detail=dict(grammar_fixes),
+    )]
+
+
+def _check_befund_fragment(text: str, workflow: str) -> list[QualityIssue]:
+    """v19.25 (B4): nur anamnese; prueft den Befund-Teil hinter dem Trenner."""
+    if workflow != "anamnese" or BEFUND_SEPARATOR not in (text or ""):
+        return []
+    befund = text.split(BEFUND_SEPARATOR, 1)[1].strip()
+    if not befund:
+        return []
+    # Satzsplit mit Abkuerzungsschutz ("z.B. Depersonalisation" bleibt zusammen)
+    sents: list[str] = []
+    for piece in _BEFUND_SENT_SPLIT_RE.split(befund):
+        if sents and _BEFUND_ABBREV_RE.search(sents[-1]):
+            sents[-1] = sents[-1] + " " + piece
+        else:
+            sents.append(piece)
+    frags: list[str] = []
+    for sent in sents:
+        sent = sent.strip()
+        if not sent:
+            continue
+        core = sent.rstrip(".!?").strip()
+        words = core.split()
+        if len(words) == 1:
+            frags.append(sent)            # "reduziert."
+        elif core.lower() in _BEFUND_EMPTY_MARKERS:
+            frags.append(sent)            # "nicht erhoben."
+        elif sent[:1].islower():
+            frags.append(sent)            # "keine spezifischen Phobien."
+    if not frags:
+        return []
+    return [QualityIssue(
+        code=ISSUE_CODE_BEFUND_FRAGMENT,
+        severity=SEVERITY_WARNING,
+        message=(
+            f"Befund enthaelt {len(frags)} Satzfragment(e) ohne Subjekt oder "
+            f"in Kleinschreibung: {', '.join(repr(f[:40]) for f in frags[:4])}. "
+            "Typisch fuer Feldwerte, die nicht in den Vorlagensatz passen."
+        ),
+        repair_hint=(
+            "Betroffene Fragmente zu vollstaendigen AMDP-Saetzen mit Subjekt "
+            "ergaenzen ('Antrieb vermindert.' statt 'vermindert.'); Fragmente "
+            "ohne Quelle ('nicht erhoben.') ersatzlos streichen."
+        ),
+        code_detail={"fragments": frags[:10], "count": len(frags)},
     )]
 
 
@@ -1413,6 +1573,8 @@ def run_quality_check(
     repair_flags: "dict | None" = None,
     diagnosen: "list[str] | None" = None,
     suizid_note_status: "str | None" = None,
+    grammar_fixes: "dict | None" = None,
+    source_warnings: "list | None" = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
@@ -1495,6 +1657,8 @@ def run_quality_check(
         input_truncated_chars=input_truncated_chars,
         repair_flags=repair_flags, diagnosen=diagnosen,
         suizid_note_status=suizid_note_status,
+        grammar_fixes=grammar_fixes,
+        source_warnings=source_warnings,
     )
     issues = run_checks(ctx)
 
@@ -1532,6 +1696,8 @@ class QCContext:
     repair_flags: "dict | None" = None
     diagnosen: "list[str] | None" = None
     suizid_note_status: "str | None" = None   # v19.22 (S3)
+    grammar_fixes: "dict | None" = None       # v19.25 (G3)
+    source_warnings: "list | None" = None     # v19.25 (Sprint Q)
 
 
 @dataclass(frozen=True)
@@ -1554,6 +1720,11 @@ CHECK_REGISTRY: tuple[QCCheck, ...] = (
             (ISSUE_CODE_TRANSCRIPT_INCOMPLETE,), "v19.16 (T4): Recording-Transkript deckt Audio nicht ab"),
     QCCheck("input_truncated", lambda c: _check_input_truncated(c.input_truncated_chars),
             (ISSUE_CODE_INPUT_TRUNCATED,), "v19.19 (K2): Budget-Guard hat Quellen gekuerzt"),
+    QCCheck("source_plausibility", lambda c: _check_source_plausibility(c.source_warnings),
+            (ISSUE_CODE_VERLAUF_UNPLAUSIBEL, ISSUE_CODE_SOURCE_ENCODING_DAMAGED,
+             ISSUE_CODE_STYLE_EXAMPLE_TOO_SHORT), "v19.25 (Sprint Q): Fremddokument/HTML/Stilvorlage"),
+    QCCheck("grammar_autofixed", lambda c: _check_grammar_autofixed(c.grammar_fixes),
+            (ISSUE_CODE_GRAMMAR_AUTOFIXED,), "v19.25 (G3): info, Telemetrie grammar_fixes"),
     # ── Output-Level ───────────────────────────────────────────────────────
     QCCheck("konjunktiv", lambda c: _check_konjunktiv(c.workflow, c.text),
             (ISSUE_CODE_KONJUNKTIV_QUOTE,), "v19.19 (A2): Anamnese in indirekter Rede"),
@@ -1577,8 +1748,12 @@ CHECK_REGISTRY: tuple[QCCheck, ...] = (
             (ISSUE_CODE_THINK_BLOCK_LEAK,)),
     QCCheck("befund_separator", lambda c: _check_befund_separator(c.text, c.workflow),
             (ISSUE_CODE_BEFUND_SEPARATOR_MISSING,)),
+    QCCheck("befund_fragment", lambda c: _check_befund_fragment(c.text, c.workflow),
+            (ISSUE_CODE_BEFUND_FRAGMENT,), "v19.25 (B4): Satzfragmente im strukturierten Befund"),
     QCCheck("length", lambda c: _check_length(c.text, c.workflow),
             (ISSUE_CODE_LENGTH_TOO_SHORT, ISSUE_CODE_LENGTH_TOO_LONG), "nur bei Stub < 50 % des Minimums"),
+    QCCheck("eb_length_below_target", lambda c: _check_eb_length_below_target(c.text, c.workflow),
+            (ISSUE_CODE_LENGTH_BELOW_TARGET,), "v19.25 (L1): nur entlassbericht < 550 Woerter"),
     QCCheck("required_keywords", lambda c: _check_required_keywords(c.text, c.workflow),
             (ISSUE_CODE_PREFIX_MISSING_KEYWORD,), "aktuell leer - siehe quality_specs"),
     QCCheck("required_sections", lambda c: _check_required_sections(c.text, c.workflow),

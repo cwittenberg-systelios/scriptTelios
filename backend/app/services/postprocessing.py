@@ -48,6 +48,10 @@ _KOMPOSITUM_KLEBEBUGS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bAufnahmegespraechszeigte\b"), "Aufnahmegespraechs zeigte"),
     (re.compile(r"\bBehandlungsverlaufzeigte\b"), "Behandlungsverlauf zeigte"),
     (re.compile(r"\bBerichtszeitraumzeigte\b"), "Berichtszeitraum zeigte"),
+    # v19.25 (G2): mistral-small klebt Genitiv-s + Praeposition. Betrieb
+    # 11./15.09.2026: "Im bisherigen Verlauf des stationären Aufenthaltsvon
+    # Frau R." in 2/2 Verlaengerungsantraegen.
+    (re.compile(r"\bAufenthaltsvon\b"), "Aufenthalts von"),
 ]
 
 # Zusaetzliche generische Heuristik fuer "Wort-Genitiv-S + Verb"-Klebebugs:
@@ -63,6 +67,14 @@ _NOUN_STEMS_GENITIVE_S = (
     "Aufenthalt", "Behandlung", "Verlauf", "Antrag",
     "Termin", "Gespraech", "Gespräch", "Bericht",
     "Verlängerungsantrag", "Verlaengerungsantrag",
+)
+# v19.25 (G2): Funktionswoerter, die an ein Genitiv-s geklebt vorkommen
+# ("Aufenthaltsvon", "Verlaufsbei"). Nur ganze Woerter (\b danach), damit
+# echte Komposita wie "Gesprächsmitte" oder "Aufenthaltsdauer" unberuehrt
+# bleiben.
+_FUNCTION_WORD_SUFFIXES = (
+    "von", "vom", "bei", "beim", "mit", "zu", "zum", "zur", "nach", "seit",
+    "der", "des", "die", "das", "dem", "den", "und", "wurde", "wurden",
 )
 
 
@@ -95,7 +107,7 @@ def fix_kompositum_klebebugs(text: str) -> str:
     # Pattern: <Stammwort>s<Verb> -> <Stammwort>es <Verb>  (oder s<Verb>)
     # Beispiel: "Verlaufszeigte" -> "Verlaufs zeigte"
     for stem in _NOUN_STEMS_GENITIVE_S:
-        for verb in _VERB_SUFFIXES:
+        for verb in _VERB_SUFFIXES + _FUNCTION_WORD_SUFFIXES:
             # "Aufenthaltszeigte" -> "Aufenthaltes zeigte" oder "Aufenthalts zeigte"
             # Wir nehmen "<stem>s <verb>" als Default (Genitiv-s).
             pattern = re.compile(rf"\b{stem}s{verb}\b")
@@ -110,7 +122,49 @@ def fix_kompositum_klebebugs(text: str) -> str:
             "Postprocessing: %d Komposita-Klebebugs repariert (Qwen3-Tokenizer-Quirk)",
             fixed_count,
         )
+    _LAST_KLEBEBUG_COUNT[0] = fixed_count
     return fixed
+
+
+# v19.25 (G3): letzter Zaehler von fix_kompositum_klebebugs (Signatur bleibt
+# str -> str, damit bestehende Aufrufer/Tests unveraendert bleiben).
+_LAST_KLEBEBUG_COUNT = [0]
+
+
+# ── 1a. Deklination "Herr" (v19.25, G1) ───────────────────────────────────────
+#
+# Betrieb 11.-17.09.2026: "von Herr G.", "bei Herr G.", "Beobachtung von
+# Herr G." - 8 Treffer in 4 von 14 P1-Dokus mit maennlichem Kuerzel.
+# "Herr" ist ein schwaches Substantiv: nach JEDER Praeposition (und im
+# Genitiv "des Herrn") steht "Herrn". Nominativ ("Herr G. berichtet") bleibt
+# unveraendert. Nur Kuerzel-Form (Grossbuchstabe + Punkt) und Nachnamen mit
+# Grossbuchstaben - "Herr" als Anrede-Wort allein ("Sehr geehrter Herr")
+# wird nicht angefasst.
+_HERR_PREPOSITIONS = (
+    "von", "vom", "bei", "beim", "mit", "zu", "zum", "gegenüber", "gegenueber",
+    "für", "fuer", "an", "nach", "über", "ueber", "durch", "ohne", "seitens",
+    "zwischen", "unter", "vor", "aus", "neben", "hinter", "gemäß", "gemaess",
+    "laut", "außer", "ausser", "samt", "um", "gegen", "wegen", "trotz",
+    "während", "waehrend", "entgegen", "statt", "anstelle", "hinsichtlich",
+    "bezüglich", "bezueglich", "zusammen mit", "gemeinsam mit",
+)
+_HERR_DEKLINATION_RE = re.compile(
+    r"\b(" + "|".join(re.escape(p) for p in sorted(_HERR_PREPOSITIONS, key=len, reverse=True))
+    + r"|des|dieses|jenes|seines|ihres|unseres|eines|keines"
+    + r")\s+Herr(?=\s+[A-ZÄÖÜ][\wäöüß-]*\.?(?:\s|$|[,;:)]))",
+    re.IGNORECASE,
+)
+
+
+def fix_herrn_deklination(text: str) -> tuple[str, int]:
+    """Praeposition/Genitiv-Artikel + 'Herr X.' -> 'Herrn X.'. Gibt
+    (Text, Anzahl Korrekturen) zurueck."""
+    if not text or "Herr " not in text:
+        return text, 0
+    fixed, n = _HERR_DEKLINATION_RE.subn(lambda m: f"{m.group(1)} Herrn", text)
+    if n:
+        logger.warning("Postprocessing: %d x 'Herr' -> 'Herrn' dekliniert (v19.25 G1)", n)
+    return fixed, n
 
 
 # ── 1b. Zentraler deutscher Satz-Splitter ─────────────────────────────────────
@@ -419,6 +473,7 @@ def postprocess_output(
     workflow: Optional[str] = None,
     max_words: Optional[int] = None,
     expected_keywords: Optional[list[str]] = None,
+    stats: Optional[dict] = None,
 ) -> str:
     """
     Wendet alle Postprocessing-Schritte in der richtigen Reihenfolge an.
@@ -436,6 +491,9 @@ def postprocess_output(
         workflow:          Workflow-Name (fuer kontextbezogenes Logging)
         max_words:         Optionale harte Obergrenze (vom Caller berechnet)
         expected_keywords: Keywords die im Output vorhanden sein muessten
+        stats:             v19.25 (G3): optionales Dict, in das die Anzahl
+                           der Grammatik-Autofixes geschrieben wird
+                           ({klebebugs, herrn, total}) - fuer Telemetrie/QC
 
     Returns:
         Bereinigter Text. Bei missing keywords: Original-Text mit Warnung im Log.
@@ -447,6 +505,14 @@ def postprocess_output(
 
     # 1. Klebebugs reparieren
     text = fix_kompositum_klebebugs(text)
+    _kleb = _LAST_KLEBEBUG_COUNT[0]
+
+    # 1a. v19.25 (G1): "von Herr G." -> "von Herrn G."
+    text, _herrn = fix_herrn_deklination(text)
+    if stats is not None:
+        stats["klebebugs"] = _kleb
+        stats["herrn"] = _herrn
+        stats["total"] = _kleb + _herrn
 
     # 2. Loop-Detection
     text = detect_loop_repetition(text)

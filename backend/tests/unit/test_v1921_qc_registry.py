@@ -9,11 +9,11 @@ def test_registry_reihenfolge_entspricht_v1920():
     names = [c.name for c in QC.CHECK_REGISTRY]
     assert names == [
         "selbstauskunft_leer", "template_placeholder", "source_truncation",
-        "transcript_coverage", "input_truncated",
+        "transcript_coverage", "input_truncated", "source_plausibility", "grammar_autofixed",
         "konjunktiv", "diagnosekriterien", "repair_flags", "wir_form",
         "pathologisierende_sprache", "prozessreflexion", "forbidden_names",
         "patient_initial", "gender", "think_blocks", "befund_separator",
-        "length", "required_keywords", "required_sections",
+        "befund_fragment", "length", "eb_length_below_target", "required_keywords", "required_sections",
         "recommended_sections", "stichpunkte", "kompositum_klebebugs",
         "source_fidelity", "suizid_note",
     ]

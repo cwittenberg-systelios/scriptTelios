@@ -24,7 +24,7 @@ def _job():
 
 _SUMMARY_RESULT = {
     "summary": "Verdichteter Text.",
-    "raw_word_count": 2000,
+    "raw_word_count": 3000,
     "summary_word_count": 400,
     "compression_ratio": 0.2,
     "duration_s": 12.5,
@@ -46,7 +46,7 @@ class TestRunVerlaufStage1:
         async def _fake(**kwargs):
             return dict(_SUMMARY_RESULT)
 
-        long_text = "Wort " * 2000  # > 1500-Woerter-Schwelle
+        long_text = "Wort " * 3000  # > 2500-Woerter-Schwelle (v19.25 S5-5)
         with patch("app.services.stage1.summarize_verlauf", _fake):
             text, audit = await _run_verlauf_stage1(
                 workflow="verlaengerung",
@@ -57,7 +57,7 @@ class TestRunVerlaufStage1:
             )
         assert text == "Verdichteter Text."
         assert audit["applied"] is True
-        assert audit["raw_word_count"] == 2000
+        assert audit["raw_word_count"] == 3000
         assert audit["fallback_reason"] is None
 
     @pytest.mark.asyncio
@@ -67,7 +67,7 @@ class TestRunVerlaufStage1:
         async def _boom(**kwargs):
             raise RuntimeError("Ollama down")
 
-        long_text = "Wort " * 2000
+        long_text = "Wort " * 3000
         with patch("app.services.stage1.summarize_verlauf", _boom):
             text, audit = await _run_verlauf_stage1(
                 workflow="verlaengerung",

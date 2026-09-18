@@ -18,7 +18,7 @@ import re
 from typing import Optional
 
 from app.services.summary_runner import (
-    anti_think_suffix, run_chunked, source_block, stage1_generate, wrap_no_think, word_count,
+    Stage1Error, anti_think_suffix, run_chunked, source_block, stage1_generate, wrap_no_think, word_count,
 )
 
 logger = logging.getLogger(__name__)
@@ -336,13 +336,15 @@ async def summarize_verlauf(
     if not _is_chunk:
         from app.services.staging import chunk_text_by_blocks, stage1_chunk_chars
         _chunk_limit = stage1_chunk_chars()
-        if len(verlauf_text) > _chunk_limit:
+        # v19.25 (S5-1): Rest-Chunk-Merge kann auf EINEN Teil zurueckfallen.
+        _chunks = chunk_text_by_blocks(verlauf_text, _chunk_limit) if len(verlauf_text) > _chunk_limit else []
+        if len(_chunks) > 1:
             return await _summarize_verlauf_chunked(
                 verlauf_text=verlauf_text,
                 workflow=workflow,
                 patient_initial=patient_initial,
                 target_words=target_words,
-                chunks=chunk_text_by_blocks(verlauf_text, _chunk_limit),
+                chunks=_chunks,
             )
 
     raw_words = len(verlauf_text.split())
@@ -358,8 +360,9 @@ async def summarize_verlauf(
         #   raw= 3000w → target= 800w (Floor)
 
     # v19.3.2: Threshold 50% → 30%. Liegt jetzt in staging.
-    from app.services.staging import compute_verlauf_min_acceptable
-    min_acceptable = compute_verlauf_min_acceptable(target_words)
+    from app.services.staging import compute_verlauf_min_acceptable, within_stage1_tolerance
+    # v19.25 (S5-5): Untergrenze relativ zum Rohtext gedeckelt.
+    min_acceptable = compute_verlauf_min_acceptable(target_words, raw_words=raw_words)
     max_acceptable = int(target_words * 2.5)  # mehr Headroom nach oben
 
     focus_hint = _build_focus_hint(workflow)
@@ -420,11 +423,21 @@ async def summarize_verlauf(
     summary_words = len(summary.split()) if summary else 0
 
     if not summary:
-        raise RuntimeError("Stage 1: Zusammenfassung leer")
+        raise Stage1Error("Stage 1: Zusammenfassung leer",
+                          system_prompt=system_prompt, user_content=user_content)
+    short_tolerated = False
     if summary_words < min_acceptable:
-        raise RuntimeError(
-            f"Stage 1: Zusammenfassung implausibel kurz: {summary_words}w "
-            f"< {min_acceptable}w Minimum (target={target_words}w, raw={raw_words}w)"
+        if not within_stage1_tolerance(summary_words, min_acceptable):
+            raise Stage1Error(
+                f"Stage 1: Zusammenfassung implausibel kurz: {summary_words}w "
+                f"< {min_acceptable}w Minimum (target={target_words}w, raw={raw_words}w)",
+                system_prompt=system_prompt, user_content=user_content, last_output=summary,
+            )
+        # v19.25 (S5-4): Toleranzband - akzeptieren, degraded markieren
+        short_tolerated = True
+        logger.warning(
+            "Stage 1 im Toleranzband akzeptiert: %dw < %dw Minimum, degraded=True",
+            summary_words, min_acceptable,
         )
     if summary_words > max_acceptable:
         logger.warning(
@@ -436,8 +449,11 @@ async def summarize_verlauf(
     issues = detect_summary_hallucination_signals(summary, verlauf_text)
     critical_issues = [i for i in issues if i["severity"] == "critical"]
     retry_used = False
-    degraded = False
+    degraded = short_tolerated
     retry_telemetry: dict = {}
+    if short_tolerated:
+        issues.append({"type": "stage1_short", "severity": "warning",
+                       "detail": f"{summary_words}w < {min_acceptable}w Minimum (Toleranzband)"})
 
     if critical_issues:
         logger.warning(
@@ -589,7 +605,7 @@ async def _retry_stricter_summary(
 
     # v19.3.2: Threshold via staging-Helper (konsistent mit summarize_verlauf).
     from app.services.staging import compute_verlauf_min_acceptable
-    min_acceptable = compute_verlauf_min_acceptable(target_words)
+    min_acceptable = compute_verlauf_min_acceptable(target_words, raw_words=len(verlauf_text.split()))
     max_acceptable = int(target_words * 2.5)
 
     focus_hint = _build_focus_hint(workflow)

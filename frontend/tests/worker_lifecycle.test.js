@@ -102,6 +102,6 @@ describe("retryDecision (10-min-Fenster, 1 Versuch/min)", () => {
 });
 
 describe("isNightBlocked (23–05 Uhr Lokalzeit)", () => {
-  test.each([[23 * 60, true], [2 * 60, true], [4 * 60 + 59, true], [5 * 60, false], [12 * 60, false], [22 * 60 + 59, false]])
-    ("Minute %i → %s", (m, exp) => expect(isNightBlocked(m)).toBe(exp));
+  const cases = [[23 * 60, true], [2 * 60, true], [4 * 60 + 59, true], [5 * 60, false], [12 * 60, false], [22 * 60 + 59, false]];
+  test.each(cases)("Minute %i → %s", (m, exp) => expect(isNightBlocked(m)).toBe(exp));
 });

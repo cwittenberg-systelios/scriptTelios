@@ -26,6 +26,22 @@ _STAGE1_WORKFLOWS = STAGE1_VERLAUF_WORKFLOWS
 _STAGE1_MIN_WORDS = STAGE1_VERLAUF_MIN_WORDS
 
 
+def _log_stage1_failure(job_id: str, workflow: str, call: str, headline: str, exc: BaseException) -> None:
+    """v19.25 (S5-6): Bei einem Stage-1-Fehlschlag Prompt UND letzten
+    Modell-Output ins prompts.log schreiben (Stage1Error traegt beides).
+    Bisher stand im Fehlerfall nur der Einzeiler im Log - genau dort, wo
+    man zur Diagnose den Prompt und die (zu kurze) Verdichtung braucht."""
+    sys_p = getattr(exc, "system_prompt", "") or ""
+    user_c = getattr(exc, "user_content", "") or ""
+    last = getattr(exc, "last_output", "") or ""
+    if sys_p or user_c:
+        _log_prompt(job_id, workflow, f"{call} (FAILED)", sys_p, user_c)
+    body = headline
+    if last:
+        body += f"\n\n--- LETZTER MODELL-OUTPUT ({len(last.split())} Woerter) ---\n{last}"
+    _log_output(job_id, workflow, call, body, None)
+
+
 _TRANSCRIPT_STAGE1_WORKFLOWS = STAGE1_TRANSCRIPT_WORKFLOWS
 
 
@@ -168,9 +184,9 @@ async def _run_verlauf_stage1(
             # Erfolge -> die Stage-1-Ausfaelle der groessten EB-Jobs waren
             # unsichtbar).
             try:
-                _log_output(job.job_id, workflow, "stage1_verlauf",
-                            f"[STAGE 1 FEHLGESCHLAGEN - Fallback Roh-Verlauf] "
-                            f"{type(e).__name__}: {str(e)[:300]}", None)
+                _log_stage1_failure(job.job_id, workflow, "stage1_verlauf",
+                                    "[STAGE 1 FEHLGESCHLAGEN - Fallback Roh-Verlauf] "
+                                    f"{type(e).__name__}: {str(e)[:300]}", e)
             except Exception:
                 pass
             logger.warning(
@@ -316,9 +332,9 @@ async def _run_transcript_stage1(
             # _sample_uniformly in llm.py wird dann vermutlich greifen.
             # v19.19 (S3): Fehlschlag sichtbar im prompts.log.
             try:
-                _log_output(job.job_id, workflow, "stage1_transcript",
-                            f"[TRANSCRIPT-STAGE 1 FEHLGESCHLAGEN - Fallback Roh-Transkript] "
-                            f"{type(e).__name__}: {str(e)[:300]}", None)
+                _log_stage1_failure(job.job_id, workflow, "stage1_transcript",
+                                    "[TRANSCRIPT-STAGE 1 FEHLGESCHLAGEN - Fallback Roh-Transkript] "
+                                    f"{type(e).__name__}: {str(e)[:300]}", e)
             except Exception:
                 pass
             logger.warning(

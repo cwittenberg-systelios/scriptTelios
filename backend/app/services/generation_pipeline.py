@@ -34,6 +34,7 @@ from app.services.llm import clean_verlauf_text, deduplicate_paragraphs, generat
 from app.services.suizidalitaet import resolve_suizid_note
 from app.services.prompt_log import _log_output, _log_prompt
 from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
+from app.services.source_plausibility import strip_html_tags
 from app.services.stage1 import _run_transcript_stage1, _run_verlauf_stage1
 from app.services.staging import compute_input_word_budget, plan_source_compression
 import app.services.transcription as _transcription
@@ -740,6 +741,7 @@ async def _extract_sources(ctx: PipelineInput, job, st: PipelineState) -> None:
             )
         return text_out
 
+    st._raw_extracts: dict[str, str] = {}   # v19.25 (Q2): Roh-Extrakte fuer den Encoding-Check
     st.selbstauskunft_text = ""
     st.selbstauskunft_empty = False   # v19.7: leeres/unextrahierbares Formular?
     if ctx.selbstauskunft_bytes and ctx.selbstauskunft_name:
@@ -787,6 +789,8 @@ async def _extract_sources(ctx: PipelineInput, job, st: PipelineState) -> None:
             st.verlaufsdoku_text = clean_verlauf_text(st.verlaufsdoku_text)
             st.verlaufsdoku_text = _check_ocr_garbage(
                 st.verlaufsdoku_text, "Verlaufsdokumentation", ctx.verlaufsdoku_name)
+            st._raw_extracts["Verlaufsdokumentation"] = st.verlaufsdoku_text   # v19.25 (Q2)
+            st.verlaufsdoku_text = strip_html_tags(st.verlaufsdoku_text)
             # v19.3: Roh-Verlauf SOFORT snapshotten, unabhaengig von Stage-1.
             # Damit ist der Repair-Kontext auch bei kurzen Verlaeufen
             # (< STAGE1_VERLAUF_MIN_WORDS) verfuegbar.
@@ -852,6 +856,11 @@ async def _extract_sources(ctx: PipelineInput, job, st: PipelineState) -> None:
             st.antragsvorlage_text = await extract_text(path)
             st.antragsvorlage_text = _check_ocr_garbage(
                 st.antragsvorlage_text, "Antragsvorlage", ctx.antragsvorlage_name)
+            # v19.25 (Q2): HTML-Reste (Job 0780690823: Verlauf als HTML in
+            # der Vorlage) vor dem Prompt entfernen; Roh-Extrakt fuer den
+            # Encoding-Check behalten.
+            st._raw_extracts["Antragsvorlage"] = st.antragsvorlage_text
+            st.antragsvorlage_text = strip_html_tags(st.antragsvorlage_text)
         except Exception as e:
             logger.warning("Antragsvorlage-Extraktion fehlgeschlagen: %s", e)
 
@@ -865,6 +874,8 @@ async def _extract_sources(ctx: PipelineInput, job, st: PipelineState) -> None:
             st.vorantrag_text = await extract_text(path)
             st.vorantrag_text = _check_ocr_garbage(
                 st.vorantrag_text, "Vorantrag", ctx.vorantrag_name)
+            st._raw_extracts["Vorheriger Antrag"] = st.vorantrag_text   # v19.25 (Q2)
+            st.vorantrag_text = strip_html_tags(st.vorantrag_text)
             logger.info("Vorantrag extrahiert: %s", _size_class(len(st.vorantrag_text)))
         except Exception as e:
             logger.warning("Vorantrag-Extraktion fehlgeschlagen: %s", e)
@@ -883,6 +894,8 @@ async def _extract_sources(ctx: PipelineInput, job, st: PipelineState) -> None:
             st.prozessreflexion_text = await extract_text(path)
             st.prozessreflexion_text = _check_ocr_garbage(
                 st.prozessreflexion_text, "Prozessreflexion", ctx.prozessreflexion_name)
+            st._raw_extracts["Prozessreflexion"] = st.prozessreflexion_text   # v19.25 (Q2)
+            st.prozessreflexion_text = strip_html_tags(st.prozessreflexion_text)
         except Exception as e:
             logger.warning("Prozessreflexion-Extraktion fehlgeschlagen: %s", e)
 
@@ -1162,6 +1175,26 @@ async def _resolve_patient_and_gates(ctx: PipelineInput, job, st: PipelineState)
             )
     job.truncated_sources = _trunc or None
 
+    # v19.25 (Sprint Q): Quellen-Plausibilitaet (Fremddokument als Verlauf,
+    # HTML/Mojibake in Vorlagen, Stilvorlage ohne Textbeispiel). Landet als
+    # job.source_warnings im Job-Status/SSE (Frontend zeigt sie schon
+    # waehrend des Laufs) und ueber run_quality_check als Input-Level-Issues.
+    try:
+        from app.services.source_plausibility import collect_source_warnings
+        _style_src = (st.style_info or {}).get("source") if isinstance(st.style_info, dict) else None
+        job.source_warnings = collect_source_warnings(
+            verlauf_text=st.verlaufsdoku_raw_text or st.verlaufsdoku_text,
+            sources=getattr(st, "_raw_extracts", None) or {},
+            style_examples=list(getattr(st, "_style_raw_texts", None) or []),
+            style_source=_style_src,
+        ) or None
+        if job.source_warnings:
+            for _w in job.source_warnings:
+                logger.warning("[Quellen-Plausibilitaet] %s (%s): %s", _w["code"], _w["source"], _w["message"])
+    except Exception as _e:
+        logger.warning("Quellen-Plausibilitaet uebersprungen: %s", _e)
+        job.source_warnings = None
+
     # v19.16 (G1): Quellen-Gate gegen Konfabulation - VOR jeder weiteren
     # (teuren) Verarbeitung. Wirft mit nutzerverstaendlicher Meldung;
     # job_queue uebernimmt str(e) als error_msg.
@@ -1439,7 +1472,8 @@ async def _generate(ctx: PipelineInput, job, st: PipelineState) -> None:
                     if _empty_slots:
                         logger.warning(
                             "Befund structured: %d leere Slot-Werte "
-                            "(-> 'nicht erhoben' eingesetzt): %s",
+                            "(Inline -> 'nicht erhoben', Standalone-Satz "
+                            "weggelassen; v19.25 B1): %s",
                             len(_empty_slots), _empty_slots,
                         )
                 else:

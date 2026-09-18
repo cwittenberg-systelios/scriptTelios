@@ -46,7 +46,7 @@
         "skip_aggressive_dedup": true,
         "force_hard_no_think": true,
         "system_prompt_sha256": "e3c114ec9f57202e8058d84a957769d71541d87f02f252b0754e65a1c0f0f0a8",
-        "user_content_sha256": "fef0a862eb849e059f691b2d0a9ad7fc5f10bd9d172dbb572b2b29bb3af8088e",
+        "user_content_sha256": "fe75ce5aa67f24cb32bf91f62853af67192fd8b24c2d03a39b68b7656dbd56ea",
         "system_prompt_len": 3384,
         "user_content_len": 8376
       }
@@ -70,7 +70,7 @@
     ],
     "summary_word_count": 1800,
     "target_words": 800,
-    "min_acceptable": 400,
+    "min_acceptable": 250,
     "retry_used": false,
     "cap_retry_used": false,
     "degraded": false,
@@ -453,7 +453,7 @@
         "skip_aggressive_dedup": true,
         "force_hard_no_think": true,
         "system_prompt_sha256": "e3c114ec9f57202e8058d84a957769d71541d87f02f252b0754e65a1c0f0f0a8",
-        "user_content_sha256": "c4864c85450b2a2734a86853086d8f6138c47e42c215dd6e6c962558feff0ec7",
+        "user_content_sha256": "f1132f4e422bd3af74046eb5b1706efcbccc9f36acc355b0434ed7367dbdf6d1",
         "system_prompt_len": 3384,
         "user_content_len": 8351
       },
@@ -465,7 +465,7 @@
         "skip_aggressive_dedup": true,
         "force_hard_no_think": true,
         "system_prompt_sha256": "e3c114ec9f57202e8058d84a957769d71541d87f02f252b0754e65a1c0f0f0a8",
-        "user_content_sha256": "c4864c85450b2a2734a86853086d8f6138c47e42c215dd6e6c962558feff0ec7",
+        "user_content_sha256": "f1132f4e422bd3af74046eb5b1706efcbccc9f36acc355b0434ed7367dbdf6d1",
         "system_prompt_len": 3384,
         "user_content_len": 8351
       }
@@ -489,7 +489,7 @@
     ],
     "summary_word_count": 1800,
     "target_words": 800,
-    "min_acceptable": 400,
+    "min_acceptable": 250,
     "retry_used": false,
     "cap_retry_used": true,
     "degraded": false,

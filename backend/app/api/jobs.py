@@ -199,6 +199,7 @@ async def stream_job(job_id: str):
 
     Events:
       - {type: "progress", progress: 42, phase: "Transkription", detail: "Chunk 2/4"}
+      - {type: "source_warnings", warnings: [{code, severity, source, message, detail}]}  (v19.25, einmalig)
       - {type: "done", result_text: "...", befund_text: "...", ...}
       - {type: "error", error_msg: "..."}
       - {type: "cancelled"}
@@ -213,6 +214,7 @@ async def stream_job(job_id: str):
     async def event_generator():
         last_progress = -1
         last_phase = ""
+        warnings_sent = False
         while True:
             j = job_queue.get_job(job_id)
             if not j:
@@ -224,6 +226,13 @@ async def stream_job(job_id: str):
                 last_progress = j.progress
                 last_phase = j.progress_phase
                 yield f"data: {json.dumps({'type': 'progress', 'progress': j.progress, 'phase': j.progress_phase, 'detail': j.progress_detail})}\n\n"
+
+            # v19.25 (Sprint Q): Quellen-Warnungen einmalig senden, sobald
+            # die Extraktion sie geliefert hat (Frontend: gelbe Box).
+            _sw = getattr(j, "source_warnings", None)
+            if _sw and not warnings_sent:
+                warnings_sent = True
+                yield f"data: {json.dumps({'type': 'source_warnings', 'warnings': _sw})}\n\n"
 
             # Terminal-States
             if j.status == JobStatus.DONE.value:
@@ -652,7 +661,7 @@ async def create_generate_job(
             status_code=422,
             detail="Ein Interview-Protokoll wird nur im Workflow 'dokumentation' unterstützt.",
         )
-    # v19.24 (B2): Kuerzel/Geschlecht aus der Klient-Frage, falls das UI
+    # v19.25 (B2): Kuerzel/Geschlecht aus der Klient-Frage, falls das UI
     # nichts geschickt hat (das UI fuellt die Felder normalerweise selbst).
     if interview is not None:
         _k = interview.klient()

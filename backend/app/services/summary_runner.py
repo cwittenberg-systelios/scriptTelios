@@ -100,10 +100,25 @@ async def stage1_generate(
     )
 
 
-def merge_chunk_telemetry(parts: list[dict]) -> dict:
+class Stage1Error(RuntimeError):
+    """v19.25 (S5-6): Stage-1-Fehler mit Diagnose-Kontext. stage1.py schreibt
+    Prompt und letzten Modell-Output ins prompts.log, damit ein Fehlschlag
+    nicht nur als Einzeiler erscheint (bisher wurde der Prompt nur bei
+    Erfolg geloggt - genau im Fehlerfall fehlte er)."""
+
+    def __init__(self, message: str, *, system_prompt: str = "",
+                 user_content: str = "", last_output: str = ""):
+        super().__init__(message)
+        self.system_prompt = system_prompt
+        self.user_content = user_content
+        self.last_output = last_output
+
+
+def merge_chunk_telemetry(parts: list[dict], chunks_failed: int = 0) -> dict:
     return {
         "chunked": True,
         "chunks": len(parts),
+        "chunks_failed": chunks_failed,
         "tokens_hit_cap": any(t.get("tokens_hit_cap") for t in parts),
         "input_truncated": any(t.get("input_truncated") for t in parts),
         "parts": parts,
@@ -143,9 +158,29 @@ async def run_chunked(
     retry_used = cap_retry_used = degraded = False
     sys_prompts: list[str] = []
     user_contents: list[str] = []
+    chunks_failed = 0
     for i, (chunk, cw) in enumerate(zip(chunks, chunk_words, strict=True), start=1):
         share = max(min_share, int(total_target * (cw / max(raw_words, 1))))
-        res = await summarize_part(chunk, share)
+        try:
+            res = await summarize_part(chunk, share)
+        except RuntimeError as e:
+            # v19.25 (S5-3): Teil-Fallback statt Gesamtabbruch. Der
+            # gescheiterte Teil geht als Rohtext in die Zusammenfassung,
+            # die anderen Teile bleiben verdichtet.
+            chunks_failed += 1
+            logger.error("%s Teil %d/%d fehlgeschlagen - Rohtext-Fallback fuer diesen Teil: %s",
+                         log_label, i, n, e)
+            parts.append(
+                f"### {part_heading.format(i=i, n=n)}\n\n"
+                f"[Teil {i}/{n}: Rohtext - Verdichtung fehlgeschlagen ({e})]\n\n{chunk.strip()}"
+            )
+            tel_parts.append({"chunk_failed": True, "error": str(e)[:200]})
+            issues.append({"type": "stage1_chunk_failed", "severity": "warning",
+                           "detail": f"Teil {i}/{n}: {str(e)[:160]}"})
+            degraded = True
+            sys_prompts.append(getattr(e, "system_prompt", "") or "")
+            user_contents.append(getattr(e, "user_content", "") or "")
+            continue
         parts.append(f"### {part_heading.format(i=i, n=n)}\n\n{res['summary']}")
         tel_parts.append(res.get("telemetry") or {})
         issues.extend(res.get("issues") or [])
@@ -154,6 +189,12 @@ async def run_chunked(
         degraded = degraded or bool(res.get("degraded"))
         sys_prompts.append(res.get("system_prompt") or "")
         user_contents.append(res.get("user_content") or "")
+    if chunks_failed >= n:
+        raise Stage1Error(
+            f"{log_label}: alle {n} Teile fehlgeschlagen",
+            system_prompt=next((p for p in sys_prompts if p), ""),
+            user_content=next((u for u in user_contents if u), ""),
+        )
     summary = header.format(n=n) + "\n\n" + "\n\n".join(parts)
     return {
         "summary":              summary,
@@ -166,7 +207,7 @@ async def run_chunked(
         "summary_word_count":   word_count(summary),
         "compression_ratio":    round(word_count(summary) / raw_words, 3) if raw_words else 0.0,
         "duration_s":           round(time.time() - t0, 1),
-        "telemetry":            merge_chunk_telemetry(tel_parts),
+        "telemetry":            merge_chunk_telemetry(tel_parts, chunks_failed),
         "retry_telemetry":      {},
         "issues":               issues,
         "retry_used":           retry_used,

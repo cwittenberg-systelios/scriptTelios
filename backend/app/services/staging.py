@@ -24,7 +24,12 @@ STAGE1_VERLAUF_WORKFLOWS: frozenset[str] = frozenset({
 })
 
 # Untergrenze: kuerzere Verlaeufe passen ohne Verdichtung in Stage 2.
-STAGE1_VERLAUF_MIN_WORDS = 1500
+# v19.25 (S5-5): 1500 -> 2500. Betrieb 15.09.2026: Verlaeufe mit 1.867w und
+# 2.487w liefen in Stage 1, das Modell lieferte 373w/364w (< fixem Minimum
+# 400w) -> Fehlschlag + Fallback Rohtext. Bis ~2.500 Woerter (~18k Zeichen)
+# passt der Rohverlauf problemlos in den 32k-Kontext; die Verdichtung kostet
+# dort nur GPU-Zeit.
+STAGE1_VERLAUF_MIN_WORDS = 2500
 
 # Workflows die in Produktion ein Transkript bekommen.
 STAGE1_TRANSCRIPT_WORKFLOWS: frozenset[str] = frozenset({
@@ -166,14 +171,26 @@ def compute_verlauf_min_acceptable(
     *,
     floor: int = 400,
     ratio: float = 0.30,
+    raw_words: Optional[int] = None,
+    raw_ratio: float = 0.15,
+    raw_floor: int = 250,
 ) -> int:
     """
     Untergrenze fuer plausible Output-Laenge der Verlaufs-Verdichtung.
 
     v19.3.2: Threshold 50% -> 30% gelockert (Eval-Run 15.05.2026 zeigte
     bei grossen Verlaeufen Outputs 543-743w, alle < 50% von target=1555w).
+    v19.25 (S5-5): mit raw_words wird die Untergrenze zusaetzlich relativ
+    zum Rohtext gedeckelt - max(raw_floor, min(base, raw_ratio*raw)). Das
+    Modell liefert ~350-500w unabhaengig von der Eingabe; ein fixes Minimum
+    von 400w schlug bei Rohtexten < 2.700w regelmaessig fehl.
+      raw=1867w -> min(400, 280) -> 280 (>= 250)
+      raw=3000w -> min(400, 450) -> 400
     """
-    return max(floor, int(target_words * ratio))
+    base = max(floor, int(target_words * ratio))
+    if raw_words is None or raw_words <= 0:
+        return base
+    return max(raw_floor, min(base, int(raw_words * raw_ratio)))
 
 
 def compute_transcript_target_words(
@@ -199,14 +216,37 @@ def compute_transcript_min_acceptable(
     *,
     floor: int = 300,
     ratio: float = 0.40,
+    raw_words: Optional[int] = None,
+    raw_cap_ratio: float = 0.5,
+    raw_cap_floor: int = 50,
 ) -> int:
     """
     Untergrenze fuer plausible Output-Laenge der Transkript-Verdichtung.
 
     40% niedriger als Verlauf (50% urspruenglich), weil Transkripte
     unstrukturiert sind und der Kompressionsgrad pro Sitzung stark variiert.
+
+    v19.25 (S5-2): mit raw_words nie mehr verlangen als die Haelfte des
+    Rohtexts (Betrieb 16.09.2026: Rest-Chunk mit 171w, Minimum 300w ->
+    Fehlschlag garantiert). Untergrenze dafuer: raw_cap_floor.
     """
-    return max(floor, int(target_words * ratio))
+    base = max(floor, int(target_words * ratio))
+    if raw_words is None or raw_words <= 0:
+        return base
+    return min(base, max(raw_cap_floor, int(raw_words * raw_cap_ratio)))
+
+
+# v19.25 (S5-4): Toleranzband. Liegt die Verdichtung nach dem Retry zwischen
+# STAGE1_TOLERANCE * Minimum und dem Minimum, wird sie AKZEPTIERT und als
+# degraded markiert (Audit-Issue 'stage1_short'), statt die komplette Stufe
+# zu verwerfen. Betrieb 17.09.2026: 363w vs. Minimum 393w -> vorher Fallback
+# 4.916 Woerter Rohtext in den Hauptcall.
+STAGE1_TOLERANCE = 0.8
+
+
+def within_stage1_tolerance(words: int, min_acceptable: int, tolerance: float = STAGE1_TOLERANCE) -> bool:
+    """True, wenn words zwar unter dem Minimum, aber innerhalb des Toleranzbands liegt."""
+    return min_acceptable > 0 and words < min_acceptable and words >= int(min_acceptable * tolerance)
 
 
 # ── v19.4: Kombiniertes Input-Budget ──────────────────────────────────────────
@@ -353,6 +393,9 @@ _BLOCK_BOUNDARY_RE = re.compile(
 )
 
 
+STAGE1_TAIL_MERGE_RATIO = 0.25
+
+
 def chunk_text_by_blocks(text: str, max_chars: int) -> list[str]:
     """Teilt text in Stuecke <= max_chars, geschnitten an Block-Grenzen
     (Datumszeilen, Ueberschriften, Sprecher-/Timestamp-Zeilen, sonst
@@ -406,7 +449,15 @@ def chunk_text_by_blocks(text: str, max_chars: int) -> list[str]:
             cur += blk
     if cur:
         chunks.append(cur)
-    return [c for c in chunks if c.strip()]
+    chunks = [c for c in chunks if c.strip()]
+    # v19.25 (S5-1): kleinen Rest-Chunk (< STAGE1_TAIL_MERGE_RATIO der
+    # Chunk-Groesse) mit dem Vorgaenger verschmelzen. Betrieb 16.09.2026:
+    # 56.637 Zeichen -> 28k + 28k + 637 Zeichen (171 Woerter); der Mini-Teil
+    # konnte sein Minimum nie erreichen und riss die ganze Stufe mit.
+    if len(chunks) >= 2 and len(chunks[-1]) < max_chars * STAGE1_TAIL_MERGE_RATIO:
+        tail = chunks.pop()
+        chunks[-1] = chunks[-1] + tail
+    return chunks
 
 
 def stage1_chunk_chars() -> int:

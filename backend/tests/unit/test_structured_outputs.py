@@ -126,11 +126,13 @@ class TestFillVorlage:
 
     def test_fixtext_wortidentisch(self):
         """Kernzusage von S2: Diff zwischen Vorlage und Output == nur Slots."""
-        values = {s: "X" for s in parse_befund_slots(BEFUND_VORLAGE)}
+        # v19.25 (B1): Ein-Wort-Werte in Standalone-Slots bekommen ein Label
+        # ("Schlaf: X."), daher hier ein mehrwortiger Wert.
+        values = {s: "Xa Xb Xc" for s in parse_befund_slots(BEFUND_VORLAGE)}
         out = fill_befund_vorlage(BEFUND_VORLAGE, values)
         expected = BEFUND_VORLAGE
         for s in parse_befund_slots(BEFUND_VORLAGE):
-            expected = expected.replace("{" + s + "}", "X")
+            expected = expected.replace("{" + s + "}", "Xa Xb Xc")
         assert out == expected
 
     def test_werte_werden_getrimmt(self):

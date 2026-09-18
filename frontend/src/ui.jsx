@@ -9,6 +9,11 @@ import { apiFetch, getApiBase } from "./api.js";
 
 function JobProgressBar({ jobId, onTerminal }) {
   const [p, setP] = useState({ progress: 0, progress_phase: "Starte...", progress_detail: "" });
+  // v19.25 (Sprint Q): Quellen-Warnungen aus der Extraktionsphase (Fremd-
+  // dokument als Verlauf, HTML/Mojibake, Stilvorlage ohne Text) - kommen
+  // per SSE-Event "source_warnings" bzw. im Polling-Status und werden schon
+  // WAEHREND des Laufs als gelbe Box gezeigt (Job laeuft weiter, D4).
+  const [warnings, setWarnings] = useState([]);
   // Sprint Draft-Persistence Bugfix: onTerminal in ref ablegen, damit der
   // useEffect nicht bei jedem neuen Callback-Identitaet neu laeuft (sonst
   // wuerde die SSE bei jeder Parent-Rerender neu aufgebaut).
@@ -30,6 +35,8 @@ function JobProgressBar({ jobId, onTerminal }) {
           const d = JSON.parse(e.data);
           if (d.type === "progress") {
             setP({ progress: d.progress || 0, progress_phase: d.phase || "", progress_detail: d.detail || "" });
+          } else if (d.type === "source_warnings") {
+            if (Array.isArray(d.warnings) && d.warnings.length) setWarnings(d.warnings);
           } else if (d.type === "done" || d.type === "error" || d.type === "cancelled") {
             setP(prev => ({ ...prev, progress: d.type === "done" ? 100 : prev.progress, progress_phase: d.type === "done" ? "Fertig" : d.type === "error" ? "Fehler" : "Abgebrochen" }));
             es.close();
@@ -56,6 +63,7 @@ function JobProgressBar({ jobId, onTerminal }) {
           const j = await r.json();
           if (cancelled) return;
           setP({ progress: j.progress || 0, progress_phase: j.progress_phase || "", progress_detail: j.progress_detail || "" });
+          if (Array.isArray(j.source_warnings) && j.source_warnings.length) setWarnings(j.source_warnings);
           if (j.status === "done" || j.status === "error" || j.status === "cancelled") {
             // Auch im Polling-Fallback Parent benachrichtigen
             if (onTerminalRef.current) onTerminalRef.current(j.status);
@@ -80,6 +88,47 @@ function JobProgressBar({ jobId, onTerminal }) {
       <div style={{fontSize:12, color:"var(--st-text-soft)", marginTop:4, textAlign:"center"}}>
         {p.progress_phase} {p.progress_detail && `— ${p.progress_detail}`} ({p.progress}%)
       </div>
+      <SourceWarningsBox warnings={warnings} />
+    </div>
+  );
+}
+
+/** v19.25 (Sprint Q): gelbe Hinweisbox zu den hochgeladenen Quellen. */
+function SourceWarningsBox({ warnings }) {
+  if (!Array.isArray(warnings) || warnings.length === 0) return null;
+  const hasWarning = warnings.some((w) => (w.severity || "info") !== "info");
+  return (
+    <div
+      className="source-warnings"
+      role="status"
+      style={{
+        margin: "10px 0 0",
+        padding: "8px 12px",
+        borderRadius: 6,
+        fontSize: 12.5,
+        lineHeight: 1.45,
+        background: hasWarning ? "#fff7e0" : "#f3f6fa",
+        border: `1px solid ${hasWarning ? "#e6b800" : "#c9d3e0"}`,
+        color: "#4a3d00",
+        textAlign: "left",
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        {hasWarning ? "⚠️ Hinweis zu den Quellen" : "ℹ️ Hinweis zu den Quellen"}
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 18 }}>
+        {warnings.map((w, i) => (
+          <li key={(w.code || "w") + i}>
+            {w.source ? <strong>{w.source}: </strong> : null}
+            {w.message}
+          </li>
+        ))}
+      </ul>
+      {hasWarning && (
+        <div style={{ marginTop: 4, color: "#6b5a00" }}>
+          Der Auftrag läuft weiter – bei einer falschen Datei bitte abbrechen und mit der richtigen Quelle neu starten.
+        </div>
+      )}
     </div>
   );
 }
@@ -710,4 +759,4 @@ function StyleSourceCard({ num, style, onStyle, styleText, onStyleText, placehol
   );
 }
 
-export { StyleSourceCard, JobProgressBar, Dropzone, ModelSelector, InputTabs, Card, PromptEditor, Output, Tags, JobModelPicker, copyFormatted, FeedbackButton };
+export { StyleSourceCard, JobProgressBar, SourceWarningsBox, Dropzone, ModelSelector, InputTabs, Card, PromptEditor, Output, Tags, JobModelPicker, copyFormatted, FeedbackButton };

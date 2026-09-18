@@ -7,6 +7,111 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.25] — Log-Runde 10.–17.09.: Befund-Slots, Stage-1-Robustheit, Grammatik, Quellen-Plausibilitaet, EB-Laenge (2026-09-18)
+
+Basis: `v19_QA_v02` @ `052221c` (nach v19.24 Interview-Dialog). Fuenf Patches (B, S5, G, Q, L; Q enthaelt
+Frontend) plus `backend/static/systelios.js`. Evaluation der Logs
+10.–17.09.2026: `input_truncated`/`tokens_hit_cap` 0/26, Wir-Form P1 0/14,
+Modalitaeten im EB 11/11 – die v19.19–v19.22-Massnahmen halten.
+
+### Sprint B — Structured-Befund ohne Satzfragmente (P2)
+
+Befund vom 15.09. (Job 7d548664): „nicht erhoben. reduziert. ausgeprägt. nein.“
+als eigene Saetze – 16 Slots der `BEFUND_VORLAGE` bilden eigene Saetze, das
+Modell liefert dort Kurzwerte; `fill_befund_vorlage()` setzte sie 1:1 ein
+(alle 3 Structured-Befunde im Log betroffen).
+
+- `prompts.py`: `classify_befund_slots()` (standalone/inline),
+  `befund_value_is_empty()`, `BEFUND_SLOT_LABELS`. **B1** Standalone-Slots ohne
+  belastbaren Wert werden samt Satzpunkt weggelassen (A3a-Regel), Kurzwerte
+  bekommen ein Label („Freude und Interessen: reduziert.“), „nein“ → „verneint“,
+  Satzanfang gross, kein doppelter Punkt. Inline-Slots unveraendert
+  („nicht erhoben“). **B2** `build_befund_slot_schema(slots, vorlage)`: pro
+  Feld eine `description` (Satzform vs. Kurzform mit Satzkontext); Prompt-
+  Regeln entsprechend. **B3** `_dedupe_slot_value()`: wiederholte
+  Nachbarwoerter („subjektiv subjektiv“, „Appetenz Appetitlosigkeit“).
+- `quality_check.py`: **B4** `BEFUND_FRAGMENT` (warning) – Ein-Wort-Saetze,
+  Leer-Marker, Kleinschreibung am Satzanfang im Befund-Teil.
+- Test `test_structured_outputs.py::test_fixtext_wortidentisch` nutzt jetzt
+  einen mehrwortigen Wert (Ein-Wort-Werte bekommen per B1 ein Label).
+
+### Sprint S5 — Stage-1-Robustheit
+
+Log: 16.09. Rest-Chunk 171w mit Minimum 300w (Fehlschlag garantiert, ganze
+Stufe verworfen); 17.09. 363w < 393w nach Retry; 15.09. Verlaeufe 1.867w/
+2.487w → 373w/364w < fix 400w.
+
+- **S5-1** `chunk_text_by_blocks`: Rest-Chunk < 25 % der Chunk-Groesse wird mit
+  dem Vorgaenger verschmolzen (`STAGE1_TAIL_MERGE_RATIO`); Aufrufer fallen bei
+  nur einem Teil auf den Normalpfad zurueck.
+- **S5-2** `compute_transcript_min_acceptable(..., raw_words)`: nie mehr als
+  die Haelfte des Rohtexts verlangen.
+- **S5-3** `run_chunked`: Teil-Fallback – gescheiterter Teil geht als Rohtext
+  (Marker `[Teil i/n: Rohtext – Verdichtung fehlgeschlagen]`) in die
+  Zusammenfassung, Telemetrie `chunks_failed`, Issue `stage1_chunk_failed`.
+- **S5-4** Toleranzband `STAGE1_TOLERANCE = 0.8`: Ergebnis zwischen 80 % und
+  100 % des Minimums wird akzeptiert und `degraded` markiert (Issue
+  `stage1_short`) – Transkript (bester von Initial/Retry) und Verlauf.
+- **S5-5** `STAGE1_VERLAUF_MIN_WORDS` 1500 → 2500;
+  `compute_verlauf_min_acceptable(..., raw_words)` = max(250, min(400, 0.15·raw)).
+  Golden-Fixture `stage1_prompts_v1920.json` (Keys `verlauf`, `verlauf_cap`)
+  neu erzeugt: min 400 → 250 fuer den 1.200-Woerter-Testtext.
+- **S5-6** `Stage1Error` (summary_runner) traegt Prompt + letzten Modell-Output;
+  `stage1._log_stage1_failure()` schreibt beides ins prompts.log
+  (`CALL: stage1_* (FAILED)`).
+
+### Sprint G — Grammatik-Postfix
+
+- **G1** `postprocessing.fix_herrn_deklination()`: Praeposition/Genitiv-Artikel
+  + „Herr X.“ → „Herrn X.“ (8 Treffer in 4 P1-Dokus); Nominativ bleibt.
+- **G2** Klebefehler „Aufenthaltsvon“ (2/2 Verlaengerungen) + generisch
+  Genitiv-s + Funktionswort (`_FUNCTION_WORD_SUFFIXES`, nur ganze Woerter).
+- **G3** Telemetrie `grammar_fixes {klebebugs, herrn, total}` → QC
+  `GRAMMAR_AUTOFIXED` (info).
+
+### Sprint Q — Quellen-Plausibilitaet
+
+Job 0780690823 (13.09.): Kammer-Formular als Verlaufsdoku, Vorlage mit HTML +
+Mojibake – kein QC schlug an. c.saur: Stilvorlage nur Ueberschriften.
+
+- Neu `services/source_plausibility.py`: **Q1** `VERLAUF_UNPLAUSIBEL`
+  (Therapie-Vokabular < 12/1.000 Woerter; echte Verlaeufe 41–57, Formular 2,6),
+  **Q2** `SOURCE_ENCODING_DAMAGED` (≥ 3 HTML-Tags oder ≥ 20 Mojibake-Woerter
+  ≥ 1 %) + `strip_html_tags()` vor dem Prompt, **Q3** `STYLE_EXAMPLE_TOO_SHORT`
+  (info; < 60 Woerter oder nur Ueberschriften).
+- `generation_pipeline`: `job.source_warnings` nach der Extraktion;
+  `job_queue.to_dict()` liefert `source_warnings`; SSE-Event
+  `{type:"source_warnings"}` einmalig; QC-Check `source_plausibility`
+  (Severity warning – Job laeuft weiter, D4).
+- **Q4** Frontend `ui.jsx`: `SourceWarningsBox` im `JobProgressBar` (gelb ab
+  warning, grau bei info) – sichtbar schon waehrend des Laufs.
+- Nebenbei: ESLint-Altfehler `tests/worker_lifecycle.test.js:106`
+  (`no-unexpected-multiline`) behoben.
+
+### Sprint L — Entlassbericht-Laenge
+
+10 EB (11.–15.09.) mit 464–649 Woertern bei Ziel 500–900.
+
+- **L1** QC `LENGTH_BELOW_TARGET` (warning, nur entlassbericht < 550 Woerter)
+  mit Repair-Hint „nur quellengedeckt erweitern“ – kein automatischer Repair.
+- **L2** `render_length_anchor_block`: explizite Mindestlaenge
+  (`EB_MIN_WORDS_EXPLICIT = 600`, gedeckelt auf Obergrenze − 100), Richtwert
+  ≥ Floor + 100, Aufforderung zu je einem Absatz pro Modalitaet.
+
+### QC-Registry (Reihenfolge)
+
+`… input_truncated, source_plausibility, grammar_autofixed, konjunktiv, …,
+befund_separator, befund_fragment, length, eb_length_below_target, …`
+
+### Tests
+
+Neu: `test_v1925_befund_slots.py`, `test_v1925_stage1_robustheit.py`,
+`test_v1925_grammatik.py`, `test_v1925_source_plausibility.py`,
+`test_v1925_eb_laenge.py`, Frontend `tests/source_warnings.test.jsx`.
+Backend 1207 Unit + 296 Integration gruen, ruff 0, ESLint 0 Fehler, Jest 94.
+
+---
+
 ## [v19.24] — Interview-Dialog: Gespraechsfuehrung, Trigger, Abschluss-Check (2026-09-18)
 
 Basis: `v19_QA_v02` @ `1f5d935` + v19.23. Ein Patch (Backend + Frontend)

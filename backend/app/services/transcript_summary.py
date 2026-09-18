@@ -26,7 +26,7 @@ import time
 from typing import Optional
 
 from app.services.summary_runner import (
-    anti_think_suffix, run_chunked, source_block, stage1_generate, wrap_no_think, word_count,
+    Stage1Error, anti_think_suffix, run_chunked, source_block, stage1_generate, wrap_no_think, word_count,
 )
 
 logger = logging.getLogger(__name__)
@@ -188,21 +188,26 @@ async def summarize_transcript(
     if not _is_chunk:
         from app.services.staging import chunk_text_by_blocks, stage1_transcript_chunk_chars
         _chunk_limit = stage1_transcript_chunk_chars()   # v19.21b (S4b): 28k statt 55k
-        if len(transcript_text) > _chunk_limit:
+        # v19.25 (S5-1): Rest-Chunk-Merge kann auf EINEN Teil zurueckfallen
+        # (z.B. 34k Zeichen -> 28k + 6k -> ein Teil); dann normal verdichten.
+        _chunks = chunk_text_by_blocks(transcript_text, _chunk_limit) if len(transcript_text) > _chunk_limit else []
+        if len(_chunks) > 1:
             return await _summarize_transcript_chunked(
                 transcript_text=transcript_text,
                 workflow=workflow,
                 patient_initial=patient_initial,
                 target_words=target_words,
-                chunks=chunk_text_by_blocks(transcript_text, _chunk_limit),
+                chunks=_chunks,
             )
 
     raw_words = len(transcript_text.split())
 
     # target_words und min_acceptable kommen aus staging.py (testbar).
     from app.services.staging import (
+        STAGE1_TOLERANCE,
         compute_transcript_target_words,
         compute_transcript_min_acceptable,
+        within_stage1_tolerance,
     )
     if target_words is None:
         target_words = compute_transcript_target_words(raw_words)
@@ -211,7 +216,8 @@ async def summarize_transcript(
         #   raw= 7000w → target=1400w
         #   raw=10000w → target=1500w (Hard-Cap)
 
-    min_acceptable = compute_transcript_min_acceptable(target_words)
+    # v19.25 (S5-2): Untergrenze nie ueber der Haelfte des Rohtexts.
+    min_acceptable = compute_transcript_min_acceptable(target_words, raw_words=raw_words)
     max_acceptable = int(target_words * 2.5)
 
     wir_hint = _wir_hint(workflow)
@@ -251,7 +257,8 @@ async def summarize_transcript(
     degraded = False
 
     if not summary:
-        raise RuntimeError("Transcript-Stage 1: Verdichtung leer")
+        raise Stage1Error("Transcript-Stage 1: Verdichtung leer",
+                          system_prompt=system_prompt, user_content=user_content)
 
     # Halluzinations-Detektion: ICDs, Verfahren, Direkt-Zitat-Wendungen,
     # implausible Sitzungs-Anzahl. Wird aus verlauf_summary wiederverwendet —
@@ -321,8 +328,9 @@ async def summarize_transcript(
             )
         except Exception as e:
             logger.error("Transcript-Stage 1 Retry-Call fehlgeschlagen: %s", e)
-            raise RuntimeError(
-                f"Transcript-Stage 1 Retry-Call fehlgeschlagen: {e}"
+            raise Stage1Error(
+                f"Transcript-Stage 1 Retry-Call fehlgeschlagen: {e}",
+                system_prompt=retry_system_prompt, user_content=retry_user, last_output=summary,
             ) from e
 
         retry_text = (retry_result.get("text") or "").strip()
@@ -336,24 +344,42 @@ async def summarize_transcript(
         #   4. Retry laengen-ok + Hallu sauber   → erfolg, uebernehmen
         #   5. Retry laengen-ok + Hallu critical → degraded, retry uebernehmen
         if not retry_text:
-            if length_too_short:
-                raise RuntimeError(
+            if length_too_short and not within_stage1_tolerance(summary_words, min_acceptable):
+                raise Stage1Error(
                     f"Transcript-Stage 1: Retry leer und Original zu kurz "
-                    f"({summary_words}w < {min_acceptable}w)"
+                    f"({summary_words}w < {min_acceptable}w)",
+                    system_prompt=retry_system_prompt, user_content=retry_user, last_output=summary,
                 )
-            # Hallu-only: Original behalten, Markierung
+            # Hallu-only (oder Original im Toleranzband): Original behalten
             degraded = True
+            if length_too_short:
+                issues.append({"type": "stage1_short", "severity": "warning",
+                               "detail": f"{summary_words}w < {min_acceptable}w Min (Toleranzband, Retry leer)"})
             logger.error(
-                "Transcript-Stage 1 Retry leer — Original mit %d critical Hallu "
+                "Transcript-Stage 1 Retry leer — Original (%dw, %d critical Hallu) "
                 "wird mit degraded=True zurueckgegeben",
-                len(critical_issues),
+                summary_words, len(critical_issues),
             )
         elif retry_words < min_acceptable:
-            raise RuntimeError(
-                f"Transcript-Stage 1: Verdichtung implausibel kurz nach Retry: "
-                f"{retry_words}w < {min_acceptable}w Min "
-                f"(target={target_words}w, raw={raw_words}w)"
+            # v19.25 (S5-4): Toleranzband - den laengeren der beiden Versuche
+            # akzeptieren, wenn er >= 80 % des Minimums erreicht.
+            best_text, best_words = (retry_text, retry_words) if retry_words >= summary_words else (summary, summary_words)
+            if not within_stage1_tolerance(best_words, min_acceptable):
+                raise Stage1Error(
+                    f"Transcript-Stage 1: Verdichtung implausibel kurz nach Retry: "
+                    f"{retry_words}w < {min_acceptable}w Min "
+                    f"(target={target_words}w, raw={raw_words}w)",
+                    system_prompt=retry_system_prompt, user_content=retry_user, last_output=retry_text,
+                )
+            logger.warning(
+                "Transcript-Stage 1 im Toleranzband akzeptiert: %dw < %dw Min (>= %d%%), degraded=True",
+                best_words, min_acceptable, int(STAGE1_TOLERANCE * 100),
             )
+            summary, summary_words = best_text, best_words
+            issues = detect_summary_hallucination_signals(summary, transcript_text)
+            issues.append({"type": "stage1_short", "severity": "warning",
+                           "detail": f"{best_words}w < {min_acceptable}w Min (Toleranzband)"})
+            degraded = True
         else:
             # Retry hat plausible Laenge — Hallu re-check
             retry_issues = detect_summary_hallucination_signals(

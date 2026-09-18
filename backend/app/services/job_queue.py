@@ -204,6 +204,9 @@ class JobState:
         self.repair_input  : Optional[dict] = None
         self._cancel_requested  : bool = False
         self.input_meta         : Optional[dict] = None
+        # v19.25 (Sprint Q): Quellen-Warnungen aus der Extraktionsphase
+        # (in-process; im Job-Status/SSE sichtbar, spaeter Teil des QC).
+        self.source_warnings    : Optional[list] = None
         # v19.21 (S3): Referenz auf den Hintergrund-INSERT aus create_job(),
         # damit _persist_job() vor dem UPDATE darauf warten kann.
         self._db_insert_task    : Optional[asyncio.Task] = None
@@ -229,6 +232,7 @@ class JobState:
             "progress":        self.progress,
             "progress_phase":  self.progress_phase,
             "progress_detail": self.progress_detail,
+            "source_warnings": self.source_warnings or [],
             "befund_text":     self.result_befund or "",
             "akut_text":       self.result_akut or "",
             "result_file":     self.result_file,
@@ -915,6 +919,10 @@ class JobQueue:
                     # v19.22 (S3): Status des Suizidalitaets-Hinweises
                     # (in-process Attribut aus run_job, siehe oben).
                     _suizid = getattr(job, "suizid_note_status", None)
+                    # v19.25 (G3): deterministische Grammatik-Korrekturen.
+                    _grammar = (job.generation_telemetry or {}).get("grammar_fixes")
+                    # v19.25 (Sprint Q): Quellen-Plausibilitaet.
+                    _src_warn = getattr(job, "source_warnings", None)
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
@@ -927,6 +935,8 @@ class JobQueue:
                         repair_flags=_repair_flags,
                         diagnosen=_dx,
                         suizid_note_status=_suizid,
+                        grammar_fixes=_grammar,
+                        source_warnings=_src_warn,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(
