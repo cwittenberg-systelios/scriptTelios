@@ -1388,6 +1388,20 @@ async def _generate(ctx: PipelineInput, job, st: PipelineState) -> None:
         _log_output(job.job_id, ctx.workflow, "anamnese", anamnese_text,
                     result_a.get("telemetry"))
 
+        # v19.26 (A3c): satzgenaue Entdiagnostizierung - nur Saetze, in denen
+        # eine Diagnose als Erklaerung der Beschwerden steht ("Gruebeln im
+        # Rahmen einer PTBS"); deterministisch verifiziert, sonst Original.
+        _dx_tel: dict = {}
+        try:
+            from app.services.diagnose_rewrite import rewrite_diagnose_sentences
+            anamnese_text, _dx_tel = await rewrite_diagnose_sentences(anamnese_text, model=ctx.model)
+            if _dx_tel.get("sentences"):
+                import json as _json
+                _log_output(job.job_id, ctx.workflow, "anamnese_dx_rewrite",
+                            _json.dumps(_dx_tel, ensure_ascii=False, indent=1), None)
+        except Exception as _e:
+            logger.warning("Entdiagnostizierung uebersprungen: %s", _e)
+
         # Cancel-Check zwischen den Calls
         if job._cancel_requested:
             raise RuntimeError("__CANCELLED__")
@@ -1511,6 +1525,8 @@ async def _generate(ctx: PipelineInput, job, st: PipelineState) -> None:
                 "degraded":        result_a.get("degraded", False),
                 "degraded_reason": result_a.get("degraded_reason"),
             },
+            # v19.26: Telemetrie der satzgenauen Entdiagnostizierung (QC-Info).
+            "dx_rewrite": _dx_tel or None,
             "befund": {
                 **tel_b,
                 "retry_used":      result_b.get("retry_used", False),

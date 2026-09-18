@@ -178,7 +178,13 @@ class TestDiagnosekriterien:
                 "der Schlaf gestört, der Appetit reduziert, die Konzentration schlecht, sie "
                 "fühle sich wertlos und ziehe sich zurück. " * 5)
         codes = [h.code for h in self._run(text, ["F33.1"])]
-        assert ISSUE_CODE_DIAGNOSE_IM_TEXT in codes
+        # v19.26 (A3c): "wie die Diagnose ... zeigt, an einer ..." ist der
+        # Erklaerungsrahmen -> jetzt DIAGNOSE_ZIRKULAER (critical) statt
+        # DIAGNOSE_IM_TEXT; die reine Nennung ohne Rahmen bleibt IM_TEXT.
+        from app.services.quality_check import ISSUE_CODE_DIAGNOSE_ZIRKULAER
+        assert ISSUE_CODE_DIAGNOSE_ZIRKULAER in codes
+        codes2 = [h.code for h in self._run("Frau M. habe eine rezidivierende depressive Störung. " * 5, ["F33.1"])]
+        assert ISSUE_CODE_DIAGNOSE_IM_TEXT in codes2
 
     def test_nur_anamnese_und_nur_mit_diagnosen(self):
         assert self._run("Stress im Beruf. " * 40, ["F33.1"], workflow="dokumentation") == []

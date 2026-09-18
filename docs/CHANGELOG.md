@@ -7,6 +7,63 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.26] — Zirkuläre Diagnose-Erklärung in der Anamnese (2026-09-18)
+
+Basis: `v19_QA_v02` @ `052221c` + v19.25. Ein Patch (nur Backend; kein
+Frontend-Rebuild noetig). Regressionsfall prompts.log.2026-09-08, Job
+`cae59639`: „Hinzu kommen Flashbacks und ein starkes Grübeln **im Rahmen
+einer Posttraumatischen Belastungsstörung (PTBS) und einer rezidivierenden
+depressiven Störung**.“ – die Diagnose erklaert das Symptom, das sie
+begruenden soll. Die A3a-Regel (v19.19) griff nicht sicher, der QC kannte
+weder „PTBS“ noch „Depression“.
+
+### Ebene 1 — Prompt (A3c, `prompts.py`)
+- Verbotene Erklaerungsrahmen als Negativbeispiele („im Rahmen einer“, „vor
+  dem Hintergrund“, „aufgrund ihrer“, „bedingt durch“, „infolge“, „als
+  Ausdruck der“, „typisch für“ + Diagnose), Positivbeispiel (Beschwerde mit
+  Verlauf/Ausloeser/Beeintraechtigung), Vordiagnosen-Regel (nur attribuiert,
+  Vergangenheitsform, im Kontext Vorbehandlungen). Ausserhalb
+  `WORKFLOW_INSTRUCTIONS_DEFAULT` → `prompt-defaults.jsx` unveraendert.
+
+### Ebene 2 — QC satzweise (`quality_check.py`)
+- `_DX_LABEL_IN_TEXT_RE` erweitert: Abkuerzungen (PTBS, kPTBS, GAS, ADHS,
+  BPS), Depression, Dysthymie, bipolar, Angst-/Zwangs-/Essstoerung,
+  Traumafolgestoerung, Borderline, Alkoholabhaengigkeit. Lay-Begriff
+  „Burnout“ bewusst nicht (Selbstbericht).
+- `diagnose_sentences()`: je Satz `zirkulaer` (Erklaerungsrahmen
+  `_DX_FRAME_RE`), `attribuiert` (`_DX_ATTRIBUTION_RE`: diagnostiziert,
+  Vorbefund, laut, Verdacht auf, in Behandlung wegen, familiaer „bei seiner
+  Mutter“; ICD-Codes nie) oder `nennung`.
+- Neu `DIAGNOSE_ZIRKULAER` (**critical**), `DIAGNOSE_IM_TEXT` (warning) jetzt
+  unabhaengig von uebergebenen Diagnosen; `diagnosekriterien` meldet nur noch
+  die Kriterien-Abdeckung. Neu `DIAGNOSE_ENTFERNT` (info, Vorher/Nachher).
+- Kalibrierung: `e55cda0c` (28.07.) → ZIRKULAER; `f67635dc` (Burnout / Verdacht
+  auf ADHS / Depression der Mutter) → 0; `7d548664` (15.09.) → 0.
+
+### Ebene 3 — satzgenaue Entdiagnostizierung (`services/diagnose_rewrite.py`)
+- Nur `zirkulaer`-Saetze (max. 6) werden einzeln per Structured-Output-Call
+  (`{"satz"}`, temperature 0.2, `workflow="anamnese_dx_rewrite"`) umformuliert.
+- `verify_rewrite()`: kein Label, kein Rahmen, kein Meta-Text, Laenge 40–160 %,
+  keine neuen Zahlen/Namen, ein Satz. Abgelehnt/Fehler → `strip_frame_clause()`
+  (Erklaerungsklausel am Satzende streichen, Restsatz ≥ 5 Woerter) → sonst
+  Original + kritisches Issue bleibt.
+- `generation_pipeline` (P2, zwischen Anamnese- und Befund-Call): Telemetrie
+  `generation_telemetry.dx_rewrite {sentences, replaced, kept, mode, pairs}`;
+  prompts.log `CALL: anamnese_dx_rewrite` mit Vorher/Nachher; QC-Info
+  `DIAGNOSE_ENTFERNT`. Nie eine Exception nach aussen.
+- Entscheidungen: D1 Rewrite ja, D2 Fallback ja, D3 Vordiagnosen attribuiert
+  erlaubt, D4 nur P2.
+
+### QC-Registry
+`… konjunktiv, diagnosekriterien, diagnose_nennung, diagnose_entfernt, repair_flags, …`
+
+### Tests
+Neu `test_v1926_diagnose_zirkulaer.py` (Klassifikation, QC, Prompt,
+Verifikation, Fallback, Rewrite mit gemocktem LLM); `test_v1919_sprint_r.py`
+angepasst (Rahmen-Satz ist jetzt ZIRKULAER). Unit 1290 gruen, ruff 0.
+
+---
+
 ## [v19.25] — Log-Runde 10.–17.09.: Befund-Slots, Stage-1-Robustheit, Grammatik, Quellen-Plausibilitaet, EB-Laenge (2026-09-18)
 
 Basis: `v19_QA_v02` @ `052221c` (nach v19.24 Interview-Dialog). Fuenf Patches (B, S5, G, Q, L; Q enthaelt

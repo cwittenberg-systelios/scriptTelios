@@ -923,6 +923,8 @@ class JobQueue:
                     _grammar = (job.generation_telemetry or {}).get("grammar_fixes")
                     # v19.25 (Sprint Q): Quellen-Plausibilitaet.
                     _src_warn = getattr(job, "source_warnings", None)
+                    # v19.26: Entdiagnostizierung (P2).
+                    _dx_rw = (job.generation_telemetry or {}).get("dx_rewrite")
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
@@ -937,6 +939,7 @@ class JobQueue:
                         suizid_note_status=_suizid,
                         grammar_fixes=_grammar,
                         source_warnings=_src_warn,
+                        dx_rewrite=_dx_rw,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(

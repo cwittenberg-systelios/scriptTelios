@@ -183,6 +183,10 @@ ISSUE_CODE_REPAIR_SHRUNK = "REPAIR_SHRUNK"
 # beruecksichtigt" = Diagnosekriterien kommen nicht ausreichend vor.
 ISSUE_CODE_DIAGNOSEKRITERIEN_COVERAGE = "DIAGNOSEKRITERIEN_COVERAGE"
 ISSUE_CODE_DIAGNOSE_IM_TEXT = "DIAGNOSE_IM_TEXT"
+# v19.26 (A3c): Diagnose als Erklaerungsrahmen aktueller Symptome (critical).
+ISSUE_CODE_DIAGNOSE_ZIRKULAER = "DIAGNOSE_ZIRKULAER"
+# v19.26: satzgenaue Entdiagnostizierung hat Saetze ersetzt (info, mit Vorher/Nachher).
+ISSUE_CODE_DIAGNOSE_ENTFERNT = "DIAGNOSE_ENTFERNT"
 
 # v19.22 (S3): Pflicht-Hinweis zur Suizidalitaet in der Gespraechsdoku.
 # Der Normalfall (Standardsatz ergaenzt) ist per Entscheid D1=A bewusst
@@ -516,17 +520,77 @@ _DX_FAMILY_PATTERNS: list[tuple[str, "re.Pattern"]] = [
     ("F10",     re.compile(r"\bF10\b|alkohol", re.I)),
 ]
 
+# v19.26 (A3c): Diagnosebezeichnungen inkl. Abkuerzungen und Alltagsformen.
+# Log 08.09.2026 (Job cae59639): "im Rahmen einer Posttraumatischen
+# Belastungsstoerung (PTBS) und einer rezidivierenden depressiven Stoerung" -
+# die alte Liste kannte weder "PTBS" noch "Depression"/"Trauma".
 _DX_LABEL_IN_TEXT_RE = re.compile(
     r"\bF\d{2}(?:\.\d{1,2})?\b"
-    r"|depressive[ns]? (?:episode|störung|stoerung)|rezidivierende depressive"
-    r"|panikstörung|panikstoerung|generalisierte angststörung|generalisierte angststoerung"
-    r"|anpassungsstörung|anpassungsstoerung|posttraumatische belastungsstörung|posttraumatische belastungsstoerung"
-    r"|somatoforme|somatisierungsstörung|somatisierungsstoerung"
-    r"|anorexia|bulimia|binge-eating"
-    r"|persönlichkeitsstörung|persoenlichkeitsstoerung"
-    r"|abhängigkeitssyndrom|abhaengigkeitssyndrom",
+    r"|\b(?:PTBS|kPTBS|GAS|ADHS|ADS|BPS|OCD|PTSD)\b"
+    r"|depressive[nrs]? (?:episode|störung|stoerung|erkrankung)|rezidivierende[nrs]? depressive"
+    r"|\bdepression(?:en)?\b|\bdysthymi\w*|\bbipolar\w*"
+    r"|panikstörung|panikstoerung|angststörung|angststoerung|agoraphobie|soziale[nr]? phobie"
+    r"|zwangsstörung|zwangsstoerung|zwangserkrankung"
+    r"|anpassungsstörung|anpassungsstoerung"
+    r"|posttraumatische[nrs]? belastungsstörung|posttraumatische[nrs]? belastungsstoerung"
+    r"|traumafolgestörung|traumafolgestoerung|komplexe[nrs]? trauma\w*"
+    r"|somatoforme|somatisierungsstörung|somatisierungsstoerung|chronische[nrs]? schmerzstörung"
+    r"|anorexia|anorexie|bulimia|bulimie|binge-eating|essstörung|essstoerung"
+    r"|persönlichkeitsstörung|persoenlichkeitsstoerung|borderline"
+    r"|abhängigkeitssyndrom|abhaengigkeitssyndrom|alkoholabhängigkeit|alkoholabhaengigkeit",
     re.IGNORECASE,
 )
+
+# Erklaerungsrahmen: Diagnose als Ursache/Kontext aktueller Symptome
+# ("Gruebeln im Rahmen einer PTBS") -> zirkulaere Begruendung.
+_DX_FRAME_RE = re.compile(
+    r"\b(?:im rahmen (?:einer|eines|der|des|seiner|ihrer)"
+    r"|vor dem hintergrund (?:einer|eines|der|des|seiner|ihrer)"
+    r"|aufgrund (?:einer|eines|der|des|seiner|ihrer)"
+    r"|bedingt durch|infolge (?:einer|eines|der|des|seiner|ihrer)"
+    r"|im kontext (?:einer|eines|der|des|seiner|ihrer)"
+    r"|als (?:ausdruck|folge|teil|symptom\w*) (?:einer|eines|der|des|seiner|ihrer)"
+    r"|typisch für|charakteristisch für|passend zu(?:r|m)?"
+    r"|(?:leidet|leide|litt) (?:an|unter) (?:einer|eines|der|des|seiner|ihrer)"
+    r"|symptome? (?:einer|eines|der|des|seiner|ihrer)"
+    r"|wie die diagnose|entsprechend der diagnose|diagnosegemäß)\b",
+    re.IGNORECASE,
+)
+
+# Attribution: Diagnose als berichtete Vorgeschichte/Fremdurteil (erlaubt).
+_DX_ATTRIBUTION_RE = re.compile(
+    r"\b(?:diagnostiziert\w*|vordiagnos\w*|vorbefund\w*|laut |zufolge|verdacht auf"
+    r"|verdachtsdiagnose|in behandlung wegen|behandelt wegen|bekannte[nrs]? "
+    r"|(?:bei|von) (?:seine[rm]|ihre[rm]|de[rm]) (?:mutter|vater|schwester|bruder|tochter|sohn|großmutter|großvater|oma|opa|tante|onkel)"
+    r"|familiär|familienanamnes\w*|in der familie|früher\w* (?:wurde|sei|habe)|damals)\b",
+    re.IGNORECASE,
+)
+
+
+def diagnose_sentences(text: str) -> list[dict]:
+    """v19.26: Saetze mit Diagnosebezeichnung, klassifiziert.
+
+    Rueckgabe je Satz: {"sentence", "labels", "kind"} mit kind in
+      "zirkulaer"  - Diagnose + Erklaerungsrahmen (kritisch)
+      "attribuiert" - Diagnose als berichtete Vorgeschichte (ok)
+      "nennung"    - Diagnose ohne Rahmen und ohne Attribution (warnung)
+    ICD-Codes sind nie attribuiert (gehoeren in keine Anamnese).
+    """
+    from app.services.postprocessing import split_sentences_de
+    out: list[dict] = []
+    for sent in split_sentences_de(text or ""):
+        labels = sorted({m.group(0) for m in _DX_LABEL_IN_TEXT_RE.finditer(sent)})
+        if not labels:
+            continue
+        has_icd = any(re.match(r"^F\d{2}", lab) for lab in labels)
+        if _DX_FRAME_RE.search(sent):
+            kind = "zirkulaer"
+        elif not has_icd and _DX_ATTRIBUTION_RE.search(sent):
+            kind = "attribuiert"
+        else:
+            kind = "nennung"
+        out.append({"sentence": sent.strip(), "labels": labels, "kind": kind})
+    return out
 
 _DX_COVERAGE_MIN = 0.4
 
@@ -581,22 +645,65 @@ def _check_diagnosekriterien(
                 code_detail={"family": fam, "missing": missing, "coverage": round(ratio, 2)},
             ))
 
-    hits = sorted({m.group(0) for m in _DX_LABEL_IN_TEXT_RE.finditer(anamnese_part)})
-    if hits:
+    return out
+
+
+def _check_diagnose_nennung(workflow: str, text: str) -> list[QualityIssue]:
+    """v19.26 (A3c): satzweise, unabhaengig von uebergebenen Diagnosen.
+
+    DIAGNOSE_ZIRKULAER (critical): Diagnose als Erklaerung aktueller Symptome
+      ("Gruebeln im Rahmen einer PTBS") - zirkulaere Begruendung.
+    DIAGNOSE_IM_TEXT (warning): Diagnosebezeichnung/ICD-Code ohne Attribution.
+    Attribuierte Vordiagnosen ("2019 wurde ... diagnostiziert", "Verdacht auf
+    ADHS durch die Vortherapeutin", "Depression bei seiner Mutter") sind ok.
+    """
+    if workflow != "anamnese":
+        return []
+    anamnese_part = (text or "").split("###BEFUND###", 1)[0]
+    classified = diagnose_sentences(anamnese_part)
+    out: list[QualityIssue] = []
+    zirk = [c for c in classified if c["kind"] == "zirkulaer"]
+    nenn = [c for c in classified if c["kind"] == "nennung"]
+    if zirk:
+        labels = sorted({lab for c in zirk for lab in c["labels"]})
+        out.append(QualityIssue(
+            code=ISSUE_CODE_DIAGNOSE_ZIRKULAER,
+            severity=SEVERITY_CRITICAL,
+            message=(
+                f"Diagnose als Erklaerung der Symptomatik ({len(zirk)} Satz/Saetze, "
+                f"{', '.join(repr(x) for x in labels[:4])}): zirkulaere Begruendung - "
+                "die Anamnese beschreibt Zustand und Symptome, aus denen die Diagnose "
+                "folgt, ohne sie zu nennen."
+            ),
+            repair_hint=(
+                "Betroffene Saetze ohne Diagnosebezeichnung formulieren: die "
+                "genannten Beschwerden (z.B. Flashbacks, Gruebeln) mit zeitlichem "
+                "Verlauf, Ausloeser und Beeintraechtigung beschreiben; den "
+                "Erklaerungsrahmen ('im Rahmen einer ...') ersatzlos streichen. "
+                "Nichts hinzufuegen."
+            ),
+            code_detail={"sentences": [c["sentence"][:220] for c in zirk[:5]],
+                         "labels": labels[:10], "count": len(zirk)},
+        ))
+    if nenn:
+        labels = sorted({lab for c in nenn for lab in c["labels"]})
         out.append(QualityIssue(
             code=ISSUE_CODE_DIAGNOSE_IM_TEXT,
             severity=SEVERITY_WARNING,
             message=(
                 f"Diagnosebezeichnung/ICD-Code im Anamnesetext: "
-                f"{', '.join(repr(h) for h in hits[:4])}. Die Anamnese begruendet "
-                "die Diagnose ueber die Symptomatik, nennt sie aber nicht."
+                f"{', '.join(repr(h) for h in labels[:4])}. Die Anamnese begruendet "
+                "die Diagnose ueber die Symptomatik, nennt sie aber nicht - "
+                "Vordiagnosen nur attribuiert ('laut Vorbefund wurde ... diagnostiziert')."
             ),
             repair_hint=(
                 "Diagnosebezeichnungen und ICD-Codes aus dem Anamnesetext "
                 "entfernen; stattdessen die zugrundeliegenden Beschwerden "
-                "beschreibend wiedergeben."
+                "beschreibend wiedergeben. Frueher gestellte Diagnosen aus den "
+                "Quellen nur als attribuierte Vorgeschichte in der Vergangenheitsform."
             ),
-            code_detail={"matches": hits[:10]},
+            code_detail={"matches": labels[:10],
+                         "sentences": [c["sentence"][:220] for c in nenn[:5]]},
         ))
     return out
 
@@ -1345,6 +1452,25 @@ def _check_source_plausibility(source_warnings: "list | None") -> list[QualityIs
     return out
 
 
+def _check_diagnose_entfernt(dx_rewrite: "dict | None") -> list[QualityIssue]:
+    """v19.26: Telemetrie der satzgenauen Entdiagnostizierung (diagnose_rewrite)."""
+    if not dx_rewrite or not int(dx_rewrite.get("replaced") or 0):
+        return []
+    n = int(dx_rewrite.get("replaced") or 0)
+    kept = int(dx_rewrite.get("kept") or 0)
+    return [QualityIssue(
+        code=ISSUE_CODE_DIAGNOSE_ENTFERNT,
+        severity=SEVERITY_INFO,
+        message=(
+            f"{n} Satz/Saetze automatisch ohne Diagnosebezeichnung umformuliert"
+            + (f", {kept} unveraendert belassen (Pruefung nicht bestanden)" if kept else "")
+            + ". Vorher/Nachher im Detail - bitte fachlich gegenlesen."
+        ),
+        repair_hint="Keine Aktion noetig - bereits umformuliert; bei Unstimmigkeit manuell korrigieren.",
+        code_detail={k: v for k, v in dx_rewrite.items() if k in ("replaced", "kept", "mode", "pairs")},
+    )]
+
+
 def _check_grammar_autofixed(grammar_fixes: "dict | None") -> list[QualityIssue]:
     """v19.25 (G3): Telemetrie-basiert, info."""
     if not grammar_fixes or not int(grammar_fixes.get("total") or 0):
@@ -1575,6 +1701,7 @@ def run_quality_check(
     suizid_note_status: "str | None" = None,
     grammar_fixes: "dict | None" = None,
     source_warnings: "list | None" = None,
+    dx_rewrite: "dict | None" = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
@@ -1659,6 +1786,7 @@ def run_quality_check(
         suizid_note_status=suizid_note_status,
         grammar_fixes=grammar_fixes,
         source_warnings=source_warnings,
+        dx_rewrite=dx_rewrite,
     )
     issues = run_checks(ctx)
 
@@ -1698,6 +1826,7 @@ class QCContext:
     suizid_note_status: "str | None" = None   # v19.22 (S3)
     grammar_fixes: "dict | None" = None       # v19.25 (G3)
     source_warnings: "list | None" = None     # v19.25 (Sprint Q)
+    dx_rewrite: "dict | None" = None          # v19.26 (Entdiagnostizierung)
 
 
 @dataclass(frozen=True)
@@ -1729,7 +1858,11 @@ CHECK_REGISTRY: tuple[QCCheck, ...] = (
     QCCheck("konjunktiv", lambda c: _check_konjunktiv(c.workflow, c.text),
             (ISSUE_CODE_KONJUNKTIV_QUOTE,), "v19.19 (A2): Anamnese in indirekter Rede"),
     QCCheck("diagnosekriterien", lambda c: _check_diagnosekriterien(c.workflow, c.text, c.diagnosen),
-            (ISSUE_CODE_DIAGNOSEKRITERIEN_COVERAGE, ISSUE_CODE_DIAGNOSE_IM_TEXT), "v19.19 (A3b)"),
+            (ISSUE_CODE_DIAGNOSEKRITERIEN_COVERAGE,), "v19.19 (A3b): Kriterien-Abdeckung"),
+    QCCheck("diagnose_nennung", lambda c: _check_diagnose_nennung(c.workflow, c.text),
+            (ISSUE_CODE_DIAGNOSE_ZIRKULAER, ISSUE_CODE_DIAGNOSE_IM_TEXT), "v19.26 (A3c): satzweise, mit Attribution"),
+    QCCheck("diagnose_entfernt", lambda c: _check_diagnose_entfernt(c.dx_rewrite),
+            (ISSUE_CODE_DIAGNOSE_ENTFERNT,), "v19.26: info, Telemetrie dx_rewrite"),
     QCCheck("repair_flags", lambda c: _check_repair_flags(c.repair_flags),
             (ISSUE_CODE_REPAIR_NO_CHANGE, ISSUE_CODE_REPAIR_SHRUNK), "v19.19 (R1/R2)"),
     QCCheck("wir_form", lambda c: _check_wir_form(c.workflow, c.text),
