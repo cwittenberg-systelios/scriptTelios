@@ -156,12 +156,26 @@ _HERR_DEKLINATION_RE = re.compile(
 )
 
 
-def fix_herrn_deklination(text: str) -> tuple[str, int]:
+def fix_herrn_deklination(text: str, pairs: Optional[list] = None) -> tuple[str, int]:
     """Praeposition/Genitiv-Artikel + 'Herr X.' -> 'Herrn X.'. Gibt
-    (Text, Anzahl Korrekturen) zurueck."""
+    (Text, Anzahl Korrekturen) zurueck. v19.26b: mit `pairs` werden
+    Vorher/Nachher-Schnipsel (Satzkontext) fuer die QC-Anzeige gesammelt."""
     if not text or "Herr " not in text:
         return text, 0
-    fixed, n = _HERR_DEKLINATION_RE.subn(lambda m: f"{m.group(1)} Herrn", text)
+
+    def _repl(m: "re.Match") -> str:
+        if pairs is not None:
+            a = max(0, m.start() - 40)
+            b = min(len(text), m.end() + 30)
+            snippet = text[a:b].replace("\n", " ")
+            pairs.append({
+                "before": ("…" if a > 0 else "") + snippet + ("…" if b < len(text) else ""),
+                "after": ("…" if a > 0 else "") + snippet.replace(m.group(0), f"{m.group(1)} Herrn", 1) + ("…" if b < len(text) else ""),
+                "how": "herrn",
+            })
+        return f"{m.group(1)} Herrn"
+
+    fixed, n = _HERR_DEKLINATION_RE.subn(_repl, text)
     if n:
         logger.warning("Postprocessing: %d x 'Herr' -> 'Herrn' dekliniert (v19.25 G1)", n)
     return fixed, n
@@ -508,11 +522,14 @@ def postprocess_output(
     _kleb = _LAST_KLEBEBUG_COUNT[0]
 
     # 1a. v19.25 (G1): "von Herr G." -> "von Herrn G."
-    text, _herrn = fix_herrn_deklination(text)
+    _pairs: list = []
+    text, _herrn = fix_herrn_deklination(text, pairs=_pairs)
     if stats is not None:
         stats["klebebugs"] = _kleb
         stats["herrn"] = _herrn
         stats["total"] = _kleb + _herrn
+        if _pairs:
+            stats["pairs"] = _pairs[:10]   # v19.26b: Vorher/Nachher fuer QC
 
     # 2. Loop-Detection
     text = detect_loop_repetition(text)

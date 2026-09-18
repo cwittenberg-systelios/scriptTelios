@@ -20,6 +20,44 @@ import { JobProgressBar } from "./ui.jsx";
 // repairBusy:     blockiert Buttons
 // repairError:    Fehlermeldung
 // readOnly:       wenn true, nur Anzeige (z.B. fuer Repair-QC nach Repair-Submit)
+/**
+ * v19.26b: Vorher/Nachher fuer automatische Umformulierungen (DIAGNOSE_ENTFERNT,
+ * GRAMMAR_AUTOFIXED). code_detail.pairs = [{before, after, how}]; after == null
+ * heisst "unveraendert belassen" (Pruefung nicht bestanden).
+ */
+const QC_PAIR_HOW = {
+  llm: "Modell",
+  fallback: "deterministisch (Klausel gestrichen)",
+  herrn: "Deklination",
+  klebebug: "Klebefehler",
+};
+
+function QcPairsDetail({ pairs }) {
+  if (!Array.isArray(pairs) || pairs.length === 0) return null;
+  return (
+    <details className="qc-pairs">
+      <summary>Vorher/Nachher anzeigen ({pairs.length})</summary>
+      <ol className="qc-pairs-list">
+        {pairs.map((p, i) => {
+          const how = String(p.how || "");
+          const label = QC_PAIR_HOW[how] || (how.startsWith("llm_abgelehnt") ? "Modellvorschlag abgelehnt" : how);
+          return (
+            <li key={i} className="qc-pair">
+              <div className="qc-pair-before"><span className="qc-pair-tag">vorher</span><s>{p.before}</s></div>
+              {p.after ? (
+                <div className="qc-pair-after"><span className="qc-pair-tag">nachher</span>{p.after}</div>
+              ) : (
+                <div className="qc-pair-kept"><span className="qc-pair-tag">belassen</span>unverändert – Umformulierung nicht übernommen</div>
+              )}
+              {label && <div className="qc-pair-how">{label}</div>}
+            </li>
+          );
+        })}
+      </ol>
+    </details>
+  );
+}
+
 function QualityCheckPanel({
   data,
   acceptedCodes = [],
@@ -74,7 +112,10 @@ function QualityCheckPanel({
               ) : (
                 <span className="qc-marker" />
               )}
-              <span className="qc-msg">{iss.message}</span>
+              <span className="qc-msg">
+                {iss.message}
+                <QcPairsDetail pairs={iss.code_detail && iss.code_detail.pairs} />
+              </span>
               <span className="qc-code" title={iss.repair_hint || ""}>{iss.code}</span>
             </li>
           );
@@ -328,4 +369,4 @@ function RepairBundle({ job, ops, toast }) {
   );
 }
 
-export { QualityCheckPanel, RepairPreviewModal, ResultVersionsTabs, RepairBundle };
+export { QualityCheckPanel, QcPairsDetail, RepairPreviewModal, ResultVersionsTabs, RepairBundle };

@@ -83,7 +83,10 @@ class TestStatsUndQC:
             workflow="dokumentation", stats=stats,
         )
         assert "Aufenthalts von Herrn G." in out and "Beobachtung von Herrn G." in out
+        pairs = stats.pop("pairs")   # v19.26b: Vorher/Nachher-Schnipsel
         assert stats == {"klebebugs": 1, "herrn": 2, "total": 3}
+        assert len(pairs) == 2 and all(p["how"] == "herrn" for p in pairs)
+        assert "von Herr G." in pairs[0]["before"] and "von Herrn G." in pairs[0]["after"]
 
     def test_stats_leer_bei_sauberem_text(self):
         stats = {}

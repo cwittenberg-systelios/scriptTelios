@@ -7,6 +7,22 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.26b] — Vorher/Nachher im QualityCheck-Panel (2026-09-18)
+
+Kleine Ergaenzung zu v19.26 (Backend + Frontend, `systelios.js` neu gebaut).
+
+- `qa.jsx`: `QcPairsDetail` – QC-Eintraege mit `code_detail.pairs` bekommen ein
+  aufklappbares „Vorher/Nachher anzeigen (n)“: alter Satz durchgestrichen,
+  neuer Satz gruen, Kennzeichnung Modell / deterministisch / abgelehnt
+  (`after == null` → „belassen“). Styles `.qc-pairs*` in `styles.jsx`.
+- `postprocessing.fix_herrn_deklination(text, pairs=…)`: sammelt
+  Vorher/Nachher-Schnipsel (Satzkontext); `postprocess_output(stats)` legt sie
+  als `stats["pairs"]` ab → Telemetrie `grammar_fixes.pairs` →
+  `GRAMMAR_AUTOFIXED.code_detail.pairs` (gleiche Anzeige wie `DIAGNOSE_ENTFERNT`).
+- Tests: `tests/qc_pairs.test.jsx` (Jest), `test_v1925_grammatik.py` angepasst.
+
+---
+
 ## [v19.26] — Zirkuläre Diagnose-Erklärung in der Anamnese (2026-09-18)
 
 Basis: `v19_QA_v02` @ `052221c` + v19.25. Ein Patch (nur Backend; kein

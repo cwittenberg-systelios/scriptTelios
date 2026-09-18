@@ -1486,7 +1486,7 @@ def _check_grammar_autofixed(grammar_fixes: "dict | None") -> list[QualityIssue]
         severity=SEVERITY_INFO,
         message=f"{total} Grammatik-Korrektur(en) automatisch angewendet: {', '.join(parts)}.",
         repair_hint="Keine Aktion noetig - bereits korrigiert.",
-        code_detail=dict(grammar_fixes),
+        code_detail=dict(grammar_fixes),   # v19.26b: enthaelt ggf. pairs (Vorher/Nachher)
     )]
 
 

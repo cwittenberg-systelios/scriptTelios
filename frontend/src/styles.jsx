@@ -560,6 +560,23 @@ const S = `
     padding: 1px 6px;
   }
 
+  /* ── v19.26b: Vorher/Nachher bei automatischen Umformulierungen ── */
+  .st-scope .qc-pairs { margin-top: 4px; font-size: 12.5px; }
+  .st-scope .qc-pairs > summary {
+    cursor: pointer; color: var(--st-text-soft); font-size: 12px; user-select: none;
+  }
+  .st-scope .qc-pairs-list { margin: 6px 0 0; padding-left: 18px; }
+  .st-scope .qc-pair { margin-bottom: 8px; }
+  .st-scope .qc-pair-tag {
+    display: inline-block; min-width: 54px; margin-right: 6px;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px;
+    color: var(--st-text-soft); text-transform: uppercase;
+  }
+  .st-scope .qc-pair-before s { color: #9a3b3b; text-decoration-color: #9a3b3b; }
+  .st-scope .qc-pair-after { color: #1f6b3a; }
+  .st-scope .qc-pair-kept { color: var(--st-text-soft); font-style: italic; }
+  .st-scope .qc-pair-how { color: var(--st-text-soft); font-size: 11px; margin-top: 2px; }
+
   /* ── Sprint 4: interaktive Erweiterung des Panels ── */
   .st-scope .qc-checkbox-label {
     display: inline-flex; align-items: center; gap: 6px;
