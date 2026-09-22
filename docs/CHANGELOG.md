@@ -7,6 +7,122 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.28] — Thematischer Entlassbericht: Fallformel, Struktur-Schalter, Testwerte-Vollständigkeit (2026-09-22)
+
+Basis: `v19_QA_v02` @ `1bcce0f`. Ein Patch (Backend + Frontend, `systelios.js`
+neu gebaut, DB: zwei neue Spalten via `schema.sql`). Ausloeser: Wunsch,
+den Entlassbericht statt in Modalitaetsabschnitten (Ankommen / Einzel /
+Gruppe / Nonverbal / Empfehlungen) thematisch aufzubauen: Auftrag des
+Klienten → Erarbeitung des zentralen Themas/Musters → Prozessfortschritte in
+Einzel-, Gruppen- und nonverbaler Therapie → Reflexion und
+Symptomveraenderung → Empfehlungen. S0-Prototyp (22.09., EB-FrauM/EB-HerrR,
+gemma4:31b, `misc/s0_run.py`): thematische Variante in beiden Faellen klar
+besser (Struktur, Wendepunkte, Empfehlungen), Status quo verlor bei HerrR
+sogar Fakten (Stage-1-Summary liess den Dezember aus) und empfahl
+„Stabilisierung der Partnerschaft" trotz dokumentierter Trennungsentscheidung.
+
+### Entscheidungen
+- D1=B: das Modell schlaegt eine **Fallformel** vor (Stage 1b), die
+  Therapeut:in waehlt/editiert und generiert neu. D2: mehrere
+  Themenkandidaten, max. 3 gewaehlt. D3=A: Modalitaeten bleiben eigene
+  Absaetze innerhalb „Prozessfortschritte" (Anti-Wiederholungs-Regel im
+  Prompt + Redundanz-Check). D4: Prozessreflexion in Teil 4. D5:
+  **Schalter im Formular**, Default = Status quo. D6: Stage 1 erhaelt
+  dokumentierte Hypothesen. D7: Testwerte-Vollstaendigkeitscheck. D8:
+  Primer-Doppelung bei gemma behoben.
+
+### S1 — Stage 1 (`services/verlauf_summary.py`)
+- EB-Struktur bekommt einen vierten Abschnitt `### Dokumentierte Hypothesen
+  und Muster` („Laut Protokoll (Datum): …"; nur Wiedergabe, keine eigene
+  Deutung — Regel 2 bleibt). Fokus-Hint EB: Wendepunkte/benannte Anteile
+  erhalten, **gesamte Zeitspanne** abdecken.
+- Neu: `detect_coverage_gap()` — fehlt in der Summary ein Monat, der im
+  Rohtext wesentlich vertreten ist (>= 15 % der Datumsmarker, >= 3), loest
+  das denselben Retry aus wie ein critical-Signal; bleibt die Luecke →
+  `degraded`, Issue `abdeckung_luecke` im Audit. Nur auf Gesamtebene (nicht
+  je Chunk). Snapshot-Fixture `stage1_prompts_v1920.json` (verlauf_chunked)
+  wegen des bewusst geaenderten EB-Prompts neu erzeugt.
+
+### S2 — Stage 1b Fallformel (`services/fallformel.py`, neu)
+- Ein LLM-Call (Hauptmodell des Jobs, temp 0.3) aus Stage-1-Summary +
+  Antragsvorlage (+ Prozessreflexion) → Markdown mit fuenf `###`-Abschnitten:
+  Auftrag · Themenkandidaten (1–3, je mit Sitzungsbelegen) · Wendepunkte je
+  Modalitaet · Symptomveraenderung · Offene Themen. Keine Testwerte/
+  Diagnosen (die kommen aus der Antragsvorlage). Kein Muster → Standardsatz.
+- Checks: Abschnitte vollstaendig, <= 3 Kandidaten (hart gekuerzt),
+  Verfahrens-/Zitat-Signale (wiederverwendet aus Stage 1), Datumsbelege ohne
+  Quelle. Kein Retry — die Therapeut:in korrigiert im UI (D1=B).
+- Pipeline: neue Phase `_run_fallformel` (nach Gates, vor Prompt-Bau), nur
+  bei `workflow=entlassbericht` und `eb_struktur=thematisch`. Form-Feld
+  `fallformel` (bestaetigte Fassung) ueberspringt den LLM-Call. Fehler in
+  Stage 1b kippen den Job nicht (Audit `applied=False, fallback_reason`).
+- Persistenz: `jobs.fallformel_text`, `jobs.fallformel_audit` (JSONB;
+  `ADD COLUMN IF NOT EXISTS` in `scripts/schema.sql`); `to_dict`,
+  DB-Load und Repair-Kontext durchgereicht. prompts.log: `stage1b_fallformel`.
+
+### S3 — Stage 2 (`services/prompts.py`, `api/jobs.py`, `llm.py`)
+- Neues Form-Feld `eb_struktur` (`modalitaet` | `thematisch`; alles andere
+  = Status quo) und `fallformel`. `WORKFLOW_INSTRUCTIONS_EB_THEMATISCH`
+  (fuenf Teile, „Thema in Teil 2 EINMAL erklaeren, Modalitaetsabsaetze
+  bringen nur den neuen Schritt") — im Manifest als
+  `instructions_thematisch`, im Export als `P_ENTL_THEMATISCH`.
+- `build_system_prompt(eb_struktur=…)`: thematisch → Few-Shot
+  `FEW_SHOT_ENTLASSBERICHT_THEMATISCH` (gleicher Fall, thematische
+  Reihenfolge) + `BASE_PROMPT_EB_THEMATISCH_ZUSATZ`; das Stilbeispiel wird
+  **nur als Schreibstil** eingehaengt (nicht als strukturelle Schablone —
+  sonst dreht ein modalitaetsbasiertes Beispiel die Struktur zurueck).
+- `build_user_content(eb_struktur=…, fallformel_text=…)`: FALLFORMEL-Block
+  mit Einbau-Regeln (Teil 1–5 ← Abschnitte; Belege nicht uebernehmen)
+  zwischen Quellen und Fokus-Themen; Prozessreflexion-Regel zeigt bei
+  thematisch auf Teil 4; Schlusssatz je Struktur. Status-quo-Pfad
+  byte-identisch (Test).
+- D8 (`llm._postprocess_text`): Primer ohne abschliessendes Whitespace wird
+  nicht mehr vorangestellt, wenn der Output mit einem Grossbuchstaben
+  beginnt (gemma setzt den Prefill nicht fort → „AufenthaltsWir erlebten",
+  „AufenthaltsZu Beginn seines" in 2 von 4 S0-Berichten).
+
+### S4 — QC (`services/quality_check.py`, `quality_specs.py`)
+- `required_sections_for(workflow, eb_struktur)`: thematisch → Anliegen ·
+  **Zentrales Thema** · Behandlungsverlauf · **Reflexion und
+  Symptomveraenderung** · Empfehlung (neue Synonymlisten); Status quo
+  unveraendert. `QCContext.eb_struktur/fallformel_text`; run_job liest den
+  Schalter vom Job (Repair: vom Parent/Audit).
+- Neu (nur EB thematisch mit Fallformel): `THEMA_NICHT_AUFGEGRIFFEN`
+  (warning, repair-faehig), `THEMA_KOHAERENZ` (info, Thema in < 3
+  Absaetzen), `WENDEPUNKT_NICHT_AUFGEGRIFFEN_<MOD>` (info; S0:
+  Elternbesuch ging verloren). Neu (EB beide Strukturen):
+  `REDUNDANZ_ABSAETZE` (info, Jaccard >= 0.6 ueber Absatzgrenzen).
+- D7 `TESTWERTE_*` (EB, mit Antragsvorlage): Prae/Post-Paare der Vorlage
+  („Skala: prae; post (") werden geparst; fehlt eine **unguenstige**
+  Veraenderung im Bericht, waehrend guenstige genannt werden →
+  `TESTWERTE_UNGUENSTIG_VERSCHWIEGEN` (warning; S0: DASS-21 Angst 2 → 12 in
+  beiden Varianten verschwiegen); sonstige fehlende → `_UNVOLLSTAENDIG`
+  (info); gar keine genannt → `TESTWERTE_FEHLEN` (warning). „0; 0"-Skalen
+  werden nie gefordert. Registry-Reihenfolge-Test aktualisiert.
+- Fokus-Themen bleiben im Stichpunkt-Check; die Fallformel laeuft NICHT
+  durch den Zeilenparser (S0-Befund: Fragment-Fehlalarme).
+
+### S5 — Frontend (`panels/P4.jsx`, `fallformel.js`, `api.js`)
+- Card E „Aufbau des Berichts": Segmented Control (Standard /
+  Thematisch), Default Status quo; beim Umschalten wechselt der
+  Prompt-Editor-Default mit (nur wenn er noch den Default zeigte).
+  Fokus-Themen → F, Prompt/Modell → G.
+- Card H „Fallformel": Themenkandidaten als Checkboxen (max. 3), Volltext
+  editierbar, Stage-1b-Signale, „Mit dieser Fallformel neu generieren" (gleiche
+  Dateien, Form-Feld `fallformel`). Persistenz im Draft-Cache
+  (`struktur`, `fallformelText`, `fallformelSel`). `src/fallformel.js` =
+  JS-Spiegel von `select_themen` (Jest).
+- `buildJobFormData`: `eb_struktur`, `fallformel`.
+
+### Sonstiges
+- `misc/s0_run.py`: S0-Runner (zwei Faelle × zwei Strukturen gegen
+  `/api/jobs/generate`, HMAC wie das Makro).
+- Doku: `docs/two_stage_pipeline.md` (Stage 1b), Sprintplan
+  `docs/v19_28_thematischer_entlassbericht_plan.md`.
+- Tests: +73 Backend (S1/S2/S3/S4/D8/Pipeline), +13 Frontend.
+
+---
+
 ## [v19.27] — Verfahrenswissen, Fokus-Treue und QC für die Gesprächsdokumentation (2026-09-22)
 
 Basis: `v19_QA_v02` @ `5edeaae`. Ein Patch (Backend + Frontend, `systelios.js`

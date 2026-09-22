@@ -98,6 +98,32 @@ Wenn keine Veränderung beschrieben: "Verlauf im Protokoll weitgehend
 gleichbleibend beschrieben."
 """
 
+# v19.28 (S1, D6): Nur fuer den Entlassbericht - die in den Gespraechs-
+# dokumentationen DOKUMENTIERTEN Hypothesen der Therapeut:innen muessen die
+# Verdichtung ueberleben, sonst hat Stage 1b (Fallformel) kein Material fuer
+# das zentrale Muster. Regel 2 (KEINE eigene Interpretation) bleibt bestehen:
+# hier wird nur wiedergegeben, was im Protokoll als Hypothese steht.
+VERLAUF_SUMMARY_STRUCTURE_EB_HYPOTHESEN = """
+### Dokumentierte Hypothesen und Muster
+NUR was in der Verlaufsdokumentation selbst als Hypothese, Muster, Sinn-
+zusammenhang oder Entwicklungsperspektive formuliert ist (typisch in den
+Abschnitten "Hypothesen und Entwicklungsperspektiven" der Einzelgespräche).
+Pro Hypothese EIN Satz, eingeleitet mit "Laut Protokoll (Datum):" - z.B.
+"Laut Protokoll (23.12.): Angst wird als Schutz- und Beziehungsregulations-
+mechanismus verstanden." Keine eigenen Deutungen ergänzen. Auch das im
+Aufnahmegespräch formulierte Anliegen/Ziel des Klienten hier mit Datum
+festhalten. Wenn das Protokoll keine Hypothesen enthält: "Keine Hypothesen
+im Protokoll dokumentiert."
+"""
+
+
+def _structure_for(workflow: Optional[str]) -> str:
+    """Struktur-Prompt je Workflow (v19.28: EB bekommt den Hypothesen-Block)."""
+    if workflow == "entlassbericht":
+        return (VERLAUF_SUMMARY_STRUCTURE.replace("Schreibe in DREI Abschnitten", "Schreibe in VIER Abschnitten")
+                + VERLAUF_SUMMARY_STRUCTURE_EB_HYPOTHESEN)
+    return VERLAUF_SUMMARY_STRUCTURE
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Workflow-spezifische Fokus-Hinweise
@@ -127,7 +153,17 @@ def _build_focus_hint(workflow: Optional[str]) -> str:
             "MODALITÄTEN ERHALTEN: Gruppensitzungen, Einzelgespräche und "
             "nonverbale Therapien (Kunst/Musik/Körper) als jeweils eigene, "
             "so benannte Einträge mit ihren Themen führen - Gruppeninhalte "
-            "NICHT in das Einzel-Narrativ auflösen."
+            "NICHT in das Einzel-Narrativ auflösen. "
+            # v19.28 (S1): Wendepunkte und dokumentierte Hypothesen sind das
+            # Material der Fallformel (Stage 1b) - sie duerfen nicht
+            # wegverdichtet werden. Vollstaendige Zeitspanne: S0-Lauf
+            # 2026-09-22 liess einen ganzen Monat aus.
+            "WENDEPUNKTE UND HYPOTHESEN ERHALTEN: benannte innere Anteile "
+            "(z.B. 'Türsteher'), Wendepunkt-Sitzungen und die im Protokoll "
+            "dokumentierten Hypothesen mit Datum wiedergeben. GESAMTE "
+            "ZEITSPANNE ABDECKEN: vom ersten bis zum letzten dokumentierten "
+            "Datum - keinen Monat auslassen, auch wenn die Quelle rückwärts "
+            "chronologisch sortiert ist."
         ),
     }.get(workflow, "")
 
@@ -246,6 +282,57 @@ def detect_summary_hallucination_signals(
     return issues
 
 
+# v19.28 (S1): Abdeckungs-Guard. S0-Befund 2026-09-22 (EB-HerrR, Status quo):
+# die Stage-1-Summary deckte nur 02.01.-29.01. ab, der gesamte Dezember
+# (inkl. der Wendepunkt-Sitzung 15.12.) fehlte - die Uebersicht behauptete
+# trotzdem "69 Sitzungen vom 02.01.". Keiner der bisherigen Checks schlug an.
+_DATE_DM_RE = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(?:\d{2,4})?(?!\d)")
+_COVERAGE_MIN_SHARE = 0.15   # Monat zaehlt als "wesentlich", wenn >= 15 % der Datumsmarker
+_COVERAGE_MIN_MARKERS = 3    # ... und mindestens 3 Datumsmarker im Rohtext
+
+
+def _month_histogram(text: str) -> dict[int, int]:
+    hist: dict[int, int] = {}
+    for _d, m in _DATE_DM_RE.findall(text or ""):
+        try:
+            mm = int(m)
+        except ValueError:
+            continue
+        if 1 <= mm <= 12:
+            hist[mm] = hist.get(mm, 0) + 1
+    return hist
+
+
+def detect_coverage_gap(summary: str, source_text: str) -> Optional[dict]:
+    """Fehlt in der Summary ein Monat, der im Rohtext wesentlich vertreten ist?
+
+    Schluessel ist der Monat ohne Jahr, weil die Summary Daten oft als
+    "12.01." schreibt. Liefert EIN Issue-Dict (severity "high") oder None.
+    """
+    if not summary or not source_text:
+        return None
+    src = _month_histogram(source_text)
+    total = sum(src.values())
+    if total < _COVERAGE_MIN_MARKERS:
+        return None
+    summ = _month_histogram(summary)
+    missing = sorted(
+        m for m, n in src.items()
+        if n >= _COVERAGE_MIN_MARKERS and n / total >= _COVERAGE_MIN_SHARE and summ.get(m, 0) == 0
+    )
+    if not missing:
+        return None
+    return {
+        "type": "abdeckung_luecke",
+        "severity": "high",
+        "detail": (
+            "Monat(e) " + ", ".join(f"{m:02d}" for m in missing)
+            + " im Rohtext wesentlich vertreten, in der Zusammenfassung ohne Datumsbezug"
+        ),
+        "missing_months": missing,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Hauptfunktion: Stage-1-Service (Schritte 2 + 3 + 4)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,11 +346,11 @@ _ANTI_THINK = anti_think_suffix(
 )
 
 
-def _system_prompt(focus_hint: str, extra: str = "") -> str:
+def _system_prompt(focus_hint: str, extra: str = "", workflow: Optional[str] = None) -> str:
     return (
         VERLAUF_SUMMARY_SYSTEM_PROMPT
         + "\n\n"
-        + VERLAUF_SUMMARY_STRUCTURE
+        + _structure_for(workflow)
         + (f"\n\nFOCUS: {focus_hint}\n" if focus_hint else "")
         + extra
         + _ANTI_THINK
@@ -370,7 +457,7 @@ async def summarize_verlauf(
     # Hintergrund (Eval-Lauf 14.05.2026): Stage-1 zeigte think_ratio=50-67%
     # bei 12962w-Inputs. Qwen3:32b ignoriert "think:False" + einmaliges
     # "/no_think" bei komplexen Verdichtungsaufgaben — defense in depth nötig.
-    system_prompt = _system_prompt(focus_hint)
+    system_prompt = _system_prompt(focus_hint, workflow=workflow)
     user_content = _user_content(verlauf_text, patient_initial, target_words, min_acceptable, max_acceptable)
 
     # Erste Generierung — kein Workflow (kein BASE_PROMPT, kein Primer),
@@ -447,7 +534,15 @@ async def summarize_verlauf(
 
     # Halluzinations-Check + ggf. EIN Retry bei critical issues
     issues = detect_summary_hallucination_signals(summary, verlauf_text)
-    critical_issues = [i for i in issues if i["severity"] == "critical"]
+    # v19.28 (S1): Abdeckungsluecke loest denselben Retry aus wie ein
+    # critical-Signal - eine Summary ohne einen ganzen Behandlungsmonat ist
+    # fuer Stage 1b/2 unbrauchbar, auch wenn jeder Satz quellentreu ist.
+    # Nur auf Gesamtebene: Teil-Chunks decken naturgemaess nur ein Zeitfenster
+    # ab, run_chunked fuegt sie chronologisch zusammen.
+    _gap = detect_coverage_gap(summary, verlauf_text) if not _is_chunk else None
+    if _gap:
+        issues.append(_gap)
+    critical_issues = [i for i in issues if i["severity"] == "critical" or i["type"] == "abdeckung_luecke"]
     retry_used = False
     degraded = short_tolerated
     retry_telemetry: dict = {}
@@ -473,8 +568,12 @@ async def summarize_verlauf(
             retry_issues = detect_summary_hallucination_signals(
                 retry_summary, verlauf_text,
             )
+            _retry_gap = detect_coverage_gap(retry_summary, verlauf_text)
+            if _retry_gap:
+                retry_issues.append(_retry_gap)
             retry_critical = [
-                i for i in retry_issues if i["severity"] == "critical"
+                i for i in retry_issues
+                if i["severity"] == "critical" or i["type"] == "abdeckung_luecke"
             ]
             retry_words = len(retry_summary.split())
             if not retry_critical and retry_words >= min_acceptable:
@@ -611,6 +710,7 @@ async def _retry_stricter_summary(
     focus_hint = _build_focus_hint(workflow)
     system_prompt = _system_prompt(
         focus_hint,
+        workflow=workflow,
         extra="\n\n"
         + "WICHTIG: In einem vorherigen Versuch traten folgende "
         + f"Halluzinations-Probleme auf: {issue_summary}. "

@@ -12,6 +12,7 @@ from app.core.workflows import WorkflowLiteral
 from app.services.generation_pipeline import (
     PipelineInput, UploadBundle, normalize_geschlecht, parse_dx_list, run_generation,
 )
+from app.services.fallformel import normalize_eb_struktur
 from app.services.job_queue import job_queue, JobStatus
 from app.services.quality_check import sanitize_for_repair_prompt
 from app.services.repair import (
@@ -440,6 +441,14 @@ async def repair_execute(
     # in job_queue.py - identisch zum normalen Generate-Pfad).
     job.patient_name = _parent_pn
     job.fokus_themen = _parent_fokus
+    # v19.28: Struktur-Schalter + Fallformel des Parents, damit der QC des
+    # Repair-Outputs die richtigen Sektionen prueft (thematisch vs. Status quo).
+    _parent_ffa = parent.get("fallformel_audit") if isinstance(parent, dict) else None
+    job.eb_struktur = (
+        getattr(_cached_parent, "eb_struktur", None) if _cached_parent else None
+    ) or ((_parent_ffa or {}).get("struktur") if isinstance(_parent_ffa, dict) else None)
+    job.fallformel_text = parent.get("fallformel_text") if isinstance(parent, dict) else None
+    job.fallformel_audit = _parent_ffa
     # v19.27: erkannte Verfahren des Parents fuer VERFAHREN_*-Checks auf dem
     # Repair-Output mitgeben (Telemetrie-Merge in run_job haengt nur an,
     # was das Repair-Result liefert - deshalb hier vorab setzen).
@@ -597,6 +606,11 @@ async def create_generate_job(
     # Default 6). Nur fuer workflow=ism_fragebogen relevant; andere
     # Workflows ignorieren das Feld.
     ism_n_items:      Annotated[Optional[int], Form(description="ISM-Fragebogen: Anzahl der Items (4-12, Default 6).")] = None,
+    # v19.28: Struktur-Schalter des Entlassberichts (D5) + bestaetigte
+    # Fallformel (D1=B). Nur fuer workflow=entlassbericht relevant; andere
+    # Workflows ignorieren beide Felder.
+    eb_struktur:      Annotated[Optional[str], Form(description="P4: 'modalitaet' (Default, Status quo) oder 'thematisch' (Auftrag/Thema/Prozess/Reflexion/Empfehlung mit Fallformel).")] = None,
+    fallformel:       Annotated[Optional[str], Form(description="P4 thematisch: von der Therapeut:in bestaetigte/editierte Fallformel (Markdown mit ###-Abschnitten). Gesetzt -> Stage 1b wird uebersprungen.")] = None,
 ):
     """
     Startet einen asynchronen Generierungs-Job.
@@ -702,6 +716,8 @@ async def create_generate_job(
         dx_list=parse_dx_list(diagnosen),
         ism_n_items=ism_n_items,
         interview_protokoll=interview,
+        eb_struktur=normalize_eb_struktur(eb_struktur),
+        fallformel_override=(fallformel.strip() if fallformel and fallformel.strip() else None),
         uploads=uploads,
     )
 

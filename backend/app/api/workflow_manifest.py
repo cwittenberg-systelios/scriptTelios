@@ -62,8 +62,13 @@ def list_workflows() -> dict:
     # Quelle, aus der frontend/src/prompt-defaults.jsx generiert wird. Damit
     # koennen Tools/Eval/Confluence-Makros den produktiven Default abfragen,
     # statt eine eigene Kopie zu pflegen. Lazy-Import: prompts.py ist gross.
-    from app.services.prompts import BEFUND_VORLAGE, WORKFLOW_INSTRUCTIONS_DEFAULT
+    from app.services.prompts import (
+        BEFUND_VORLAGE, WORKFLOW_INSTRUCTIONS_DEFAULT, WORKFLOW_INSTRUCTIONS_EB_THEMATISCH,
+    )
     workflows = to_manifest()
     for w in workflows:
         w["instructions_default"] = WORKFLOW_INSTRUCTIONS_DEFAULT.get(w["key"], "")
+        # v19.28: zweite Default-Anweisung fuer den Struktur-Schalter (D5).
+        if w["key"] == "entlassbericht":
+            w["instructions_thematisch"] = WORKFLOW_INSTRUCTIONS_EB_THEMATISCH
     return {"workflows": workflows, "befund_vorlage": BEFUND_VORLAGE}

@@ -130,6 +130,17 @@ ALTER TABLE jobs
 ALTER TABLE jobs
     ADD COLUMN IF NOT EXISTS verlauf_summary_audit JSONB;
 
+-- v19.28: Stage 1b - Fallformel des thematischen Entlassberichts (Schalter
+-- eb_struktur=thematisch). fallformel_text = Geruest des Berichts (Auftrag,
+-- Themenkandidaten, Wendepunkte je Modalitaet, Symptomveraenderung, offene
+-- Themen), fallformel_audit = {applied, source: llm|therapeut, struktur,
+-- themen, issues, degraded, duration_s, fallback_reason}. NULL bei
+-- Struktur "modalitaet" (Status quo) oder anderen Workflows.
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS fallformel_text TEXT;
+ALTER TABLE jobs
+    ADD COLUMN IF NOT EXISTS fallformel_audit JSONB;
+
 -- v19.3: Repair-Kontext-Persistierung.
 -- Repair-Calls brauchen die Original-Quellen, um inhaltliche Therapeuten-
 -- Hinweise (z.B. "schreibe noch einen Absatz zum Paargespraech") sinnvoll

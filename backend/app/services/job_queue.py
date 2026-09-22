@@ -176,6 +176,13 @@ class JobState:
         #                        compression_ratio/retry_used/degraded/...
         self.verlauf_summary_text : Optional[str]  = None
         self.verlauf_summary_audit: Optional[dict] = None
+        # v19.28: Stage 1b (Fallformel, thematischer Entlassbericht).
+        # fallformel_text:  Geruest des Berichts (None wenn Struktur =
+        #                   modalitaet oder Stage 1b nicht lief)
+        # fallformel_audit: {applied, source (llm|therapeut), struktur,
+        #                   themen, issues, degraded, fallback_reason, ...}
+        self.fallformel_text      : Optional[str]  = None
+        self.fallformel_audit     : Optional[dict] = None
         # v19.3: Repair-Kontext-Persistierung.
         # source_verlauf_text:        Roh-Verlaufsdoku nach clean_verlauf_text.
         # transcript_summary_text:    Verdichtetes Transkript nach Stage-1.
@@ -248,6 +255,8 @@ class JobState:
             # Jobs die Stage 1 nicht beruehrt haben.
             "verlauf_summary_text":  self.verlauf_summary_text,
             "verlauf_summary_audit": self.verlauf_summary_audit,
+            "fallformel_text":       self.fallformel_text,
+            "fallformel_audit":      self.fallformel_audit,
             # v19.3: Repair-Kontext-Felder. Default None bei Jobs ohne
             # passende Quellen.
             "source_verlauf_text":         self.source_verlauf_text,
@@ -595,6 +604,8 @@ class JobQueue:
             "generation_telemetry":        db_job.generation_telemetry,
             "verlauf_summary_text":        db_job.verlauf_summary_text,
             "verlauf_summary_audit":       db_job.verlauf_summary_audit,
+            "fallformel_text":             db_job.fallformel_text,
+            "fallformel_audit":            db_job.fallformel_audit,
             "source_verlauf_text":         db_job.source_verlauf_text,
             "transcript_summary_text":     db_job.transcript_summary_text,
             "source_antragsvorlage_text":  db_job.source_antragsvorlage_text,
@@ -718,6 +729,9 @@ class JobQueue:
             # v19.2: Stage-1-Pipeline-Felder
             verlauf_summary_text=state.verlauf_summary_text,
             verlauf_summary_audit=state.verlauf_summary_audit,
+            # v19.28: Fallformel
+            fallformel_text=state.fallformel_text,
+            fallformel_audit=state.fallformel_audit,
             # v19.3: Repair-Kontext
             source_verlauf_text=state.source_verlauf_text,
             transcript_summary_text=state.transcript_summary_text,
@@ -830,6 +844,9 @@ class JobQueue:
             # an result["verlauf_summary_text"] gehaengt (kann None bleiben).
             job.verlauf_summary_audit = result.get("verlauf_summary_audit")
             job.verlauf_summary_text  = result.get("verlauf_summary_text")
+            # v19.28: Fallformel (Stage 1b)
+            job.fallformel_text  = result.get("fallformel_text")
+            job.fallformel_audit = result.get("fallformel_audit")
             # v19.3: Repair-Kontext-Felder
             job.source_verlauf_text         = result.get("source_verlauf_text")
             job.transcript_summary_text     = result.get("transcript_summary_text")
@@ -957,6 +974,12 @@ class JobQueue:
                         "verlauf": getattr(job, "verlauf_summary_audit", None),
                     }
                     _verfahren = (job.generation_telemetry or {}).get("verfahren")
+                    # v19.28: Struktur-Schalter + Fallformel (Thema-Kohaerenz,
+                    # Sektionen je Struktur). Ad-hoc-Attribut aus der Pipeline
+                    # bzw. vom Parent (Repair); Fallback auf das Audit.
+                    _eb_struktur = getattr(job, "eb_struktur", None) or (
+                        (job.fallformel_audit or {}).get("struktur") if isinstance(job.fallformel_audit, dict) else None
+                    )
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
@@ -974,6 +997,8 @@ class JobQueue:
                         dx_rewrite=_dx_rw,
                         stage1_audits=_stage1_audits,
                         verfahren_keys=_verfahren,
+                        eb_struktur=_eb_struktur,
+                        fallformel_text=job.fallformel_text,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(

@@ -133,6 +133,11 @@ function buildJobFormData(workflow, prompt, userContent, files = {}) {
   if (files.interviewProtokoll) fd.append("interview_protokoll", JSON.stringify(files.interviewProtokoll));
   if (files.styleText)        fd.append("style_text",       files.styleText);
   if (files.model)            fd.append("model",            files.model);
+  // v19.28: Struktur-Schalter des Entlassberichts (D5) + bestaetigte
+  // Fallformel (D1=B). Nur senden, wenn gesetzt - Backend-Default ist
+  // "modalitaet" (Status quo).
+  if (files.ebStruktur)       fd.append("eb_struktur",      files.ebStruktur);
+  if (files.fallformel)       fd.append("fallformel",       files.fallformel);
   return fd;
 }
 

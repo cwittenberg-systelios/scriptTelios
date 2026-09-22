@@ -976,6 +976,72 @@ erscheinen wesentlich, um das Erreichte nachhaltig im Alltag zu verankern und we
 auszubauen.\
 """
 
+# v19.28 (S3): Few-Shot fuer die THEMATISCHE Struktur (Schalter eb_struktur=
+# thematisch, D5). Gleicher Fall, gleiche Saetze wie oben, aber in der
+# Reihenfolge Auftrag -> zentrales Muster (einmal erklaert) -> Prozess-
+# fortschritte je Modalitaet (nur der neue Schritt, D3=A) -> Reflexion und
+# Symptomveraenderung (D4) -> Empfehlungen als Vertiefung des Musters.
+FEW_SHOT_ENTLASSBERICHT_THEMATISCH = """\
+BEISPIEL (reiner Fließtext, keine Überschriften; fünf Teile, die nahtlos ineinander übergehen):
+
+Zu Beginn des stationären Aufenthaltes formulierte [Patient/in] als zentrales Anliegen, \
+wieder inneren Halt zu finden und sich aus einem verfestigten Erleben von \
+innerer Überforderung und Selbstwertzweifeln zu lösen - sie wollte, in ihren \
+Worten, „wieder funktionieren, ohne mich dabei zu verlieren". Wir erlebten sie \
+zu Therapiebeginn deutlich erschöpft, innerlich angespannt und in ihrem \
+Selbstwert erheblich verunsichert, zugleich mit einer differenzierten \
+Selbstwahrnehmung und einem grundsätzlichen Vertrauen in den therapeutischen \
+Prozess, was eine tragfähige Arbeitsbasis ermöglichte.
+
+Im Verlauf kristallisierte sich als zentrales Muster die enge Verstrickung \
+ihres Selbstwerts mit Leistung heraus: Nur wer funktioniert, darf sich wertvoll \
+fühlen. In der hypnosystemischen Anteilearbeit begegnete [Patient/in] einer \
+inneren Dynamik aus stark leistungsorientierten, kontrollierenden Anteilen, die \
+biographisch eng mit frühen Beziehungserfahrungen verknüpft waren, in denen \
+Zuwendung an Leistung gebunden war. So konnte sie deren frühere Sinnhaftigkeit \
+als Schutz- und Überlebensleistung würdigen, was sich bereits sehr positiv auf \
+ihren Selbstwert auswirkte. Dieses Muster zog sich als roter Faden durch alle \
+Therapieformen des Aufenthalts.
+
+Im Einzelprozess gelang es ihr zunehmend, diese inneren Ebenen voneinander zu \
+differenzieren, ihnen aus einer erwachsenen, selbstfürsorglichen Perspektive zu \
+begegnen und damit neue Arten und Weisen des Selbstumgangs zu entdecken und zu \
+stärken. Ein Wendepunkt war der Moment, in dem sie den leistungsorientierten \
+Anteil nicht mehr als Gegner, sondern als überengagierten Beschützer verstehen \
+konnte.
+
+Besonders in der Kunsttherapie wurde das Muster sichtbar, wo [Patient/in] \
+wiederholt zwischen einem starken Ergebnisdruck und dem Wunsch, einfach spielen zu \
+dürfen, schwankte. Wir beobachteten Phasen intensiver emotionaler Berührung, in \
+denen sie Schmerz und Trauer zuließ, was zeitweise zu Zuständen innerer \
+Verschlossenheit führte; gleichzeitig berichtete sie, in der Folge mehr innere \
+Integrität, Stabilität und eine flexiblere Handlungsgestaltung zu erleben. In der \
+Körperarbeit konnte sie explizit ihrem Wunsch nach Halt und Geborgenheit nachgehen \
+und erlebbar machen - Halt, der nicht verdient werden muss.
+
+In den therapeutischen Gruppen wagte sie sich schrittweise in für sie zunächst \
+ungewohntes Terrain und nutzte die Gruppe mit wachsender Sicherheit als Resonanzraum, \
+um eigene Beziehungsmuster zu erkennen. Die wohlwollenden Rückmeldungen der Gruppe \
+konnte sie zunehmend annehmen - auch dann, wenn sie gerade nichts geleistet hatte - \
+und für ein realistischeres, freundlicheres Selbstbild nutzen.
+
+Zum Abschluss ihres Prozesses reflektierte [Patient/in], sie habe gelernt, dass \
+ihr Wert nicht von ihrer Leistung abhänge, und erlebe sich insgesamt ruhiger und \
+freier in Entscheidungen. Im Gesamtverlauf zeigte sich eine deutliche Entwicklung \
+hin zu mehr innerer Differenzierung, affektiver Stabilität und Selbstwirksamkeit. \
+So konnte über die Begleitung eine deutliche Symptomreduktion erreicht werden, wie \
+es sich auch in den Prä-/Post-Messungen abbildet (Angst 3,5 → 0,5; Depression \
+2,5 → 1; Stress 1 → 1,5). Den leichten Anstieg der Stressbelastung verstehen wir \
+im Kontext des bevorstehenden Übergangs in den Alltag.
+
+Für den weiteren Verlauf empfehlen wir eine kontinuierliche ambulante \
+psychotherapeutische Begleitung mit traumatherapeutischem Schwerpunkt. Insbesondere \
+die Vertiefung des begonnenen Weges von hoher Leistungsorientierung hin zu einem \
+Selbstwert, der nicht verdient werden muss, sowie die achtsame Begleitung bei \
+anstehenden Veränderungsprozessen erscheinen wesentlich, um das Erreichte \
+nachhaltig im Alltag zu verankern und weiter auszubauen.\
+"""
+
 
 # ── ARCHITEKTUR (v18) ────────────────────────────────────────────────────────
 #
@@ -1249,6 +1315,71 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "einladend, gerne mit einem Motiv aus dem Gespräch des Klienten."
     ),
 }
+
+# v19.28 (S3): Editierbare Anweisung fuer die THEMATISCHE Struktur des
+# Entlassberichts (Schalter eb_struktur=thematisch, D5; Default bleibt der
+# Status quo oben). Das Frontend tauscht den Prompt-Editor-Default beim
+# Umschalten. S0-Prototyp 2026-09-22 (EB-FrauM/HerrR, gemma4:31b): mit
+# dieser Anweisung + Fallformel im Fokus-Feld in beiden Faellen klar besser
+# als der Status quo (Struktur, Wendepunkte, Empfehlungen).
+WORKFLOW_INSTRUCTIONS_EB_THEMATISCH: str = (
+    "Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts "
+    "als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, "
+    "ohne Einleitung und ohne Abschluss.\n\n"
+    "Der Bericht folgt NICHT der Reihenfolge der Therapieformen, sondern dem "
+    "therapeutischen Prozess des Klienten/der Klientin. Er hat FÜNF Teile, die "
+    "nahtlos ineinander übergehen (ALLE FÜNF MÜSSEN VORKOMMEN):\n\n"
+    "Teil 1 – AUFTRAG (kurz, 1 Absatz):\n"
+    "Mit welchem Anliegen und welchem Veränderungswunsch kam der Klient/die "
+    "Klientin – in seinen/ihren eigenen Worten, wie im Aufnahmegespräch und in "
+    "den Auftragsklärungen dokumentiert. Dazu der Zustand zu Therapiebeginn.\n\n"
+    "Teil 2 – ERARBEITUNG DES ZENTRALEN THEMAS (1–2 Absätze):\n"
+    "Welches Muster wurde im Verlauf als zentral erkannt (siehe FALLFORMEL, "
+    "falls vorhanden; sonst aus den dokumentierten Hypothesen der Verlaufsdoku). "
+    "Beschreibe, wie sich dieses Muster gezeigt hat, mit welcher Sinnhaftigkeit "
+    "es gewürdigt wurde (Schutzfunktion, biographischer Kontext) und wann/wo im "
+    "Verlauf es erarbeitet wurde. Erkläre das Muster HIER EINMAL vollständig – "
+    "in den folgenden Teilen wird es nicht neu hergeleitet, sondern nur "
+    "weitergeführt.\n\n"
+    "Teil 3 – PROZESSFORTSCHRITTE (Hauptteil):\n"
+    "Für JEDE dokumentierte Therapieform – Einzeltherapie, Gruppentherapie, "
+    "nonverbale Therapien (Kunst-, Musik-, Körperpsychotherapie/Körperarbeit) – "
+    "ein EIGENER Absatz. Jeder Absatz beantwortet: Welcher neue Schritt im "
+    "Umgang mit dem zentralen Thema wurde GENAU DORT möglich? Welcher Wendepunkt, "
+    "welche konkrete Erfahrung, welche Beziehungsdynamik? Nur dokumentierte "
+    "Verfahren nennen. Keine Wiederholung dessen, was Teil 2 schon erklärt hat – "
+    "ein kurzer Rückbezug („dieses Muster zeigte sich in der Gruppe darin, dass "
+    "…\u201c) genügt. Eine Therapieform darf nur fehlen, wenn die Quellen sie nicht "
+    "dokumentieren.\n\n"
+    "Teil 4 – REFLEXION UND SYMPTOMVERÄNDERUNG (kompakt):\n"
+    "Wie der Klient/die Klientin den eigenen Prozess zum Abschluss reflektiert "
+    "(sofern eine Prozessreflexion vorliegt: in indirekter Rede, ohne Zitate, "
+    "ohne Dank/Feedback ans Team). Dann die Symptomatik im Vergleich zur "
+    "Aufnahme, verbliebener Bedarf, Ressourcen, Prognose. Prä-/Post-Testwerte "
+    "vollständig, wenn die Antragsvorlage sie enthält – auch ungünstige.\n\n"
+    "Teil 5 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss, DARF NICHT FEHLEN):\n"
+    "Empfehlungen für die ambulante Weiterbehandlung als Vertiefung des in "
+    "Teil 2–3 beschriebenen Weges: Therapieform, Schwerpunkte, Frequenz, "
+    "Nachsorge.\n\n"
+    "Zuordnung zur Gesamtstruktur: Teil 1–3 bilden den Behandlungsverlauf "
+    "(~70 %), Teil 4 die Epikrise (~20 %), Teil 5 die Empfehlungen (~10 %). "
+    "Stil folgt der Vorlage (Wir-Sicht oder empathische 3. Person), NIE "
+    "objektiv-distanzierter Berichtston."
+)
+
+# v19.28: Pflichtkern-Zusatz (nicht editierbar) fuer die thematische Struktur.
+# Ersetzt in build_system_prompt den Few-Shot und praezisiert die
+# MODALITAETEN-Regel (Absaetze leben in Teil 3, kein Neu-Herleiten, D3=A).
+BASE_PROMPT_EB_THEMATISCH_ZUSATZ: str = (
+    "\n\nTHEMATISCHE STRUKTUR (verbindlich, ergänzt MODALITÄTEN): Die "
+    "Modalitätsabsätze stehen in Teil 3 (Prozessfortschritte) und bringen je "
+    "einen NEUEN Schritt im Umgang mit dem zentralen Thema - sie erklären das "
+    "Thema nicht erneut. Kein Absatz darf inhaltlich ein anderer in anderen "
+    "Worten sein; wer einen Satz aus Teil 2 wiederholen würde, lässt ihn weg. "
+    "Nennt die FALLFORMEL Wendepunkte für eine Modalität, MÜSSEN diese im "
+    "Absatz dieser Modalität vorkommen. Teil 5 rahmt die Empfehlungen als "
+    "Vertiefung des Musters aus Teil 2, nicht als Mängelliste."
+)
 
 
 # ── Pflichtkern fuer Akutantrag (Backend, nicht editierbar) ──────────────────
@@ -2241,6 +2372,11 @@ def build_system_prompt(
     # v19.23: True, wenn die Quelle das Interview-Protokoll ist (statt
     # Transkript). Haengt INTERVIEW_MODUS_REGELN hinter die Anweisungen.
     interview_mode: bool = False,
+    # v19.28: Struktur-Schalter des Entlassberichts (D5). "thematisch" ->
+    # thematischer Few-Shot + Pflichtkern-Zusatz, Stilbeispiel nur als
+    # Schreibstil-Referenz (die Struktur kommt aus der Anweisung, nicht aus
+    # der Schablone). None/"modalitaet" = Status quo.
+    eb_struktur: Optional[str] = None,
 ) -> str:
     """
     Baut den finalen System-Prompt zusammen.
@@ -2282,6 +2418,10 @@ def build_system_prompt(
         workflow_instructions = WORKFLOW_INSTRUCTIONS_DEFAULT.get(workflow, "")
 
     base = BASE_PROMPTS.get(workflow, "")
+    _eb_thematisch = workflow == "entlassbericht" and eb_struktur == "thematisch"
+    if _eb_thematisch:
+        base = base.replace(FEW_SHOT_ENTLASSBERICHT, FEW_SHOT_ENTLASSBERICHT_THEMATISCH)
+        base = base + BASE_PROMPT_EB_THEMATISCH_ZUSATZ
 
     diag_str = ", ".join(diagnosen) if diagnosen else "noch nicht festgelegt"
     base = base.replace("{diagnosen}", diag_str)
@@ -2362,6 +2502,12 @@ def build_system_prompt(
         # P2/P3/P4: Stilbeispiel ist strukturelle Schablone → Gliederung,
         # Länge und Tonalität übernehmen, nur Patienteninhalte ersetzen.
         is_structural = workflow in STRUCTURAL_WORKFLOWS
+        # v19.28: thematisch -> Schablone liefert NUR den Schreibstil; die
+        # Gliederung (5 Teile) steht in der Anweisung. Sonst wuerde ein
+        # modalitaetsbasiertes Stilbeispiel die Struktur zurueckdrehen.
+        if _eb_thematisch:
+            is_structural = False
+            style_is_example = True
 
         if is_structural:
             parts.append(
@@ -2418,6 +2564,7 @@ def build_system_prompt(
     has_structural_template = (
         style_context and style_context.strip()
         and workflow in STRUCTURAL_WORKFLOWS
+        and not _eb_thematisch
     )
 
     # BASE_PROMPT-Kernel (Pflichtkern, NICHT editierbar) wird nach den
@@ -2545,6 +2692,10 @@ def build_user_content(
     # (services/verfahren.py) - werden in der Sandwich-Erinnerung (P1)
     # explizit genannt, damit der Fokus nicht gegen den System-Prompt verliert.
     verfahren_labels: Optional[list[str]] = None,
+    # v19.28: Struktur-Schalter (D5) + Fallformel (Stage 1b) fuer den
+    # thematischen Entlassbericht. Beide None = Status quo.
+    eb_struktur: Optional[str] = None,
+    fallformel_text: Optional[str] = None,
     # Backwards-Compat: alter Parameter custom_prompt wurde mit v18 entfernt
     # (Workflow-Anweisungen leben jetzt im System-Prompt). Wir akzeptieren
     # ihn weiterhin in der Signatur, ignorieren ihn aber bewusst, damit
@@ -2835,9 +2986,17 @@ def build_user_content(
                 f"PROZESSREFLEXION DES KLIENTEN (Abschlussreflexion in eigenen Worten):\n"
                 f"{prozessreflexion_text}\n\n"
                 "EINBAU DER PROZESSREFLEXION - VERBINDLICH:\n"
-                "1. Widme der Reflexion einen eigenen Absatz am ENDE des "
-                "Behandlungsverlaufs (unmittelbar vor der Epikrise). Leite ihn "
-                "sinngemäß ein mit 'Zum Abschluss ihres Prozesses reflektierte "
+                + (
+                    # v19.28 (D4): thematisch -> Teil 4 (Reflexion und
+                    # Symptomveraenderung) beginnt mit der Reflexion.
+                    "1. Beginne Teil 4 (REFLEXION UND SYMPTOMVERÄNDERUNG) mit "
+                    "der Reflexion, als eigenen Absatz vor der Symptomatik-"
+                    "Bilanz. Leite ihn "
+                    if eb_struktur == "thematisch" else
+                    "1. Widme der Reflexion einen eigenen Absatz am ENDE des "
+                    "Behandlungsverlaufs (unmittelbar vor der Epikrise). Leite ihn "
+                )
+                + "sinngemäß ein mit 'Zum Abschluss ihres Prozesses reflektierte "
                 "die Klientin ...' bzw. 'Zum Abschluss seines Prozesses "
                 "reflektierte der Klient ...' (Geschlecht gemäß den Quellen).\n"
                 "2. Gib die Reflexionsinhalte AUSSCHLIESSLICH in indirekter Rede "
@@ -2856,17 +3015,33 @@ def build_user_content(
             )
         if diagnosen:
             parts.append(f"DIAGNOSEN DES AKTUELLEN PATIENTEN: {', '.join(diagnosen)}")
+        # v19.28 (S2/S3): Fallformel als Geruest des thematischen Berichts -
+        # NACH den Quellen, VOR den Fokus-Themen (hoechste Recency vor dem
+        # Schreibauftrag). Nur wenn der Schalter auf thematisch steht.
+        if eb_struktur == "thematisch" and fallformel_text and fallformel_text.strip():
+            from app.services.fallformel import fallformel_prompt_block
+            parts.append(fallformel_prompt_block(fallformel_text))
         if fokus_themen:
             parts.append(f"THERAPEUTISCHE SCHWERPUNKTE / BESONDERE THEMEN:\n{fokus_themen}")
-        parts.append(
-            "Verfasse jetzt den psychotherapeutischen Verlaufsteil als zusammenhängenden "
-            "Fließtext ohne Überschriften. "
-            # v13: absolute Wortzahlen durch Proportionen ersetzt - Gesamtlänge zentral via resolve_length_anchor()
-            "Behandlungsverlauf (Hauptteil, ~70% des Textes), Epikrise (~20%) und "
-            "Therapieempfehlungen (~10%) fliessen nahtlos ineinander. "
-            "Ausschliesslich auf Basis der obigen Quellen – "
-            "keine Informationen erfinden die nicht in den Quellen stehen."
-        )
+        if eb_struktur == "thematisch":
+            parts.append(
+                "Verfasse jetzt den psychotherapeutischen Verlaufsteil als zusammenhängenden "
+                "Fließtext ohne Überschriften in den fünf Teilen Auftrag, zentrales Thema, "
+                "Prozessfortschritte je Therapieform, Reflexion und Symptomveränderung, "
+                "Therapieempfehlungen (Teil 1–3 ~70% des Textes, Teil 4 ~20%, Teil 5 ~10%). "
+                "Ausschliesslich auf Basis der obigen Quellen – "
+                "keine Informationen erfinden die nicht in den Quellen stehen."
+            )
+        else:
+            parts.append(
+                "Verfasse jetzt den psychotherapeutischen Verlaufsteil als zusammenhängenden "
+                "Fließtext ohne Überschriften. "
+                # v13: absolute Wortzahlen durch Proportionen ersetzt - Gesamtlänge zentral via resolve_length_anchor()
+                "Behandlungsverlauf (Hauptteil, ~70% des Textes), Epikrise (~20%) und "
+                "Therapieempfehlungen (~10%) fliessen nahtlos ineinander. "
+                "Ausschliesslich auf Basis der obigen Quellen – "
+                "keine Informationen erfinden die nicht in den Quellen stehen."
+            )
 
     # v18 Architekturwechsel:
     # Frueher wurde am Ende ein THERAPEUTEN-HINWEIS-Block aus custom_prompt

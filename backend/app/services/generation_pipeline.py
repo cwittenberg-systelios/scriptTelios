@@ -117,6 +117,12 @@ class PipelineInput:
     # v19.23: validiertes Interview-Protokoll (services.interview_protokoll)
     # - dritter Quelltyp der Gespraechsdoku. None = kein Interview-Modus.
     interview_protokoll: Any = None
+    # v19.28: Struktur-Schalter des Entlassberichts (D5; "modalitaet" =
+    # Status quo, "thematisch" = Auftrag/Thema/Prozess/Reflexion/Empfehlung)
+    # und optional die von der Therapeut:in bestaetigte/editierte Fallformel
+    # (D1=B): ist sie gesetzt, wird Stage 1b uebersprungen.
+    eb_struktur:     str = "modalitaet"
+    fallformel_override: Optional[str] = None
     uploads:         UploadBundle = field(default_factory=UploadBundle)
 
     # Upload-Attribute direkt am Input verfuegbar machen (ctx.audio_bytes ...),
@@ -147,6 +153,8 @@ class PipelineInput:
             "has_style":            bool(u.style_bytes) or bool(self.style_text and self.style_text.strip()),
             "has_transcript":       bool(self.transcript and self.transcript.strip()),
             "has_fokus_themen":     bool(self.bullets and self.bullets.strip()),
+            "eb_struktur":          self.eb_struktur if self.workflow == "entlassbericht" else None,
+            "has_fallformel_override": bool(self.fallformel_override and self.fallformel_override.strip()),
             "has_interview":        self.interview_protokoll is not None,
             "interview_set":        getattr(self.interview_protokoll, "set", None),
             "diagnosen":            self.dx_list,
@@ -171,6 +179,8 @@ class PipelineState:
     _t0:                            Any = None  # Startzeit LLM-Call
     _transcript_stage1_audit:       Any = None  # Audit der Transkript-Stage-1
     _verfahren:                     Any = None  # v19.27: erkannte Verfahren (list[Verfahren])
+    _fallformel_audit:              Any = None  # v19.28: Audit der Stage 1b (Fallformel)
+    fallformel_text:                Any = None  # v19.28: Fallformel fuer Stage 2 (None = keine)
     _transcript_summary_text:       Any = None  # Stage-1-Verdichtung des Transkripts
     _transkript_raw_for_result:     Any = None  # Roh-Transkript fuer result_transcript
     interview_text:                 str = ""    # v19.23: gerendertes Protokoll (Prompt-Quellblock)
@@ -569,6 +579,7 @@ async def run_generation(ctx: PipelineInput, job) -> dict:
     await _extract_sources(ctx, job, st)
     await _resolve_style(ctx, job, st)
     await _resolve_patient_and_gates(ctx, job, st)
+    await _run_fallformel(ctx, job, st)
     await _build_prompts(ctx, job, st)
     await _generate(ctx, job, st)
     return await _finalize(ctx, job, st)
@@ -1152,6 +1163,8 @@ async def _resolve_patient_and_gates(ctx: PipelineInput, job, st: PipelineState)
     # dem Job hinterlegen - in-process, wird dort per getattr gelesen.
     job.patient_name = st.patient_name   # Datenschutz-Namensleck-Check (Punkt 1)
     job.fokus_themen = ctx.bullets        # Stichpunkt/Fokus-Themen-Check (Punkt 6)
+    # v19.28: Struktur-Schalter fuer den QC (REQUIRED_SECTIONS je Struktur)
+    job.eb_struktur = ctx.eb_struktur if ctx.workflow == "entlassbericht" else None
     job.selbstauskunft_empty = st.selbstauskunft_empty  # v19.7: leere Selbstauskunft (P2)
     # v19.13: Reflexions-Referenz-Check (P4) - nur wenn Reflexion vorhanden.
     job.prozessreflexion_present = bool(st.prozessreflexion_text and st.prozessreflexion_text.strip())
@@ -1222,6 +1235,79 @@ async def _resolve_patient_and_gates(ctx: PipelineInput, job, st: PipelineState)
         raise RuntimeError(_gate_msg)
 
 
+async def _run_fallformel(ctx: PipelineInput, job, st: PipelineState) -> None:
+    """v19.28 (S2): Stage 1b - Fallformel fuer den thematischen Entlassbericht.
+
+    Laeuft NUR bei workflow=entlassbericht und eb_struktur=thematisch.
+    Eingabe ist der (ggf. Stage-1-verdichtete) Verlauf plus Antragsvorlage
+    und Prozessreflexion. Liegt eine von der Therapeut:in bestaetigte
+    Fallformel vor (Form-Feld, D1=B), wird sie ohne LLM-Call uebernommen.
+    Ein Fehler in Stage 1b bricht den Job NICHT ab: Stage 2 laeuft dann
+    thematisch ohne Fallformel (die Anweisung faellt auf die dokumentierten
+    Hypothesen der Verlaufsdoku zurueck) und das Audit sagt warum.
+    """
+    from app.services.fallformel import (
+        EB_STRUKTUR_THEMATISCH, build_fallformel, parse_themenkandidaten, select_themen,
+    )
+    st.fallformel_text = None
+    st._fallformel_audit = None
+    if ctx.workflow != "entlassbericht" or ctx.eb_struktur != EB_STRUKTUR_THEMATISCH:
+        return
+    if ctx.fallformel_override and ctx.fallformel_override.strip():
+        txt = select_themen(ctx.fallformel_override.strip(), None)
+        st.fallformel_text = txt
+        st._fallformel_audit = {
+            "applied": True, "source": "therapeut", "struktur": ctx.eb_struktur,
+            "themen": parse_themenkandidaten(txt), "issues": [], "degraded": False,
+        }
+        logger.info("Job %s: Fallformel der Therapeut:in uebernommen (%d Themen)",
+                    job.job_id, len(st._fallformel_audit["themen"]))
+        return
+    if not (st.verlaufsdoku_text and st.verlaufsdoku_text.strip()):
+        st._fallformel_audit = {"applied": False, "source": "llm", "struktur": ctx.eb_struktur,
+                                "fallback_reason": "keine Verlaufsdokumentation"}
+        return
+    try:
+        if "extraction" in (st.bands or {}):
+            eb = st.bands["extraction"]
+            job.set_progress(eb[0] + int((eb[1] - eb[0]) * 0.9), "Fallformel wird erstellt.")
+    except Exception:
+        pass
+    try:
+        res = await build_fallformel(
+            verlauf_text=st.verlaufsdoku_text,
+            antragsvorlage_text=st.antragsvorlage_text,
+            prozessreflexion_text=st.prozessreflexion_text,
+            patient_initial=st._patient_initial_early,
+            model=ctx.model,
+            raw_source_text="\n".join(t for t in (
+                st.verlaufsdoku_raw_text or st.verlaufsdoku_text, st.antragsvorlage_text,
+                st.prozessreflexion_text,
+            ) if t),
+        )
+        try:
+            _log_prompt(job.job_id, ctx.workflow, "stage1b_fallformel",
+                        res.get("system_prompt", ""), res.get("user_content", ""))
+            _log_output(job.job_id, ctx.workflow, "stage1b_fallformel",
+                        res.get("text", ""), res.get("telemetry"))
+        except Exception:
+            pass
+        st.fallformel_text = res["text"]
+        st._fallformel_audit = {
+            "applied": True, "source": "llm", "struktur": ctx.eb_struktur,
+            "themen": res["themen"], "issues": res["issues"], "degraded": res["degraded"],
+            "duration_s": res["duration_s"], "word_count": res["word_count"],
+            "telemetry": res.get("telemetry"),
+        }
+        logger.info("Job %s: Fallformel erstellt (%d Themen, %d Signale, %.1fs)",
+                    job.job_id, len(res["themen"]), len(res["issues"]), res["duration_s"])
+    except Exception as e:  # noqa: BLE001 - Stage 1b darf den Job nicht kippen
+        logger.warning("Job %s: Stage 1b (Fallformel) fehlgeschlagen - Stage 2 laeuft ohne: %s",
+                       job.job_id, e)
+        st._fallformel_audit = {"applied": False, "source": "llm", "struktur": ctx.eb_struktur,
+                                "fallback_reason": str(e)[:300]}
+
+
 async def _build_prompts(ctx: PipelineInput, job, st: PipelineState) -> None:
     """Phase 5: System-Prompt (inkl. Geschlechtshinweis, Glossar-Konditionalitaet), Input-Budget-Guard und User-Content."""
     effective_instructions = ctx.instructions
@@ -1270,6 +1356,7 @@ async def _build_prompts(ctx: PipelineInput, job, st: PipelineState) -> None:
         word_limits=st.word_limits,
         source_text=st._glossar_source,
         interview_mode=bool(st.interview_text),
+        eb_struktur=ctx.eb_struktur if ctx.workflow == "entlassbericht" else None,
     )
     # ── v19.4: Kombinierter Input-Budget-Guard ───────────────────────────
     # Nach allen isolierten Stage-1-Verdichtungen: prueft die SUMME aller
@@ -1324,6 +1411,8 @@ async def _build_prompts(ctx: PipelineInput, job, st: PipelineState) -> None:
         # bleibt fuer Backwards-Compat in der Signatur.
         patient_name=st.patient_name,
         interview_text=st.interview_text or None,
+        eb_struktur=ctx.eb_struktur if ctx.workflow == "entlassbericht" else None,
+        fallformel_text=st.fallformel_text,
     )
 
 
@@ -1749,4 +1838,7 @@ async def _finalize(ctx: PipelineInput, job, st: PipelineState) -> dict:
         # (Register gilt dort nicht, D11). Wird in run_job in die Telemetrie
         # gespiegelt und vom QualityCheck (VERFAHREN_*) ausgewertet.
         "verfahren_keys": [v.key for v in (st._verfahren or [])],
+        # v19.28: Fallformel (Stage 1b) - Text + Audit fuer UI/Persistenz.
+        "fallformel_text": st.fallformel_text,
+        "fallformel_audit": st._fallformel_audit,
     }

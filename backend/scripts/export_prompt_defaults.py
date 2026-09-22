@@ -69,17 +69,24 @@ def _js_template_literal(text: str) -> str:
 def render() -> str:
     sys.path.insert(0, str(BACKEND_DIR))
     os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-    from app.services.prompts import BEFUND_VORLAGE, WORKFLOW_INSTRUCTIONS_DEFAULT
+    from app.services.prompts import (
+        BEFUND_VORLAGE, WORKFLOW_INSTRUCTIONS_DEFAULT, WORKFLOW_INSTRUCTIONS_EB_THEMATISCH,
+    )
 
     parts = [HEADER, "\n"]
     for const, key in WORKFLOW_CONSTANTS:
         text = WORKFLOW_INSTRUCTIONS_DEFAULT[key]
         parts.append(f"// {key}\nconst {const} = `{_js_template_literal(text)}`;\n\n")
+    # v19.28: zweite Default-Anweisung des Entlassberichts (Struktur-Schalter).
+    parts.append(
+        f"// entlassbericht (Struktur: thematisch, v19.28)\n"
+        f"const P_ENTL_THEMATISCH = `{_js_template_literal(WORKFLOW_INSTRUCTIONS_EB_THEMATISCH)}`;\n\n"
+    )
     parts.append(
         f"// Befundvorlage (Anamnese, Psychischer Befund)\n"
         f"const P_BEFUND_VORLAGE = `{_js_template_literal(BEFUND_VORLAGE)}`;\n\n"
     )
-    names = [c for c, _ in WORKFLOW_CONSTANTS] + ["P_BEFUND_VORLAGE"]
+    names = [c for c, _ in WORKFLOW_CONSTANTS] + ["P_ENTL_THEMATISCH", "P_BEFUND_VORLAGE"]
     parts.append("export { " + ", ".join(names) + " };\n")
     return "".join(parts)
 

@@ -203,6 +203,31 @@ ISSUE_CODE_DIAGNOSE_ENTFERNT = "DIAGNOSE_ENTFERNT"
 ISSUE_CODE_SUIZIDALITAET_QUELLE_NICHT_UEBERNOMMEN = "SUIZIDALITAET_QUELLE_NICHT_UEBERNOMMEN"
 ISSUE_CODE_SUIZIDHINWEIS_FEHLT = "SUIZIDHINWEIS_FEHLT"
 
+# v19.28 (S4): thematischer Entlassbericht (eb_struktur=thematisch).
+# THEMA_NICHT_AUFGEGRIFFEN: ein in der Fallformel gewaehltes Thema kommt im
+#   Bericht nicht vor (warning, repair-faehig) - analog MISSING_STICHPUNKT.
+# THEMA_KOHAERENZ: Thema wird nur in < 3 Absaetzen aufgegriffen (info) -
+#   der rote Faden traegt nicht durch den Text.
+# WENDEPUNKT_NICHT_AUFGEGRIFFEN_<MOD>: Wendepunkt der Fallformel fuer eine
+#   Modalitaet fehlt im Bericht (info; S0: Elternbesuch ging verloren).
+# REDUNDANZ_ABSAETZE: nahezu gleiche Saetze in verschiedenen Absaetzen
+#   (info, D3-Risiko "Muster in jedem Absatz neu erklaert").
+ISSUE_CODE_THEMA_NICHT_AUFGEGRIFFEN = "THEMA_NICHT_AUFGEGRIFFEN"
+ISSUE_CODE_THEMA_KOHAERENZ = "THEMA_KOHAERENZ"
+ISSUE_CODE_PREFIX_WENDEPUNKT_NICHT_AUFGEGRIFFEN = "WENDEPUNKT_NICHT_AUFGEGRIFFEN_"
+ISSUE_CODE_REDUNDANZ_ABSAETZE = "REDUNDANZ_ABSAETZE"
+# v19.28 (D7): Testwerte-Vollstaendigkeit (nur entlassbericht, beide
+# Strukturen). Die Antragsvorlage nennt Prae/Post-Paare je Skala; der
+# Bericht muss die Paare uebernehmen - vor allem die UNGUENSTIGEN. S0-Lauf
+# 2026-09-22: DASS-21 Angst 2 -> 12 wurde in beiden Varianten verschwiegen,
+# die guenstigen Werte genannt (Verfaelschungsschutz-Verstoss).
+# TESTWERTE_UNGUENSTIG_VERSCHWIEGEN: Skala mit Verschlechterung fehlt (warning)
+# TESTWERTE_UNVOLLSTAENDIG: sonstige Skala mit Veraenderung fehlt (info)
+# TESTWERTE_FEHLEN: Vorlage hat Testwerte, Bericht nennt keines (warning)
+ISSUE_CODE_TESTWERTE_UNGUENSTIG_VERSCHWIEGEN = "TESTWERTE_UNGUENSTIG_VERSCHWIEGEN"
+ISSUE_CODE_TESTWERTE_UNVOLLSTAENDIG = "TESTWERTE_UNVOLLSTAENDIG"
+ISSUE_CODE_TESTWERTE_FEHLEN = "TESTWERTE_FEHLEN"
+
 
 # v19.25 (Sprint G3): Postprocessing hat Grammatik deterministisch korrigiert
 # ("von Herr G." -> "von Herrn G.", "Aufenthaltsvon" -> "Aufenthalts von").
@@ -1300,9 +1325,9 @@ def _check_required_keywords(text: str, workflow: str) -> list[QualityIssue]:
     return issues
 
 
-def _check_required_sections(text: str, workflow: str) -> list[QualityIssue]:
+def _check_required_sections(text: str, workflow: str, eb_struktur: "str | None" = None) -> list[QualityIssue]:
     issues: list[QualityIssue] = []
-    for section in required_sections_for(workflow):
+    for section in required_sections_for(workflow, eb_struktur):
         if section_present(text, section):
             continue
         suffix = upper_code_suffix(section)
@@ -1386,6 +1411,287 @@ def _check_recommended_sections(
                 code_detail={"section": section, "source_hits": hits,
                              "synonyms": synonyms_for(section)},
             ))
+    return issues
+
+
+# ── v19.28 (S4): thematischer Entlassbericht ───────────────────────────────────
+
+_STOP_DE = frozenset("""
+und oder aber der die das des dem den ein eine einer eines einem einen mit ohne
+als auch nicht sich seine seiner ihre ihrer ihres ihrem ihren sein ihr bei von
+zum zur zu im in an auf aus nach vor über ueber unter durch für fuer gegen wird
+werden wurde wurden konnte konnten kann können koennen sowie zwischen dabei
+dass wenn wie mehr sehr noch nur schon eigene eigenen eigener innere innerer
+inneren innerem thema themen muster zentrales zentrale zentral klient klientin
+patient patientin frau herr belege beleg einzel gruppe nonverbal nonverbale
+therapie therapien einzeltherapie gruppentherapie körperarbeit koerperarbeit
+kunsttherapie musiktherapie bezugsgruppe wendepunkt wendepunkte sitzung
+dokumentiert keine kein
+""".split())
+
+
+def _content_terms(s: str, *, min_len: int = 5) -> list[str]:
+    """Inhaltswoerter (lowercase, Wortstamm = erste 6 Zeichen) ohne Stoppwoerter,
+    Datumsangaben und Belegklammern."""
+    s = re.sub(r"\([^)]*\)", " ", s or "")           # (Einzel 23.12.)
+    s = re.sub(r"\d{1,2}\.\d{1,2}\.?", " ", s)
+    out: list[str] = []
+    for w in re.findall(r"[A-Za-zÄÖÜäöüß-]+", s):
+        wl = w.lower().strip("-")
+        if len(wl) < min_len or wl in _STOP_DE:
+            continue
+        out.append(wl[:6])
+    return out
+
+
+def _paragraphs(text: str) -> list[str]:
+    return [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+
+
+def _thema_titel(item: str) -> str:
+    m = re.search(r"\*\*(.+?)\*\*", item or "")
+    if m:
+        return m.group(1).strip()
+    return (item or "").split(" – ")[0].split(" - ")[0].strip()[:80]
+
+
+def _check_thema_kohaerenz(
+    text: str, workflow: str, eb_struktur: "str | None", fallformel_text: "str | None",
+) -> list[QualityIssue]:
+    """Thema (Fallformel) im Bericht aufgegriffen und tragfaehig? Nur EB thematisch."""
+    if workflow != "entlassbericht" or eb_struktur != "thematisch" or not fallformel_text:
+        return []
+    from app.services.fallformel import parse_themenkandidaten
+    themen = parse_themenkandidaten(fallformel_text)
+    if not themen:
+        return []
+    issues: list[QualityIssue] = []
+    paras = _paragraphs(text)
+    para_stems = [set(_content_terms(p)) for p in paras]
+    for item in themen:
+        titel = _thema_titel(item)
+        stems = set(_content_terms(titel))
+        if not stems:
+            continue
+        hit_paras = sum(1 for ps in para_stems if ps & stems)
+        if hit_paras == 0:
+            issues.append(QualityIssue(
+                code=ISSUE_CODE_THEMA_NICHT_AUFGEGRIFFEN,
+                severity=SEVERITY_WARNING,
+                message=f"Gewaehltes Thema der Fallformel nicht aufgegriffen: '{titel}'",
+                repair_hint=(
+                    f"Arbeite das Thema '{titel}' in Teil 2 (zentrales Thema) heraus und "
+                    "binde die Modalitaetsabsaetze daran zurueck - AUSSCHLIESSLICH mit "
+                    "Inhalten, die in den Quellen belegt sind."
+                ),
+                code_detail={"thema": titel},
+            ))
+        elif hit_paras < 3 and len(paras) >= 4:
+            issues.append(QualityIssue(
+                code=ISSUE_CODE_THEMA_KOHAERENZ,
+                severity=SEVERITY_INFO,
+                message=(
+                    f"Thema '{titel}' nur in {hit_paras} von {len(paras)} Absaetzen "
+                    "aufgegriffen - der rote Faden traegt kaum durch den Text."
+                ),
+                repair_hint=(
+                    f"Beziehe die Prozessfortschritte je Therapieform und die Empfehlungen "
+                    f"erkennbar auf '{titel}' (kurzer Rueckbezug, kein Neu-Herleiten)."
+                ),
+                code_detail={"thema": titel, "absaetze_mit_thema": hit_paras, "absaetze": len(paras)},
+            ))
+    return issues
+
+
+_WENDEPUNKT_MOD_RE = re.compile(
+    r"^\s*[-*]\s*(Einzeltherapie|Gruppentherapie|Nonverbale Therapien?)\s*:\s*(.+)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _check_wendepunkte(
+    text: str, workflow: str, eb_struktur: "str | None", fallformel_text: "str | None",
+) -> list[QualityIssue]:
+    """Wendepunkte je Modalitaet (Fallformel) im Bericht wiederzufinden? Info-Ebene:
+    pro Modalitaet muss mindestens EIN distinktives Inhaltswort (>= 7 Zeichen)
+    des Wendepunkts im Text vorkommen."""
+    if workflow != "entlassbericht" or eb_struktur != "thematisch" or not fallformel_text:
+        return []
+    from app.services.fallformel import split_sections
+    sec = split_sections(fallformel_text).get("Wendepunkte je Modalität", "")
+    if not sec:
+        return []
+    text_stems = set(_content_terms(text, min_len=7))
+    issues: list[QualityIssue] = []
+    for m in _WENDEPUNKT_MOD_RE.finditer(sec):
+        mod, body = m.group(1), m.group(2)
+        if "keine wendepunkte" in body.lower():
+            continue
+        stems = set(_content_terms(body, min_len=7))
+        if not stems or stems & text_stems:
+            continue
+        suffix = upper_code_suffix(mod.split()[0])
+        issues.append(QualityIssue(
+            code=f"{ISSUE_CODE_PREFIX_WENDEPUNKT_NICHT_AUFGEGRIFFEN}{suffix}",
+            severity=SEVERITY_INFO,
+            message=f"Wendepunkt der Fallformel fuer '{mod}' im Bericht nicht wiederzufinden: {body[:90]}",
+            repair_hint=(
+                f"Greife im Absatz zu '{mod}' den dokumentierten Wendepunkt auf: {body[:160]} "
+                "- nur, sofern er in den Quellen belegt ist."
+            ),
+            code_detail={"modalitaet": mod, "wendepunkt": body[:200]},
+        ))
+    return issues
+
+
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _check_redundanz(text: str, workflow: str) -> list[QualityIssue]:
+    """Nahezu gleiche Saetze (Jaccard der Wortstaemme >= 0.6) in VERSCHIEDENEN
+    Absaetzen - info. Nur entlassbericht (D3: Wiederholungsrisiko der
+    thematischen Struktur; im Status quo genauso nuetzlich)."""
+    if workflow != "entlassbericht":
+        return []
+    sents: list[tuple[int, str, frozenset]] = []
+    for pi, p in enumerate(_paragraphs(text)):
+        for s in _SENT_SPLIT_RE.split(p):
+            stems = frozenset(_content_terms(s))
+            if len(stems) >= 6:
+                sents.append((pi, s.strip(), stems))
+    pairs: list[tuple[str, str, float]] = []
+    for i in range(len(sents)):
+        for j in range(i + 1, len(sents)):
+            if sents[i][0] == sents[j][0]:
+                continue
+            a, b = sents[i][2], sents[j][2]
+            jac = len(a & b) / len(a | b)
+            if jac >= 0.6:
+                pairs.append((sents[i][1], sents[j][1], round(jac, 2)))
+    if len(pairs) < 2:
+        return []
+    return [QualityIssue(
+        code=ISSUE_CODE_REDUNDANZ_ABSAETZE,
+        severity=SEVERITY_INFO,
+        message=f"{len(pairs)} nahezu gleiche Satzpaare in verschiedenen Absaetzen - Inhalte wiederholen sich.",
+        repair_hint=(
+            "Entferne Wiederholungen: jeder Absatz bringt einen neuen Schritt; ein "
+            "kurzer Rueckbezug genuegt. Beispiel: '" + pairs[0][0][:100] + "' vs. '" + pairs[0][1][:100] + "'."
+        ),
+        code_detail={"pairs": [{"a": a[:160], "b": b[:160], "jaccard": j} for a, b, j in pairs[:5]]},
+    )]
+
+
+# ── v19.28 (D7): Testwerte-Vollstaendigkeit ───────────────────────────────────
+
+# "Depression: 2.5; 0.5 (" / "Stress: 16; 20 (" - Skalenname, prae; post.
+_TESTWERT_PAIR_RE = re.compile(
+    r"([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß /-]{2,28}?)\s*:\s*(\d+(?:[.,]\d+)?)\s*;\s*(\d+(?:[.,]\d+)?)\s*\("
+)
+_INSTRUMENT_RE = re.compile(r"\b(ISR|DASS-?21|DASS|BDI(?:-II)?|BSI|PHQ-?9|GAD-?7|SCL-?90)\b", re.IGNORECASE)
+
+
+def _num(s: str) -> float:
+    return float(s.replace(",", "."))
+
+
+def _num_variants(s: str) -> list[str]:
+    v = s.replace(",", ".")
+    out = {v, v.replace(".", ",")}
+    if v.endswith(".0"):
+        out.add(v[:-2])
+    return sorted(out, key=len, reverse=True)
+
+
+def parse_testwert_paare(antragsvorlage_text: "str | None") -> list[dict]:
+    """[{instrument, skala, prae, post, prae_raw, post_raw}] aus der Vorlage."""
+    text = antragsvorlage_text or ""
+    if not text:
+        return []
+    out: list[dict] = []
+    instrument = ""
+    pos = 0
+    for m in _TESTWERT_PAIR_RE.finditer(text):
+        # zuletzt genanntes Instrument vor diesem Treffer
+        for im in _INSTRUMENT_RE.finditer(text, pos, m.start()):
+            instrument = im.group(1).upper()
+        pos = m.start()
+        skala = m.group(1).strip()
+        if len(skala.split()) > 3:
+            skala = skala.split()[-1]
+        out.append({
+            "instrument": instrument, "skala": skala,
+            "prae": _num(m.group(2)), "post": _num(m.group(3)),
+            "prae_raw": m.group(2), "post_raw": m.group(3),
+        })
+    return out
+
+
+def _pair_in_text(text: str, prae_raw: str, post_raw: str) -> bool:
+    """prae und post (in beliebiger Schreibweise) innerhalb von 40 Zeichen."""
+    for a in _num_variants(prae_raw):
+        for b in _num_variants(post_raw):
+            pat = (r"(?<![\d.,])" + re.escape(a) + r"(?![\d])" + r".{0,40}?"
+                   + r"(?<![\d.,])" + re.escape(b) + r"(?![\d])")
+            if re.search(pat, text, re.DOTALL):
+                return True
+    return False
+
+
+def _check_testwerte(text: str, workflow: str, antragsvorlage_text: "str | None") -> list[QualityIssue]:
+    if workflow != "entlassbericht":
+        return []
+    pairs = parse_testwert_paare(antragsvorlage_text)
+    # relevant: Veraenderung ODER unveraendert erhoeht (> 0); "0; 0" ignorieren
+    relevant = [p for p in pairs if p["prae"] != p["post"] or p["post"] > 0]
+    if not relevant:
+        return []
+    found = [p for p in relevant if _pair_in_text(text, p["prae_raw"], p["post_raw"])]
+    missing = [p for p in relevant if p not in found]
+    if not missing:
+        return []
+
+    def _label(p: dict) -> str:
+        return f"{p['instrument'] + ' ' if p['instrument'] else ''}{p['skala']} {p['prae_raw']} → {p['post_raw']}"
+
+    if not found:
+        return [QualityIssue(
+            code=ISSUE_CODE_TESTWERTE_FEHLEN,
+            severity=SEVERITY_WARNING,
+            message=f"Die Antragsvorlage enthaelt {len(relevant)} Prae/Post-Testwerte, der Bericht nennt keinen.",
+            repair_hint=(
+                "Referenziere in der Epikrise/Teil 4 die Prae-/Post-Testwerte der Antragsvorlage "
+                "mit den konkreten Zahlen - alle Skalen mit Veraenderung, auch unguenstige: "
+                + "; ".join(_label(p) for p in missing[:8]) + "."
+            ),
+            code_detail={"missing": [_label(p) for p in missing]},
+        )]
+    issues: list[QualityIssue] = []
+    unguenstig = [p for p in missing if p["post"] > p["prae"]]
+    sonstige = [p for p in missing if p["post"] <= p["prae"]]
+    if unguenstig:
+        issues.append(QualityIssue(
+            code=ISSUE_CODE_TESTWERTE_UNGUENSTIG_VERSCHWIEGEN,
+            severity=SEVERITY_WARNING,
+            message=(
+                "Unguenstige Testwert-Veraenderung(en) der Antragsvorlage fehlen im Bericht, "
+                "guenstige werden genannt: " + "; ".join(_label(p) for p in unguenstig) + "."
+            ),
+            repair_hint=(
+                "Verfaelschungsschutz: nenne auch die unguenstigen Prae/Post-Werte exakt wie "
+                "in der Vorlage (" + "; ".join(_label(p) for p in unguenstig) + ") und ordne "
+                "sie nur ein, wenn die Quellen das begruenden ('verstehen wir als ...')."
+            ),
+            code_detail={"missing": [_label(p) for p in unguenstig]},
+        ))
+    if sonstige:
+        issues.append(QualityIssue(
+            code=ISSUE_CODE_TESTWERTE_UNVOLLSTAENDIG,
+            severity=SEVERITY_INFO,
+            message="Weitere Testwerte der Antragsvorlage nicht genannt: " + "; ".join(_label(p) for p in sonstige) + ".",
+            repair_hint="Ergaenze die fehlenden Prae/Post-Werte, sofern sie fuer den Nachbehandler relevant sind.",
+            code_detail={"missing": [_label(p) for p in sonstige]},
+        ))
     return issues
 
 
@@ -1699,6 +2005,8 @@ def run_quality_check(
     dx_rewrite: "dict | None" = None,
     stage1_audits: "dict | None" = None,
     verfahren_keys: "list | None" = None,
+    eb_struktur: "str | None" = None,
+    fallformel_text: "str | None" = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
@@ -1786,6 +2094,8 @@ def run_quality_check(
         dx_rewrite=dx_rewrite,
         stage1_audits=stage1_audits,
         verfahren_keys=verfahren_keys,
+        eb_struktur=eb_struktur,
+        fallformel_text=fallformel_text,
     )
     issues = run_checks(ctx)
 
@@ -1828,6 +2138,8 @@ class QCContext:
     dx_rewrite: "dict | None" = None          # v19.26 (Entdiagnostizierung)
     stage1_audits: "dict | None" = None       # v19.27: {"transkript": audit, "verlauf": audit}
     verfahren_keys: "list | None" = None      # v19.27: Keys aus services/verfahren.py
+    eb_struktur: "str | None" = None          # v19.28: Struktur-Schalter Entlassbericht (D5)
+    fallformel_text: "str | None" = None      # v19.28: Fallformel (Stage 1b)
 
 
 @dataclass(frozen=True)
@@ -1895,8 +2207,18 @@ CHECK_REGISTRY: tuple[QCCheck, ...] = (
             (ISSUE_CODE_LENGTH_BELOW_TARGET,), "v19.27 (D3=A): nur dokumentation < 150 Woerter"),
     QCCheck("required_keywords", lambda c: _check_required_keywords(c.text, c.workflow),
             (ISSUE_CODE_PREFIX_MISSING_KEYWORD,), "aktuell leer - siehe quality_specs"),
-    QCCheck("required_sections", lambda c: _check_required_sections(c.text, c.workflow),
-            (ISSUE_CODE_PREFIX_MISSING_SECTION,)),
+    QCCheck("required_sections", lambda c: _check_required_sections(c.text, c.workflow, c.eb_struktur),
+            (ISSUE_CODE_PREFIX_MISSING_SECTION,), "v19.28: Sektionen je eb_struktur"),
+    QCCheck("thema_kohaerenz", lambda c: _check_thema_kohaerenz(c.text, c.workflow, c.eb_struktur, c.fallformel_text),
+            (ISSUE_CODE_THEMA_NICHT_AUFGEGRIFFEN, ISSUE_CODE_THEMA_KOHAERENZ),
+            "v19.28 (S4): nur entlassbericht thematisch mit Fallformel"),
+    QCCheck("wendepunkte", lambda c: _check_wendepunkte(c.text, c.workflow, c.eb_struktur, c.fallformel_text),
+            (ISSUE_CODE_PREFIX_WENDEPUNKT_NICHT_AUFGEGRIFFEN,), "v19.28 (S4): info"),
+    QCCheck("redundanz", lambda c: _check_redundanz(c.text, c.workflow),
+            (ISSUE_CODE_REDUNDANZ_ABSAETZE,), "v19.28 (D3): info, nur entlassbericht"),
+    QCCheck("testwerte", lambda c: _check_testwerte(c.text, c.workflow, c.antragsvorlage_text),
+            (ISSUE_CODE_TESTWERTE_UNGUENSTIG_VERSCHWIEGEN, ISSUE_CODE_TESTWERTE_UNVOLLSTAENDIG,
+             ISSUE_CODE_TESTWERTE_FEHLEN), "v19.28 (D7): nur entlassbericht mit Antragsvorlage"),
     QCCheck("recommended_sections", lambda c: _check_recommended_sections(c.text, c.workflow, source_text=c.source_text),
             (ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED,), "info; empfohlene Modalitaet nicht erwaehnt"),
     QCCheck("doku_struktur", lambda c: _check_doku_struktur(c.text, c.workflow, c.source_text),

@@ -1573,11 +1573,28 @@ def _postprocess_text(
                 text[: len(assistant_primer) + 32]
             ).lower().split()
         )
+        # v19.28 (D8): Gemma setzt den Prefill oft NICHT fort, sondern
+        # beginnt einen neuen Satz - mal mit Primer-Variante ("Zu Beginn
+        # seines stationären Aufenthaltes ..."), mal ganz anders ("Wir
+        # erlebten ..."). Beides lief am Echo-Check vorbei und ergab
+        # "AufenthaltsWir erlebten" bzw. "AufenthaltsZu Beginn seines"
+        # (S0-Lauf 2026-09-22, 2 von 4 Berichten). Ein Primer ohne
+        # abschliessendes Whitespace kann nur mit Kleinbuchstabe oder
+        # Leerzeichen fortgesetzt werden - beginnt der Output mit einem
+        # Grossbuchstaben, hat das Modell den Primer ignoriert.
+        _primer_open = bool(assistant_primer) and not assistant_primer[-1].isspace()
+        _starts_new_sentence = _primer_open and text[:1].isupper()
         if _primer_norm and _head_norm.startswith(_primer_norm):
             logger.info(
                 "Primer-Echo erkannt - Modell hat Primer selbst wiederholt, "
                 "kein erneutes Voranstellen (Primer: %r)",
                 assistant_primer.strip()[:40],
+            )
+        elif _starts_new_sentence:
+            logger.info(
+                "Primer ignoriert - Output beginnt mit neuem Satz (%r), "
+                "kein Voranstellen (Primer: %r)",
+                text[:30], assistant_primer.strip()[:40],
             )
         else:
             text = assistant_primer + text

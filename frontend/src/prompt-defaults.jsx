@@ -118,7 +118,29 @@ TONALITÄT:
 BEGRÜSSUNG UND VERABSCHIEDUNG:
 - Formuliere eine kurze, persönliche Begrüßung (1-2 Sätze) und Verabschiedung (1-2 Sätze) für den täglichen Fragebogen - warm, einladend, gerne mit einem Motiv aus dem Gespräch des Klienten.`;
 
+// entlassbericht (Struktur: thematisch, v19.28)
+const P_ENTL_THEMATISCH = `Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, ohne Einleitung und ohne Abschluss.
+
+Der Bericht folgt NICHT der Reihenfolge der Therapieformen, sondern dem therapeutischen Prozess des Klienten/der Klientin. Er hat FÜNF Teile, die nahtlos ineinander übergehen (ALLE FÜNF MÜSSEN VORKOMMEN):
+
+Teil 1 – AUFTRAG (kurz, 1 Absatz):
+Mit welchem Anliegen und welchem Veränderungswunsch kam der Klient/die Klientin – in seinen/ihren eigenen Worten, wie im Aufnahmegespräch und in den Auftragsklärungen dokumentiert. Dazu der Zustand zu Therapiebeginn.
+
+Teil 2 – ERARBEITUNG DES ZENTRALEN THEMAS (1–2 Absätze):
+Welches Muster wurde im Verlauf als zentral erkannt (siehe FALLFORMEL, falls vorhanden; sonst aus den dokumentierten Hypothesen der Verlaufsdoku). Beschreibe, wie sich dieses Muster gezeigt hat, mit welcher Sinnhaftigkeit es gewürdigt wurde (Schutzfunktion, biographischer Kontext) und wann/wo im Verlauf es erarbeitet wurde. Erkläre das Muster HIER EINMAL vollständig – in den folgenden Teilen wird es nicht neu hergeleitet, sondern nur weitergeführt.
+
+Teil 3 – PROZESSFORTSCHRITTE (Hauptteil):
+Für JEDE dokumentierte Therapieform – Einzeltherapie, Gruppentherapie, nonverbale Therapien (Kunst-, Musik-, Körperpsychotherapie/Körperarbeit) – ein EIGENER Absatz. Jeder Absatz beantwortet: Welcher neue Schritt im Umgang mit dem zentralen Thema wurde GENAU DORT möglich? Welcher Wendepunkt, welche konkrete Erfahrung, welche Beziehungsdynamik? Nur dokumentierte Verfahren nennen. Keine Wiederholung dessen, was Teil 2 schon erklärt hat – ein kurzer Rückbezug („dieses Muster zeigte sich in der Gruppe darin, dass …“) genügt. Eine Therapieform darf nur fehlen, wenn die Quellen sie nicht dokumentieren.
+
+Teil 4 – REFLEXION UND SYMPTOMVERÄNDERUNG (kompakt):
+Wie der Klient/die Klientin den eigenen Prozess zum Abschluss reflektiert (sofern eine Prozessreflexion vorliegt: in indirekter Rede, ohne Zitate, ohne Dank/Feedback ans Team). Dann die Symptomatik im Vergleich zur Aufnahme, verbliebener Bedarf, Ressourcen, Prognose. Prä-/Post-Testwerte vollständig, wenn die Antragsvorlage sie enthält – auch ungünstige.
+
+Teil 5 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss, DARF NICHT FEHLEN):
+Empfehlungen für die ambulante Weiterbehandlung als Vertiefung des in Teil 2–3 beschriebenen Weges: Therapieform, Schwerpunkte, Frequenz, Nachsorge.
+
+Zuordnung zur Gesamtstruktur: Teil 1–3 bilden den Behandlungsverlauf (~70 %), Teil 4 die Epikrise (~20 %), Teil 5 die Empfehlungen (~10 %). Stil folgt der Vorlage (Wir-Sicht oder empathische 3. Person), NIE objektiv-distanzierter Berichtston.`;
+
 // Befundvorlage (Anamnese, Psychischer Befund)
 const P_BEFUND_VORLAGE = `Im Gespräch offen, wach, bewusstseinsklar, zu allen Qualitäten orientiert. Konzentration subjektiv {konzentration}. Auffassung, Merkfähigkeit und Gedächtnis intakt. Formalgedanklich {formalgedanke}, keine Denkverlangsamung, {fokus_denken}. {phobien_angst}. {Zwänge}. {vermeidung}. Kein Anhalt für Wahn oder Sinnestäuschungen, keine Ich-Störungen (z.B. Depersonalisation, Derealisation, Dissoziation). Stimmungslage {stimmung}, affektive Schwingungsfähigkeit {schwingung} bei insgesamt {affektlage} Affektlage. {freud_interessen}. {erschöpfung}. Antrieb {antrieb}. {hoffnung_insuffizienz}. {schuldgefühle}. Selbstwertgefühl ist {selbstwert}. Gefühlsregulation ist {gefühlsregulation}. Impulskontrolle ist {impulskontrolle}. {ambivalenz}. {innere_unruhe}. {zirkadian}. {schlaf}. Appetenz {appetenz}. {aggressiv_selbstverletzend}. {sozialer_rückzug}. Essverhalten {essverhalten}. {suchtverhalten}. {somatisierung}. {suizidalität_vergangenheit}. Aktuelle Verneinung von lebensüberdrüssigen und suizidalen Gedanken, keine suizidale Handlungsplanung oder Handlungsvorbereitung. Zum Zeitpunkt der Aufnahme von akuter Suizidalität klar distanziert.`;
 
-export { P_DOKU, P_ANAMNESE, P_VERL, P_VERL_FOLGE, P_AKUT, P_ENTL, P_ISM, P_BEFUND_VORLAGE };
+export { P_DOKU, P_ANAMNESE, P_VERL, P_VERL_FOLGE, P_AKUT, P_ENTL, P_ISM, P_ENTL_THEMATISCH, P_BEFUND_VORLAGE };

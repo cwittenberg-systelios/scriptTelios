@@ -125,6 +125,29 @@ KEYWORD_SYNONYMS: dict[str, list[str]] = {
         "praepost", "prä-/post", "symptomreduktion", "über die begleitung",
         "über die gesamte begleitung",
     ],
+    # ── v19.28 (S4): thematischer Entlassbericht ───────────────────────────
+    # Teil 2 - zentrales Thema / Muster: distinktive Marker fuer "hier wird
+    # ein Muster benannt" (kein bare 'muster' - 'Beziehungsmuster' kommt in
+    # fast jedem Bericht vor und waere zahnlos).
+    "zentrales thema": [
+        "zentrales thema", "zentrale thema", "zentrales muster", "zentrale muster",
+        "als zentrales", "kristallisierte sich", "kristallisierte", "roter faden",
+        "roten faden", "kernthema", "hauptthema", "leitthema", "verstrickung",
+        "verstrickt", "sinnzusammenhang", "schutzfunktion", "schutzleistung",
+        "überlebensleistung", "ueberlebensleistung", "als muster", "das muster",
+        "dieses muster", "dieses musters",
+    ],
+    # Teil 4 - Reflexion und Symptomveraenderung (D4): Reflexionsmarker ODER
+    # Symptomatik-Bilanz-Marker; einer genuegt.
+    "reflexion und symptomveränderung": [
+        "reflexion und symptomveränderung", "reflektiert", "reflektierte",
+        "rückblickend", "rueckblickend", "zum abschluss ihres prozesses",
+        "zum abschluss seines prozesses", "symptomveränderung",
+        "symptomveraenderung", "symptomatik", "symptomreduktion",
+        "im vergleich zur aufnahme", "im vergleich zum aufnahme", "prä-/post",
+        "prä-post", "prä- post", "praepost", "testwerte", "gesamtverlauf",
+        "im gesamtverlauf",
+    ],
     # ── empfohlene Therapie-Modalitaeten (v19.6.1, siehe RECOMMENDED_SECTIONS) ─
     # NICHT pflicht - nur erwartet, WENN die Modalitaet stattgefunden hat. Werden
     # auf info-Ebene geprueft (kein Fehlalarm, wenn z.B. keine Kunsttherapie lief).
@@ -195,6 +218,15 @@ REQUIRED_SECTIONS: dict[str, list[str]] = {
         "Gesamtbewertung", "Empfehlung",
     ],
 }
+
+# v19.28 (S4): Pflicht-Sektionen des Entlassberichts bei Struktur-Schalter
+# "thematisch" (Auftrag -> zentrales Thema -> Prozessfortschritte je
+# Modalitaet -> Reflexion und Symptomveraenderung -> Empfehlungen). Die
+# Status-quo-Liste oben bleibt fuer eb_struktur=modalitaet unveraendert.
+REQUIRED_SECTIONS_EB_THEMATISCH: list[str] = [
+    "Anliegen und Behandlungsziele", "Zentrales Thema", "Behandlungsverlauf",
+    "Reflexion und Symptomveränderung", "Empfehlung",
+]
 
 
 # ── Empfohlene (optionale) Sektionen pro Workflow (v19.6.1) ────────────────────
@@ -273,8 +305,11 @@ def required_keywords_for(workflow: str) -> list[str]:
     return list(REQUIRED_KEYWORDS.get(workflow, []))
 
 
-def required_sections_for(workflow: str) -> list[str]:
-    """Pflicht-Sektionen fuer einen Workflow. Leer falls keine."""
+def required_sections_for(workflow: str, eb_struktur: "str | None" = None) -> list[str]:
+    """Pflicht-Sektionen fuer einen Workflow. Leer falls keine.
+    v19.28: entlassbericht + eb_struktur="thematisch" -> thematische Liste."""
+    if workflow == "entlassbericht" and eb_struktur == "thematisch":
+        return list(REQUIRED_SECTIONS_EB_THEMATISCH)
     return list(REQUIRED_SECTIONS.get(workflow, []))
 
 

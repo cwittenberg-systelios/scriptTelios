@@ -175,6 +175,44 @@ Die Eval-Suite werted `degraded=True` als Hard-Fail.
 
 ---
 
+## Stage 1b: Fallformel (v19.28, nur Entlassbericht thematisch)
+
+Schalter `eb_struktur=thematisch` (Form-Feld, Default `modalitaet` = Status
+quo). Zwischen Quellen-Gates und Prompt-Bau laeuft `_run_fallformel()`
+(`services/fallformel.py`):
+
+```
+Stage-1-Summary (inkl. "### Dokumentierte Hypothesen und Muster")
++ Antragsvorlage (+ Prozessreflexion)
+        │  build_fallformel()  — ein Call, Hauptmodell des Jobs, temp 0.3
+        ▼
+### Auftrag / ### Themenkandidaten (1–3) / ### Wendepunkte je Modalität
+### Symptomveränderung / ### Offene Themen
+        │  detect_fallformel_issues(): Abschnitte, <= 3 Kandidaten,
+        │  Verfahrens-/Zitat-Signale (Stage-1-Check), Datumsbelege ohne Quelle
+        ▼
+Stage 2: FALLFORMEL-Block im User-Content (Teil 1–5 <- Abschnitte)
+```
+
+- Form-Feld `fallformel` (von der Therapeut:in bestaetigte/editierte
+  Fassung) ueberspringt den LLM-Call (`audit.source = "therapeut"`).
+- Fehler in Stage 1b kippen den Job nicht: Stage 2 laeuft thematisch ohne
+  Geruest, `fallformel_audit = {applied: false, fallback_reason}`.
+- Persistenz: `jobs.fallformel_text`, `jobs.fallformel_audit` (JSONB:
+  applied, source, struktur, themen, issues, degraded, duration_s,
+  word_count, telemetry). prompts.log-Label: `stage1b_fallformel`.
+- QC liest `eb_struktur` + `fallformel_text` (Sektionen je Struktur,
+  THEMA_*/WENDEPUNKT_*-Checks); Repair-Jobs erben beides vom Parent.
+
+### Stage 1: Abdeckungs-Guard (v19.28)
+
+`detect_coverage_gap(summary, source)`: Monats-Histogramm der Datumsmarker
+(`dd.mm.`, Jahr optional). Ein Monat mit >= 15 % der Quell-Marker (und >= 3)
+ohne einen einzigen Marker in der Summary = `abdeckung_luecke` (high) →
+Retry wie bei critical; bleibt die Luecke → `degraded`. Nur auf
+Gesamtebene, nicht je Chunk. Ausloeser: S0-Lauf 22.09.2026 (EB-HerrR), die
+Summary deckte nur 02.01.–29.01. ab und behauptete „69 Sitzungen vom 02.01.".
+
 ## Datenfluss zur DB
 
 ```

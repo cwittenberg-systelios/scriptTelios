@@ -87,6 +87,15 @@ class Job(Base):
     verlauf_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     verlauf_summary_audit: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=True)
 
+    # v19.28: Stage 1b - Fallformel des thematischen Entlassberichts.
+    # fallformel_text:  Geruest (Auftrag, Themenkandidaten, Wendepunkte je
+    #                   Modalitaet, Symptomveraenderung, offene Themen).
+    #                   NULL bei Struktur "modalitaet" oder anderen Workflows.
+    # fallformel_audit: JSONB {applied, source: llm|therapeut, struktur,
+    #                   themen, issues, degraded, duration_s, fallback_reason}.
+    fallformel_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fallformel_audit: Mapped[dict | None] = mapped_column(JSONB().with_variant(JSON(), "sqlite"), nullable=True)
+
     # v19.3: Repair-Kontext-Persistierung.
     # source_verlauf_text:        Roh-Verlauf nach clean_verlauf_text (NULL wenn
     #                             Workflow keine Verlaufsdoku nutzt). Wird beim

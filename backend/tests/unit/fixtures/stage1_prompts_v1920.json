@@ -269,9 +269,9 @@
         "temperature_override": 0.4,
         "skip_aggressive_dedup": true,
         "force_hard_no_think": true,
-        "system_prompt_sha256": "ad9a054bd6d6bccfadcd1992e49555939cc95fbb36f1aa87d0b4c73dd67dbc7e",
+        "system_prompt_sha256": "9744f9bfa4dc1c2fe302e447c8cc1677662f4f7cf058717391c5125af33314ec",
         "user_content_sha256": "e45127f38081e0bd34c1dcacdce61739f78ecdc3343ffce495dc66de86c41677",
-        "system_prompt_len": 3591,
+        "system_prompt_len": 4582,
         "user_content_len": 55191
       },
       {
@@ -281,9 +281,9 @@
         "temperature_override": 0.4,
         "skip_aggressive_dedup": true,
         "force_hard_no_think": true,
-        "system_prompt_sha256": "ad9a054bd6d6bccfadcd1992e49555939cc95fbb36f1aa87d0b4c73dd67dbc7e",
+        "system_prompt_sha256": "9744f9bfa4dc1c2fe302e447c8cc1677662f4f7cf058717391c5125af33314ec",
         "user_content_sha256": "5870da4cdcff594dace84d7118c777b43d8378ba809ed8c93d878e8d6f9cfe0b",
-        "system_prompt_len": 3591,
+        "system_prompt_len": 4582,
         "user_content_len": 55183
       },
       {
@@ -293,9 +293,9 @@
         "temperature_override": 0.4,
         "skip_aggressive_dedup": true,
         "force_hard_no_think": true,
-        "system_prompt_sha256": "ad9a054bd6d6bccfadcd1992e49555939cc95fbb36f1aa87d0b4c73dd67dbc7e",
+        "system_prompt_sha256": "9744f9bfa4dc1c2fe302e447c8cc1677662f4f7cf058717391c5125af33314ec",
         "user_content_sha256": "92b6eb9d8378bb0f8bb09aafdf9294d40cc176af9aee8f18af5691b469a2eb2a",
-        "system_prompt_len": 3591,
+        "system_prompt_len": 4582,
         "user_content_len": 55189
       },
       {
@@ -305,9 +305,9 @@
         "temperature_override": 0.4,
         "skip_aggressive_dedup": true,
         "force_hard_no_think": true,
-        "system_prompt_sha256": "ad9a054bd6d6bccfadcd1992e49555939cc95fbb36f1aa87d0b4c73dd67dbc7e",
+        "system_prompt_sha256": "9744f9bfa4dc1c2fe302e447c8cc1677662f4f7cf058717391c5125af33314ec",
         "user_content_sha256": "384270fda0fa0a6d161876083a9e9b7a761fa6e6ad91e9e00e994568d199555a",
-        "system_prompt_len": 3591,
+        "system_prompt_len": 4582,
         "user_content_len": 55183
       },
       {
@@ -317,9 +317,9 @@
         "temperature_override": 0.4,
         "skip_aggressive_dedup": true,
         "force_hard_no_think": true,
-        "system_prompt_sha256": "ad9a054bd6d6bccfadcd1992e49555939cc95fbb36f1aa87d0b4c73dd67dbc7e",
+        "system_prompt_sha256": "9744f9bfa4dc1c2fe302e447c8cc1677662f4f7cf058717391c5125af33314ec",
         "user_content_sha256": "e49c8d90531b33a6ec91ea1125db57aba85ad5f86a5614fdaf1b97cc6956a03b",
-        "system_prompt_len": 3591,
+        "system_prompt_len": 4582,
         "user_content_len": 44214
       }
     ],
