@@ -51,7 +51,6 @@ from app.services.quality_specs import (
     required_keywords_for,
     required_sections_for,
     section_present,
-    stichpunkt_present,
     synonyms_for,
     upper_code_suffix,
 )
@@ -223,6 +222,28 @@ ISSUE_CODE_STYLE_EXAMPLE_TOO_SHORT = "STYLE_EXAMPLE_TOO_SHORT"
 # Sicherheitsnetz hinter fill_befund_vorlage(): Saetze mit <= 2 Woertern
 # ("reduziert.", "nicht erhoben.") oder Satzanfang in Kleinschreibung.
 ISSUE_CODE_BEFUND_FRAGMENT = "BEFUND_FRAGMENT"
+
+# v19.27: Fokus-Treue, Verfahren, Stage-1-Audit, P1-Struktur - Regeln in
+# quality_check_doku.py, Codes hier re-exportiert (Registry-Test prueft
+# jede ISSUE_CODE_*-Konstante gegen die Regeln).
+from app.services.quality_check_doku import (  # noqa: E402
+    ISSUE_CODE_ABSCHNITT_DUENN,
+    ISSUE_CODE_DOKU_LISTENFORMAT,
+    ISSUE_CODE_EINLADUNG_FALLBACK,
+    ISSUE_CODE_EINLADUNG_GENERISCH,
+    ISSUE_CODE_ORGANISATORISCHES_PLATZHALTER,
+    ISSUE_CODE_STAGE1_FALLBACK,
+    ISSUE_CODE_STAGE1_HALLUZINATION,
+    ISSUE_CODE_STAGE1_VERDICHTUNG_DEGRADED,
+    ISSUE_CODE_STICHPUNKTE_IGNORIERT,
+    ISSUE_CODE_VERFAHREN_NICHT_BENANNT,
+    ISSUE_CODE_VERFAHREN_PHASE_FEHLT,
+    check_doku_length as _check_doku_length,
+    check_doku_struktur as _check_doku_struktur,
+    check_stage1_audit as _check_stage1_audit,
+    check_stichpunkte as _check_stichpunkte_v1927,
+    check_verfahren as _check_verfahren,
+)
 
 # Regex zur Validierung dass ein Code wirklich ^[A-Z_]+$ matched.
 # Wird in serialize_issues + Pydantic-Schemas (Phase C) genutzt.
@@ -1572,34 +1593,8 @@ def _check_kompositum_klebebugs(text: str) -> list[QualityIssue]:
 
 # ── Hauptfunktion ──────────────────────────────────────────────────────────────
 
-def _check_stichpunkte(
-    text: str, stichpunkte: list[str] | None,
-) -> list[QualityIssue]:
-    """Dynamische Pro-Job-Keywords (Punkt 6): jeder vom Therapeuten mitgegebene
-    Stichpunkt (P1) bzw. jedes Fokus-Thema (P3/P4) soll im Output vorkommen.
-    Ersetzt die statischen (leeren) REQUIRED_KEYWORDS durch etwas Sinnhaftes/
-    Individuelles. Erkennung generoes (quality_specs.stichpunkt_present) - Bias
-    gegen Rausch-Repairs. Ein fehlender Stichpunkt = eine WARNUNG (Therapeut
-    entscheidet; ggf. bewusst weggelassen)."""
-    if not stichpunkte:
-        return []
-    issues: list[QualityIssue] = []
-    for bullet in stichpunkte:
-        b = (bullet or "").strip()
-        if not b or stichpunkt_present(text, b):
-            continue
-        issues.append(QualityIssue(
-            code=ISSUE_CODE_MISSING_STICHPUNKT,
-            severity=SEVERITY_WARNING,
-            message=f"Stichpunkt/Fokus-Thema nicht aufgegriffen: '{b}'",
-            repair_hint=(
-                f"Greife das Thema '{b}' im Text auf - AUSSCHLIESSLICH sofern es "
-                "durch die Quellen (Transkript/Unterlagen) gedeckt ist. Erfinde "
-                "keine Inhalte, nur um das Stichwort unterzubringen (Quellentreue)."
-            ),
-            code_detail={"stichpunkt": b},
-        ))
-    return issues
+# v19.27: _check_stichpunkte lebt jetzt in quality_check_doku.check_stichpunkte
+# (Abdeckungsquote, Akronym-Pflicht, STICHPUNKTE_IGNORIERT).
 
 
 # ── v19.22 (S3): Pflicht-Hinweis Suizidalitaet ────────────────────────────────
@@ -1702,6 +1697,8 @@ def run_quality_check(
     grammar_fixes: "dict | None" = None,
     source_warnings: "list | None" = None,
     dx_rewrite: "dict | None" = None,
+    stage1_audits: "dict | None" = None,
+    verfahren_keys: "list | None" = None,
 ) -> list[QualityIssue]:
     """Fuehrt alle QualityCheck-Regeln gegen einen Text aus.
 
@@ -1787,6 +1784,8 @@ def run_quality_check(
         grammar_fixes=grammar_fixes,
         source_warnings=source_warnings,
         dx_rewrite=dx_rewrite,
+        stage1_audits=stage1_audits,
+        verfahren_keys=verfahren_keys,
     )
     issues = run_checks(ctx)
 
@@ -1827,6 +1826,8 @@ class QCContext:
     grammar_fixes: "dict | None" = None       # v19.25 (G3)
     source_warnings: "list | None" = None     # v19.25 (Sprint Q)
     dx_rewrite: "dict | None" = None          # v19.26 (Entdiagnostizierung)
+    stage1_audits: "dict | None" = None       # v19.27: {"transkript": audit, "verlauf": audit}
+    verfahren_keys: "list | None" = None      # v19.27: Keys aus services/verfahren.py
 
 
 @dataclass(frozen=True)
@@ -1849,6 +1850,9 @@ CHECK_REGISTRY: tuple[QCCheck, ...] = (
             (ISSUE_CODE_TRANSCRIPT_INCOMPLETE,), "v19.16 (T4): Recording-Transkript deckt Audio nicht ab"),
     QCCheck("input_truncated", lambda c: _check_input_truncated(c.input_truncated_chars),
             (ISSUE_CODE_INPUT_TRUNCATED,), "v19.19 (K2): Budget-Guard hat Quellen gekuerzt"),
+    QCCheck("stage1_audit", lambda c: _check_stage1_audit(c.stage1_audits),
+            (ISSUE_CODE_STAGE1_VERDICHTUNG_DEGRADED, ISSUE_CODE_STAGE1_HALLUZINATION,
+             ISSUE_CODE_STAGE1_FALLBACK), "v19.27: Transkript-/Verlauf-Verdichtung (D2=B)"),
     QCCheck("source_plausibility", lambda c: _check_source_plausibility(c.source_warnings),
             (ISSUE_CODE_VERLAUF_UNPLAUSIBEL, ISSUE_CODE_SOURCE_ENCODING_DAMAGED,
              ISSUE_CODE_STYLE_EXAMPLE_TOO_SHORT), "v19.25 (Sprint Q): Fremddokument/HTML/Stilvorlage"),
@@ -1887,14 +1891,28 @@ CHECK_REGISTRY: tuple[QCCheck, ...] = (
             (ISSUE_CODE_LENGTH_TOO_SHORT, ISSUE_CODE_LENGTH_TOO_LONG), "nur bei Stub < 50 % des Minimums"),
     QCCheck("eb_length_below_target", lambda c: _check_eb_length_below_target(c.text, c.workflow),
             (ISSUE_CODE_LENGTH_BELOW_TARGET,), "v19.25 (L1): nur entlassbericht < 550 Woerter"),
+    QCCheck("doku_length_below_target", lambda c: _check_doku_length(c.text, c.workflow),
+            (ISSUE_CODE_LENGTH_BELOW_TARGET,), "v19.27 (D3=A): nur dokumentation < 150 Woerter"),
     QCCheck("required_keywords", lambda c: _check_required_keywords(c.text, c.workflow),
             (ISSUE_CODE_PREFIX_MISSING_KEYWORD,), "aktuell leer - siehe quality_specs"),
     QCCheck("required_sections", lambda c: _check_required_sections(c.text, c.workflow),
             (ISSUE_CODE_PREFIX_MISSING_SECTION,)),
     QCCheck("recommended_sections", lambda c: _check_recommended_sections(c.text, c.workflow, source_text=c.source_text),
             (ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED,), "info; empfohlene Modalitaet nicht erwaehnt"),
-    QCCheck("stichpunkte", lambda c: _check_stichpunkte(c.text, c.stichpunkte),
-            (ISSUE_CODE_MISSING_STICHPUNKT,), "nur mit stichpunkte"),
+    QCCheck("doku_struktur", lambda c: _check_doku_struktur(c.text, c.workflow, c.source_text),
+            (ISSUE_CODE_ORGANISATORISCHES_PLATZHALTER, ISSUE_CODE_EINLADUNG_GENERISCH,
+             ISSUE_CODE_EINLADUNG_FALLBACK, ISSUE_CODE_DOKU_LISTENFORMAT,
+             ISSUE_CODE_ABSCHNITT_DUENN), "v19.27 (D4=A, D5=B): nur dokumentation"),
+    QCCheck("stichpunkte",
+            lambda c: _check_stichpunkte_v1927(
+                c.text, c.stichpunkte,
+                stage1_applied=bool(((c.stage1_audits or {}).get("transkript") or {}).get("applied")),
+            ),
+            (ISSUE_CODE_MISSING_STICHPUNKT, ISSUE_CODE_STICHPUNKTE_IGNORIERT),
+            "v19.27 (D6=A, D7=A): Abdeckungsquote + Akronym-Pflicht; Block-Ignoranz critical"),
+    QCCheck("verfahren", lambda c: _check_verfahren(c.text, c.workflow, c.verfahren_keys),
+            (ISSUE_CODE_VERFAHREN_NICHT_BENANNT, ISSUE_CODE_VERFAHREN_PHASE_FEHLT),
+            "v19.27 (D13=A): belegtes Verfahren benannt? Phasen nur P1, info"),
     QCCheck("kompositum_klebebugs", lambda c: _check_kompositum_klebebugs(c.text),
             (ISSUE_CODE_KOMPOSITA_KLEBEBUG,)),
     QCCheck("source_fidelity", lambda c: _check_source_fidelity(c.text, c.source_text),
@@ -1952,6 +1970,9 @@ def serialize_issues(
         if i.severity in summary:
             summary[i.severity] += 1
 
+    # v19.27 (D8): Anzahl der gelaufenen Regeln fuer die Status-Meldung
+    # "alle n Checks bestanden" im Frontend. Additiv, Schema-Version bleibt 1.
+    summary["checks_run"] = len(CHECK_REGISTRY)
     return {
         "version": QUALITY_CHECK_SCHEMA_VERSION,
         "workflow": workflow,

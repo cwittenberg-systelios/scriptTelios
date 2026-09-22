@@ -9,14 +9,15 @@ def test_registry_reihenfolge_entspricht_v1920():
     names = [c.name for c in QC.CHECK_REGISTRY]
     assert names == [
         "selbstauskunft_leer", "template_placeholder", "source_truncation",
-        "transcript_coverage", "input_truncated", "source_plausibility", "grammar_autofixed",
+        "transcript_coverage", "input_truncated", "stage1_audit", "source_plausibility", "grammar_autofixed",
         "konjunktiv", "diagnosekriterien", "diagnose_nennung", "diagnose_entfernt", "repair_flags", "wir_form",
         "pathologisierende_sprache", "prozessreflexion", "forbidden_names",
         "patient_initial", "gender", "think_blocks", "befund_separator",
-        "befund_fragment", "length", "eb_length_below_target", "required_keywords", "required_sections",
-        "recommended_sections", "stichpunkte", "kompositum_klebebugs",
+        "befund_fragment", "length", "eb_length_below_target", "doku_length_below_target",
+        "required_keywords", "required_sections",
+        "recommended_sections", "doku_struktur", "stichpunkte", "verfahren", "kompositum_klebebugs",
         "source_fidelity", "suizid_note",
-    ]
+    ]  # v19.27: + stage1_audit, doku_length_below_target, doku_struktur, verfahren
     assert len(set(names)) == len(names)
 
 

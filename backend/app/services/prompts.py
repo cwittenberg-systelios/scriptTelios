@@ -15,6 +15,12 @@ import re
 # Zentraler abkuerzungsfester Satz-Splitter (R1) - Stilanalyse nutzt ab
 # v19.5/Issue-2 dieselbe Satzdefinition wie Hard-Cap und Loop-Detection.
 from app.services.postprocessing import split_sentences_de
+from app.services.verfahren import (  # v19.27
+    erkannte_verfahren,
+    register_applies,
+    render_verfahren_feststellung,
+    render_verfahren_phasenblock,
+)
 
 
 # ── Workflow-Kategorisierung ─────────────────────────────────────────────────
@@ -361,6 +367,15 @@ Emotionsregulation, Resonanzraum, Beobachterposition, innere Klarheit,
 biographische Verwurzelung, Vermeidungsmuster, Beziehungsdynamik,
 Anspannungszustände, Grübelneigung, Nähe-Distanz-Themen.\
 """
+
+# v19.27: Der Feststellungs-Absatz des neutralen Glossars wird bei woertlich
+# belegten Verfahren (services/verfahren.py) durch die Whitelist ersetzt -
+# Marker fuer den deterministischen Tausch in build_system_prompt().
+_NEUTRAL_FESTSTELLUNG_RE = re.compile(
+    r"QUELLENTREUE-FESTSTELLUNG FUER DIESEN AUFTRAG \(wichtigste Regel\):\n"
+    r".*?ressourcenorientiert\.",
+    re.DOTALL,
+)
 
 
 # ── Psychopathologischer Befund Vorlage ──────────────────────────────────────
@@ -2286,8 +2301,35 @@ def build_system_prompt(
     #     →  BASE_PROMPT-Kernel  →  Diagnosen/Wortlimit (im base eingebettet)
     # Issue-2: Glossar-Variante anhand der Quellen dieses Auftrags waehlen.
     # source_text=None (Legacy/Tests) -> konservativ das volle Glossar.
-    _parts_work = True if source_text is None else source_mentions_parts_work(source_text)
+    # v19.27: Verfahrensregister (alle Workflows ausser anamnese/befund, D11).
+    # Statt binaer "volles Glossar / Verbot": woertlich in den Quellen
+    # (inkl. Stichpunkten) genannte Verfahren werden als Whitelist benannt,
+    # P1 bekommt zusaetzlich die Phasenstruktur. Nichts belegt -> neutrales
+    # Glossar wie bisher. Anteile-Vokabular weiterhin nur bei parts_work.
+    _verfahren: list = []
+    if source_text is None:
+        _parts_work = True
+    elif register_applies(workflow):
+        _verfahren = erkannte_verfahren(source_text)
+        _parts_work = any(v.parts_work for v in _verfahren)
+    else:
+        _parts_work = source_mentions_parts_work(source_text)
     _glossar = KLINISCHES_GLOSSAR if _parts_work else KLINISCHES_GLOSSAR_NEUTRAL
+    if _verfahren:
+        _feststellung = render_verfahren_feststellung(_verfahren)
+        if _parts_work:
+            # Volles Glossar hat keine Feststellung - Whitelist anhaengen.
+            _glossar = _glossar + "\n\n" + _feststellung
+        else:
+            _glossar, _n = _NEUTRAL_FESTSTELLUNG_RE.subn(
+                lambda _m: _feststellung, _glossar, count=1,
+            )
+            if _n != 1:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "v19.27 Feststellungs-Tausch griff nicht (n=%d) - Whitelist angehaengt.", _n
+                )
+                _glossar = _glossar + "\n\n" + _feststellung
     # v19.17 (P-1): P1 bekommt gespraechsnahe statt Berichts-Wendungen
     # (Wir-Form + Antragsfloskeln raus aus der Einzelgespraechs-Doku).
     if workflow == "dokumentation":
@@ -2304,6 +2346,9 @@ def build_system_prompt(
             "\nAUFTRAG / INHALTLICHE ANWEISUNGEN:\n"
             + workflow_instructions.strip()
         )
+    # v19.27: Phasenblock nur fuer die Gespraechsdokumentation (D11).
+    if _verfahren and workflow == "dokumentation":
+        parts.append("\n" + render_verfahren_phasenblock(_verfahren))
     if interview_mode and workflow == "dokumentation":
         parts.append("\n" + INTERVIEW_MODUS_REGELN)
 
@@ -2496,6 +2541,10 @@ def build_user_content(
     # v19.23: gerendertes Interview-Protokoll (interview_protokoll.render_protokoll)
     # als dritter Quelltyp der Gespraechsdoku neben transcript/fokus_themen.
     interview_text: Optional[str] = None,
+    # v19.27: Labels der in den Quellen woertlich belegten Verfahren
+    # (services/verfahren.py) - werden in der Sandwich-Erinnerung (P1)
+    # explizit genannt, damit der Fokus nicht gegen den System-Prompt verliert.
+    verfahren_labels: Optional[list[str]] = None,
     # Backwards-Compat: alter Parameter custom_prompt wurde mit v18 entfernt
     # (Workflow-Anweisungen leben jetzt im System-Prompt). Wir akzeptieren
     # ihn weiterhin in der Signatur, ignorieren ihn aber bewusst, damit
@@ -2632,13 +2681,22 @@ def build_user_content(
             )
         # Sandwich-Erinnerung
         if fokus_themen:
-            parts.append(
+            _erinnerung = (
                 "ERINNERUNG – PRUEFE VOR DEM SCHREIBEN:\n"
                 "Bevor du jeden der vier Abschnitte beginnst: Welcher der oben "
                 "genannten THERAPEUTISCHEN SCHWERPUNKTE gehoert hierhin? Setze "
                 "ihn explizit um – nicht nur als beilaeufige Erwaehnung, sondern "
                 "als zentralen Inhalt des passenden Abschnitts."
             )
+            # v19.27: Verfahren aus den Schwerpunkten namentlich einfordern.
+            if verfahren_labels:
+                _erinnerung += (
+                    "\nDas in den Schwerpunkten/Quellen genannte Verfahren ("
+                    + ", ".join(verfahren_labels)
+                    + ") wird namentlich benannt und entlang seiner Struktur "
+                    "dokumentiert (siehe VERFAHRENSSTRUKTUR im System-Prompt)."
+                )
+            parts.append(_erinnerung)
         if parts:
             parts.append("Erstelle jetzt die klinische Dokumentation gemäß den Anweisungen.")
         else:

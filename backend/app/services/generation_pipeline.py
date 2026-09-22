@@ -32,6 +32,7 @@ from app.services.embeddings import retrieve_style_examples
 from app.services.extraction import extract_style_context, extract_text
 from app.services.llm import clean_verlauf_text, deduplicate_paragraphs, generate_text, substitute_patient_placeholders, truncate_style_context
 from app.services.suizidalitaet import resolve_suizid_note
+from app.services.verfahren import erkannte_verfahren, register_applies  # v19.27
 from app.services.prompt_log import _log_output, _log_prompt
 from app.services.prompts import build_system_prompt, build_user_content, split_style_examples
 from app.services.source_plausibility import strip_html_tags
@@ -169,6 +170,7 @@ class PipelineState:
     _style_raw_texts:               Any = None  # Rohtexte der Stilvorlagen (Laengenanker)
     _t0:                            Any = None  # Startzeit LLM-Call
     _transcript_stage1_audit:       Any = None  # Audit der Transkript-Stage-1
+    _verfahren:                     Any = None  # v19.27: erkannte Verfahren (list[Verfahren])
     _transcript_summary_text:       Any = None  # Stage-1-Verdichtung des Transkripts
     _transkript_raw_for_result:     Any = None  # Roh-Transkript fuer result_transcript
     interview_text:                 str = ""    # v19.23: gerendertes Protokoll (Prompt-Quellblock)
@@ -844,6 +846,14 @@ async def _extract_sources(ctx: PipelineInput, job, st: PipelineState) -> None:
         patient_initial=st._patient_initial_early,
         job=job,
         bands=st.bands,
+        # v19.27: Fokus-Angaben + woertlich belegte Verfahren an die
+        # Verdichtung durchreichen (Ausloeser 89276fb6: Stage-1 machte ein
+        # Randthema zum Hauptanliegen und glaettete die IRRT-Imagination).
+        fokus_themen=ctx.bullets,
+        verfahren=(
+            erkannte_verfahren("\n".join(t for t in (st.transkript_text, ctx.bullets) if t))
+            if register_applies(ctx.workflow) else []
+        ),
     )
 
     # P3/P4: Antragsvorlage (EB/VA mit Diagnosen, Anamnese, ohne Verlauf)
@@ -1236,11 +1246,20 @@ async def _build_prompts(ctx: PipelineInput, job, st: PipelineState) -> None:
     # Issue-2: Quellen fuer die Glossar-Konditionalitaet zusammenfuehren.
     # Bewusst die ROH-Quellen VOR dem Budget-Guard (der verdichtet nur -
     # Erkennung auf den volleren Texten ist die konservative Richtung).
+    # v19.27: Stichpunkte/Fokus-Themen zaehlen laut QUELLENREGEL als Quelle -
+    # ein dort genanntes Verfahren (Ausloeser: "IRRT ...") darf den Prompt
+    # nicht mehr auf "kein Verfahren benennen" schalten.
     st._glossar_source = "\n".join(t for t in (
         st.transkript_text, st.verlaufsdoku_text, st.selbstauskunft_text,
         st.vorbefunde_text, st.antragsvorlage_text, st.vorantrag_text,
-        st.prozessreflexion_text, st.interview_plain,
+        st.prozessreflexion_text, st.interview_plain, ctx.bullets,
     ) if t)
+    st._verfahren = (
+        erkannte_verfahren(st._glossar_source) if register_applies(ctx.workflow) else []
+    )
+    if st._verfahren:
+        logger.info("Job %s Verfahren in Quellen belegt: %s",
+                    job.job_id, [v.key for v in st._verfahren])
     st.system = build_system_prompt(
         workflow=ctx.workflow,
         workflow_instructions=effective_instructions,
@@ -1292,6 +1311,7 @@ async def _build_prompts(ctx: PipelineInput, job, st: PipelineState) -> None:
         workflow=ctx.workflow,
         transcript=st.transkript_text,
         fokus_themen=ctx.bullets,
+        verfahren_labels=[v.label for v in st._verfahren] or None,
         selbstauskunft_text=st.selbstauskunft_text,
         vorbefunde_text=st.vorbefunde_text,
         verlaufsdoku_text=st.verlaufsdoku_text,
@@ -1724,4 +1744,9 @@ async def _finalize(ctx: PipelineInput, job, st: PipelineState) -> dict:
         # v19.3: Transkript-Stage-1-Audit (None wenn nicht relevant oder
         # Workflow nicht in _TRANSCRIPT_STAGE1_WORKFLOWS).
         "transcript_summary_audit": st._transcript_stage1_audit,
+        # v19.27: Keys der in den Quellen/Stichpunkten woertlich belegten
+        # Verfahren (services/verfahren.py). Leere Liste fuer anamnese/befund
+        # (Register gilt dort nicht, D11). Wird in run_job in die Telemetrie
+        # gespiegelt und vom QualityCheck (VERFAHREN_*) ausgewertet.
+        "verfahren_keys": [v.key for v in (st._verfahren or [])],
     }

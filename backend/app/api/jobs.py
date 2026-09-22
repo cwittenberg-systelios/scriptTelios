@@ -408,6 +408,10 @@ async def repair_execute(
     _cached_parent = job_queue.get_job(job_id)
     _parent_pn = getattr(_cached_parent, "patient_name", None) if _cached_parent else None
     _parent_fokus = getattr(_cached_parent, "fokus_themen", None) if _cached_parent else None
+    # v19.27: Fallback aus der persistierten Telemetrie (Parent aus der DB).
+    _parent_tele = parent.get("generation_telemetry") or {}
+    if not _parent_fokus and isinstance(_parent_tele, dict):
+        _parent_fokus = _parent_tele.get("fokus_themen")
     if not _parent_pn:
         _pk = parent.get("patient_kuerzel")
         if _pk:
@@ -436,6 +440,11 @@ async def repair_execute(
     # in job_queue.py - identisch zum normalen Generate-Pfad).
     job.patient_name = _parent_pn
     job.fokus_themen = _parent_fokus
+    # v19.27: erkannte Verfahren des Parents fuer VERFAHREN_*-Checks auf dem
+    # Repair-Output mitgeben (Telemetrie-Merge in run_job haengt nur an,
+    # was das Repair-Result liefert - deshalb hier vorab setzen).
+    if isinstance(_parent_tele, dict) and _parent_tele.get("verfahren"):
+        job.generation_telemetry = {"verfahren": list(_parent_tele["verfahren"])}
 
     # v19.14a: Quellentreue-Netz fuer den Repair-Output. Der Voll-Repair
     # schreibt den GESAMTEN Text neu, lief aber bis v19.13 OHNE

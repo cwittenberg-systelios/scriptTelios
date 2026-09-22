@@ -245,6 +245,10 @@ async def _run_transcript_stage1(
     patient_initial: Optional[str],
     job,
     bands: dict,
+    # v19.27: Fokus-Angaben des Therapeuten und woertlich belegte Verfahren
+    # (list[Verfahren]) - gehen als Zusatzblock in die Verdichtung.
+    fokus_themen: Optional[str] = None,
+    verfahren: Optional[list] = None,
 ) -> tuple[str, Optional[str], Optional[dict]]:
     """v19.3 Transkript-Stage-1 (Transkript-Verdichtung).
 
@@ -293,6 +297,12 @@ async def _run_transcript_stage1(
                 "workflow":        workflow,
                 "patient_initial": patient_initial,
             }
+            # v19.27: nur setzen, wenn vorhanden - der Prompt bleibt sonst
+            # byte-identisch zu v19.26 (Snapshot-Test test_v1921_r7).
+            if fokus_themen and fokus_themen.strip():
+                tr_kwargs["fokus_themen"] = fokus_themen
+            if verfahren:
+                tr_kwargs["verfahren"] = list(verfahren)
             if tr_target_override is not None:
                 tr_kwargs["target_words"] = tr_target_override
             tr_result = await summarize_transcript(**tr_kwargs)

@@ -522,6 +522,9 @@ const S = `
   .st-scope .qc-panel.qc-critical { border-left-color: var(--st-red, #b00); }
   .st-scope .qc-panel.qc-warning  { border-left-color: #d18722; }
   .st-scope .qc-panel.qc-info     { border-left-color: var(--st-text-soft); }
+  /* v19.27 (D8): Status "alle n Checks bestanden" */
+  .st-scope .qc-panel.qc-ok       { border-left-color: #2e7d4f; }
+  .st-scope .qc-panel.qc-ok .qc-head { border-bottom: none; }
   .st-scope .qc-head {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 16px; background: var(--st-gray-light);
@@ -537,6 +540,10 @@ const S = `
   .st-scope .qc-badge.qc-critical { background: var(--st-red, #b00); color: white; }
   .st-scope .qc-badge.qc-warning  { background: #d18722; color: white; }
   .st-scope .qc-badge.qc-info     { background: var(--st-text-soft); color: white; }
+  .st-scope .qc-badge.qc-ok       { background: #2e7d4f; color: white; text-transform: none; }
+  /* v19.27: fehlende Begriffe / uebergangene Stichpunkte */
+  .st-scope .qc-fehlend { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--st-text-soft); }
+  .st-scope .qc-fehlend li { margin: 0; }
   .st-scope .qc-list { list-style: none; margin: 0; padding: 6px 0; }
   .st-scope .qc-item {
     display: flex; align-items: flex-start; gap: 10px;

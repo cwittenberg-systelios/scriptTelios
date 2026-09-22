@@ -251,6 +251,21 @@ für die Eval-Auswertung und Produktions-Monitoring.
 
 ---
 
+## v19.27: Transkript-Audit in der Telemetrie, Fokus und Verfahren
+
+- `transcript_summary_audit` wurde bis v19.26 in `run_job` verworfen (kein
+  JobState-Feld, keine Spalte). Seit v19.27 liegt es unter
+  `generation_telemetry["transcript_stage1"]` (persistiert in
+  `jobs.generation_telemetry`, keine Migration). Ebenfalls dort:
+  `verfahren` (Keys aus `services/verfahren.py`) und `fokus_themen`.
+- Der QualityCheck (`stage1_audit`) liest beide Audits:
+  `VERDICHTUNG_DEGRADED` (warning), `VERDICHTUNG_HALLUZINATION`
+  (warning; critical bei ICD), `VERDICHTUNG_FALLBACK` (info bei Exception).
+- `summarize_transcript(fokus_themen=, verfahren=)`: die Schwerpunkte des
+  Therapeuten bestimmen Hauptanliegen/Hauptteil der Verdichtung, belegte
+  Verfahren liefern die Struktur, die nicht weggeglaettet werden darf.
+  Ohne beide Parameter bleibt der Prompt byte-identisch.
+
 ## Performance-Log-Format
 
 `/workspace/performance.log` (ein JSON pro abgeschlossenem Job):

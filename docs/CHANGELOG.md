@@ -7,6 +7,108 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.27] — Verfahrenswissen, Fokus-Treue und QC für die Gesprächsdokumentation (2026-09-22)
+
+Basis: `v19_QA_v02` @ `5edeaae`. Ein Patch (Backend + Frontend, `systelios.js`
+neu gebaut). Ausloeser: Job `89276fb6` (22.09.), Fokus-Eingabe „IRRT
+Traumasitzung …" — der System-Prompt sagte gleichzeitig „Benenne KEIN
+Therapieverfahren namentlich" (neutrales Glossar, Schalter sah die
+Stichpunkte nicht und kannte IRRT nicht), Stage-1 machte ein Randthema zum
+Hauptanliegen, der Stichpunkte-Check meldete nichts (Akronym „IRRT" fiel an
+der Mindestlaenge 5 aus der Pruefung, ODER-Logik durch woertlich
+uebernommenes „Operation … Geburt … Tochter" erfuellt). QC: 0 Issues,
+Feedback Rating 2.
+
+### Teil 0 — Verfahrensregister (`services/verfahren.py`, D10/D11)
+- Neu: `Verfahren`-Dataclass (Stämme, Phasen, Doku-/Stage-1-Hinweise,
+  Phasen-Marker, `parts_work`) und `VERFAHREN_REGISTER` (IRRT nach
+  Schmucker/Köster: Vorbereitung · Phase 1 Wiedererleben 1a/1b · Phase 2
+  Täterkonfrontation am Hot Spot · Phase 3 Zuwendung zum Damaligen Ich,
+  Abschlussbild · Nachbesprechung; EMDR, IFS/Anteilearbeit, Ego-State/
+  Stuhlarbeit, Schematherapie, Hypnose, Traumakonfrontation).
+  `erkannte_verfahren()` = Substring-Erkennung, kein LLM.
+- Phasen sind ein **Beobachtungsraster**, kein Soll-Verlauf: Prompt und QC
+  bewerten nie, ob eine Phase „gelungen" ist (im Ausloeserfall war die
+  nicht vollzogene Entmachtung fachlich der Erfolg — Täter = lebensrettender
+  Arzt; Einordnung als Trauer-/Integrationssitzung kommt vom Therapeuten).
+- `build_system_prompt`: dreistufige Quellentreue-Feststellung fuer alle
+  Workflows ausser `anamnese`/`befund` (D11): nichts belegt → neutrales
+  Glossar wie bisher; Verfahren woertlich in Transkript/Unterlagen/
+  **Stichpunkten** → Whitelist „In den Quellen … genannt: IRRT. Benenne
+  AUSSCHLIESSLICH dieses Verfahren"; `parts_work` (IFS, Ego-State,
+  Schematherapie) → volles Glossar + Whitelist. Phasenblock
+  `VERFAHRENSSTRUKTUR …` nur in P1. Anamnese behaelt
+  `source_mentions_parts_work`/`PARTS_WORK_STEMS` unveraendert.
+- `generation_pipeline`: `_glossar_source` += `ctx.bullets`; erkannte
+  Verfahren in `st._verfahren`, Result-Key `verfahren_keys`;
+  `build_user_content(verfahren_labels=…)` nennt das Verfahren in der
+  Sandwich-Erinnerung.
+- Stage-1 (`transcript_summary.summarize_transcript`, `stage1.
+  _run_transcript_stage1`): neue optionale Parameter `fokus_themen`,
+  `verfahren` → Block „SCHWERPUNKTE DES THERAPEUTEN (verbindlich fuer die
+  Gewichtung)" + „ANGEWENDETES VERFAHREN" im System-Prompt. Ohne beide ist
+  der Prompt byte-identisch (Snapshot `test_v1921_r7` unveraendert).
+
+### Teil A — Stage-1-Audit sichtbar (D1=A, D2=B)
+- `run_job`: `transcript_summary_audit` (bisher verworfen), `verfahren_keys`
+  und `fokus_themen` landen in `generation_telemetry` (`transcript_stage1`,
+  `verfahren`, `fokus_themen`) — persistiert, keine Migration. Vorab
+  gesetzte Telemetrie (Repair-Job) wird gemergt statt ueberschrieben.
+- QC `stage1_audit` (Transkript + Verlauf): `VERDICHTUNG_DEGRADED`
+  (warning), `VERDICHTUNG_HALLUZINATION` (warning, critical bei ICD),
+  `VERDICHTUNG_FALLBACK` (info, nur bei `exception:`). Still bei sauberem
+  Lauf und Skip wegen Kuerze.
+
+### Teil B — P1-Struktur (`services/quality_check_doku.py`, D3–D5)
+- `doku_length_below_target`: `LENGTH_BELOW_TARGET` bei 75–149 Woertern (D3=A).
+- `doku_struktur` (nur dokumentation): `ORGANISATORISCHES_PLATZHALTER`
+  (warning, D4=A), `EINLADUNG_GENERISCH` (warning, nur mit Quelle),
+  `EINLADUNG_FALLBACK` (info), `DOKU_LISTENFORMAT` (warning),
+  `ABSCHNITT_DUENN` (info; Einladungen/Organisatorisches ausgenommen, D5=B).
+  Abschnitts-Parser `doku_sections()`.
+
+### Teil C — Fokus-Treue (D6=A, D7=A, D13=A)
+- `quality_specs`: `stichpunkt_akronyme()` (Grossbuchstaben ≥ 3 sind immer
+  Pflicht-Terme), Token-Regex mit Ziffern/Akzenten, Fuellwort-Fallback nur
+  wenn kein Fuellwort (sonst „unpruefbar", kein Issue),
+  `stichpunkt_coverage()` (Akronyme/Komposita ≥ 10 zaehlen doppelt).
+  `stichpunkt_present` = Quote ≥ 0,5 UND kein fehlendes Akronym; ≤ 2 Terme:
+  alle. Kein Komma-Split.
+- QC `stichpunkte`: `MISSING_STICHPUNKT` mit `code_detail.fehlend/hits/
+  total/akronym_fehlt`; neu `STICHPUNKTE_IGNORIERT` (critical) ab ≥ 2
+  Punkten und ≥ 50 % fehlend; Zusatz „(Transkript wurde … verdichtet)" wenn
+  Stage-1 lief.
+- QC `verfahren`: `VERFAHREN_NICHT_BENANNT` (warning), `VERFAHREN_PHASE_FEHLT`
+  (info, nur P1, reine Marker-Beobachtung).
+- `_qc_fidelity_source` += Fokus-Themen (korrekt uebernommenes „IRRT" ist
+  keine Erfindung); `_job_fokus_themen()` mit Telemetrie-Fallback fuer Jobs/
+  Repairs nach Pod-Neustart; `jobs.repair_execute` erbt `fokus_themen` und
+  `verfahren` aus der Parent-Telemetrie.
+- Registry: 34 Regeln (+ `stage1_audit`, `doku_length_below_target`,
+  `doku_struktur`, `verfahren`); `serialize_issues` traegt
+  `summary.checks_run` (additiv, Schema-Version 1).
+
+### Frontend (D8)
+- `qa.jsx`: leere Issue-Liste → gruener Status „Interne Qualitaetspruefung —
+  alle n Checks bestanden" (ohne Repair-Formular; ohne `checks_run`: „keine
+  Beanstandungen"); `QcFehlendDetail` listet `code_detail.fehlend`.
+  Styles `.qc-ok`, `.qc-fehlend`.
+
+### Kalibrierung
+- Regressionsfall `89276fb6` (echter Output): vorher 0 Issues, jetzt
+  `MISSING_STICHPUNKT` (fehlend: irrt, traumasitzung; akronym_fehlt) +
+  `VERFAHREN_NICHT_BENANNT`. Der zweite Job im vorliegenden Log
+  (`5a3425f9`, Anamnese) bleibt bei 0 neuen Codes. Breitere Kalibrierung
+  ueber weitere `prompts.log`-Runden steht aus.
+
+### Tests
+- Neu: `test_v1927_verfahren.py` (19), `test_v1927_fokus.py` (22),
+  `test_v1927_doku_qc.py` (23), `frontend/tests/qc_status.test.jsx` (5).
+  `test_v1921_qc_registry.py` (Reihenfolge) angepasst. Unit-Suite 1360
+  passed; Jest 103 passed; ESLint 0 Fehler; ruff sauber.
+
+---
+
 ## [v19.26b] — Vorher/Nachher im QualityCheck-Panel (2026-09-18)
 
 Kleine Ergaenzung zu v19.26 (Backend + Frontend, `systelios.js` neu gebaut).

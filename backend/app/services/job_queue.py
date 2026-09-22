@@ -812,7 +812,14 @@ class JobQueue:
             job.style_info         = result.get("style_info")
             # v19.1: Telemetrie aus dem LLM-Result (Pipeline jobs.py
             # haengt sie an result["generation_telemetry"] an).
-            job.generation_telemetry = result.get("generation_telemetry")
+            # v19.27: vorab gesetzte Telemetrie (Repair-Job: "verfahren" vom
+            # Parent, jobs.py) nicht ueberschreiben, sondern mergen.
+            _pre_tele = job.generation_telemetry if isinstance(job.generation_telemetry, dict) else {}
+            _res_tele = result.get("generation_telemetry")
+            if _pre_tele or _res_tele:
+                job.generation_telemetry = {**_pre_tele, **(_res_tele or {})}
+            else:
+                job.generation_telemetry = _res_tele
             # v19.2: Stage-1-Pipeline-Ergebnis.
             # verlauf_summary_text wird aus dem Audit-Bundle abgeleitet,
             # falls Stage 1 erfolgreich war (applied=True). Der eigentliche
@@ -833,6 +840,24 @@ class JobQueue:
             # Attribut (kein DB-Feld), analog patient_name/fokus_themen -
             # der QualityCheck liest es in S3 per getattr.
             job.suizid_note_status = result.get("suizid_note_status")
+            # v19.27: Transkript-Stage-1-Audit, erkannte Verfahren und die
+            # Fokus-Angaben in die (persistierte) Telemetrie - bisher wurde
+            # das Transkript-Audit still verworfen, und fokus_themen war
+            # nach einem Pod-Neustart (Job aus DB) fuer Repair/QC weg.
+            try:
+                _tele = dict(job.generation_telemetry or {})
+                _tr_audit = result.get("transcript_summary_audit")
+                if _tr_audit is not None:
+                    _tele["transcript_stage1"] = _tr_audit
+                _vk = result.get("verfahren_keys")
+                if _vk:
+                    _tele["verfahren"] = list(_vk)
+                _ft = getattr(job, "fokus_themen", None)
+                if _ft:
+                    _tele["fokus_themen"] = _ft
+                job.generation_telemetry = _tele or None
+            except Exception:
+                logger.exception("Job %s: Telemetrie-Erweiterung (v19.27) fehlgeschlagen", job.job_id)
             job.duration_s  = round(asyncio.get_event_loop().time() - t0, 1)
 
             if job._cancel_requested:
@@ -898,7 +923,7 @@ class JobQueue:
                     # hinterlegt (in-process, kein DB-Feld). getattr -> robust,
                     # falls nicht gesetzt (aeltere Aufrufer, Repair-Jobs).
                     _patient_name = getattr(job, "patient_name", None)
-                    _stichpunkte = split_stichpunkte(getattr(job, "fokus_themen", None))
+                    _stichpunkte = split_stichpunkte(_job_fokus_themen(job))
                     _sa_empty = getattr(job, "selbstauskunft_empty", None)
                     # v19.13: Ad-hoc-Flag aus jobs.py (Pattern selbstauskunft_empty).
                     # None/False bei Repair-Jobs und aelteren Aufrufern -> Check entfaellt.
@@ -925,6 +950,13 @@ class JobQueue:
                     _src_warn = getattr(job, "source_warnings", None)
                     # v19.26: Entdiagnostizierung (P2).
                     _dx_rw = (job.generation_telemetry or {}).get("dx_rewrite")
+                    # v19.27: Stage-1-Audits (Transkript + Verlauf) und
+                    # woertlich belegte Verfahren.
+                    _stage1_audits = {
+                        "transkript": (job.generation_telemetry or {}).get("transcript_stage1"),
+                        "verlauf": getattr(job, "verlauf_summary_audit", None),
+                    }
+                    _verfahren = (job.generation_telemetry or {}).get("verfahren")
                     issues = run_quality_check(
                         qc_text, job.workflow, source_text=_fidelity_source,
                         stichpunkte=_stichpunkte, patient_name=_patient_name,
@@ -940,6 +972,8 @@ class JobQueue:
                         grammar_fixes=_grammar,
                         source_warnings=_src_warn,
                         dx_rewrite=_dx_rw,
+                        stage1_audits=_stage1_audits,
+                        verfahren_keys=_verfahren,
                     )
                     job.quality_check = serialize_issues(issues, workflow=job.workflow)
                     logger.info(
@@ -1001,8 +1035,22 @@ def _qc_fidelity_source(job) -> str:
         getattr(job, "source_vorantrag_text", None),
         getattr(job, "source_prozessreflexion_text", None),
         getattr(job, "qc_source_text", None),   # v19.14a: Repair-Jobs
+        # v19.27: Stichpunkte/Fokus-Themen sind laut QUELLENREGEL Quelle -
+        # ein korrekt uebernommenes Verfahren ("IRRT") darf nicht als
+        # Erfindung gemeldet werden. Telemetrie-Fallback fuer Jobs aus der DB.
+        _job_fokus_themen(job),
     )
     return "\n\n".join(s for s in parts if s and s.strip())
+
+
+def _job_fokus_themen(job) -> str | None:
+    """v19.27: Fokus-Themen aus dem In-Process-Attribut, sonst aus der
+    persistierten Telemetrie (Job nach Pod-Neustart / Repair mit Parent
+    aus der DB)."""
+    ft = getattr(job, "fokus_themen", None)
+    if ft:
+        return ft
+    return (getattr(job, "generation_telemetry", None) or {}).get("fokus_themen")
 
 
 # Globale Instanz

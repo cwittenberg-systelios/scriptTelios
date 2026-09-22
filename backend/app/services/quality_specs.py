@@ -360,35 +360,105 @@ _STICHWORT_FILLER: frozenset[str] = frozenset({
 })
 
 
+# v19.27: Akronyme (IRRT, IFS, EMDR, DBT, ...) sind oft der Kern einer
+# Fokus-Angabe und fielen bisher an der Mindestlaenge 5 aus der Pruefung
+# (Ausloeser Job 89276fb6: "IRRT Traumasitzung ..." galt als erfuellt, weil
+# "Operation/Geburt/Tochter" woertlich uebernommen wurden - IRRT fehlte).
+_AKRONYM_RE = re.compile(r"\b[A-ZÄÖÜ]{3,}\b")
+_TOKEN_RE = re.compile(r"[a-zäöüßéèàç0-9]+")
+_STICHPUNKT_MIN_LEN = 5
+# Ab dieser Laenge zaehlt ein Term doppelt (Komposita tragen den Inhalt).
+_STICHPUNKT_KOMPOSITUM_LEN = 10
+
+
+def stichpunkt_akronyme(bullet: str) -> list[str]:
+    """Grossbuchstaben-Akronyme (>= 3 Zeichen) eines Stichpunkts, lowercase,
+    in Reihenfolge, ohne Duplikate."""
+    seen: list[str] = []
+    for m in _AKRONYM_RE.findall(bullet or ""):
+        low = m.lower()
+        if low not in seen and low not in _STICHWORT_STOP:
+            seen.append(low)
+    return seen
+
+
 def stichpunkt_terms(bullet: str) -> list[str]:
     """Distinktive Anker-Begriffe eines Stichpunkts (lowercase, ohne Stop-/
-    Fuellwoerter, Mindestlaenge 5). Fallback: laengstes Token, falls nach dem
-    Filtern nichts uebrig bleibt (reiner Fuellwort-Stichpunkt)."""
-    raw = re.findall(r"[a-zäöüß]+", (bullet or "").lower())
-    terms = [
-        t for t in raw
-        if len(t) >= 5 and t not in _STICHWORT_STOP and t not in _STICHWORT_FILLER
-    ]
+    Fuellwoerter, Mindestlaenge 5; Akronyme immer). Fallback: laengstes
+    Token, falls nach dem Filtern nichts uebrig bleibt - aber nur, wenn es
+    kein Fuellwort ist (sonst leer -> Stichpunkt gilt als unpruefbar)."""
+    raw = _TOKEN_RE.findall((bullet or "").lower())
+    akronyme = stichpunkt_akronyme(bullet)
+    terms = list(akronyme)
+    for t in raw:
+        if t in terms:
+            continue
+        if len(t) >= _STICHPUNKT_MIN_LEN and t not in _STICHWORT_STOP and t not in _STICHWORT_FILLER:
+            terms.append(t)
     if terms:
         return terms
-    return [max(raw, key=len)] if raw else []
+    if not raw:
+        return []
+    longest = max(raw, key=len)
+    if longest in _STICHWORT_FILLER or longest in _STICHWORT_STOP:
+        return []
+    return [longest]
+
+
+def _term_hit(text_lo: str, term: str) -> bool:
+    """Wortstamm an Wortgrenze: die ersten 8 Zeichen (Flexion/Komposita
+    frei). Akronyme/kurze Terme werden exakt als Wort gesucht."""
+    if len(term) < _STICHPUNKT_MIN_LEN:
+        return re.search(r"\b" + re.escape(term) + r"\b", text_lo) is not None
+    return re.search(r"\b" + re.escape(term[:8]), text_lo) is not None
+
+
+def stichpunkt_coverage(text: str, bullet: str) -> dict:
+    """Abdeckung eines Stichpunkts im Text.
+
+    Returns {"hits": int, "total": int, "fehlend": [terme], "akronym_fehlt": bool,
+             "score": float}. Gewichtung: Akronyme und Komposita
+    (>= 10 Zeichen) zaehlen doppelt. Leerer/unpruefbarer Stichpunkt ->
+    total 0, score 1.0.
+    """
+    terms = stichpunkt_terms(bullet)
+    akronyme = set(stichpunkt_akronyme(bullet))
+    if not terms:
+        return {"hits": 0, "total": 0, "fehlend": [], "akronym_fehlt": False, "score": 1.0}
+    text_lo = (text or "").lower()
+    hits = 0.0
+    total = 0.0
+    fehlend: list[str] = []
+    akronym_fehlt = False
+    for t in terms:
+        w = 2.0 if (t in akronyme or len(t) >= _STICHPUNKT_KOMPOSITUM_LEN) else 1.0
+        total += w
+        if _term_hit(text_lo, t):
+            hits += w
+        else:
+            fehlend.append(t)
+            if t in akronyme:
+                akronym_fehlt = True
+    return {
+        "hits": int(hits), "total": int(total), "fehlend": fehlend,
+        "akronym_fehlt": akronym_fehlt,
+        "score": (hits / total) if total else 1.0,
+    }
 
 
 def stichpunkt_present(text: str, bullet: str) -> bool:
-    """True, wenn mindestens ein distinktiver Begriff des Stichpunkts (Wortstamm
-    an Wortgrenze) im Text vorkommt. Leerer Stichpunkt -> True (nichts zu
-    pruefen)."""
-    terms = stichpunkt_terms(bullet)
-    if not terms:
+    """True, wenn der Stichpunkt als abgedeckt gilt (v19.27, D6=A):
+    gewichtete Abdeckungsquote >= 0,5 UND kein Akronym fehlt; bei <= 2
+    Termen muessen alle vorkommen. Leerer/unpruefbarer Stichpunkt -> True."""
+    cov = stichpunkt_coverage(text, bullet)
+    if cov["total"] == 0:
         return True
-    text_lo = text.lower()
-    # Wortstamm ab Wortgrenze; Suffix frei fuer Flexion (traumafokussiert ->
-    # traumafokussierte). Praefix auf max. 8 Zeichen begrenzt, damit lange
-    # Komposita ueber Flexions-/Fugengrenzen matchen.
-    for t in terms:
-        if re.search(r"\b" + re.escape(t[:8]), text_lo):
-            return True
-    return False
+    if cov["akronym_fehlt"]:
+        return False
+    n_terms = len(stichpunkt_terms(bullet))
+    if n_terms <= 2:
+        return not cov["fehlend"]
+    return cov["score"] >= 0.5
 
 
 def split_stichpunkte(raw: str | None) -> list[str]:

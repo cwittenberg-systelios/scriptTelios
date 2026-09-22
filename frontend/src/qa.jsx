@@ -58,6 +58,17 @@ function QcPairsDetail({ pairs }) {
   );
 }
 
+// ── v19.27 (D8): Fehlende Begriffe eines Stichpunkts / uebergangene Punkte
+// (code_detail.fehlend bei MISSING_STICHPUNKT / STICHPUNKTE_IGNORIERT).
+function QcFehlendDetail({ fehlend }) {
+  if (!Array.isArray(fehlend) || fehlend.length === 0) return null;
+  return (
+    <ul className="qc-fehlend">
+      {fehlend.map((f, i) => <li key={i}>{String(f)}</li>)}
+    </ul>
+  );
+}
+
 function QualityCheckPanel({
   data,
   acceptedCodes = [],
@@ -69,11 +80,27 @@ function QualityCheckPanel({
   repairError = null,
   readOnly = false,
 }) {
-  if (!data || !Array.isArray(data.issues) || data.issues.length === 0) {
+  if (!data || !Array.isArray(data.issues)) {
     return null;
   }
   const issues  = data.issues;
   const summary = data.summary || {};
+  // v19.27 (D8): keine Beanstandungen -> Status statt leerem Panel.
+  if (issues.length === 0) {
+    const n = summary.checks_run;
+    return (
+      <div className="qc-panel qc-ok">
+        <div className="qc-head">
+          <span className="qc-title">Interne Qualitätsprüfung</span>
+          <span className="qc-counts">
+            <span className="qc-badge qc-ok">
+              {n ? `alle ${n} Checks bestanden` : "keine Beanstandungen"}
+            </span>
+          </span>
+        </div>
+      </div>
+    );
+  }
   const critN   = summary.critical || 0;
   const warnN   = summary.warning  || 0;
   const infoN   = summary.info     || 0;
@@ -115,6 +142,7 @@ function QualityCheckPanel({
               <span className="qc-msg">
                 {iss.message}
                 <QcPairsDetail pairs={iss.code_detail && iss.code_detail.pairs} />
+                <QcFehlendDetail fehlend={iss.code_detail && iss.code_detail.fehlend} />
               </span>
               <span className="qc-code" title={iss.repair_hint || ""}>{iss.code}</span>
             </li>
@@ -369,4 +397,4 @@ function RepairBundle({ job, ops, toast }) {
   );
 }
 
-export { QualityCheckPanel, QcPairsDetail, RepairPreviewModal, ResultVersionsTabs, RepairBundle };
+export { QualityCheckPanel, QcPairsDetail, QcFehlendDetail, RepairPreviewModal, ResultVersionsTabs, RepairBundle };

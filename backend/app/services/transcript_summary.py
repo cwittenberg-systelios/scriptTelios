@@ -107,6 +107,27 @@ KEINE Aufgaben, Uebungen oder Impulse.
 """
 
 
+def _fokus_verfahren_block(fokus_themen: Optional[str], verfahren: Optional[list]) -> str:
+    """v19.27: Zusatzblock fuer die Verdichtung. Die Fokus-Angaben des
+    Therapeuten bestimmen, was Hauptanliegen ist; belegte Verfahren geben
+    die Struktur vor, die nicht weggeglaettet werden darf. Leer -> ''."""
+    parts: list[str] = []
+    if fokus_themen and fokus_themen.strip():
+        parts.append(
+            "SCHWERPUNKTE DES THERAPEUTEN (verbindlich fuer die Gewichtung):\n"
+            + fokus_themen.strip()
+            + "\nDiese Angaben bestimmen, was in Sektion 1 als Hauptanliegen "
+            "steht und was in Sektion 2 den Hauptteil bildet. Ein Thema, das im "
+            "Transkript zeitlich zuerst kommt, ist deshalb noch nicht das "
+            "Hauptanliegen. Erfinde nichts, um einen Schwerpunkt zu belegen - "
+            "fehlt er im Transkript, schreibe 'im Transkript nicht belegt'."
+        )
+    if verfahren:
+        from app.services.verfahren import render_verfahren_stage1_hinweis
+        parts.append(render_verfahren_stage1_hinweis(list(verfahren)))
+    return "\n\n".join(parts)
+
+
 def _wir_hint(workflow: Optional[str]) -> str:
     """Stil-Hinweis: Wir-Form fuer Antrags-Workflows, sonst neutral-deskriptiv."""
     if workflow and workflow in WIR_WORKFLOWS:
@@ -139,6 +160,11 @@ async def summarize_transcript(
     target_words: Optional[int] = None,
     patient_initial: Optional[str] = None,
     _is_chunk: bool = False,
+    # v19.27: Fokus-Angaben des Therapeuten (roh) und woertlich belegte
+    # Verfahren (list[Verfahren]). Beide optional; ohne sie ist der Prompt
+    # byte-identisch zu v19.26.
+    fokus_themen: Optional[str] = None,
+    verfahren: Optional[list] = None,
 ) -> dict:
     """
     Stage 1 fuer Sitzungstranskripte.
@@ -198,6 +224,8 @@ async def summarize_transcript(
                 patient_initial=patient_initial,
                 target_words=target_words,
                 chunks=_chunks,
+                fokus_themen=fokus_themen,
+                verfahren=verfahren,
             )
 
     raw_words = len(transcript_text.split())
@@ -226,10 +254,13 @@ async def summarize_transcript(
     # Eval-Lauf 14.05.2026 zeigte: einmaliges /no_think reicht bei Qwen3:32b
     # nicht — defense in depth durch System-Prompt-Anhang + /no_think doppelt
     # im User-Content + Temperatur 0.4 statt 0.2.
+    # v19.27: Fokus/Verfahren-Block (nur wenn vorhanden -> sonst unveraendert).
+    _fokus_block = _fokus_verfahren_block(fokus_themen, verfahren)
     system_prompt = (
         TRANSCRIPT_SUMMARY_SYSTEM_PROMPT
         + "\n\n"
         + TRANSCRIPT_SUMMARY_STRUCTURE
+        + (("\n\n" + _fokus_block) if _fokus_block else "")
         + f"\n\nSTIL: {wir_hint}"
         + _ANTI_THINK
     )
@@ -437,6 +468,8 @@ async def _summarize_transcript_chunked(
     patient_initial: Optional[str],
     target_words: Optional[int],
     chunks: list[str],
+    fokus_themen: Optional[str] = None,
+    verfahren: Optional[list] = None,
 ) -> dict:
     """v19.19 (S4): Teil-Verdichtung fuer ueberlange Transkripte, chronologisch
     zusammengefuegt (summary_runner.run_chunked, R7). Zielwortzahl proportional
@@ -452,6 +485,8 @@ async def _summarize_transcript_chunked(
             target_words=share,
             patient_initial=patient_initial,
             _is_chunk=True,
+            fokus_themen=fokus_themen,
+            verfahren=verfahren,
         )
 
     return await run_chunked(
