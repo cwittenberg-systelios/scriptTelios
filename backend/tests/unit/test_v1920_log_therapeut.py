@@ -10,7 +10,10 @@ class _Job:
 
 class TestTherapeutImLog:
     def test_prompt_und_output_header(self, caplog):
-        from app.api import jobs as J
+        from app.services import prompt_log as J
+        # v19.29 (S0): direkt aus prompt_log importiert - das Level setzt
+        # sonst erst _setup_prompt_logger() beim App-Import.
+        J._prompt_logger.setLevel(logging.DEBUG)
         records = []
         handler = logging.Handler()
         handler.emit = lambda r: records.append(r.getMessage())
@@ -25,7 +28,7 @@ class TestTherapeutImLog:
         assert any("THERAPEUT: c.saur  (OUTPUT)" in r for r in records)
 
     def test_unbekannter_job_strich(self):
-        from app.api import jobs as J
+        from app.services import prompt_log as J
         with patch.object(J.job_queue, "get_job", lambda jid: None):
             assert J._therapeut_for_log("nope") == "-"
 

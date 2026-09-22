@@ -11,27 +11,27 @@ import pytest
 
 class TestNoopDetection:
     def test_identisch_ist_noop(self):
-        from app.api.jobs import _is_repair_noop
+        from app.services.repair import _is_repair_noop
         t = "Herr M. berichtete von Sorgen. " * 60
         noop, sim = _is_repair_noop(t, t)
         assert noop and sim == 1.0
 
     def test_whitespace_unterschiede_sind_noop(self):
-        from app.api.jobs import _is_repair_noop
+        from app.services.repair import _is_repair_noop
         t = "Herr M. berichtete von Sorgen. " * 60
         noop, _ = _is_repair_noop(t, t.replace(". ", ".\n\n"))
         assert noop
 
     def test_kleine_echte_ergaenzung_kein_noop(self):
         # Log-Fall a954a3a1: sim 0.98, +3 % Woerter -> echte Aenderung
-        from app.api.jobs import _is_repair_noop
+        from app.services.repair import _is_repair_noop
         t = "Herr M. berichtete von Sorgen und Belastungen im Alltag. " * 50
         new = t + "Im Paargespräch am 12.06. wurden die Rollen in der Beziehung reflektiert und neu verhandelt. "
         noop, sim = _is_repair_noop(t, new)
         assert not noop and sim > 0.95
 
     def test_wants_addition(self):
-        from app.api.jobs import _repair_wants_addition
+        from app.services.repair import _repair_wants_addition
         assert _repair_wants_addition("Bitte das Paargespräch mitaufnehmen", [])
         assert _repair_wants_addition("", ["MISSING_SECTION_BEHANDLUNGSVERLAUF"])
         assert not _repair_wants_addition("bitte noch etwas kürzer", [])

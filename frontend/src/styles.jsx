@@ -544,6 +544,20 @@ const S = `
   /* v19.27: fehlende Begriffe / uebergangene Stichpunkte */
   .st-scope .qc-fehlend { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--st-text-soft); }
   .st-scope .qc-fehlend li { margin: 0; }
+  /* v19.29: Item-Bezug (ISM) */
+  .st-scope .qc-item-link {
+    border: none; background: none; padding: 0; margin: 0; font: inherit;
+    color: inherit; text-align: left; cursor: pointer; text-decoration: underline dotted;
+  }
+  .st-scope .qc-item-link:hover { color: #0A4B71; }
+  .st-scope .ism-item-flagged { border-left: 3px solid #d18722 !important; }
+  .st-scope .ism-item-flagged.ism-item-critical { border-left-color: var(--st-red, #b00) !important; }
+  .st-scope .ism-item-focus { box-shadow: 0 0 0 2px #0A4B71; transition: box-shadow 0.3s; }
+  .st-scope .ism-item-marker {
+    position: absolute; top: 6px; right: 30px; font-size: 10.5px; font-weight: 600;
+    color: #d18722; text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .st-scope .ism-item-critical .ism-item-marker { color: var(--st-red, #b00); }
   .st-scope .qc-list { list-style: none; margin: 0; padding: 6px 0; }
   .st-scope .qc-item {
     display: flex; align-items: flex-start; gap: 10px;

@@ -20,12 +20,11 @@ import pytest
 from fastapi import HTTPException
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.api.jobs import (
+from app.api.jobs import repair_execute, repair_preview
+from app.services.repair import (
     _build_repair_context,
     _resolve_parent_job,
     _split_anamnese_concat,
-    repair_execute,
-    repair_preview,
 )
 from app.models.schemas import RepairPreviewRequest, RepairRequest
 from app.services.quality_check import (
@@ -338,7 +337,7 @@ class TestRunRepairCoroutine:
 
     @pytest.mark.asyncio
     async def test_anamnese_splits_output_at_separator(self):
-        from app.api.jobs import _run_repair_coroutine
+        from app.services.repair import _run_repair_coroutine
 
         fake_job = MagicMock()
         fake_job.set_progress = MagicMock()
@@ -376,7 +375,7 @@ class TestRunRepairCoroutine:
 
     @pytest.mark.asyncio
     async def test_non_anamnese_no_split(self):
-        from app.api.jobs import _run_repair_coroutine
+        from app.services.repair import _run_repair_coroutine
 
         fake_job = MagicMock()
         fake_job.set_progress = MagicMock()
@@ -405,7 +404,7 @@ class TestRunRepairCoroutine:
         ROLE_PREAMBLE, das auf Generierung ausgelegt ist) und den harten
         Anti-Think-Pfad erzwingen (gegen den im prompts.log gemessenen
         48-57% Think-Leak im Repair)."""
-        from app.api.jobs import _run_repair_coroutine
+        from app.services.repair import _run_repair_coroutine
         from app.services.prompts import REPAIR_SYSTEM_PROMPT, ROLE_PREAMBLE
 
         fake_job = MagicMock()

@@ -20,8 +20,10 @@
 // Backend-Workflow: "ism_fragebogen" (result_text = JSON, siehe
 // app/services/ism.py).
 // ────────────────────────────────────────────────────────────────────────────
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { apiFetch, getApiBase } from "../api.js";
+import { confirmExportText, exportNeedsConfirm, issuesForItem, useIsmLiveCheck } from "../ism-check.jsx";
+import { QualityCheckPanel } from "../qa.jsx";
 import { AudioInput } from "../audio.jsx";
 import { useDraftCache } from "../hooks.jsx";
 import { P_ISM } from "../prompt-defaults.jsx";
@@ -60,8 +62,17 @@ function TrashIcon({ size = 14 }) {
   );
 }
 
-function IsmItemEditor({ item, index, onChange, onDelete }) {
+function IsmItemEditor({ item, index, onChange, onDelete, onBlur = null, issues = [], focused = false }) {
   const set = (patch) => onChange(index, patch);
+  // v19.29: Markierung, wenn der Live-QC auf dieses Item zeigt.
+  const sev = issues.some((i) => i.severity === "critical") ? "critical"
+    : issues.some((i) => i.severity === "warning") ? "warning"
+    : issues.length ? "info" : null;
+  const cls = ["ism-item",
+    sev && sev !== "info" ? "ism-item-flagged" : "",
+    sev === "critical" ? "ism-item-critical" : "",
+    focused ? "ism-item-focus" : ""].filter(Boolean).join(" ");
+  const blur = () => onBlur && onBlur();
   function confirmDelete() {
     const kurz = (item.frage || "").trim();
     const label = kurz.length > 60 ? kurz.slice(0, 60) + "\u2026" : kurz || "(ohne Frage)";
@@ -69,11 +80,16 @@ function IsmItemEditor({ item, index, onChange, onDelete }) {
     onDelete(index);
   }
   return (
-    <div style={{
+    <div id={`ism-item-${index}`} className={cls} data-testid={`ism-item-${index}`} style={{
       border: "1px solid var(--st-gray-border)", borderRadius: 6,
       padding: "10px 12px", marginBottom: 10, background: "var(--st-bg)",
       position: "relative",
     }}>
+      {sev && sev !== "info" && (
+        <span className="ism-item-marker" title={issues.map((i) => i.message).join("\n")}>
+          {issues.length} {issues.length === 1 ? "Hinweis" : "Hinweise"}
+        </span>
+      )}
       <button
         onClick={confirmDelete}
         title="Item entfernen"
@@ -91,6 +107,7 @@ function IsmItemEditor({ item, index, onChange, onDelete }) {
         rows={2}
         value={item.frage}
         onChange={(e) => set({ frage: e.target.value })}
+        onBlur={blur}
         placeholder="Heute konnte ich ..."
         style={{ width: "100%", fontWeight: 600, fontSize: 13, resize: "vertical",
                  border: "1px solid transparent", background: "transparent",
@@ -101,6 +118,7 @@ function IsmItemEditor({ item, index, onChange, onDelete }) {
           type="text"
           value={item.pol_min}
           onChange={(e) => set({ pol_min: e.target.value })}
+          onBlur={blur}
           placeholder="Pol links (0)"
           title="Label am linken Pol (Wert 0)"
           style={{ flex: "1 1 0", fontSize: 11, padding: "3px 6px",
@@ -116,6 +134,7 @@ function IsmItemEditor({ item, index, onChange, onDelete }) {
           type="text"
           value={item.pol_max}
           onChange={(e) => set({ pol_max: e.target.value })}
+          onBlur={blur}
           placeholder="Pol rechts (100)"
           title="Label am rechten Pol (Wert 100)"
           style={{ flex: "1 1 0", fontSize: 11, padding: "3px 6px",
@@ -143,8 +162,29 @@ function P6({ toast, resumeJob, onResumed }) {
   // ism = editierbarer Fragebogen-Zustand (aus result_text JSON geparst)
   const [ism, setIsm] = useState(null);
   const [ismError, setIsmError] = useState(null);
-  const [qc, setQc] = useState(null);
+  // v19.29: Live-QC (D4=B: Blur / Item-Wechsel / vor Export) statt statischem Kasten.
+  const { qc, setQc, check: runCheck } = useIsmLiveCheck(null);
+  const ismRef = useRef(null);
+  ismRef.current = ism;
+  const [focusedItem, setFocusedItem] = useState(null);
   const [xmlBusy, setXmlBusy] = useState(false);
+
+  // Blur-Handler: prueft den aktuellen (bereits per setIsm uebernommenen) Stand.
+  function checkNow() { runCheck(ismRef.current); }
+  function checkAfter(updater) {
+    setIsm((prev) => {
+      const next = updater(prev);
+      ismRef.current = next;
+      Promise.resolve().then(() => runCheck(next));
+      return next;
+    });
+  }
+  function focusItem(index) {
+    setFocusedItem(index);
+    const el = typeof document !== "undefined" ? document.getElementById(`ism-item-${index}`) : null;
+    if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(() => setFocusedItem((cur) => (cur === index ? null : cur)), 2000);
+  }
 
   function applyResult(j) {
     setQc(j.quality_check || null);
@@ -191,10 +231,10 @@ function P6({ toast, resumeJob, onResumed }) {
     }));
   }
   function deleteItem(index) {
-    setIsm((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
+    checkAfter((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
   }
   function addItem(faktorId) {
-    setIsm((prev) => ({
+    checkAfter((prev) => ({
       ...prev,
       items: [...prev.items, {
         faktor_id: faktorId,
@@ -218,13 +258,22 @@ function P6({ toast, resumeJob, onResumed }) {
       try { detail = JSON.stringify((await r.json()).detail); } catch (_) {}
       throw new Error(detail);
     }
-    return r.json(); // { xml, filename }
+    const data = await r.json(); // { xml, filename, quality_check }
+    // v19.29 (S4/D3): QC auf genau dem exportierten Stand; bei offenen
+    // Beanstandungen nachfragen, nie blockieren.
+    if (data.quality_check) setQc(data.quality_check);
+    if (exportNeedsConfirm(data.quality_check) && !window.confirm(confirmExportText(data.quality_check))) {
+      return null;
+    }
+    return data;
   }
 
   async function copyXml() {
     setXmlBusy(true);
     try {
-      const { xml } = await fetchXml();
+      const res = await fetchXml();
+      if (!res) return;
+      const { xml } = res;
       await navigator.clipboard.writeText(xml);
       toast("SNS-XML kopiert");
     } catch (e) { toast("XML-Export fehlgeschlagen: " + friendlyError(e)); }
@@ -234,7 +283,9 @@ function P6({ toast, resumeJob, onResumed }) {
   async function downloadXml() {
     setXmlBusy(true);
     try {
-      const { xml, filename } = await fetchXml();
+      const res = await fetchXml();
+      if (!res) return;
+      const { xml, filename } = res;
       const blob = new Blob([xml], { type: "application/xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -261,8 +312,6 @@ function P6({ toast, resumeJob, onResumed }) {
     });
     return [...byFactor.entries()].sort((a, b) => a[0] - b[0]);
   }, [ism]);
-
-  const qcIssues = qc?.issues?.length ? qc.issues : null;
 
   return (
     <div>
@@ -371,25 +420,11 @@ function P6({ toast, resumeJob, onResumed }) {
 
               {!busy && ism && (
                 <div>
-                  {qcIssues && (
-                    <div style={{
-                      border: "1px solid #f0d060", background: "#fffbe6",
-                      borderRadius: 4, padding: "8px 10px", marginBottom: 12,
-                      fontSize: 12, color: "#7a6000", lineHeight: 1.5,
-                    }}>
-                      <b>Hinweise aus der Qualitätsprüfung:</b>
-                      <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
-                        {qcIssues.map((iss, i) => (
-                          <li key={i}>{iss.message}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
                   <div style={{ marginBottom: 14 }}>
                     <label className="field-label">Begrüßung (täglicher Einstieg)</label>
                     <textarea rows={2} value={ism.begruessung}
                       onChange={(e) => setIsm({ ...ism, begruessung: e.target.value })}
+                      onBlur={checkNow}
                       style={{ width: "100%" }} />
                   </div>
 
@@ -419,6 +454,9 @@ function P6({ toast, resumeJob, onResumed }) {
                           index={idx}
                           onChange={patchItem}
                           onDelete={deleteItem}
+                          onBlur={checkNow}
+                          issues={issuesForItem(qc, idx)}
+                          focused={focusedItem === idx}
                         />
                       ))}
                     </div>
@@ -428,8 +466,12 @@ function P6({ toast, resumeJob, onResumed }) {
                     <label className="field-label">Verabschiedung (täglicher Abschluss)</label>
                     <textarea rows={2} value={ism.verabschiedung}
                       onChange={(e) => setIsm({ ...ism, verabschiedung: e.target.value })}
+                      onBlur={checkNow}
                       style={{ width: "100%" }} />
                   </div>
+
+                  {/* v19.29 (D5=A): QC-Panel auf dem editierten Stand, read-only */}
+                  <QualityCheckPanel data={qc} readOnly onFocusItem={focusItem} />
 
                   <div className="field-note" style={{ marginTop: 10 }}>
                     Änderungen hier fließen direkt in den XML-Export.
@@ -460,4 +502,4 @@ function P6({ toast, resumeJob, onResumed }) {
   );
 }
 
-export { P6 };
+export { P6, IsmItemEditor };

@@ -427,3 +427,88 @@ class TestIsmXmlEndpoint:
                             "items": []},
         })
         assert r.status_code == 422
+
+
+# ══════════════════════════════════════════════════════════════════
+# v19.29: Regelkatalog, Live-Check-Endpoint, Export mit QC
+# ══════════════════════════════════════════════════════════════════
+
+class TestIsmChecksV1929:
+
+    def test_katalog_und_checks_run(self):
+        from app.services.ism import ISM_CHECKS, ISM_CHECKS_RUN
+        from app.services.quality_check import serialize_issues
+        names = [n for n, _f, _c in ISM_CHECKS]
+        assert names == ["json_valid", "pole_identisch", "wir_form", "item_duplikat",
+                         "frage_kurz", "pol_zu_lang", "faktor_unbesetzt"]
+        assert ISM_CHECKS_RUN == 7
+        ser = serialize_issues([], workflow="ism_fragebogen")
+        assert ser["summary"]["checks_run"] == 7
+        assert serialize_issues([], workflow="dokumentation")["summary"]["checks_run"] != 7
+
+    def test_frage_kurz_warning(self):
+        from app.services.ism import ism_issues_for_payload
+        payload = _valid_payload()
+        payload["items"][2]["frage"] = "Heute"
+        issues = ism_issues_for_payload(payload)
+        i = [x for x in issues if x.code == "ISM_FRAGE_KURZ"]
+        assert i and i[0].severity == "warning" and i[0].code_detail["item_index"] == 2
+
+    def test_pol_zu_lang_info(self):
+        from app.services.ism import ISM_POL_MAX_CHARS, ism_issues_for_payload
+        payload = _valid_payload()
+        payload["items"][0]["pol_max"] = "x" * (ISM_POL_MAX_CHARS + 1)
+        issues = ism_issues_for_payload(payload)
+        i = [x for x in issues if x.code == "ISM_POL_ZU_LANG"]
+        assert i and i[0].severity == "info" and i[0].code_detail["item_index"] == 0
+
+    def test_ungueltige_struktur_als_issue(self):
+        from app.services.ism import ism_issues_for_payload
+        issues = ism_issues_for_payload({"begruessung": "Hallo", "verabschiedung": "Bye", "items": []})
+        assert len(issues) == 1 and issues[0].code == "ISM_JSON_INVALID"
+        assert issues[0].code_detail["fields"][0]["loc"] == "items"
+        assert ism_issues_for_payload("kein dict")[0].code == "ISM_JSON_INVALID"
+
+    def test_alte_regeln_unveraendert(self):
+        from app.services.ism import ism_issues_for_payload
+        assert ism_issues_for_payload(_valid_payload(6)) == []
+
+
+class TestIsmCheckEndpoint:
+
+    @pytest.fixture()
+    def client(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        with TestClient(app) as c:
+            yield c
+
+    def test_valide_null_issues(self, client):
+        r = client.post("/api/ism/check", json={"fragebogen": _valid_payload(6)})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["issues"] == [] and d["summary"]["checks_run"] == 7
+        assert d["workflow"] == "ism_fragebogen" and d["version"] == 1
+
+    def test_pole_identisch_mit_item_index(self, client):
+        payload = _valid_payload()
+        payload["items"][1]["pol_max"] = payload["items"][1]["pol_min"]
+        d = client.post("/api/ism/check", json={"fragebogen": payload}).json()
+        codes = [i["code"] for i in d["issues"]]
+        assert "ISM_POLE_IDENTISCH" in codes
+        assert [i for i in d["issues"] if i["code"] == "ISM_POLE_IDENTISCH"][0]["code_detail"]["item_index"] == 1
+
+    def test_kaputte_struktur_200_critical(self, client):
+        r = client.post("/api/ism/check", json={"fragebogen": {"items": "nope"}})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["summary"]["critical"] == 1 and d["issues"][0]["code"] == "ISM_JSON_INVALID"
+
+    def test_xml_export_liefert_qc(self, client):
+        payload = _valid_payload(5)
+        payload["items"][0]["frage"] = "Heute haben wir uns abgegrenzt."
+        r = client.post("/api/ism/xml", json={"name": "X1", "fragebogen": payload})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert "xml" in d and d["quality_check"]["summary"]["warning"] >= 1
+        assert any(i["code"] == "ISM_WIR_FORM" for i in d["quality_check"]["issues"])

@@ -19,26 +19,9 @@ from app.services.repair import (
     _resolve_parent_job, _build_repair_context, _run_repair_coroutine,
 )
 
-# v19.21 (S6c): Pipeline-, Stage-1-, Repair- und Prompt-Log-Logik leben jetzt in
-# app/services/ (generation_pipeline, stage1, repair, prompt_log). Die
-# folgenden Namen werden fuer Tests/Skripte, die sie von hier importieren
-# (oder per patch("app.api.jobs.<n>") ersetzen), weiterhin re-exportiert.
-from app.services.generation_pipeline import (  # noqa: F401
-    _missing_source_error, _apply_input_budget_guard, _run_ism_generation,
-    _resolve_transcript, _extract_sources, _resolve_style, _resolve_patient_and_gates,
-    _build_prompts, _generate, _finalize,
-)
-from app.services.prompt_log import (  # noqa: F401
-    _prompt_logger, _setup_prompt_logger, _therapeut_for_log, _log_prompt, _log_output,
-)
-from app.services.repair import (  # noqa: F401
-    _resolve_repair_sources, _split_anamnese_concat, _text_similarity,
-    _is_repair_noop, _repair_wants_addition,
-)
-from app.services.stage1 import (  # noqa: F401
-    _STAGE1_WORKFLOWS, _STAGE1_MIN_WORDS, _TRANSCRIPT_STAGE1_WORKFLOWS,
-    _stage1_audit_bundle, _run_verlauf_stage1, _run_transcript_stage1,
-)
+# v19.29 (S0): Der v19.21-Re-Export-Shim (Pipeline-/Stage-1-/Repair-/Prompt-Log-
+# Namen fuer Tests) ist entfernt - Tests importieren aus app.services.*.
+from app.services.prompt_log import _setup_prompt_logger
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

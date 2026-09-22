@@ -18,7 +18,7 @@ import pytest
 
 class TestMissingSourceGate:
     def _gate(self, workflow, **kw):
-        from app.api.jobs import _missing_source_error
+        from app.services.generation_pipeline import _missing_source_error
         return _missing_source_error(workflow, **kw)
 
     def test_p1_ohne_quellen_blockt(self):

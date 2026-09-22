@@ -84,7 +84,7 @@ def _state():
 
 @pytest.mark.asyncio
 async def test_resolve_transcript_text_direkt():
-    from app.api.jobs import _resolve_transcript
+    from app.services.generation_pipeline import _resolve_transcript
     ctx = PipelineInput(workflow="dokumentation", instructions="I", model=None, transcript="Hallo Welt")
     st = _state()
     await _resolve_transcript(ctx, _job(), st)
@@ -94,7 +94,7 @@ async def test_resolve_transcript_text_direkt():
 
 @pytest.mark.asyncio
 async def test_resolve_transcript_txt_datei_cp1252_fallback():
-    from app.api.jobs import _resolve_transcript
+    from app.services.generation_pipeline import _resolve_transcript
     up = UploadBundle(transcript_file_bytes="Gespräch über Ängste".encode("cp1252"),
                       transcript_file_name="t.txt")
     ctx = PipelineInput(workflow="anamnese", instructions="I", model=None, uploads=up)
@@ -105,7 +105,7 @@ async def test_resolve_transcript_txt_datei_cp1252_fallback():
 
 @pytest.mark.asyncio
 async def test_resolve_transcript_txt_datei_greift_nicht_wenn_text_da():
-    from app.api.jobs import _resolve_transcript
+    from app.services.generation_pipeline import _resolve_transcript
     up = UploadBundle(transcript_file_bytes=b"aus datei", transcript_file_name="t.txt")
     ctx = PipelineInput(workflow="anamnese", instructions="I", model=None, transcript="direkt", uploads=up)
     st = _state()
@@ -115,7 +115,7 @@ async def test_resolve_transcript_txt_datei_greift_nicht_wenn_text_da():
 
 @pytest.mark.asyncio
 async def test_resolve_transcript_ungueltige_p0_id():
-    from app.api.jobs import _resolve_transcript
+    from app.services.generation_pipeline import _resolve_transcript
     ctx = PipelineInput(workflow="dokumentation", instructions="I", model=None, p0_recording_id="abc")
     st = _state()
     await _resolve_transcript(ctx, _job(), st)

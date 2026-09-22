@@ -7,6 +7,59 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.29] — Live-QC für den ISM-Fragebogen (P6) + S6c-Rest (2026-09-22)
+
+Basis: `v19_QA_v02` @ `ff58d0d` (nach v19.27/v19.28). Ein Patch (Backend +
+Frontend, `systelios.js` neu gebaut).
+
+Ausgangslage: Der ISM-QC lief nur einmal nach der Generierung auf dem
+Modell-JSON und wurde in P6 als gelber Hinweiskasten gezeigt; der vom
+Therapeuten editierte Stand wurde vor dem SNS-XML-Export nur strukturell
+(Pydantic) geprüft. Identische Pole, Duplikate oder Wir-Form aus dem
+Editieren gingen unbemerkt ins XML. `checks_run` stand für ISM auf 34.
+
+### S0 — Rest von S6c (v19.21)
+- Re-Export-Shim am Kopf von `app/api/jobs.py` entfernt; die Tests
+  `test_jobs_repair`, `test_jobs_stage1_phases`, `test_v1916_transcript_guard`,
+  `test_v1919_sprint_r`, `test_v1921_s6_pipeline`, `test_v1920_log_therapeut` importieren aus
+  `app.services.repair/stage1/generation_pipeline/prompt_log`. `jobs.py` importiert nur
+  noch `_setup_prompt_logger` aus `prompt_log`. Kein Verhalten geändert.
+
+### Backend
+- `services/ism.py`: Regelkatalog `ISM_CHECKS` (json_valid, pole_identisch,
+  wir_form, item_duplikat, **frage_kurz** (warning, < `ISM_FRAGE_MIN_CHARS`=12),
+  **pol_zu_lang** (info, > `ISM_POL_MAX_CHARS`=60), faktor_unbesetzt) mit
+  `run_ism_checks(fb)` und `ism_issues_for_payload(dict)` — Strukturfehler
+  werden als `ISM_JSON_INVALID`-Issue mit `code_detail.fields` gemeldet, nie
+  als Exception (D1=A). `run_ism_quality_check(text)` delegiert dorthin.
+- `quality_check.serialize_issues`: `checks_run` für `ism_fragebogen` =
+  `ISM_CHECKS_RUN` (7) statt Registry-Länge.
+- `api/ism.py`: neu `POST /api/ism/check` (`{fragebogen: any}` → 200 mit
+  `serialize_issues`-Format, auch bei ungültiger Struktur);
+  `POST /api/ism/xml` liefert zusätzlich `quality_check` auf genau dem
+  exportierten Stand (S4).
+
+### Frontend (D3–D5)
+- Neu `src/ism-check.jsx`: `useIsmLiveCheck` (POST `/ism/check`, Abbruch
+  laufender Requests, fehlertolerant), `issuesForItem`, `exportNeedsConfirm`,
+  `confirmExportText`.
+- `P6.jsx`: gelber Kasten ersetzt durch read-only `QualityCheckPanel` unter
+  der Vorschau (grüner Status „alle 7 Checks bestanden"). Check-Trigger
+  (D4=B): Blur von Frage/Polen/Begrüßung/Verabschiedung, Item hinzufügen/
+  löschen, Export. Export: bei critical/warning Bestätigungsdialog, kein
+  Blockieren (D3=A). Item-Bezug: `IsmItemEditor` mit `issues`/`focused`
+  (Markierung + „n Hinweise"), Klick auf ein Issue scrollt zum Item
+  (`QualityCheckPanel.onFocusItem`).
+- `qa.jsx`: `QualityCheckPanel` optional `onFocusItem`; Styles
+  `.qc-item-link`, `.ism-item-flagged/-critical/-focus/-marker`.
+
+### Tests
+- `test_ism.py` + 9 (Katalog/`checks_run`, neue Regeln, Endpoint, Export
+  mit QC); `frontend/tests/ism_live_check.test.jsx` (8). Jest 124 passed;
+  ESLint 0 Fehler; ruff sauber.
+
+---
+
 ## [v19.28] — Thematischer Entlassbericht: Fallformel, Struktur-Schalter, Testwerte-Vollständigkeit (2026-09-22)
 
 Basis: `v19_QA_v02` @ `1bcce0f`. Ein Patch (Backend + Frontend, `systelios.js`

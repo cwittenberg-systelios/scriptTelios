@@ -41,7 +41,7 @@ class TestRunVerlaufStage1:
 
     @pytest.mark.asyncio
     async def test_erfolg_ersetzt_text_und_baut_audit(self):
-        from app.api.jobs import _run_verlauf_stage1
+        from app.services.stage1 import _run_verlauf_stage1
 
         async def _fake(**kwargs):
             return dict(_SUMMARY_RESULT)
@@ -62,7 +62,7 @@ class TestRunVerlaufStage1:
 
     @pytest.mark.asyncio
     async def test_exception_faellt_auf_original_zurueck(self):
-        from app.api.jobs import _run_verlauf_stage1
+        from app.services.stage1 import _run_verlauf_stage1
 
         async def _boom(**kwargs):
             raise RuntimeError("Ollama down")
@@ -82,7 +82,7 @@ class TestRunVerlaufStage1:
 
     @pytest.mark.asyncio
     async def test_fremder_workflow_liefert_original_ohne_audit(self):
-        from app.api.jobs import _run_verlauf_stage1
+        from app.services.stage1 import _run_verlauf_stage1
         text, audit = await _run_verlauf_stage1(
             workflow="dokumentation",   # nicht in Verlauf-Whitelist
             verlaufsdoku_text="kurz",
@@ -98,7 +98,7 @@ class TestRunTranscriptStage1:
 
     @pytest.mark.asyncio
     async def test_erfolg_ersetzt_text_und_persistiert_summary(self):
-        from app.api.jobs import _run_transcript_stage1
+        from app.services.stage1 import _run_transcript_stage1
 
         async def _fake(**kwargs):
             return dict(_SUMMARY_RESULT)
@@ -118,7 +118,7 @@ class TestRunTranscriptStage1:
 
     @pytest.mark.asyncio
     async def test_exception_behaelt_rohtranskript(self):
-        from app.api.jobs import _run_transcript_stage1
+        from app.services.stage1 import _run_transcript_stage1
 
         async def _boom(**kwargs):
             raise ValueError("kaputt")
@@ -139,7 +139,7 @@ class TestRunTranscriptStage1:
 
     @pytest.mark.asyncio
     async def test_kurzes_transkript_skip_mit_audit_grund(self):
-        from app.api.jobs import _run_transcript_stage1
+        from app.services.stage1 import _run_transcript_stage1
         short = "Wort " * 100  # unter 2800
         text, summary, audit = await _run_transcript_stage1(
             workflow="dokumentation",

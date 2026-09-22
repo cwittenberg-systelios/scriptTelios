@@ -334,108 +334,189 @@ def validate_ism_payload(
     return fb, []
 
 
-def run_ism_quality_check(text: str) -> list:
-    """A3: Struktureller QC fuer den ISM-Workflow (ersetzt die Fliesstext-
-    Checks). `text` ist das persistierte result_text (JSON-String).
+# ── v19.29: Regelkatalog des ISM-QC ──────────────────────────────────────────
+# Jede Regel ist eine Funktion fb -> list[QualityIssue]; ISM_CHECKS ist der
+# Katalog in Ausfuehrungsreihenfolge (analog quality_check.CHECK_REGISTRY).
+# len(ISM_CHECKS) liefert `checks_run` fuer die Status-Meldung im Frontend.
+# Die Regeln laufen sowohl nach der Generierung (run_job -> quality_check-
+# Dispatch) als auch live auf dem editierten Stand (POST /api/ism/check).
 
-    Rueckgabe: list[QualityIssue] (Import lazy - quality_check importiert
-    dieses Modul, wir vermeiden den Zyklus zur Modul-Ladezeit).
-    """
+# D2: Schwellen als Konstanten - anpassen, falls das SNS ein anderes
+# Label-Limit hat. ISM_FRAGE_MIN_CHARS liegt bewusst ueber dem Pydantic-
+# min_length=5 (das faengt nur Leerstrings ab): eine Selbstauskunft unter
+# 12 Zeichen ist beim Editieren stehen geblieben ("Heute ...").
+ISM_FRAGE_MIN_CHARS = 12
+ISM_POL_MAX_CHARS = 60
+
+
+def _qi(code, severity, message, repair_hint, code_detail=None):
     from app.services.quality_check import QualityIssue
+    return QualityIssue(code=code, severity=severity, message=message,
+                        repair_hint=repair_hint, code_detail=code_detail)
 
-    issues: list[QualityIssue] = []
-    try:
-        data = json.loads(text)
-        fb = IsmFragebogen.model_validate(data)
-    except (json.JSONDecodeError, ValidationError) as e:
-        issues.append(QualityIssue(
-            code="ISM_JSON_INVALID",
-            severity="critical",
-            message=(
-                "Der Fragebogen konnte nicht als valides JSON gelesen werden - "
-                "Vorschau und XML-Export sind nicht möglich."
-            ),
-            repair_hint=(
-                "Gib den Fragebogen als valides JSON-Objekt mit den Feldern "
-                "begruessung, verabschiedung und items zurück."
-            ),
-            code_detail={"error": str(e)[:300]},
-        ))
-        return issues
 
-    # Pol-Labels: leere oder identische Pole machen den Slider unbrauchbar.
+def _rule_pole_identisch(fb: IsmFragebogen) -> list:
+    """Leere oder identische Pole machen den Slider unbrauchbar."""
+    issues = []
     for i, item in enumerate(fb.items):
         if item.pol_min.strip().lower() == item.pol_max.strip().lower():
-            issues.append(QualityIssue(
-                code="ISM_POLE_IDENTISCH",
-                severity="warning",
-                message=(
-                    f"Item {i + 1}: min- und max-Label sind identisch "
-                    f"('{item.pol_min[:60]}') - der Slider hat keine Richtung."
-                ),
-                repair_hint=(
-                    "Formuliere zwei unterscheidbare Pol-Labels: links "
-                    "validierend/einladend (Wert 0), rechts "
-                    "ressourcenbestätigend (Wert 100)."
-                ),
-                code_detail={"item_index": i, "frage": item.frage[:120]},
+            issues.append(_qi(
+                "ISM_POLE_IDENTISCH", "warning",
+                f"Item {i + 1}: min- und max-Label sind identisch "
+                f"('{item.pol_min[:60]}') - der Slider hat keine Richtung.",
+                "Formuliere zwei unterscheidbare Pol-Labels: links "
+                "validierend/einladend (Wert 0), rechts "
+                "ressourcenbestätigend (Wert 100).",
+                {"item_index": i, "frage": item.frage[:120]},
             ))
+    return issues
 
-    # Wir-Form: Items sind Selbstauskuenfte des Klienten in Ich-Perspektive.
+
+def _rule_wir_form(fb: IsmFragebogen) -> list:
+    """Items sind Selbstauskuenfte des Klienten in Ich-Perspektive."""
+    issues = []
     for i, item in enumerate(fb.items):
         joined = f"{item.frage} {item.pol_min} {item.pol_max}"
         if _WIR_FORM_RE.search(joined):
-            issues.append(QualityIssue(
-                code="ISM_WIR_FORM",
-                severity="warning",
-                message=(
-                    f"Item {i + 1} enthält Wir-/Uns-Formulierungen - "
-                    "ISM-Items sind Selbstauskünfte in Ich-Perspektive."
-                ),
-                repair_hint=(
-                    "Formuliere das Item in der Ich-Perspektive des Klienten "
-                    "('Heute konnte ich ...'), ohne Wir-Form."
-                ),
-                code_detail={"item_index": i, "frage": item.frage[:120]},
+            issues.append(_qi(
+                "ISM_WIR_FORM", "warning",
+                f"Item {i + 1} enthält Wir-/Uns-Formulierungen - "
+                "ISM-Items sind Selbstauskünfte in Ich-Perspektive.",
+                "Formuliere das Item in der Ich-Perspektive des Klienten "
+                "('Heute konnte ich ...'), ohne Wir-Form.",
+                {"item_index": i, "frage": item.frage[:120]},
             ))
+    return issues
 
-    # Duplikate: identische Fragen doppelt.
+
+def _rule_item_duplikat(fb: IsmFragebogen) -> list:
+    issues = []
     seen: dict[str, int] = {}
     for i, item in enumerate(fb.items):
         key = item.frage.strip().lower()
         if key in seen:
-            issues.append(QualityIssue(
-                code="ISM_ITEM_DUPLIKAT",
-                severity="warning",
-                message=(
-                    f"Item {i + 1} ist ein Duplikat von Item {seen[key] + 1}."
-                ),
-                repair_hint="Ersetze das Duplikat durch ein eigenständiges Item.",
-                code_detail={"item_index": i, "duplicate_of": seen[key]},
+            issues.append(_qi(
+                "ISM_ITEM_DUPLIKAT", "warning",
+                f"Item {i + 1} ist ein Duplikat von Item {seen[key] + 1}.",
+                "Ersetze das Duplikat durch ein eigenständiges Item.",
+                {"item_index": i, "duplicate_of": seen[key]},
             ))
         else:
             seen[key] = i
+    return issues
 
-    # Faktorabdeckung: rein informativ (leere Faktoren sind erlaubt, D1c).
+
+def _rule_frage_kurz(fb: IsmFragebogen) -> list:
+    """v19.29 (D2): beim Editieren entstandene Rumpf-Fragen."""
+    issues = []
+    for i, item in enumerate(fb.items):
+        if len(item.frage.strip()) < ISM_FRAGE_MIN_CHARS:
+            issues.append(_qi(
+                "ISM_FRAGE_KURZ", "warning",
+                f"Item {i + 1}: Frage ist leer oder zu kurz ('{item.frage.strip()[:40]}').",
+                "Formuliere eine vollständige Selbstauskunft in Ich-Perspektive.",
+                {"item_index": i, "frage": item.frage[:120]},
+            ))
+    return issues
+
+
+def _rule_pol_zu_lang(fb: IsmFragebogen) -> list:
+    """v19.29 (D2): Pol-Labels sind Slider-Beschriftungen - lange Labels
+    werden im SNS abgeschnitten oder umbrochen. Info."""
+    issues = []
+    for i, item in enumerate(fb.items):
+        lang = [lbl for lbl in (item.pol_min, item.pol_max) if len(lbl.strip()) > ISM_POL_MAX_CHARS]
+        if lang:
+            issues.append(_qi(
+                "ISM_POL_ZU_LANG", "info",
+                f"Item {i + 1}: Pol-Label länger als {ISM_POL_MAX_CHARS} Zeichen "
+                f"({max(len(x.strip()) for x in lang)}) - im SNS-Slider ggf. abgeschnitten.",
+                "Pol-Label kürzen; die Aussage gehört in die Frage.",
+                {"item_index": i, "max_chars": ISM_POL_MAX_CHARS},
+            ))
+    return issues
+
+
+def _rule_faktor_unbesetzt(fb: IsmFragebogen) -> list:
+    """Rein informativ (leere Faktoren sind erlaubt, D1c)."""
     covered = sorted({it.faktor_id for it in fb.items})
     uncovered = sorted(ISM_FAKTOR_IDS - set(covered))
-    if uncovered:
-        namen = ", ".join(ISM_FAKTOR_BY_ID[i]["name"] for i in uncovered)
-        issues.append(QualityIssue(
-            code="ISM_FAKTOR_UNBESETZT",
-            severity="info",
-            message=(
-                f"Ohne Items geblieben: {namen}. Zulässig, wenn das Gespräch "
-                "dafür keinen tragfähigen Inhalt liefert."
-            ),
-            repair_hint=(
-                "Nur ergänzen, wenn das Gespräch belegbaren Inhalt für diese "
-                "Faktoren enthält - nichts erfinden."
-            ),
-            code_detail={"uncovered_factor_ids": uncovered},
-        ))
+    if not uncovered:
+        return []
+    namen = ", ".join(ISM_FAKTOR_BY_ID[i]["name"] for i in uncovered)
+    return [_qi(
+        "ISM_FAKTOR_UNBESETZT", "info",
+        f"Ohne Items geblieben: {namen}. Zulässig, wenn das Gespräch "
+        "dafür keinen tragfähigen Inhalt liefert.",
+        "Nur ergänzen, wenn das Gespräch belegbaren Inhalt für diese "
+        "Faktoren enthält - nichts erfinden.",
+        {"uncovered_factor_ids": uncovered},
+    )]
 
+
+# (name, funktion, codes) - json_valid ist die implizite erste Regel
+# (run_ism_quality_check / ism_issues_for_payload), zaehlt aber mit.
+ISM_CHECKS: tuple[tuple[str, Any, tuple[str, ...]], ...] = (
+    ("json_valid", None, ("ISM_JSON_INVALID",)),
+    ("pole_identisch", _rule_pole_identisch, ("ISM_POLE_IDENTISCH",)),
+    ("wir_form", _rule_wir_form, ("ISM_WIR_FORM",)),
+    ("item_duplikat", _rule_item_duplikat, ("ISM_ITEM_DUPLIKAT",)),
+    ("frage_kurz", _rule_frage_kurz, ("ISM_FRAGE_KURZ",)),
+    ("pol_zu_lang", _rule_pol_zu_lang, ("ISM_POL_ZU_LANG",)),
+    ("faktor_unbesetzt", _rule_faktor_unbesetzt, ("ISM_FAKTOR_UNBESETZT",)),
+)
+ISM_CHECKS_RUN = len(ISM_CHECKS)
+
+
+def _json_invalid_issue(detail: str, *, fields: Optional[list] = None):
+    return _qi(
+        "ISM_JSON_INVALID", "critical",
+        "Der Fragebogen konnte nicht als valides JSON gelesen werden - "
+        "Vorschau und XML-Export sind nicht möglich.",
+        "Gib den Fragebogen als valides JSON-Objekt mit den Feldern "
+        "begruessung, verabschiedung und items zurück.",
+        {"error": detail[:300], **({"fields": fields} if fields else {})},
+    )
+
+
+def run_ism_checks(fb: IsmFragebogen) -> list:
+    """Alle Regeln aus ISM_CHECKS auf einem validen Fragebogen."""
+    issues: list = []
+    for _name, fn, _codes in ISM_CHECKS:
+        if fn is not None:
+            issues.extend(fn(fb))
     return issues
+
+
+def ism_issues_for_payload(data: Any) -> list:
+    """v19.29: QC fuer ein (ggf. im Frontend editiertes) Fragebogen-Dict.
+    Strukturfehler werden als ISM_JSON_INVALID-Issue gemeldet (mit den
+    Pydantic-Feldfehlern in code_detail.fields), nicht als Exception -
+    der Live-Check darf beim Editieren nicht abbrechen (D1=A)."""
+    if not isinstance(data, dict):
+        return [_json_invalid_issue(f"kein Objekt (Typ: {type(data).__name__})")]
+    try:
+        fb = IsmFragebogen.model_validate(data)
+    except ValidationError as e:
+        fields = [
+            {"loc": ".".join(str(p) for p in err.get("loc", ())), "msg": str(err.get("msg"))}
+            for err in e.errors()[:8]
+        ]
+        return [_json_invalid_issue("; ".join(f"{f['loc']}: {f['msg']}" for f in fields), fields=fields)]
+    return run_ism_checks(fb)
+
+
+def run_ism_quality_check(text: str) -> list:
+    """A3: Struktureller QC fuer den ISM-Workflow (ersetzt die Fliesstext-
+    Checks). `text` ist das persistierte result_text (JSON-String).
+    Rueckgabe: list[QualityIssue] (Import lazy - quality_check importiert
+    dieses Modul, wir vermeiden den Zyklus zur Modul-Ladezeit).
+    """
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        return [_json_invalid_issue(str(e))]
+    return ism_issues_for_payload(data)
 
 
 # ── A1: Deterministischer SNS-XML-Renderer ───────────────────────────────────

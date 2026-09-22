@@ -2294,7 +2294,13 @@ def serialize_issues(
 
     # v19.27 (D8): Anzahl der gelaufenen Regeln fuer die Status-Meldung
     # "alle n Checks bestanden" im Frontend. Additiv, Schema-Version bleibt 1.
-    summary["checks_run"] = len(CHECK_REGISTRY)
+    if workflow == "ism_fragebogen":
+        # v19.29: ISM laeuft ueber den Sonderpfad ism.ISM_CHECKS, nicht ueber
+        # die Registry.
+        from app.services.ism import ISM_CHECKS_RUN
+        summary["checks_run"] = ISM_CHECKS_RUN
+    else:
+        summary["checks_run"] = len(CHECK_REGISTRY)
     return {
         "version": QUALITY_CHECK_SCHEMA_VERSION,
         "workflow": workflow,

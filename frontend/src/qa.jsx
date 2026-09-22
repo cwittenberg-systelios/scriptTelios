@@ -79,6 +79,9 @@ function QualityCheckPanel({
   repairBusy = false,
   repairError = null,
   readOnly = false,
+  // v19.29: Item-Bezug (ISM): Issues mit code_detail.item_index werden
+  // klickbar und rufen onFocusItem(index) auf.
+  onFocusItem = null,
 }) {
   if (!data || !Array.isArray(data.issues)) {
     return null;
@@ -140,7 +143,14 @@ function QualityCheckPanel({
                 <span className="qc-marker" />
               )}
               <span className="qc-msg">
-                {iss.message}
+                {onFocusItem && iss.code_detail && Number.isInteger(iss.code_detail.item_index) ? (
+                  <button
+                    type="button"
+                    className="qc-item-link"
+                    title="Zum Item springen"
+                    onClick={() => onFocusItem(iss.code_detail.item_index)}
+                  >{iss.message}</button>
+                ) : iss.message}
                 <QcPairsDetail pairs={iss.code_detail && iss.code_detail.pairs} />
                 <QcFehlendDetail fehlend={iss.code_detail && iss.code_detail.fehlend} />
               </span>
