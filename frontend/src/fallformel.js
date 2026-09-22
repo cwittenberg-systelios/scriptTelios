@@ -84,4 +84,91 @@ function issueLabel(issue) {
   return `${sev} ${issue.detail || issue.type || ""}`.trim();
 }
 
-export { MAX_THEMEN, KEIN_MUSTER_SATZ, splitSections, parseThemen, themaTitel, applyThemenAuswahl, issueLabel };
+// ── v19.28.1: strukturierter Editor (kein Markdown-Editing durch die Therapeut:in) ──
+//
+// Die Fallformel wird beim Empfang EINMAL in eine Struktur geparst, im UI
+// feldweise editiert und erst beim Senden wieder in dasselbe ###-Markdown
+// serialisiert, das das Backend (select_themen/parse_themenkandidaten, QC-
+// Wendepunkt-Regex "- <Modalitaet>: ...") versteht. Abgewaehlte Themen
+// werden beim Senden weggelassen (Entscheidung 2026-09-22).
+
+const MODALITAETEN = ["Einzeltherapie", "Gruppentherapie", "Nonverbale Therapien"];
+const KEINE_WENDEPUNKTE = "keine Wendepunkte dokumentiert";
+const MOD_LINE_RE = /^\s*[-*]\s*(Einzeltherapie|Gruppentherapie|Nonverbale Therapien?)\s*:\s*(.*)$/i;
+const BELEGE_RE = /\bBelege?\s*:\s*/i;
+
+function _norm(s) { return String(s || "").replace(/\s+/g, " ").trim(); }
+
+// "**Titel** – Beschreibung … Belege: (Einzel 23.12.), (…)" -> {titel, desc, belege}
+function parseThemaItem(item) {
+  let rest = _norm(item);
+  let titel = "";
+  const m = /^\*\*(.+?)\*\*\s*(?:[–-]\s*)?/.exec(rest);
+  if (m) { titel = m[1].trim(); rest = rest.slice(m[0].length); }
+  let belege = "";
+  const b = BELEGE_RE.exec(rest);
+  if (b) { belege = rest.slice(b.index + b[0].length).trim(); rest = rest.slice(0, b.index).trim(); }
+  if (!titel) {
+    // ohne Fettdruck: erster Halbsatz bis " – " als Titel
+    const parts = rest.split(/\s[–-]\s/);
+    titel = parts[0].trim(); rest = parts.slice(1).join(" – ").trim();
+  }
+  return { titel, desc: rest.replace(/\s*[–-]\s*$/, "").trim(), belege };
+}
+
+function _modKey(name) {
+  const n = name.toLowerCase();
+  if (n.startsWith("einzel")) return MODALITAETEN[0];
+  if (n.startsWith("gruppe")) return MODALITAETEN[1];
+  return MODALITAETEN[2];
+}
+
+// Markdown -> Struktur. Unbekannte Abschnitte bleiben in `extra` erhalten.
+function parseFallformel(text) {
+  const sec = splitSections(text);
+  const wendepunkte = Object.fromEntries(MODALITAETEN.map(m => [m, []]));
+  for (const line of (sec.get("Wendepunkte je Modalität") || "").split("\n")) {
+    const m = MOD_LINE_RE.exec(line);
+    if (!m) continue;
+    const body = _norm(m[2]);
+    if (!body || body.toLowerCase().includes(KEINE_WENDEPUNKTE.toLowerCase())) continue;
+    wendepunkte[_modKey(m[1])].push(...body.split(/;\s+/).map(_norm).filter(Boolean));
+  }
+  const extra = {};
+  for (const [k, v] of sec) if (!SECTION_ORDER.includes(k)) extra[k] = v;
+  return {
+    auftrag: _norm(sec.get("Auftrag") || ""),
+    themen: parseThemen(text).map(parseThemaItem),
+    wendepunkte,
+    symptom: _norm(sec.get("Symptomveränderung") || ""),
+    offen: _norm(sec.get("Offene Themen") || ""),
+    extra,
+  };
+}
+
+// Struktur + Auswahl (Indizes in Berichtsreihenfolge) -> Markdown fuers Backend.
+function serializeFallformel(ff, selection) {
+  const sel = (selection || []).filter(i => Number.isInteger(i) && ff.themen[i]).slice(0, MAX_THEMEN);
+  const th = sel.length
+    ? sel.map((i, n) => {
+        const t = ff.themen[i];
+        const titel = _norm(t.titel) || `Thema ${n + 1}`;
+        return `${n + 1}. **${titel}**` + (_norm(t.desc) ? ` – ${_norm(t.desc)}` : "") + (_norm(t.belege) ? ` Belege: ${_norm(t.belege)}` : "");
+      }).join("\n")
+    : KEIN_MUSTER_SATZ;
+  const wp = MODALITAETEN.map(m => {
+    const list = (ff.wendepunkte[m] || []).map(_norm).filter(Boolean);
+    return `- ${m}: ${list.length ? list.join("; ") : KEINE_WENDEPUNKTE}`;
+  }).join("\n");
+  const parts = [
+    `### Auftrag\n${_norm(ff.auftrag)}`,
+    `### Themenkandidaten\n${th}`,
+    `### Wendepunkte je Modalität\n${wp}`,
+    `### Symptomveränderung\n${_norm(ff.symptom)}`,
+    `### Offene Themen\n${_norm(ff.offen)}`,
+  ];
+  for (const [k, v] of Object.entries(ff.extra || {})) parts.push(`### ${k}\n${String(v).trim()}`);
+  return parts.join("\n\n").trim();
+}
+
+export { MAX_THEMEN, KEIN_MUSTER_SATZ, MODALITAETEN, KEINE_WENDEPUNKTE, splitSections, parseThemen, themaTitel, applyThemenAuswahl, issueLabel, parseThemaItem, parseFallformel, serializeFallformel };

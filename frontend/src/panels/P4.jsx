@@ -12,7 +12,7 @@ import { P_ENTL, P_ENTL_THEMATISCH } from "../prompt-defaults.jsx";
 import { RepairBundle, ResultVersionsTabs } from "../qa.jsx";
 import { Card, Dropzone, Output, PromptEditor, JobModelPicker, copyFormatted, FeedbackButton, StyleSourceCard } from "../ui.jsx";
 import { useWorkflowRun, WorkflowActionBar } from "../workflow-run.jsx";
-import { MAX_THEMEN, applyThemenAuswahl, issueLabel, parseThemen, themaTitel } from "../fallformel.js";
+import { MAX_THEMEN, MODALITAETEN, issueLabel, parseFallformel, serializeFallformel } from "../fallformel.js";
 
 const STRUKTUR_MODALITAET = "modalitaet";
 const STRUKTUR_THEMATISCH = "thematisch";
@@ -25,8 +25,15 @@ const P4_DRAFT_DEFAULT = {
   // Antragsvorlage (Backend-Extraktion, Kandidaten-Konsens).
   // v19.28: Struktur-Schalter (Default Status quo) + editierte Fallformel
   // des letzten Laufs (fuer F5 / Rerun); Auswahl der Themen als Indizes.
-  struktur: STRUKTUR_MODALITAET, fallformelText: "", fallformelSel: [],
+  // v19.28.1: strukturiert statt Markdown-Text (die Therapeut:in editiert
+  // Felder, nie das Markdown - Serialisierung erst beim Senden).
+  struktur: STRUKTUR_MODALITAET, fallformel: null, fallformelSel: [], fallformelProposal: "",
 };
+
+const EMPTY_FF = () => ({
+  auftrag: "", themen: [], symptom: "", offen: "", extra: {},
+  wendepunkte: Object.fromEntries(MODALITAETEN.map(m => [m, []])),
+});
 
 // Segmented Control fuer den Struktur-Schalter (Muster: KlientControls).
 function StrukturSwitch({ value, onChange, disabled }) {
@@ -51,54 +58,145 @@ function StrukturSwitch({ value, onChange, disabled }) {
   );
 }
 
-// Fallformel-Card: Themenkandidaten (Checkboxen, max. MAX_THEMEN), Volltext
-// editierbar, Stage-1b-Signale, Rerun-Button.
-function FallformelCard({ text, audit, selection, onSelection, onText, onRerun, rerunDisabled, rerunTitle, busy }) {
-  const themen = useMemo(() => parseThemen(text), [text]);
+// Fallformel-Card (v19.28.1): strukturierter Editor. Jeder Abschnitt wird
+// einzeln gerendert und feldweise editiert; Themen werden per Nummernkreis
+// an-/abgewaehlt (Nummer = Reihenfolge im Bericht, max. MAX_THEMEN) und mit
+// Pfeilen geordnet. Abgewaehlte Themen bleiben sichtbar, gehen beim Senden
+// aber NICHT mit (Entscheidung 2026-09-22). Kein Markdown im UI.
+const _lbl = { fontSize:11, letterSpacing:"0.06em", textTransform:"uppercase", color:"var(--st-text-soft)", fontWeight:600 };
+const _ib = { border:"1px solid var(--st-gray-border)", background:"transparent", color:"var(--st-text-soft)", borderRadius:3, width:24, height:24, fontSize:12, cursor:"pointer", display:"grid", placeItems:"center", padding:0 };
+const _inp = { width:"100%", boxSizing:"border-box", fontFamily:"inherit", fontSize:13, padding:"4px 6px", border:"1px solid var(--st-gray-border)", borderRadius:3, background:"transparent", color:"inherit" };
+
+function FallformelCard({ ff, proposalText, audit, selection, onChange, onSelection, onReset, onRerun, rerunDisabled, rerunTitle, busy }) {
   const issues = (audit && audit.issues) || [];
   const applied = !!(audit && audit.applied);
+  const themen = ff.themen || [];
+  const sel = (selection || []).filter(i => themen[i]);
+  const rank = (i) => sel.indexOf(i);
+  const update = (patch) => onChange({ ...ff, ...patch });
+  const setThema = (i, patch) => update({ themen: themen.map((t, k) => (k === i ? { ...t, ...patch } : t)) });
   const toggle = (i) => {
-    const has = selection.includes(i);
-    if (has) onSelection(selection.filter(x => x !== i));
-    else if (selection.length < MAX_THEMEN) onSelection([...selection, i]);
+    if (sel.includes(i)) onSelection(sel.filter(x => x !== i));
+    else if (sel.length < MAX_THEMEN) onSelection([...sel, i]);
   };
+  const move = (i, d) => {
+    const j = i + d; if (j < 0 || j >= themen.length) return;
+    const arr = themen.slice(); [arr[i], arr[j]] = [arr[j], arr[i]];
+    // Auswahl folgt den Indizes mit
+    const remap = (x) => (x === i ? j : x === j ? i : x);
+    update({ themen: arr }); onSelection(sel.map(remap));
+  };
+  const remove = (i) => {
+    update({ themen: themen.filter((_, k) => k !== i) });
+    onSelection(sel.filter(x => x !== i).map(x => (x > i ? x - 1 : x)));
+  };
+  const addThema = () => {
+    update({ themen: [...themen, { titel: "", desc: "", belege: "" }] });
+    if (sel.length < MAX_THEMEN) onSelection([...sel, themen.length]);
+  };
+  const setWp = (mod, list) => update({ wendepunkte: { ...ff.wendepunkte, [mod]: list } });
+  const nWp = MODALITAETEN.reduce((a, m) => a + ((ff.wendepunkte || {})[m] || []).filter(x => x.trim()).length, 0);
+  const preview = serializeFallformel(ff, sel);
+
   return (
-    <Card num="H" title="Fallformel (Gerüst des thematischen Berichts)" badge="opt" open={true} hasContent={!!text}>
+    <Card num="H" title="Fallformel (Gerüst des thematischen Berichts)" badge="opt" open={true} hasContent={themen.length > 0}>
       {!applied && (
         <div className="info-note">
-          Für diesen Lauf wurde keine Fallformel erstellt{audit && audit.fallback_reason ? ` (${audit.fallback_reason})` : ""} – der Bericht wurde thematisch ohne Gerüst geschrieben.
+          Für diesen Lauf wurde keine Fallformel erstellt{audit && audit.fallback_reason ? ` (${audit.fallback_reason})` : ""} – der Bericht wurde thematisch ohne Gerüst geschrieben. Sie können unten selbst ein Gerüst anlegen.
         </div>
       )}
       {applied && (
-        <div className="info-note" style={{marginBottom:8}}>
-          {audit.source === "therapeut" ? "Von Ihnen bestätigte Fallformel." : "Vom Modell vorgeschlagen."} Wählen Sie bis zu {MAX_THEMEN} Themen (je weniger, desto klarer der rote Faden), passen Sie den Text an und generieren Sie neu.
+        <div className="info-note" style={{marginBottom:10}}>
+          {audit.source === "therapeut" ? "Von Ihnen bestätigte Fallformel." : "Vom Modell vorgeschlagen."} Klicken Sie auf die Nummer, um ein Thema zu wählen oder abzuwählen (max. {MAX_THEMEN}; die Nummer ist die Reihenfolge im Bericht). Texte lassen sich direkt ändern.
         </div>
       )}
-      {themen.length > 0 && (
-        <div style={{marginBottom:10}}>
-          <label className="field-label">Themenkandidaten</label>
-          {themen.map((item, i) => (
-            <label key={i} style={{display:"flex", gap:8, alignItems:"flex-start", padding:"4px 0", cursor:"pointer"}}>
-              <input type="checkbox" checked={selection.includes(i)} onChange={() => toggle(i)}
-                disabled={!selection.includes(i) && selection.length >= MAX_THEMEN}
-                aria-label={`Thema ${i + 1}: ${themaTitel(item)}`} />
-              <span style={{fontSize:13}}><strong>{themaTitel(item)}</strong>{item.includes("–") ? " – " + item.split("–").slice(1).join("–").trim() : ""}</span>
-            </label>
-          ))}
-        </div>
-      )}
-      <label className="field-label">Fallformel (editierbar)</label>
-      <textarea rows={12} value={text} onChange={e => onText(e.target.value)} aria-label="Fallformel" style={{fontFamily:"inherit", fontSize:13}} />
-      {issues.length > 0 && (
+
+      <div style={{marginBottom:12}}>
+        <div style={_lbl}>Auftrag <span style={{fontWeight:400, textTransform:"none", letterSpacing:0}}>· Teil 1</span></div>
+        <textarea rows={2} style={_inp} aria-label="Auftrag" value={ff.auftrag} onChange={e => update({ auftrag: e.target.value })} placeholder="Anliegen des Klienten zu Beginn …" />
+      </div>
+
+      <div style={{marginBottom:12}}>
+        <div style={{..._lbl, display:"flex", gap:8}}>Themenkandidaten <span style={{fontWeight:400, textTransform:"none", letterSpacing:0, marginLeft:"auto"}}>{sel.length} von {themen.length} gewählt (max. {MAX_THEMEN}) · Teil 2</span></div>
+        {themen.map((t, i) => {
+          const on = sel.includes(i);
+          return (
+            <div key={i} data-testid={`thema-${i}`} style={{display:"grid", gridTemplateColumns:"24px 1fr auto", gap:10, alignItems:"start", padding:"8px 10px", border:"1px solid " + (on ? "var(--st-red)" : "var(--st-gray-border)"), borderRadius:4, marginTop:6, opacity: on ? 1 : 0.6}}>
+              <button type="button" role="checkbox" aria-checked={on} aria-label={`Thema ${i + 1}${t.titel ? ": " + t.titel : ""}`}
+                title={on ? "Abwählen" : (sel.length >= MAX_THEMEN ? `Höchstens ${MAX_THEMEN} Themen` : "Wählen")}
+                onClick={() => toggle(i)} disabled={!on && sel.length >= MAX_THEMEN}
+                style={{width:24, height:24, borderRadius:"50%", fontSize:11, fontWeight:700, cursor:"pointer", padding:0, marginTop:2,
+                  background: on ? "var(--st-red)" : "transparent", color: on ? "white" : "var(--st-text-soft)",
+                  border: "1.5px solid " + (on ? "var(--st-red)" : "var(--st-text-soft)")}}>
+                {on ? rank(i) + 1 : ""}
+              </button>
+              <div style={{display:"grid", gap:4}}>
+                <input type="text" style={{..._inp, fontWeight:600}} aria-label={`Titel Thema ${i + 1}`} value={t.titel} placeholder="Kurztitel des Musters" onChange={e => setThema(i, { titel: e.target.value })} />
+                <textarea rows={2} style={_inp} aria-label={`Beschreibung Thema ${i + 1}`} value={t.desc} placeholder="Was ist das Muster, woher kommt es laut Protokoll?" onChange={e => setThema(i, { desc: e.target.value })} />
+                <input type="text" style={{..._inp, fontFamily:"ui-monospace, Menlo, monospace", fontSize:11.5, color:"var(--st-text-soft)"}} aria-label={`Belege Thema ${i + 1}`} value={t.belege} placeholder="Belege: (Einzel 23.12.), …" onChange={e => setThema(i, { belege: e.target.value })} />
+              </div>
+              <div style={{display:"flex", flexDirection:"column", gap:4}}>
+                <button type="button" style={_ib} title="Nach oben" aria-label={`Thema ${i + 1} nach oben`} disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+                <button type="button" style={_ib} title="Nach unten" aria-label={`Thema ${i + 1} nach unten`} disabled={i === themen.length - 1} onClick={() => move(i, 1)}>↓</button>
+                <button type="button" style={_ib} title="Thema entfernen" aria-label={`Thema ${i + 1} entfernen`} onClick={() => remove(i)}>×</button>
+              </div>
+            </div>
+          );
+        })}
+        <button type="button" className="btn-secondary" style={{marginTop:8, fontSize:12}} onClick={addThema}>+ Eigenes Thema hinzufügen</button>
+      </div>
+
+      <div style={{marginBottom:12}}>
+        <div style={_lbl}>Wendepunkte je Modalität <span style={{fontWeight:400, textTransform:"none", letterSpacing:0}}>· Teil 3</span></div>
+        {MODALITAETEN.map(mod => {
+          const list = (ff.wendepunkte || {})[mod] || [];
+          return (
+            <div key={mod} style={{display:"grid", gridTemplateColumns:"minmax(120px, 160px) 1fr", gap:"6px 12px", alignItems:"start", padding:"6px 0"}}>
+              <div style={{fontSize:12.5, fontWeight:600, paddingTop:5}}>{mod}</div>
+              <div>
+                {list.length === 0 && <div style={{fontSize:12.5, color:"var(--st-text-soft)", fontStyle:"italic", padding:"5px 0"}}>keine Wendepunkte dokumentiert</div>}
+                {list.map((w, j) => (
+                  <div key={j} style={{display:"flex", gap:6, marginBottom:4}}>
+                    <input type="text" style={_inp} aria-label={`${mod} Wendepunkt ${j + 1}`} value={w} onChange={e => setWp(mod, list.map((x, k) => (k === j ? e.target.value : x)))} placeholder="Wendepunkt mit Datum …" />
+                    <button type="button" style={{..._ib, flex:"none"}} title="Zeile entfernen" aria-label={`${mod} Wendepunkt ${j + 1} entfernen`} onClick={() => setWp(mod, list.filter((_, k) => k !== j))}>×</button>
+                  </div>
+                ))}
+                <button type="button" className="btn-secondary" style={{fontSize:11.5, padding:"3px 8px"}} onClick={() => setWp(mod, [...list, ""])}>+ Wendepunkt</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{marginBottom:12}}>
+        <div style={_lbl}>Symptomveränderung <span style={{fontWeight:400, textTransform:"none", letterSpacing:0}}>· Teil 4 (Prozessreflexion und Testwerte kommen aus den Quellen)</span></div>
+        <textarea rows={2} style={_inp} aria-label="Symptomveränderung" value={ff.symptom} onChange={e => update({ symptom: e.target.value })} placeholder="Ausgangszustand → Endzustand laut Verlauf …" />
+      </div>
+      <div style={{marginBottom:12}}>
+        <div style={_lbl}>Offene Themen <span style={{fontWeight:400, textTransform:"none", letterSpacing:0}}>· Teil 5</span></div>
+        <textarea rows={2} style={_inp} aria-label="Offene Themen" value={ff.offen} onChange={e => update({ offen: e.target.value })} placeholder="Was laut Protokoll offen bleibt …" />
+      </div>
+
+      {(issues.length > 0 || sel.length === 0) && (
         <div className="field-note" style={{marginTop:6}}>
-          Prüfhinweise des Modells: {issues.map((it, i) => <div key={i}>{issueLabel(it)}</div>)}
+          {sel.length === 0 && <div>⚠ Kein Thema gewählt – Teil 2 wird als Themenübersicht ohne Muster geschrieben.</div>}
+          {issues.length > 0 && <div>Prüfhinweise des Modells: {issues.map((it, i) => <div key={i}>{issueLabel(it)}</div>)}</div>}
         </div>
       )}
-      <div style={{marginTop:10, textAlign:"right"}}>
+
+      <div style={{display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", marginTop:12}}>
+        <span style={{fontSize:12, color:"var(--st-text-soft)", marginRight:"auto"}}>
+          Gesendet werden {sel.length} {sel.length === 1 ? "Thema" : "Themen"}, {nWp} Wendepunkte. Belege in Klammern gehen nicht in den Bericht.
+        </span>
+        {proposalText && <button type="button" className="btn-secondary" onClick={onReset}>Vorschlag des Modells wiederherstellen</button>}
         <button className="btn-primary" type="button" onClick={onRerun} disabled={rerunDisabled || busy} title={rerunTitle}>
           Mit dieser Fallformel neu generieren
         </button>
       </div>
+      <details style={{marginTop:8}}>
+        <summary style={{fontSize:12, color:"var(--st-text-soft)", cursor:"pointer"}}>Vorschau: so geht die Fallformel an das Modell</summary>
+        <pre data-testid="ff-preview" style={{fontSize:11, whiteSpace:"pre-wrap", background:"var(--st-gray-light)", padding:8, borderRadius:3, overflowX:"auto"}}>{preview}</pre>
+      </details>
     </Card>
   );
 }
@@ -117,11 +215,11 @@ function P4({ toast, resumeJob, onResumed }) {
 
   // B2: Text-Felder ueber useDraftCache (Pattern aus P2/B1)
   const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p4", P4_DRAFT_DEFAULT);
-  const { styleText, fokus, prompt, struktur, fallformelText, fallformelSel } = draft;
+  const { styleText, fokus, prompt, struktur, fallformel, fallformelSel, fallformelProposal } = draft;
   const setStyleText  = useCallback(v => updateDraft({ styleText: v }),  [updateDraft]);
   const setFokus      = useCallback(v => updateDraft({ fokus: v }),      [updateDraft]);
   const setPrompt     = useCallback(v => updateDraft({ prompt: v }),     [updateDraft]);
-  const setFallformelText = useCallback(v => updateDraft({ fallformelText: v }), [updateDraft]);
+  const setFallformel     = useCallback(v => updateDraft({ fallformel: v }),     [updateDraft]);
   const setFallformelSel  = useCallback(v => updateDraft({ fallformelSel: v }),  [updateDraft]);
 
   // v19.28: Schalter tauscht den Prompt-Default mit - aber nur, wenn der
@@ -149,7 +247,9 @@ function P4({ toast, resumeJob, onResumed }) {
       const txt = j.fallformel_text || "";
       setFallformelAudit(j.fallformel_audit || null);
       if (txt) {
-        updateDraft({ fallformelText: txt, fallformelSel: parseThemen(txt).map((_, i) => i).slice(0, MAX_THEMEN) });
+        // v19.28.1: einmal parsen, danach nur noch Struktur (kein Markdown im UI)
+        const ff = parseFallformel(txt);
+        updateDraft({ fallformel: ff, fallformelProposal: txt, fallformelSel: ff.themen.map((_, i) => i).slice(0, MAX_THEMEN) });
       }
     },
   });
@@ -171,12 +271,15 @@ function P4({ toast, resumeJob, onResumed }) {
     });
   }
 
-  // Rerun mit der von der Therapeut:in gewaehlten/editierten Fallformel.
+  // Rerun mit der von der Therapeut:in gewaehlten/editierten Fallformel:
+  // Struktur -> Markdown erst hier; abgewaehlte Themen fallen weg.
   function rerunMitFallformel() {
-    const txt = applyThemenAuswahl(fallformelText, fallformelSel);
-    setFallformelText(txt);
-    setFallformelSel(parseThemen(txt).map((_, i) => i));
-    run(txt);
+    run(serializeFallformel(fallformel || EMPTY_FF(), fallformelSel || []));
+  }
+  function resetFallformel() {
+    if (!fallformelProposal) return;
+    const ff = parseFallformel(fallformelProposal);
+    updateDraft({ fallformel: ff, fallformelSel: ff.themen.map((_, i) => i).slice(0, MAX_THEMEN) });
   }
 
   const filesMissing = !verlauf || !bericht;
@@ -214,7 +317,7 @@ function P4({ toast, resumeJob, onResumed }) {
             placeholder="Beispiel-Entlassbericht einfügen ..."
           />
 
-          <Card num="E" title="Aufbau des Berichts" badge="opt" open={true} hasContent={thematisch}>
+          <Card num="E" title="Aufbau des Berichts" badge="opt" open={false} hasContent={thematisch}>
             <StrukturSwitch value={struktur} onChange={setStruktur} disabled={wr.busy} />
             <div className="field-note" style={{marginTop:8}}>
               {thematisch
@@ -258,15 +361,17 @@ function P4({ toast, resumeJob, onResumed }) {
           <Output text={wr.displayText} loading={wr.busy} jobId={wr.currentJobId} warn={wr.outWarn}
             onCopy={() => { copyFormatted(wr.displayText); toast("Kopiert"); }} />
 
-          {thematisch && (fallformelText || fallformelAudit) && (
+          {thematisch && (fallformel || fallformelAudit) && (
             <FallformelCard
-              text={fallformelText}
+              ff={fallformel || EMPTY_FF()}
+              proposalText={fallformelProposal}
               audit={fallformelAudit}
               selection={fallformelSel || []}
               onSelection={setFallformelSel}
-              onText={setFallformelText}
+              onChange={setFallformel}
+              onReset={resetFallformel}
               onRerun={rerunMitFallformel}
-              rerunDisabled={filesMissing || !(fallformelText || "").trim()}
+              rerunDisabled={filesMissing}
               rerunTitle={filesMissing ? filesTitle + " – Dateien nach Neuladen bitte erneut hochladen" : ""}
               busy={wr.busy}
             />
@@ -293,4 +398,4 @@ function P4({ toast, resumeJob, onResumed }) {
   );
 }
 
-export { P4, StrukturSwitch, FallformelCard, P4_DRAFT_DEFAULT };
+export { P4, StrukturSwitch, FallformelCard, P4_DRAFT_DEFAULT, EMPTY_FF };

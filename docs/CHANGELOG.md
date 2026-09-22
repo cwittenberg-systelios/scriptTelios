@@ -60,6 +60,29 @@ Editieren gingen unbemerkt ins XML. `checks_run` stand für ISM auf 34.
 
 ---
 
+## [v19.28.1] — Fallformel als strukturierter Editor (2026-09-22)
+
+Frontend-Patch auf v19.28 (`systelios.js` neu gebaut, kein Backend-Anteil).
+Entscheidungen: Feld E „Aufbau des Berichts" ist eingeklappt (optional);
+die Therapeut:in editiert nie Markdown (Drift-Risiko), sondern Felder;
+abgewaehlte Themen werden beim Senden weggelassen.
+
+- `src/fallformel.js`: `parseFallformel(text)` (Markdown → {auftrag,
+  themen[{titel, desc, belege}], wendepunkte{Einzel/Gruppe/Nonverbal: []},
+  symptom, offen, extra}) und `serializeFallformel(ff, selection)` (Struktur
+  + Auswahl → dasselbe `###`-Markdown, das das Backend versteht; Wendepunkte
+  je Modalitaet mit „; " gejoint, leere Modalitaet = „keine Wendepunkte
+  dokumentiert", keine Auswahl = Standardsatz). Roundtrip-Test.
+- `panels/P4.jsx`: Card H rendert jeden Abschnitt einzeln — Auftrag,
+  Themen (Nummernkreis = an/ab + Reihenfolge im Bericht, ↑↓, ×, „+ Eigenes
+  Thema"; Titel/Beschreibung/Belege als Felder), Wendepunkte je Modalitaet
+  (Zeilen + / ×), Symptomveraenderung, Offene Themen. Auswahl wirkt sofort
+  (Zaehler + aufklappbare Vorschau des gesendeten Markdown). „Vorschlag des
+  Modells wiederherstellen" aus dem gespeicherten Rohtext. Draft-Cache:
+  `fallformel` (Struktur), `fallformelSel`, `fallformelProposal`.
+
+---
+
 ## [v19.28] — Thematischer Entlassbericht: Fallformel, Struktur-Schalter, Testwerte-Vollständigkeit (2026-09-22)
 
 Basis: `v19_QA_v02` @ `1bcce0f`. Ein Patch (Backend + Frontend, `systelios.js`
