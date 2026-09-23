@@ -6,6 +6,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { apiFetch, getApiBase, startJob } from "../api.js";
 import { AudioInput } from "../audio.jsx";
 import { InterviewDialog, INTERVIEW_DEFAULT, buildInterviewProtokoll, interviewHasContent } from "../interview.jsx";
+import { InterviewChat, CHAT_DEFAULT, buildInterviewGespraech, chatHasContent } from "../interview-chat.jsx";
 import { useDraftCache, useJobResult } from "../hooks.jsx";
 import { JobDetailPane, JobListPane } from "../joblist.jsx";
 import { P_DOKU } from "../prompt-defaults.jsx";
@@ -30,8 +31,9 @@ function _emptyDraft() {
     prompt: P_DOKU,
     geschlecht: "",
     kuerzel: "",
-    quelle: "audio",               // v19.23: aktiver Quell-Tab (audio|file|text|interview)
-    interview: { ...INTERVIEW_DEFAULT },   // v19.23: Dialog-Zustand (JSON, Draft-Cache)
+    quelle: "audio",               // v19.23/v19.31: Quelle (audio|file|text|interview|chat)
+    interview: { ...INTERVIEW_DEFAULT },   // v19.23: Fragenkarten-Zustand (JSON, Draft-Cache)
+    chat: { ...CHAT_DEFAULT },             // v19.31: Gespraechs-Zustand (JSON, Draft-Cache)
     starting: false,
     createdAt: Date.now(),
   };
@@ -44,7 +46,7 @@ function _emptyDraft() {
 const P1_DRAFT_TEXT_DEFAULT = {
   text: "", bullets: "", kuerzel: "", geschlecht: "",
   prompt: P_DOKU, styleText: "",
-  quelle: "audio", interview: { ...INTERVIEW_DEFAULT },
+  quelle: "audio", interview: { ...INTERVIEW_DEFAULT }, chat: { ...CHAT_DEFAULT },
 };
 const P1_TEXT_FIELDS = Object.keys(P1_DRAFT_TEXT_DEFAULT);
 
@@ -159,7 +161,7 @@ function P1({ toast, resumeJob, onResumed }) {
     const running = jobs.find(j => j.status === "pending" || j.status === "running");
     if (!running) return;
     const d = selected?.type === "draft" ? drafts.find(x => x.id === selected.id) : null;
-    const draftLeer = d && !d.text && !d.bullets && !d.audio && !d.txtFile && !interviewHasContent(d.interview);
+    const draftLeer = d && !d.text && !d.bullets && !d.audio && !d.txtFile && !interviewHasContent(d.interview) && !chatHasContent(d.chat);
     if (draftLeer) setSelected({ type: "job", id: running.job_id });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs, listLoading]);
@@ -254,14 +256,16 @@ function P1({ toast, resumeJob, onResumed }) {
     // v19.23: Im Interview-Tab ist das Protokoll die einzige Gespraechsquelle;
     // Audio/Transkript/Text der anderen Tabs werden dann NICHT mitgeschickt
     // (ein Job hat genau eine Gespraechsquelle - plus optionale Stichpunkte).
-    const isInterview = d.quelle === "interview";
-    const protokoll = isInterview ? buildInterviewProtokoll(d.interview) : null;
+    const isInterview = d.quelle === "interview" || d.quelle === "chat";
+    const protokoll = d.quelle === "interview" ? buildInterviewProtokoll(d.interview) : null;
+    const gespraech = d.quelle === "chat" ? buildInterviewGespraech(d.chat) : null;
 
     try {
       const jobId = await startJob("dokumentation", d.prompt, isInterview ? "" : (d.text || ""), {
         audio:        isInterview ? null : d.audio,
         txtFile:      isInterview ? null : (d.txtFile || null),
         interviewProtokoll: protokoll,
+        interviewGespraech: gespraech,
         style:        d.style,
         styleText:    d.styleText || null,
         bullets:      d.bullets || null,
@@ -322,66 +326,132 @@ function P1({ toast, resumeJob, onResumed }) {
   // damit existiert immer genau ein Entwurf).
   // v19.23: Quelle haengt am aktiven Tab - im Interview-Tab zaehlt nur ein
   // abgeschlossenes Interview, in den anderen Tabs nur Audio/Datei/Text.
-  const isInterviewTab = currentDraft?.quelle === "interview";
-  const hasSource = currentDraft && (isInterviewTab
+  const isInterviewTab = currentDraft?.quelle === "interview" || currentDraft?.quelle === "chat";
+  const hasSource = currentDraft && (currentDraft.quelle === "interview"
     ? !!buildInterviewProtokoll(currentDraft.interview)
-    : !!(currentDraft.audio || currentDraft.txtFile || currentDraft.text));
+    : currentDraft.quelle === "chat"
+      ? !!buildInterviewGespraech(currentDraft.chat)
+      : !!(currentDraft.audio || currentDraft.txtFile || currentDraft.text));
   const formCanGenerate = currentDraft && hasSource && currentDraft.kuerzel.trim();
+
+  // v19.31: Quelle als zwei Kacheln (Aufzeichnung | Interview) statt vier
+  // Tabs; die Unterauswahl (Aufnahme/Datei/Text bzw. Gespraech/Fragenkarten)
+  // liegt darunter. `quelle` bleibt der feinere Wert fuer den Job.
+  const quelleGruppe = isInterviewTab ? "interview" : "aufzeichnung";
+  const setGruppe = (g) => {
+    if (g === quelleGruppe) return;
+    if (g === "interview") {
+      let mode = "chat";
+      try { mode = localStorage.getItem("st_interview_modus") || "chat"; } catch { /* ignoriert */ }
+      updateDraft(currentDraft.id, { quelle: mode === "fragen" ? "interview" : "chat" });
+    } else {
+      updateDraft(currentDraft.id, { quelle: currentDraft.audio ? "audio" : currentDraft.txtFile ? "file" : currentDraft.text ? "text" : "audio" });
+    }
+  };
+  const setInterviewModus = (m) => {
+    try { localStorage.setItem("st_interview_modus", m); } catch { /* ignoriert */ }
+    updateDraft(currentDraft.id, { quelle: m === "fragen" ? "interview" : "chat" });
+  };
+  const onKlient = (k) => {
+    // v19.24 (B2): Klient-Frage fuellt Kuerzel/Geschlecht, wenn leer.
+    const p = {};
+    if (!currentDraft.kuerzel.trim() && k.initial) p.kuerzel = k.initial;
+    if (!currentDraft.geschlecht && k.gender) p.geschlecht = k.gender;
+    if (Object.keys(p).length) updateDraft(currentDraft.id, p);
+  };
+  const tileStyle = (on) => ({
+    flex: 1, minWidth: 160, cursor: "pointer", textAlign: "left", padding: "10px 12px", borderRadius: 6,
+    border: on ? "2px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+    background: on ? "var(--st-red-pale)" : "var(--st-bg)", color: "var(--st-text)",
+  });
 
   const formPane = currentDraft ? (
     <div className="workflow">
-      <Card num="A" title="Gesprächsmaterial" badge="req" open={true}>
-        <InputTabs
-          tabs={[
-            { id:"audio",     icon:"🎙", label:"Aufnahme"  },
-            { id:"file",      icon:"📄", label:"Datei"     },
-            { id:"text",      icon:"✏️", label:"Text"      },
-            { id:"interview", icon:"💬", label:"Interview" },
-          ]}
-          defaultTab={currentDraft.quelle || "audio"}
-          onChange={(id) => updateDraft(currentDraft.id, { quelle: id })}
-        >
-          {(activeTab) => (<>
-            {activeTab === "interview" && (
+      <Card num="A" title="Wie kommt das Gespräch herein?" badge="req" open={true}>
+        <div style={{display:"flex", gap:10, flexWrap:"wrap"}} data-testid="p1-quelle">
+          <button type="button" style={tileStyle(quelleGruppe === "aufzeichnung")} onClick={() => setGruppe("aufzeichnung")} data-testid="p1-tile-aufzeichnung">
+            <div style={{fontWeight:600, fontSize:13}}>🎙 Aufzeichnung</div>
+            <div style={{fontSize:11, color:"var(--st-text-soft)", marginTop:2}}>Aufnahme, Audiodatei, Transkript oder Text</div>
+          </button>
+          <button type="button" style={tileStyle(quelleGruppe === "interview")} onClick={() => setGruppe("interview")} data-testid="p1-tile-interview">
+            <div style={{fontWeight:600, fontSize:13}}>💬 Interview</div>
+            <div style={{fontSize:11, color:"var(--st-text-soft)", marginTop:2}}>Keine Aufnahme – du erzählst, das System fragt nach</div>
+          </button>
+        </div>
+
+        {quelleGruppe === "aufzeichnung" && (
+          <div style={{marginTop:12}}>
+            <InputTabs
+              tabs={[
+                { id:"audio", icon:"🎙", label:"Aufnahme" },
+                { id:"file",  icon:"📄", label:"Datei"    },
+                { id:"text",  icon:"✏️", label:"Text"     },
+              ]}
+              defaultTab={["audio","file","text"].includes(currentDraft.quelle) ? currentDraft.quelle : "audio"}
+              onChange={(id) => updateDraft(currentDraft.id, { quelle: id })}
+            >
+              {(activeTab) => (<>
+                {activeTab === "audio" && (
+                  <AudioInput file={currentDraft.audio} onFile={(f) => updateDraft(currentDraft.id, { audio: f })} />
+                )}
+                {activeTab === "file" && (
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"var(--st-text-soft)",marginBottom:4}}>Transkript-Datei</div>
+                      <Dropzone label="Transkript hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={currentDraft.txtFile} onFile={(f) => updateDraft(currentDraft.id, { txtFile: f })} />
+                    </div>
+                    <div>
+                      <div style={{fontSize:11,fontWeight:600,color:"var(--st-text-soft)",marginBottom:4}}>oder Audiodatei</div>
+                      <Dropzone label="Audiodatei hochladen" hint=".mp3 · .m4a · .wav · .ogg · .webm · .flac" accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*" icon="&#128266;"
+                        file={currentDraft.audio && !currentDraft.audio.__p0recording ? currentDraft.audio : null}
+                        onFile={(f) => updateDraft(currentDraft.id, { audio: f })} />
+                    </div>
+                  </div>
+                )}
+                {activeTab === "text" && (
+                  <textarea rows={6} placeholder="Gesprächsinhalt direkt hier einfügen ..."
+                    value={currentDraft.text}
+                    onChange={(e) => updateDraft(currentDraft.id, { text: e.target.value })}
+                    style={{marginTop:0}} />
+                )}
+              </>)}
+            </InputTabs>
+          </div>
+        )}
+
+        {quelleGruppe === "interview" && (
+          <div style={{marginTop:12}}>
+            <div style={{display:"flex", gap:6, alignItems:"center", marginBottom:10, fontSize:12}}>
+              <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Form</span>
+              {[["chat","Gespräch"],["fragen","Fragenkarten"]].map(([m, label]) => {
+                const on = (m === "chat") === (currentDraft.quelle === "chat");
+                return <button key={m} type="button" onClick={() => setInterviewModus(m)} data-testid={"p1-modus-" + m} style={{
+                  padding:"3px 10px", borderRadius:3, cursor:"pointer", fontSize:12, fontWeight: on ? 700 : 400,
+                  background: on ? "var(--st-red)" : "var(--st-gray-light)", color: on ? "white" : "var(--st-text-soft)",
+                  border: on ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
+                }}>{label}</button>;
+              })}
+              <span style={{fontSize:11, color:"var(--st-text-soft)"}}>{currentDraft.quelle === "chat" ? "Das System führt das Gespräch entlang der Fragenliste." : "Eine Frage nach der anderen, mit Rückfragen."}</span>
+            </div>
+            {currentDraft.quelle === "chat" ? (
+              <InterviewChat
+                value={currentDraft.chat}
+                onChange={(cv) => updateDraft(currentDraft.id, { chat: cv })}
+                toast={toast}
+                model={jobModel || null}
+                onKlient={onKlient}
+              />
+            ) : (
               <InterviewDialog
                 value={currentDraft.interview}
                 onChange={(iv) => updateDraft(currentDraft.id, { interview: iv })}
                 toast={toast}
                 model={jobModel || null}
-                onKlient={(k) => {
-                  // v19.24 (B2): Klient-Frage fuellt Kuerzel/Geschlecht, wenn leer.
-                  const p = {};
-                  if (!currentDraft.kuerzel.trim() && k.initial) p.kuerzel = k.initial;
-                  if (!currentDraft.geschlecht && k.gender) p.geschlecht = k.gender;
-                  if (Object.keys(p).length) updateDraft(currentDraft.id, p);
-                }}
+                onKlient={onKlient}
               />
             )}
-            {activeTab === "audio" && (
-              <AudioInput file={currentDraft.audio} onFile={(f) => updateDraft(currentDraft.id, { audio: f })} />
-            )}
-            {activeTab === "file" && (
-              <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                <div>
-                  <div style={{fontSize:11,fontWeight:600,color:"var(--st-text-soft)",marginBottom:4}}>Transkript-Datei</div>
-                  <Dropzone label="Transkript hochladen" hint=".txt  .docx" accept=".txt,.docx" icon="&#128196;" file={currentDraft.txtFile} onFile={(f) => updateDraft(currentDraft.id, { txtFile: f })} />
-                </div>
-                <div>
-                  <div style={{fontSize:11,fontWeight:600,color:"var(--st-text-soft)",marginBottom:4}}>oder Audiodatei</div>
-                  <Dropzone label="Audiodatei hochladen" hint=".mp3 · .m4a · .wav · .ogg · .webm · .flac" accept=".mp3,.m4a,.wav,.ogg,.webm,.flac,.aac,audio/*" icon="&#128266;"
-                    file={currentDraft.audio && !currentDraft.audio.__p0recording ? currentDraft.audio : null}
-                    onFile={(f) => updateDraft(currentDraft.id, { audio: f })} />
-                </div>
-              </div>
-            )}
-            {activeTab === "text" && (
-              <textarea rows={6} placeholder="Gesprächsinhalt direkt hier einfügen ..."
-                value={currentDraft.text}
-                onChange={(e) => updateDraft(currentDraft.id, { text: e.target.value })}
-                style={{marginTop:0}} />
-            )}
-          </>)}
-        </InputTabs>
+          </div>
+        )}
       </Card>
 
       <Card num="B" title="Stichpunkte" badge="opt" open={false} hasContent={!!(currentDraft.bullets || "").trim()}>
@@ -470,7 +540,7 @@ function P1({ toast, resumeJob, onResumed }) {
               title={
                 !hasSource
                   ? (isInterviewTab
-                      ? "Interview erst abschliessen (alle Fragen beantworten)"
+                      ? "Interview erst abschließen"
                       : "Gespraechsmaterial erforderlich (Audio, Transkript oder Text)")
                   : !currentDraft.kuerzel.trim()
                     ? "Patientenkuerzel ist erforderlich"

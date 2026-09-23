@@ -16,7 +16,7 @@
 // Prompt-Log-Eintraege und die Feedback-Fallkopie.
 // ────────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchInterviewSets, interviewAbschluss, interviewTranscribe, interviewTurn } from "./api.js";
+import { fetchInterviewSets, interviewAbschluss, interviewTranscribe, interviewTurn, warmupInterviewServer } from "./api.js";
 import { friendlyError } from "./shared.js";
 import { getSpeechProvider } from "./speech.js";
 import { FeedbackButton } from "./ui.jsx";
@@ -163,16 +163,28 @@ function InterviewDialog({ value, onChange, toast, model, onKlient }) {
     try { return localStorage.getItem(LS_VORLESEN) !== "0"; } catch { return true; }
   });
   const [draftText, setDraftText] = useState("");
+  // v19.24.1: Server-Status fuer die Statuszeile: null (unbekannt) | "ok" |
+  // "starting" | "no_proxy" | "no_server" | "blocked_night" | "error"
+  const [serverState, setServerState] = useState(null);
   const speech = getSpeechProvider();
 
   const patch = useCallback((p) => onChange({ ...v, ...p }), [onChange, v]);
 
-  // Manifest einmal laden
+  // v19.24.1: Manifest laden (Bundle-Fallback, wenn der Server aus ist) und
+  // parallel den Server still anstossen. Sobald er laeuft (st-health-ok),
+  // wird das Manifest vom Server nachgeladen - editierte Fragen im Draft
+  // bleiben davon unberuehrt (v.fragen ist eine Kopie).
   useEffect(() => {
     let alive = true;
-    fetchInterviewSets().then(m => { if (alive) setManifest(m); })
+    const load = () => fetchInterviewSets()
+      .then(m => { if (alive) setManifest(m); })
       .catch(e => { if (alive) setLoadErr(friendlyError(e)); });
-    return () => { alive = false; };
+    load();
+    warmupInterviewServer().then(st => { if (alive) setServerState(st?.status || "error"); })
+      .catch(() => { if (alive) setServerState("error"); });
+    const onOk = () => { if (!alive) return; setServerState("ok"); load(); };
+    window.addEventListener("st-health-ok", onOk);
+    return () => { alive = false; window.removeEventListener("st-health-ok", onOk); };
   }, []);
 
   // Set initialisieren: gemerktes Set oder Server-Default
@@ -430,6 +442,16 @@ function InterviewDialog({ value, onChange, toast, model, onKlient }) {
   if (loadErr) return <div className="info-note">Fragen-Sets konnten nicht geladen werden: {loadErr}</div>;
   if (!manifest || !v.fragen.length) return <div style={{ ...soft, padding: "8px 0" }}>Lade Fragen-Sets …</div>;
 
+  // v19.24.1: Statuszeile, solange der Server nicht laeuft. Antworten koennen
+  // trotzdem getippt werden; Diktat und Weiter warten dann auf den Server.
+  const serverStatusNote = (() => {
+    if (serverState === "starting") return "Server startet – Antworten werden verarbeitet, sobald er läuft (3–6 min).";
+    if (serverState === "no_server") return "Kein Server verfügbar – bitte später erneut versuchen.";
+    if (serverState === "blocked_night") return "Zwischen 23 und 5 Uhr startet kein Server automatisch.";
+    if (serverState === "error" && manifest?.source === "bundle") return "Server nicht erreichbar – Fragen aus dem lokalen Stand.";
+    return null;
+  })();
+
   const header = (
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
       <span style={{ ...soft, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Verfahren</span>
@@ -439,6 +461,7 @@ function InterviewDialog({ value, onChange, toast, model, onKlient }) {
         {manifest.sets.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
       </select>
       {anredeOf(v.klient) && <span style={{ ...soft, fontWeight: 600 }} data-testid="interview-klient">{anredeOf(v.klient)}</span>}
+      {serverStatusNote && <span style={{ ...soft, color: "var(--st-red)" }} data-testid="interview-server">{serverStatusNote}</span>}
       <label style={{ ...soft, display: "flex", alignItems: "center", gap: 4, marginLeft: "auto", cursor: "pointer" }}>
         <input type="checkbox" checked={vorlesen} onChange={toggleVorlesen} /> Vorlesen
       </label>

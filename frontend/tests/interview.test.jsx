@@ -13,11 +13,12 @@ jest.mock("../src/api.js", () => ({
   interviewTranscribe: jest.fn(),
   interviewTurn: jest.fn(),
   interviewAbschluss: jest.fn(),
+  warmupInterviewServer: jest.fn(() => Promise.resolve({ status: "ok" })),
   apiFetch: jest.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) })),
   getApiBase: () => "http://api",
 }));
 
-import { fetchInterviewSets, interviewTurn, interviewAbschluss } from "../src/api.js";
+import { fetchInterviewSets, interviewTurn, interviewAbschluss, warmupInterviewServer } from "../src/api.js";
 import { _setSpeechProvider } from "../src/speech.js";
 import { InterviewDialog, INTERVIEW_DEFAULT, buildInterviewProtokoll, interviewHasContent } from "../src/interview.jsx";
 
@@ -221,6 +222,19 @@ describe("InterviewDialog", () => {
     answerAndNext("Thema X.");
     await expectFrage("Selbstgefährdung");
     expect(toast).toHaveBeenCalledWith(expect.stringMatching(/weiter ohne Rückfrage/));
+  });
+
+  test("Server aus: Bundle-Manifest, Warmup, Statuszeile; st-health-ok laedt neu", async () => {
+    fetchInterviewSets.mockResolvedValueOnce({ ...MANIFEST, source: "bundle" }).mockResolvedValueOnce({ ...MANIFEST, source: "server" });
+    warmupInterviewServer.mockResolvedValueOnce({ status: "starting" });
+    render(<Harness />);
+    await screen.findByTestId("interview-start");
+    expect(warmupInterviewServer).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Worum ging es?")).toBeTruthy();                // sofort nutzbar
+    await screen.findByText(/Server startet/);
+    window.dispatchEvent(new Event("st-health-ok"));
+    await waitFor(() => expect(fetchInterviewSets).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByTestId("interview-server")).toBeNull());
   });
 
   test("buildInterviewProtokoll ist null vor Abschluss", () => {

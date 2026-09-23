@@ -40,6 +40,27 @@ Rückfrage. Nicht-Pflichtfragen dürfen übersprungen werden („nicht erhoben�
 - Feedback-Button am Ende (`job_id = interview-<session>`, `context =
   interview_dialog`); Prompt-Log-Einträge des Dialogs laufen unter derselben ID.
 
+## Dialog-Modus (v19.31)
+
+Zweite Form des Interviews: das Modell führt das Gespräch, die Fragenliste
+ist seine Checkliste. Je Turn schickt das Frontend die Historie an
+`POST /api/interview/chat/stream`; vorher laufen deterministische
+Leitplanken (`interview_chat.plan_turn`): Suizidalitäts-Trigger als
+Regie-Anweisung, Pflichtpunkte per Marker-Check (`fertig` wird sonst
+verweigert), Nachfrage-Budget je Thema/gesamt (`ChatConfig`, Default 4/24),
+Redundanz-Erkennung. Das Modell antwortet als JSON (`sage`, `abgedeckt`,
+`unklar`, `thema`, `fertig`); nur `sage` wird gestreamt und satzweise
+vorgelesen. Am Ende geht das Gespräch als `interview_gespraech` an
+`/jobs/generate`; nur Behandler-Turns sind Quelle, Klient erscheint in der
+Doku ausschließlich als Kürzel. Eval: `scripts/eval_interview_chat.py`.
+
+## Ohne laufenden Server (v19.24.1)
+
+Die Fragen-Sets liegen im Bundle (`INTERVIEW_SETS_DEFAULT`, generiert aus
+`interview_sets.py`). Beim Öffnen des Tabs wird der Server still gestartet;
+bis er läuft, zeigt der Tab eine Statuszeile, Fragen anpassen und Tippen
+sind sofort möglich, Diktat und Rückfrage-Check warten auf den Server.
+
 ## Endpoints
 
 | Endpoint | Zweck |
@@ -47,7 +68,9 @@ Rückfrage. Nicht-Pflichtfragen dürfen übersprungen werden („nicht erhoben�
 | `GET /api/interview/sets` | Manifest der Sets (Server-Defaults, Reset-Punkt) |
 | `POST /api/interview/transcribe` | Kurzdiktat (≤ 5 min, ≤ 20 MB) → Text; Whisper ohne Diarisierung, ohne Füllwortfilter; Tempdatei wird sofort gelöscht |
 | `POST /api/interview/turn` | Rückfrage-Entscheidung zu einer Antwort (liefert `rueckfrage_typ`, `trigger_stufe`, `quittung`, `ueberleitung`, `klient`) |
-| `POST /api/interview/abschluss` | Abschluss-Check über das ganze Protokoll |
+| `POST /api/interview/abschluss` | Abschluss-Check über das ganze Protokoll (Fragenkarten) |
+| `POST /api/interview/chat/stream` | Ein Turn des Dialog-Modus als SSE (`delta`, `meta`, `done`, `error`) |
+| `POST /api/jobs/generate` | Form-Feld `interview_gespraech` (Dialog-Modus) oder `interview_protokoll` (Fragenkarten) |
 | `POST /api/jobs/generate` | Form-Feld `interview_protokoll` (nur `dokumentation`) |
 
 Protokoll-Format:

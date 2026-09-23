@@ -479,6 +479,68 @@ Backend 1207 Unit + 296 Integration gruen, ruff 0, ESLint 0 Fehler, Jest 94.
 
 ---
 
+## [v19.31] — Dialog-Modus: das Modell fuehrt das Interview (2026-09-23)
+
+Basis: `v19_QA_v02` @ `58aaeeb` + v19.24.1. Ein Patch (Backend + Frontend)
+plus `backend/static/systelios.js`.
+
+**Warum.** Statt Fragekarten ein Gespraech mit dem System, so wie man mit
+einem Kollegen spricht: Der Behandler erzaehlt, das Modell fragt entlang
+der Fragenliste nach - mit therapeutischem Hintergrundwissen, ohne etwas
+hinzuzuerfinden. Fragekarten bleiben als zweite Form erhalten.
+
+### Backend
+
+- `services/llm_chat.py` (S1) - `generate_chat_stream()` ueber Ollama
+  `/api/chat` mit `stream: true`; bei Structured Output wird nur das Feld
+  `sage` als Delta gestreamt (`SageExtractor`, escape-sicher ueber
+  Chunk-Grenzen), das JSON kommt am Ende geparst.
+- `services/interview_chat.py` (S2) - Prompt (Auftrag, Regeln in Du-Form,
+  Fragenliste mit Status je Punkt, Budget), `plan_turn()` mit Leitplanken
+  (Suizidalitaets-Trigger -> Regie, Pflichtpunkte per Marker-Check, Budget
+  je Thema/gesamt, Notbremse), `apply_turn()` (Checkliste monoton,
+  `fertig` nur mit Pflichtpunkten, Redundanz-Erkennung), Verdichtung der
+  Historie ab 20 Turns. `ChatConfig` fuer Experimente (G4).
+- `POST /api/interview/chat/stream` (S3) - zustandsloser SSE-Turn
+  (`delta`, `meta`, `done`, `error`); Historie kommt vom Frontend (D2=B);
+  Prompt-Log unter `interview-<session>`.
+- Gespraech als Quelle (S4) - `InterviewGespraech` + `parse_gespraech()`
+  (422 ohne Behandler-Antworten oder ohne Aussage zur Selbstgefaehrdung),
+  `render_gespraech()` ([Interviewer]/[Behandler]), `gespraech_plaintext()`
+  = nur Behandler-Turns; Form-Feld `interview_gespraech` in `/jobs/generate`
+  (nur eine Interview-Quelle je Job); `INTERVIEW_MODUS_REGELN`: Fragen des
+  Interviewers sind keine Inhalte, Klient in der Doku nur als Kuerzel.
+- `scripts/eval_interview_chat.py` (S6) - drei synthetische Behandler-
+  Skripte gegen den Dialog (Turns, Nachfragen je Thema, Abdeckung,
+  Redundanz, Einschmuggeln); braucht Ollama.
+- Tests: `tests/unit/test_v1931_dialog_modus.py` (34).
+
+### Frontend
+
+- `src/interview-chat.jsx` - Chat-Panel: Sprechblasen, Push-to-talk, Enter
+  sendet, gestreamter Interviewer-Satz wird sofort vorgelesen
+  (`speech.sayStream`, satzweise), Checkliste am Rand (offen/unklar/
+  abgedeckt), Abbrechen, „Abschliessen“ (Backend verweigert ohne
+  Pflichtpunkte), „Noch etwas ergaenzen“, Feedback-Button.
+- `src/speech.js` - `sayStream()` mit Satzsegmentierung (`splitSentences`,
+  Abkuerzungen/Kuerzel bleiben zusammen) und Warteschlange.
+- `src/panels/P1.jsx` - Quelle als zwei Kacheln „Aufzeichnung“ (Aufnahme/
+  Datei/Text darunter) und „Interview“ (Form: Gespraech | Fragenkarten,
+  je Nutzer gemerkt) statt vier Tabs; `quelle` bleibt der feine Wert fuer
+  den Job (`chat` -> `interview_gespraech`).
+- `api.js` - `interviewChatStream()` (POST + SSE-Reader, Start-on-Intent).
+- Tests: `tests/interview-chat.test.jsx` (7).
+
+### Bekannte Punkte
+
+- v19.31.1: Sie->Du in den UI-Hilfetexten (P4 Fallformel-Hinweise; alle
+  anderen Panels waren bereits ohne Anrede oder in Du-Form).
+- Gemma4 als Gespraechsfuehrer ist ungeprueft; vor dem Alltag die Eval
+  gegen die drei Skripte fahren und die Regeln (Ueberfragen, Einschmuggeln)
+  nachziehen.
+
+---
+
 ## [v19.24] — Interview-Dialog: Gespraechsfuehrung, Trigger, Abschluss-Check (2026-09-18)
 
 Basis: `v19_QA_v02` @ `1f5d935` + v19.23. Ein Patch (Backend + Frontend)
@@ -533,6 +595,18 @@ das Ganze schauen - ohne dass das LLM Fachurteile faellt.
   `FeedbackButton` (`jobId = interview-<session>`, `context =
   interview_dialog`).
 - `api.js` - `interviewAbschluss`. Tests: `tests/interview.test.jsx` (8).
+
+### v19.24.1 — Interview-Tab ohne laufenden Server nutzbar
+
+- Fragen-Sets liegen als `INTERVIEW_SETS_DEFAULT` im Bundle
+  (`export_prompt_defaults.py` generiert sie aus `interview_sets.py`; Sync-Test
+  erweitert). `fetchInterviewSets()` faellt darauf zurueck, wenn der Server
+  aus ist (`source: "bundle"`), und laedt bei `st-health-ok` vom Server nach.
+- `warmupInterviewServer()` stoesst beim Oeffnen des Tabs still den
+  Start-on-Intent an; Statuszeile im Tab („Server startet – …“, „Kein
+  Server verfuegbar“, Nachtsperre). Tippen und „Interview starten“ gehen
+  sofort; Diktat und Rueckfrage-Check warten ueber `_postEnsured` auf den
+  Server.
 
 ### Bekannte Punkte
 

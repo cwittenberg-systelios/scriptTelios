@@ -117,6 +117,8 @@ class PipelineInput:
     # v19.23: validiertes Interview-Protokoll (services.interview_protokoll)
     # - dritter Quelltyp der Gespraechsdoku. None = kein Interview-Modus.
     interview_protokoll: Any = None
+    # v19.31: Gespraech aus dem Dialog-Modus (services.interview_protokoll.InterviewGespraech)
+    interview_gespraech: Any = None
     # v19.28: Struktur-Schalter des Entlassberichts (D5; "modalitaet" =
     # Status quo, "thematisch" = Auftrag/Thema/Prozess/Reflexion/Empfehlung)
     # und optional die von der Therapeut:in bestaetigte/editierte Fallformel
@@ -155,8 +157,9 @@ class PipelineInput:
             "has_fokus_themen":     bool(self.bullets and self.bullets.strip()),
             "eb_struktur":          self.eb_struktur if self.workflow == "entlassbericht" else None,
             "has_fallformel_override": bool(self.fallformel_override and self.fallformel_override.strip()),
-            "has_interview":        self.interview_protokoll is not None,
-            "interview_set":        getattr(self.interview_protokoll, "set", None),
+            "has_interview":        self.interview_protokoll is not None or self.interview_gespraech is not None,
+            "interview_set":        getattr(self.interview_protokoll, "set", None) or getattr(self.interview_gespraech, "set", None),
+            "interview_modus":      "gespraech" if self.interview_gespraech is not None else ("fragen" if self.interview_protokoll is not None else None),
             "diagnosen":            self.dx_list,
             "model_requested":      self.model or "default",
         }
@@ -554,6 +557,11 @@ async def run_generation(ctx: PipelineInput, job) -> dict:
         st.interview_text = render_protokoll(ctx.interview_protokoll)
         st.interview_plain = protokoll_plaintext(ctx.interview_protokoll)
         job.interview_set = getattr(ctx.interview_protokoll, "set", None)
+    elif ctx.interview_gespraech is not None:
+        from app.services.interview_protokoll import gespraech_plaintext, render_gespraech
+        st.interview_text = render_gespraech(ctx.interview_gespraech)
+        st.interview_plain = gespraech_plaintext(ctx.interview_gespraech)
+        job.interview_set = getattr(ctx.interview_gespraech, "set", None)
 
     await _resolve_transcript(ctx, job, st)
 

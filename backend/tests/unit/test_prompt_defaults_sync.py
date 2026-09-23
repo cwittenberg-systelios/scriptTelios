@@ -51,3 +51,15 @@ def test_alle_workflows_im_export_und_im_manifest():
 def test_template_literal_escaping():
     mod = _load_script()
     assert mod._js_template_literal("a`b${c}\\d") == "a\\`b\\${c}\\\\d"
+
+
+def test_interview_sets_im_export():
+    """v19.24.1: das Manifest der Fragen-Sets liegt als Offline-Fallback im Bundle."""
+    import json
+    from app.core.interview_sets import to_manifest
+    mod = _load_script()
+    rendered = mod.render()
+    assert "const INTERVIEW_SETS_DEFAULT = " in rendered
+    start = rendered.index("const INTERVIEW_SETS_DEFAULT = ") + len("const INTERVIEW_SETS_DEFAULT = ")
+    end = rendered.index(";\n", start)
+    assert json.loads(rendered[start:end]) == json.loads(json.dumps(to_manifest()))

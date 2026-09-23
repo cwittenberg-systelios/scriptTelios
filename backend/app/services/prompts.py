@@ -241,6 +241,11 @@ INTERVIEW_MODUS_REGELN = (
     "beschreibe Methode, Material, Prozess und Ausdruck konkret; verwende "
     "die Fachsprache des jeweiligen Verfahrens nur, soweit der Behandler "
     "sie selbst verwendet hat.\n"
+    "- Liegt die Quelle als GESPRÄCH zwischen Interviewer und Behandler vor: "
+    "Die Fragen des Interviewers sind KEINE Inhalte - nur die Antworten des "
+    "Behandlers sind Quelle. Nennt der Behandler Klient/in im Gespräch mit "
+    "Namen oder Vornamen, erscheint in der Dokumentation AUSSCHLIESSLICH das "
+    "Namenskürzel (Anrede + Initiale).\n"
 )
 
 _WENDUNGEN_RE = re.compile(

@@ -568,6 +568,7 @@ async def create_generate_job(
     transcript:       Annotated[Optional[str], Form()] = None,
     p0_recording_id:  Annotated[Optional[str], Form(description="P0-Recording-ID: Transkript wird aus DB geholt, ggf. priorisiert transkribiert.")] = None,
     bullets:          Annotated[Optional[str], Form(description="Stichpunkte (P1) oder Fokus-Themen (P3/P4)")] = None,
+    interview_gespraech: Annotated[Optional[str], Form(description="P1 (v19.31): Gespräch des Dialog-Modus als JSON ({set, set_label, session_id, historie:[{rolle, text, thema}], klient}). Alternative zu interview_protokoll.")] = None,
     interview_protokoll: Annotated[Optional[str], Form(description="P1 (v19.23): Protokoll des Interview-Dialogs als JSON ({set, set_label, eintraege:[{key, frage, antwort, rueckfrage, rueckfrage_antwort}]}). Dritter Quelltyp neben Audio/Transkript und Stichpunkten.")] = None,
     style_text:       Annotated[Optional[str], Form()] = None,
     model:            Annotated[Optional[str], Form()] = None,
@@ -657,20 +658,23 @@ async def create_generate_job(
     # (HTTPException lokal aliasen: die Closure oben importiert den Namen
     # lokal, wodurch er in dieser Funktion vor dem Import ungebunden ist.)
     from fastapi import HTTPException as _HTTPException
-    from app.services.interview_protokoll import InterviewProtokollError, parse_protokoll
+    from app.services.interview_protokoll import InterviewProtokollError, parse_gespraech, parse_protokoll
     try:
         interview = parse_protokoll(interview_protokoll)
+        gespraech = parse_gespraech(interview_gespraech)
     except InterviewProtokollError as e:
         raise _HTTPException(status_code=422, detail=str(e)) from e
-    if interview is not None and workflow != "dokumentation":
+    if (interview is not None or gespraech is not None) and workflow != "dokumentation":
         raise _HTTPException(
             status_code=422,
             detail="Ein Interview-Protokoll wird nur im Workflow 'dokumentation' unterstützt.",
         )
+    if interview is not None and gespraech is not None:
+        raise _HTTPException(status_code=422, detail="Bitte nur eine Interview-Quelle senden (Fragen ODER Gespräch).")
     # v19.25 (B2): Kuerzel/Geschlecht aus der Klient-Frage, falls das UI
     # nichts geschickt hat (das UI fuellt die Felder normalerweise selbst).
-    if interview is not None:
-        _k = interview.klient()
+    _k = interview.klient() if interview is not None else (gespraech.klient_info() if gespraech is not None else None)
+    if _k is not None:
         if _k:
             if not (patientenname and patientenname.strip()):
                 patientenname = f"{_k['anrede']} {_k['initial']}"
@@ -699,6 +703,7 @@ async def create_generate_job(
         dx_list=parse_dx_list(diagnosen),
         ism_n_items=ism_n_items,
         interview_protokoll=interview,
+        interview_gespraech=gespraech,
         eb_struktur=normalize_eb_struktur(eb_struktur),
         fallformel_override=(fallformel.strip() if fallformel and fallformel.strip() else None),
         uploads=uploads,
@@ -709,7 +714,8 @@ async def create_generate_job(
         workflow=workflow,
         description=f"Workflow: {workflow}"
                     + (f" | Audio: {uploads.audio_name}" if uploads.audio_name else "")
-                    + (f" | Interview: {interview.set_label or interview.set}" if interview else ""),
+                    + (f" | Interview: {interview.set_label or interview.set}" if interview else "")
+                    + (f" | Gespräch: {gespraech.set_label or gespraech.set}" if gespraech else ""),
         therapeut_id=therapeut_id,
         patient_kuerzel=ctx.patient_kuerzel,
     )

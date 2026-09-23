@@ -250,3 +250,76 @@ def protokoll_plaintext(p: InterviewProtokoll) -> str:
         if ap.antwort.strip() and not ap.belassen:
             parts.append(ap.antwort.strip())
     return "\n".join(parts)
+
+
+# ── v19.31 (S4): Gespraech aus dem Dialog-Modus als Quelle ────────────────────
+
+class GespraechTurn(BaseModel):
+    rolle: str = Field(pattern="^(system|behandler)$")
+    text: str = Field(default="", max_length=MAX_ANTWORT_CHARS)
+    thema: str = Field(default="", max_length=64)
+
+
+class InterviewGespraech(BaseModel):
+    set: str = Field(min_length=1, max_length=64)
+    set_label: str = Field(default="", max_length=120)
+    session_id: str = Field(default="", max_length=64)
+    historie: list[GespraechTurn] = Field(min_length=1, max_length=400)
+    klient: dict | None = None
+
+    def behandler_text(self) -> str:
+        return "\n".join(t.text.strip() for t in self.historie if t.rolle == "behandler" and t.text.strip())
+
+    def klient_info(self) -> dict | None:
+        if isinstance(self.klient, dict) and self.klient.get("anrede") and self.klient.get("initial"):
+            return {"anrede": self.klient["anrede"], "initial": self.klient["initial"],
+                    "gender": self.klient.get("gender") or ("m" if self.klient["anrede"] == "Herr" else "w")}
+        return extract_klient(self.behandler_text())
+
+
+def parse_gespraech(raw: str | None) -> InterviewGespraech | None:
+    """JSON-String -> Gespraech. None/leer -> None. Fehler -> InterviewProtokollError."""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as e:
+        raise InterviewProtokollError(f"Interview-Gespräch ist kein gültiges JSON: {e}") from e
+    try:
+        g = InterviewGespraech.model_validate(data)
+    except ValidationError as e:
+        first = e.errors()[0] if e.errors() else {}
+        loc = ".".join(str(x) for x in first.get("loc", ()))
+        raise InterviewProtokollError(
+            f"Interview-Gespräch ungültig ({loc or 'struktur'}): {first.get('msg', e)}"
+        ) from e
+    if not g.behandler_text().strip():
+        raise InterviewProtokollError(
+            "Das Interview-Gespräch enthält keine Antworten des Behandlers - die "
+            "Dokumentation wurde NICHT erstellt, um ein erfundenes Dokument zu verhindern."
+        )
+    from app.services.suizidalitaet import mentions_nssv, mentions_suizidalitaet
+    bt = g.behandler_text().lower()
+    if not (mentions_suizidalitaet(bt) or mentions_nssv(bt)
+            or any(m in bt for m in ("keine hinweise", "kein hinweis", "keine anzeichen",
+                                     "nicht suizidal", "keine selbstgefährd", "keine selbstgefaehrd",
+                                     "keine krise", "unauffällig", "unauffaellig"))):
+        raise InterviewProtokollError(
+            "Im Gespräch fehlt eine Aussage zur Selbstgefährdung. Bitte das Interview "
+            "abschließen, bevor die Dokumentation erstellt wird."
+        )
+    return g
+
+
+def render_gespraech(g: InterviewGespraech) -> str:
+    lines = [f"Verfahren / Fragen-Set: {g.set_label or g.set}", ""]
+    for t in g.historie:
+        if not t.text.strip():
+            continue
+        lines.append(f"[{'Interviewer' if t.rolle == 'system' else 'Behandler'}]: {t.text.strip()}")
+    return "\n".join(lines).rstrip()
+
+
+def gespraech_plaintext(g: InterviewGespraech) -> str:
+    """Nur Behandler-Turns (Glossar-Wahl, Stil-Retrieval, Suizid-Quellcheck)."""
+    return g.behandler_text()

@@ -3,6 +3,7 @@
 //
 // Quelle: backend/app/services/prompts.py
 //         (WORKFLOW_INSTRUCTIONS_DEFAULT, BEFUND_VORLAGE)
+//         backend/app/core/interview_sets.py (INTERVIEW_SETS_DEFAULT, v19.24.1)
 // Generator: backend/scripts/export_prompt_defaults.py
 //   - `npm run build` ruft ihn als "prebuild" auf,
 //   - `lint_gate.sh --check` und tests/unit/test_prompt_defaults_sync.py
@@ -143,4 +144,376 @@ Zuordnung zur Gesamtstruktur: Teil 1–3 bilden den Behandlungsverlauf (~70 %), 
 // Befundvorlage (Anamnese, Psychischer Befund)
 const P_BEFUND_VORLAGE = `Im Gespräch offen, wach, bewusstseinsklar, zu allen Qualitäten orientiert. Konzentration subjektiv {konzentration}. Auffassung, Merkfähigkeit und Gedächtnis intakt. Formalgedanklich {formalgedanke}, keine Denkverlangsamung, {fokus_denken}. {phobien_angst}. {Zwänge}. {vermeidung}. Kein Anhalt für Wahn oder Sinnestäuschungen, keine Ich-Störungen (z.B. Depersonalisation, Derealisation, Dissoziation). Stimmungslage {stimmung}, affektive Schwingungsfähigkeit {schwingung} bei insgesamt {affektlage} Affektlage. {freud_interessen}. {erschöpfung}. Antrieb {antrieb}. {hoffnung_insuffizienz}. {schuldgefühle}. Selbstwertgefühl ist {selbstwert}. Gefühlsregulation ist {gefühlsregulation}. Impulskontrolle ist {impulskontrolle}. {ambivalenz}. {innere_unruhe}. {zirkadian}. {schlaf}. Appetenz {appetenz}. {aggressiv_selbstverletzend}. {sozialer_rückzug}. Essverhalten {essverhalten}. {suchtverhalten}. {somatisierung}. {suizidalität_vergangenheit}. Aktuelle Verneinung von lebensüberdrüssigen und suizidalen Gedanken, keine suizidale Handlungsplanung oder Handlungsvorbereitung. Zum Zeitpunkt der Aufnahme von akuter Suizidalität klar distanziert.`;
 
-export { P_DOKU, P_ANAMNESE, P_VERL, P_VERL_FOLGE, P_AKUT, P_ENTL, P_ISM, P_ENTL_THEMATISCH, P_BEFUND_VORLAGE };
+// Interview-Modus: Fragen-Sets (GET /api/interview/sets, Offline-Fallback)
+const INTERVIEW_SETS_DEFAULT = {
+  "abschnitte": {
+    "auftragsklaerung": "Auftragsklärung",
+    "einladungen": "Einladungen",
+    "hypothesen": "Hypothesen und Entwicklungsperspektiven",
+    "inhalte": "Relevante Gesprächsinhalte",
+    "meta": "Organisatorisch (nicht in der Dokumentation)",
+    "schluss": "Schlussabsatz (Hinweis zur Suizidalität)"
+  },
+  "default_set": "gespraech",
+  "sets": [
+    {
+      "beschreibung": "Einzelgespräch ohne Aufnahme, z.B. ohne Einwilligung zur Aufzeichnung.",
+      "fragen": [
+        {
+          "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
+          "key": "klient",
+          "pflicht": true,
+          "pflichtaspekte": [],
+          "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
+          "ziel_abschnitt": "meta"
+        },
+        {
+          "hinweis": "",
+          "key": "anliegen",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "das Anliegen oder Ziel des Gesprächs"
+          ],
+          "text": "Worum ging es im Gespräch? Was war das Anliegen der Person und das gemeinsame Ziel?",
+          "ziel_abschnitt": "auftragsklaerung"
+        },
+        {
+          "hinweis": "",
+          "key": "inhalte",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "konkrete Inhalte des Gesprächs"
+          ],
+          "text": "Was waren die wesentlichen Inhalte? Was hat die Person berichtet, welche Muster, Anteile oder Ressourcen wurden sichtbar?",
+          "ziel_abschnitt": "inhalte"
+        },
+        {
+          "hinweis": "",
+          "key": "hypothesen",
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Welche Hypothesen, Reframings oder Sinnzuschreibungen habt ihr erarbeitet? Was wird möglich, wenn …?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
+          "key": "vereinbarung",
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
+          "ziel_abschnitt": "einladungen"
+        },
+        {
+          "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
+          "key": "selbstgefaehrdung",
+          "pflicht": true,
+          "pflichtaspekte": [
+            "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"
+          ],
+          "text": "Gab es in der Stunde Hinweise auf Selbstgefährdung – Suizidalität, Selbstverletzung oder eine akute Krise? Falls nein, sag bitte kurz, dass es keine Hinweise gab.",
+          "ziel_abschnitt": "schluss"
+        }
+      ],
+      "key": "gespraech",
+      "label": "Gespräch (ohne Aufzeichnung)"
+    },
+    {
+      "beschreibung": "Gestalterische Einzel- oder Gruppenarbeit.",
+      "fragen": [
+        {
+          "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
+          "key": "klient",
+          "pflicht": true,
+          "pflichtaspekte": [],
+          "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
+          "ziel_abschnitt": "meta"
+        },
+        {
+          "hinweis": "",
+          "key": "anliegen",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "das Anliegen oder Thema der Person"
+          ],
+          "text": "Was war das erarbeitete Anliegen? Womit kam die Person in die Stunde?",
+          "ziel_abschnitt": "auftragsklaerung"
+        },
+        {
+          "hinweis": "",
+          "key": "methode",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "die eingesetzte Methode oder Intervention"
+          ],
+          "text": "Welche Methode, welches Material oder welche Aufgabe habt ihr verwendet, und was ist entstanden?",
+          "ziel_abschnitt": "inhalte"
+        },
+        {
+          "hinweis": "",
+          "key": "beobachtung",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "Emotionen oder Ausdruck der Person",
+            "Beziehungsgestaltung oder Kontakt"
+          ],
+          "text": "Welche Emotionen, welchen Ausdruck und welche Beziehungsgestaltung hast du im nichtsprachlichen Teil wahrgenommen – im Gestalten, im Bild, im Kontakt?",
+          "ziel_abschnitt": "inhalte"
+        },
+        {
+          "hinweis": "",
+          "key": "ergebnis",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "der Zustand der Person am Ende der Stunde"
+          ],
+          "text": "Was war das Ergebnis der Stunde, und in welchem Zustand geht die Person? Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
+          "key": "vereinbarung",
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
+          "ziel_abschnitt": "einladungen"
+        },
+        {
+          "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
+          "key": "selbstgefaehrdung",
+          "pflicht": true,
+          "pflichtaspekte": [
+            "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"
+          ],
+          "text": "Gab es in der Stunde Hinweise auf Selbstgefährdung – Suizidalität, Selbstverletzung oder eine akute Krise? Falls nein, sag bitte kurz, dass es keine Hinweise gab.",
+          "ziel_abschnitt": "schluss"
+        }
+      ],
+      "key": "kunst",
+      "label": "Kunsttherapie"
+    },
+    {
+      "beschreibung": "Aktive oder rezeptive musiktherapeutische Arbeit.",
+      "fragen": [
+        {
+          "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
+          "key": "klient",
+          "pflicht": true,
+          "pflichtaspekte": [],
+          "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
+          "ziel_abschnitt": "meta"
+        },
+        {
+          "hinweis": "",
+          "key": "anliegen",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "das Anliegen oder Thema der Person"
+          ],
+          "text": "Was war das erarbeitete Anliegen? Womit kam die Person in die Stunde?",
+          "ziel_abschnitt": "auftragsklaerung"
+        },
+        {
+          "hinweis": "",
+          "key": "methode",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "die eingesetzte Methode oder Intervention"
+          ],
+          "text": "Welche Methode habt ihr verwendet – Improvisation, Instrumente, Stimme, rezeptives Hören – und was ist dabei entstanden?",
+          "ziel_abschnitt": "inhalte"
+        },
+        {
+          "hinweis": "",
+          "key": "beobachtung",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "Emotionen oder Ausdruck der Person",
+            "Beziehungsgestaltung oder Kontakt"
+          ],
+          "text": "Welche Emotionen, welchen Ausdruck und welche Beziehungsgestaltung hast du im Spiel und im Klang wahrgenommen – Tempo, Dynamik, Kontakt, Pausen?",
+          "ziel_abschnitt": "inhalte"
+        },
+        {
+          "hinweis": "",
+          "key": "ergebnis",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "der Zustand der Person am Ende der Stunde"
+          ],
+          "text": "Was war das Ergebnis der Stunde, und in welchem Zustand geht die Person? Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
+          "key": "vereinbarung",
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
+          "ziel_abschnitt": "einladungen"
+        },
+        {
+          "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
+          "key": "selbstgefaehrdung",
+          "pflicht": true,
+          "pflichtaspekte": [
+            "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"
+          ],
+          "text": "Gab es in der Stunde Hinweise auf Selbstgefährdung – Suizidalität, Selbstverletzung oder eine akute Krise? Falls nein, sag bitte kurz, dass es keine Hinweise gab.",
+          "ziel_abschnitt": "schluss"
+        }
+      ],
+      "key": "musik",
+      "label": "Musiktherapie"
+    },
+    {
+      "beschreibung": "Körperorientierte psychotherapeutische Arbeit.",
+      "fragen": [
+        {
+          "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
+          "key": "klient",
+          "pflicht": true,
+          "pflichtaspekte": [],
+          "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
+          "ziel_abschnitt": "meta"
+        },
+        {
+          "hinweis": "",
+          "key": "anliegen",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "das Anliegen oder Thema der Person"
+          ],
+          "text": "Was war das erarbeitete Anliegen? Womit kam die Person in die Stunde?",
+          "ziel_abschnitt": "auftragsklaerung"
+        },
+        {
+          "hinweis": "",
+          "key": "methode",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "die eingesetzte Methode oder Intervention"
+          ],
+          "text": "Welche körperorientierte Intervention oder Übung habt ihr gemacht – Wahrnehmung, Atem, Bewegung, Berührung, Aufstellung?",
+          "ziel_abschnitt": "inhalte"
+        },
+        {
+          "hinweis": "",
+          "key": "beobachtung",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "Emotionen oder Ausdruck der Person",
+            "Beziehungsgestaltung oder Kontakt"
+          ],
+          "text": "Was hast du an Körperwahrnehmung, Regulation, Emotion und Kontakt beobachtet – Anspannung, Atem, Halt, Nähe und Distanz?",
+          "ziel_abschnitt": "inhalte"
+        },
+        {
+          "hinweis": "",
+          "key": "ergebnis",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "der Zustand der Person am Ende der Stunde"
+          ],
+          "text": "Was war das Ergebnis der Stunde, und in welchem Zustand geht die Person? Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
+          "key": "vereinbarung",
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
+          "ziel_abschnitt": "einladungen"
+        },
+        {
+          "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
+          "key": "selbstgefaehrdung",
+          "pflicht": true,
+          "pflichtaspekte": [
+            "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"
+          ],
+          "text": "Gab es in der Stunde Hinweise auf Selbstgefährdung – Suizidalität, Selbstverletzung oder eine akute Krise? Falls nein, sag bitte kurz, dass es keine Hinweise gab.",
+          "ziel_abschnitt": "schluss"
+        }
+      ],
+      "key": "koerperarbeit",
+      "label": "Körperarbeit"
+    },
+    {
+      "beschreibung": "Körpertherapeutische Behandlung (physiotherapienah).",
+      "fragen": [
+        {
+          "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
+          "key": "klient",
+          "pflicht": true,
+          "pflichtaspekte": [],
+          "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
+          "ziel_abschnitt": "meta"
+        },
+        {
+          "hinweis": "",
+          "key": "anliegen",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "das Anliegen oder Thema der Person"
+          ],
+          "text": "Was war das erarbeitete Anliegen? Womit kam die Person in die Stunde?",
+          "ziel_abschnitt": "auftragsklaerung"
+        },
+        {
+          "hinweis": "",
+          "key": "methode",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "die eingesetzte Methode oder Intervention"
+          ],
+          "text": "Welche Beschwerden standen im Vordergrund, was hast du befundet und welche Maßnahmen oder Techniken hast du angewendet?",
+          "ziel_abschnitt": "inhalte"
+        },
+        {
+          "hinweis": "",
+          "key": "beobachtung",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "Emotionen oder Ausdruck der Person",
+            "Beziehungsgestaltung oder Kontakt"
+          ],
+          "text": "Wie hat die Person die Behandlung erlebt und vertragen? Was hast du an Körperspannung, Bewegung, Schmerzverhalten und Kontakt beobachtet?",
+          "ziel_abschnitt": "inhalte"
+        },
+        {
+          "hinweis": "",
+          "key": "ergebnis",
+          "pflicht": false,
+          "pflichtaspekte": [
+            "der Zustand der Person am Ende der Stunde"
+          ],
+          "text": "Was war das Ergebnis der Stunde, und in welchem Zustand geht die Person? Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
+          "key": "vereinbarung",
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
+          "ziel_abschnitt": "einladungen"
+        },
+        {
+          "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
+          "key": "selbstgefaehrdung",
+          "pflicht": true,
+          "pflichtaspekte": [
+            "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"
+          ],
+          "text": "Gab es in der Stunde Hinweise auf Selbstgefährdung – Suizidalität, Selbstverletzung oder eine akute Krise? Falls nein, sag bitte kurz, dass es keine Hinweise gab.",
+          "ziel_abschnitt": "schluss"
+        }
+      ],
+      "key": "koerpertherapie",
+      "label": "Körpertherapie"
+    }
+  ]
+};
+
+export { P_DOKU, P_ANAMNESE, P_VERL, P_VERL_FOLGE, P_AKUT, P_ENTL, P_ISM, P_ENTL_THEMATISCH, P_BEFUND_VORLAGE, INTERVIEW_SETS_DEFAULT };

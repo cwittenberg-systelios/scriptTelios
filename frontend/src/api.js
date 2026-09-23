@@ -131,6 +131,8 @@ function buildJobFormData(workflow, prompt, userContent, files = {}) {
   if (files.bullets)          fd.append("bullets",          files.bullets);
   // v19.23: Interview-Protokoll (Objekt) als JSON-String - dritter Quelltyp P1.
   if (files.interviewProtokoll) fd.append("interview_protokoll", JSON.stringify(files.interviewProtokoll));
+  // v19.31: Gespraech des Dialog-Modus (Objekt) als JSON-String.
+  if (files.interviewGespraech) fd.append("interview_gespraech", JSON.stringify(files.interviewGespraech));
   if (files.styleText)        fd.append("style_text",       files.styleText);
   if (files.model)            fd.append("model",            files.model);
   // v19.28: Struktur-Schalter des Entlassberichts (D5) + bestaetigte
@@ -264,9 +266,31 @@ async function _jsonOrThrow(r) {
 }
 
 // GET /api/interview/sets -> { default_set, abschnitte, sets:[...] }
+// v19.24.1: Ist der Server aus oder nicht erreichbar, kommt das im Bundle
+// mitgelieferte Manifest (INTERVIEW_SETS_DEFAULT) zurueck - der Tab ist
+// sofort nutzbar; `source` sagt dem Aufrufer, woher die Daten stammen.
 async function fetchInterviewSets() {
-  const r = await apiFetch(`${getApiBase()}/interview/sets`);
-  return _jsonOrThrow(r);
+  const { INTERVIEW_SETS_DEFAULT } = await import("./prompt-defaults.jsx");
+  try {
+    const r = await apiFetch(`${getApiBase()}/interview/sets`, { signal: AbortSignal.timeout(6000) });
+    if (r.ok) return { ...(await r.json()), source: "server" };
+  } catch (_) { /* Fallback unten */ }
+  return { ...INTERVIEW_SETS_DEFAULT, source: "bundle" };
+}
+
+// v19.24.1: Server beim Oeffnen des Interview-Tabs still anstossen (Start-on-
+// Intent), damit der Pod laeuft, wenn die erste Antwort kommt. Liefert den
+// ensure-Status; "ok" = laeuft, "starting" = faehrt hoch, sonst kein Proxy/
+// kein Start moeglich. Blockiert nie.
+async function warmupInterviewServer() {
+  if (!getProxyBase()) return { status: "no_proxy" };
+  try {
+    const h = await apiFetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(4000) });
+    if (h && h.ok) return { status: "ok" };
+  } catch (_) { /* Server aus -> ensure */ }
+  const ens = await ensureServer();
+  announceServerState(ens);
+  return ens;
 }
 
 // POST /api/interview/transcribe (Kurzdiktat) -> { transcript, duration_seconds, word_count }
@@ -285,6 +309,44 @@ async function interviewTurn(payload) {
     body: JSON.stringify(payload),
   });
   return _jsonOrThrow(r);
+}
+
+// v19.31: POST /api/interview/chat/stream (SSE ueber fetch-Reader).
+// onEvent({type: delta|meta|error|done, ...}) je Event; liefert das meta-Objekt.
+async function interviewChatStream(payload, onEvent, { signal } = {}) {
+  const r = await _postEnsured(`${getApiBase()}/interview/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error((d && d.detail) || r.statusText);
+  }
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let meta = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const chunk = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const line = chunk.split("\n").find(l => l.startsWith("data: "));
+      if (!line) continue;
+      let ev;
+      try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+      if (ev.type === "meta") meta = ev;
+      if (ev.type === "error") throw new Error(ev.error_msg || "Stream-Fehler");
+      onEvent && onEvent(ev);
+      if (ev.type === "done") return meta;
+    }
+  }
+  return meta;
 }
 
 // v19.24: POST /api/interview/abschluss -> { punkte:[{typ,bezug,frage}], model_used }
@@ -397,4 +459,4 @@ function getConfluenceUser() {
   return "";
 }
 
-export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, fetchInterviewSets, interviewTranscribe, interviewTurn, interviewAbschluss, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };
+export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, fetchInterviewSets, warmupInterviewServer, interviewTranscribe, interviewTurn, interviewAbschluss, interviewChatStream, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };

@@ -255,3 +255,127 @@ async def interview_abschluss(
 def _aspekte_for_log(turn: TurnRequest) -> tuple[bool, list[str]]:
     from app.services.interview_dialog import _resolve_aspekte
     return _resolve_aspekte(turn)
+
+
+# ── v19.31 (S3): Dialog-Modus - Streaming-Turn ───────────────────────────────
+#
+# POST /api/interview/chat/stream
+#   Eingabe: Set, Historie (Frontend haelt sie, D2=B), Checkliste, Klient,
+#            Budget-Zaehler, Trigger-Stufe, Modell, Session-ID.
+#   SSE:     data: {"type":"delta","text":"…"}      gestreamter `sage`-Text
+#            data: {"type":"meta", …apply_turn()…}  Checkliste, fertig, Regie
+#            data: {"type":"done"}
+#            data: {"type":"error","error_msg":"…"}
+#
+# Der Endpoint ist zustandslos: plan_turn() rekonstruiert den Zustand aus
+# dem Request, apply_turn() liefert den neuen Zustand im meta-Event zurueck.
+
+class ChatTurnIn(BaseModel):
+    set: str = Field(min_length=1, max_length=64)
+    historie: list[dict] = Field(default_factory=list, max_length=400)
+    checkliste: dict[str, str] = Field(default_factory=dict)
+    rueckfragen: dict[str, int] = Field(default_factory=dict)
+    trigger_stufe: int = Field(default=0, ge=0, le=2)
+    klient: Optional[dict] = None
+    model: Optional[str] = None
+    session_id: Optional[str] = Field(default=None, max_length=64)
+    max_rueckfragen_thema: int = Field(default=4, ge=1, le=20)
+    max_rueckfragen_gesamt: int = Field(default=24, ge=1, le=100)
+
+
+@router.post("/interview/chat/stream")
+async def interview_chat_stream(
+    req: ChatTurnIn,
+    current_user: str = Depends(get_current_user),
+):
+    """Ein Turn des Dialog-Modus, gestreamt als SSE."""
+    import json as _json
+    from starlette.responses import StreamingResponse
+    from app.core.interview_sets import get_set
+    from app.services.interview_chat import (
+        TURN_SCHEMA, ChatConfig, ChatState, Turn, apply_turn, plan_turn,
+    )
+    from app.services.llm_chat import generate_chat_stream
+
+    if get_set(req.set) is None:
+        raise HTTPException(status_code=422, detail=f"Unbekanntes Fragen-Set: {req.set}")
+
+    historie = [
+        Turn(rolle=str(t.get("rolle") or "behandler"), text=str(t.get("text") or ""),
+             thema=str(t.get("thema") or ""))
+        for t in req.historie if isinstance(t, dict)
+    ]
+    state = ChatState(
+        set_key=req.set, historie=historie, checkliste=dict(req.checkliste),
+        rueckfragen_je_thema={k: int(v) for k, v in req.rueckfragen.items()},
+        trigger_stufe=req.trigger_stufe,
+        klient=req.klient if isinstance(req.klient, dict) and req.klient.get("initial") else None,
+    )
+    cfg = ChatConfig(max_rueckfragen_thema=req.max_rueckfragen_thema,
+                     max_rueckfragen_gesamt=req.max_rueckfragen_gesamt)
+    plan = plan_turn(state, cfg)
+
+    model = None
+    if req.model and req.model.strip():
+        from app.services.llm import ensure_generation_model
+        model = await ensure_generation_model(req.model, "dokumentation")
+    else:
+        from app.services.llm import ensure_generation_model
+        model = await ensure_generation_model(None, "dokumentation")
+
+    call_id = _session_call_id(req.session_id)
+    turn_no = sum(1 for t in historie if t.rolle == "system") + 1
+    try:
+        _log_prompt(call_id, "dokumentation", f"interview_chat:{req.set}:t{turn_no}",
+                    plan.system_prompt, _json.dumps(plan.messages, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        logger.debug("Interview-Chat: Prompt-Log fehlgeschlagen", exc_info=True)
+
+    def _sse(obj: dict) -> str:
+        return f"data: {_json.dumps(obj, ensure_ascii=False)}\n\n"
+
+    async def gen():
+        result = None
+        try:
+            async for kind, payload in generate_chat_stream(
+                plan.system_prompt, plan.messages, model=model, max_tokens=400,
+                temperature=0.3, response_format=TURN_SCHEMA, stream_field="sage",
+            ):
+                if kind == "delta":
+                    yield _sse({"type": "delta", "text": payload})
+                elif kind == "error":
+                    yield _sse({"type": "error", "error_msg": str(payload)})
+                    return
+                elif kind == "done":
+                    result = payload
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Interview-Chat %s: Stream-Fehler %s", call_id, e)
+            yield _sse({"type": "error", "error_msg": str(e)})
+            return
+        if result is None:
+            yield _sse({"type": "error", "error_msg": "Keine Antwort vom Modell."})
+            return
+        data = result.get("structured_data")
+        sage = (result.get("sage") or "").strip()
+        if not sage and isinstance(data, dict):
+            sage = str(data.get("sage") or "").strip()
+        if not sage:
+            sage = (result.get("text") or "").strip()[:600]
+        meta = apply_turn(state, data if isinstance(data, dict) else None, sage, plan, cfg)
+        meta.update({"type": "meta", "sage": sage, "regie": plan.regie,
+                     "model_used": result.get("model_used"), "duration_s": result.get("duration_s"),
+                     "parse_error": bool(result.get("structured_parse_error"))})
+        try:
+            _log_output(call_id, "dokumentation", f"interview_chat:{req.set}:t{turn_no}",
+                        result.get("text") or "", {"duration_s": result.get("duration_s"),
+                                                   "token_count": result.get("token_count"),
+                                                   "regie_typ": plan.regie_typ})
+        except Exception:  # noqa: BLE001
+            logger.debug("Interview-Chat: Output-Log fehlgeschlagen", exc_info=True)
+        logger.info("Interview-Chat %s t%d (user=%s set=%s): regie=%s fertig=%s",
+                    call_id, turn_no, current_user, req.set, plan.regie_typ, meta.get("fertig"))
+        yield _sse(meta)
+        yield _sse({"type": "done"})
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

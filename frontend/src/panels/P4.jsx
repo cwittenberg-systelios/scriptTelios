@@ -102,12 +102,12 @@ function FallformelCard({ ff, proposalText, audit, selection, onChange, onSelect
     <Card num="H" title="Fallformel (Gerüst des thematischen Berichts)" badge="opt" open={true} hasContent={themen.length > 0}>
       {!applied && (
         <div className="info-note">
-          Für diesen Lauf wurde keine Fallformel erstellt{audit && audit.fallback_reason ? ` (${audit.fallback_reason})` : ""} – der Bericht wurde thematisch ohne Gerüst geschrieben. Sie können unten selbst ein Gerüst anlegen.
+          Für diesen Lauf wurde keine Fallformel erstellt{audit && audit.fallback_reason ? ` (${audit.fallback_reason})` : ""} – der Bericht wurde thematisch ohne Gerüst geschrieben. Du kannst unten selbst ein Gerüst anlegen.
         </div>
       )}
       {applied && (
         <div className="info-note" style={{marginBottom:10}}>
-          {audit.source === "therapeut" ? "Von Ihnen bestätigte Fallformel." : "Vom Modell vorgeschlagen."} Klicken Sie auf die Nummer, um ein Thema zu wählen oder abzuwählen (max. {MAX_THEMEN}; die Nummer ist die Reihenfolge im Bericht). Texte lassen sich direkt ändern.
+          {audit.source === "therapeut" ? "Von dir bestätigte Fallformel." : "Vom Modell vorgeschlagen."} Klick auf die Nummer, um ein Thema zu wählen oder abzuwählen (max. {MAX_THEMEN}; die Nummer ist die Reihenfolge im Bericht). Texte lassen sich direkt ändern.
         </div>
       )}
 

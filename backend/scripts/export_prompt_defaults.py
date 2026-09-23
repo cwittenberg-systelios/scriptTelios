@@ -46,6 +46,7 @@ HEADER = """\
 //
 // Quelle: backend/app/services/prompts.py
 //         (WORKFLOW_INSTRUCTIONS_DEFAULT, BEFUND_VORLAGE)
+//         backend/app/core/interview_sets.py (INTERVIEW_SETS_DEFAULT, v19.24.1)
 // Generator: backend/scripts/export_prompt_defaults.py
 //   - `npm run build` ruft ihn als "prebuild" auf,
 //   - `lint_gate.sh --check` und tests/unit/test_prompt_defaults_sync.py
@@ -69,6 +70,8 @@ def _js_template_literal(text: str) -> str:
 def render() -> str:
     sys.path.insert(0, str(BACKEND_DIR))
     os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    import json
+    from app.core.interview_sets import to_manifest
     from app.services.prompts import (
         BEFUND_VORLAGE, WORKFLOW_INSTRUCTIONS_DEFAULT, WORKFLOW_INSTRUCTIONS_EB_THEMATISCH,
     )
@@ -86,7 +89,14 @@ def render() -> str:
         f"// Befundvorlage (Anamnese, Psychischer Befund)\n"
         f"const P_BEFUND_VORLAGE = `{_js_template_literal(BEFUND_VORLAGE)}`;\n\n"
     )
-    names = [c for c, _ in WORKFLOW_CONSTANTS] + ["P_ENTL_THEMATISCH", "P_BEFUND_VORLAGE"]
+    # v19.24.1: Fragen-Sets des Interview-Modus im Bundle, damit der Tab
+    # ohne laufenden Server sofort nutzbar ist (Server-Start laeuft parallel).
+    manifest_json = json.dumps(to_manifest(), ensure_ascii=False, indent=2, sort_keys=True)
+    parts.append(
+        "// Interview-Modus: Fragen-Sets (GET /api/interview/sets, Offline-Fallback)\n"
+        f"const INTERVIEW_SETS_DEFAULT = {manifest_json};\n\n"
+    )
+    names = [c for c, _ in WORKFLOW_CONSTANTS] + ["P_ENTL_THEMATISCH", "P_BEFUND_VORLAGE", "INTERVIEW_SETS_DEFAULT"]
     parts.append("export { " + ", ".join(names) + " };\n")
     return "".join(parts)
 
