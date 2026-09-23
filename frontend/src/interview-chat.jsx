@@ -222,7 +222,9 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const serverNote = serverState === "starting" ? "Server startet – Antworten werden verarbeitet, sobald er läuft (3–6 min)."
     : serverState === "no_server" ? "Kein Server verfügbar – bitte später erneut versuchen."
     : serverState === "blocked_night" ? "Zwischen 23 und 5 Uhr startet kein Server automatisch." : null;
-  const abgedeckt = v.fragen.filter(f => v.checkliste[f.key] === "abgedeckt").length;
+  // v19.31.2: optionale Punkte zaehlen nicht in den Fortschritt.
+  const pflichtFragen = v.fragen.filter(f => !f.optional);
+  const abgedeckt = pflichtFragen.filter(f => v.checkliste[f.key] === "abgedeckt").length;
   const recording = dict.state === "recording", transcribing = dict.state === "transcribing";
 
   const header = (
@@ -242,14 +244,14 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
 
   const checkliste = (
     <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 180 }} data-testid="chat-checkliste">
-      <div style={{ ...soft, fontWeight: 600 }}>Fragenliste · {abgedeckt}/{v.fragen.length}</div>
+      <div style={{ ...soft, fontWeight: 600 }}>Fragenliste · {abgedeckt}/{pflichtFragen.length}</div>
       {v.fragen.map((f, i) => {
         const st = v.checkliste[f.key] || "offen";
         const mark = st === "abgedeckt" ? "✓" : st === "unklar" ? "?" : "·";
         const col = st === "abgedeckt" ? "var(--st-text-soft)" : st === "unklar" ? "var(--st-red)" : "var(--st-text)";
         return <div key={f.key} title={f.text} style={{ fontSize: 12, color: col, display: "flex", gap: 6 }}>
           <span style={{ width: 12, textAlign: "center", fontWeight: 700 }}>{mark}</span>
-          <span style={{ textDecoration: st === "abgedeckt" ? "line-through" : "none" }}>{i + 1}. {f.text.length > 44 ? f.text.slice(0, 42) + "…" : f.text}{f.pflicht ? " *" : ""}</span>
+          <span style={{ textDecoration: st === "abgedeckt" ? "line-through" : "none" }}>{i + 1}. {f.text.length > 44 ? f.text.slice(0, 42) + "…" : f.text}{f.pflicht ? " *" : ""}{f.optional ? " (optional)" : ""}</span>
         </div>;
       })}
     </div>

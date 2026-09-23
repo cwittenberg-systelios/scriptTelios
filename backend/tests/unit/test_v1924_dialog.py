@@ -80,7 +80,7 @@ class TestKlient:
     async def test_turn_klient_erkannt(self):
         res = await decide_turn(TurnRequest("kunst", KLIENT_KEY, "Um wen?", "Frau Kaiser"), generate_fn=_no_llm)
         assert res.rueckfrage is None and res.quelle == "klient"
-        assert res.klient == {"anrede": "Frau", "initial": "K.", "gender": "w"}
+        assert res.klient == {"anrede": "Frau", "initial": "K.", "gender": "w", "nennung": "Frau Kaiser"}
         assert res.ueberleitung in UEBERLEITUNGEN
 
     async def test_turn_klient_nicht_erkannt_einmal_rueckfrage(self):
@@ -97,7 +97,7 @@ class TestKlient:
         assert "Um wen geht es" not in text and "Herr M." not in text
         assert text.count("FRAGE ") == len(get_set("kunst").fragen) - 1
         assert "Herr M." not in protokoll_plaintext(p)
-        assert p.klient() == {"anrede": "Herr", "initial": "M.", "gender": "m"}
+        assert p.klient() == {"anrede": "Herr", "initial": "M.", "gender": "m", "nennung": "Herr M."}
 
 
 # ── Trigger ───────────────────────────────────────────────────────────────────
@@ -272,7 +272,7 @@ class TestEndpoints:
         r = client.post("/api/interview/turn", json={
             "set": "kunst", "frage_key": KLIENT_KEY, "frage_text": "Um wen?", "antwort": "Frau Berger",
         })
-        assert r.json()["klient"] == {"anrede": "Frau", "initial": "B.", "gender": "w"}
+        assert r.json()["klient"] == {"anrede": "Frau", "initial": "B.", "gender": "w", "nennung": "Frau Berger"}
 
     def test_abschluss_endpoint(self, client, monkeypatch):
         import app.api.interview as api

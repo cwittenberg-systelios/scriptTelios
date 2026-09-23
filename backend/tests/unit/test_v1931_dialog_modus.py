@@ -138,9 +138,9 @@ class TestPlanTurn:
     def test_klient_wird_aus_historie_erkannt(self):
         st = _state(("system", "Um wen geht es?"), ("behandler", "Um Herrn Müller."))
         p = plan_turn(st)
-        assert st.klient == {"anrede": "Herr", "initial": "M.", "gender": "m"}
+        assert st.klient == {"anrede": "Herr", "initial": "M.", "gender": "m", "nennung": "Herr Müller"}
         assert st.checkliste[KLIENT_KEY] == STATUS_ABGEDECKT
-        assert "KLIENT/IN: Herr M." in p.system_prompt
+        assert "KLIENT/IN: im Gespraech 'Herr Müller' (Kuerzel fuer die Doku: Herr M.)" in p.system_prompt
 
     def test_trigger_regie(self):
         st = _state(("system", "Wie war es?"), ("behandler", "Er hat lebensmüde Gedanken geäußert."),
@@ -252,7 +252,7 @@ class TestGespraech:
         assert "[Interviewer]: Um wen geht es?" in text and "[Behandler]: Um Frau Kaiser, Anna." in text
         plain = gespraech_plaintext(g)
         assert "Um wen geht es?" not in plain and "Scham nach dem Streit" in plain
-        assert g.klient_info() == {"anrede": "Frau", "initial": "K.", "gender": "w"}
+        assert g.klient_info() == {"anrede": "Frau", "initial": "K.", "gender": "w", "nennung": "Frau Kaiser"}
 
     def test_klient_aus_feld_gewinnt(self):
         g = parse_gespraech(json.dumps(_gespraech(klient={"anrede": "Herr", "initial": "Z."})))
@@ -378,3 +378,70 @@ class TestChatEndpoint:
             "interview_gespraech": json.dumps(_gespraech()), "interview_protokoll": json.dumps(prot),
         })
         assert r.status_code == 422 and "nur eine" in r.json()["detail"]
+
+
+# ── v19.31.2: Eval-Befunde ────────────────────────────────────────────────────
+
+class TestV19312:
+    def test_ergebnisfrage_geteilt_prozess_optional(self):
+        from app.core.interview_sets import INTERVIEW_SETS
+        for s in INTERVIEW_SETS:
+            if s.key == "gespraech":
+                continue
+            keys = [f.key for f in s.fragen]
+            assert keys.index("ergebnis") < keys.index("zustand") < keys.index("prozess")
+            f = {x.key: x for x in s.fragen}
+            assert f["zustand"].pflichtaspekte and not f["zustand"].optional
+            assert f["prozess"].optional and not f["prozess"].pflichtaspekte
+            assert "?" in f["ergebnis"].text and f["ergebnis"].text.count("?") == 1
+
+    def test_optional_blockiert_abschluss_nicht(self):
+        s = get_set("kunst")
+        alle_ausser_prozess = {f.key: STATUS_ABGEDECKT for f in s.fragen if f.key != "prozess"}
+        st = _state(("system", "?"), ("behandler", "Um Frau K. Keine Hinweise auf Selbstgefährdung."),
+                    checkliste=alle_ausser_prozess)
+        assert plan_turn(st).regie_typ == "abschluss"
+
+    def test_optional_im_prompt_markiert(self):
+        p = plan_turn(_state())
+        assert "(prozess) [offen] [OPTIONAL]" in p.system_prompt
+        assert "Mit [OPTIONAL] markierte Punkte" in p.system_prompt
+
+    def test_trigger_nutzt_nennung_des_behandlers(self):
+        st = _state(("system", "Um wen?"), ("behandler", "Es geht um Frau Kaiser."),
+                    ("system", "Wie war es?"), ("behandler", "Sie hat lebensmüde Gedanken geäußert."))
+        p = plan_turn(st)
+        assert p.regie_typ == "trigger" and "Frau Kaiser" in p.regie and "Frau K." not in p.regie
+
+    def test_verwendete_einstiege(self):
+        from app.services.interview_chat import verwendete_einstiege
+        h = [Turn("system", "Alles klar, Herr Müller. Und?"), Turn("behandler", "Alles klar."),
+             Turn("system", "Verstanden. Gab es …"), Turn("system", "Gutachten?"), Turn("system", "Alles klar.")]
+        assert verwendete_einstiege(h) == ["alles klar", "verstanden"]
+        p = plan_turn(_state(("system", "Alles klar, los geht's."), ("behandler", "Frau K.")))
+        assert "BEREITS VERWENDETE EINSTIEGE (nicht wiederholen): 'Alles klar'" in p.system_prompt
+
+    def test_abschluss_verspricht_keine_eigene_erstellung(self):
+        from app.services.interview_chat import REGELN
+        alle = {f.key: STATUS_ABGEDECKT for f in get_set("kunst").fragen}
+        p = plan_turn(_state(("behandler", "Um Frau K. Keine Hinweise auf Selbstgefährdung."), checkliste=alle))
+        assert "NICHT, dass du sie erstellst" in p.regie
+        assert "Sage NICHT, dass du sie erstellst" in REGELN
+
+    def test_regel_eine_sache_und_themen_statt_wortlaut(self):
+        from app.services.interview_chat import REGELN
+        assert "nicht mehrere Teilfragen" in REGELN and "THEMEN, nicht den Wortlaut" in REGELN
+        assert "Nicht jede Antwort bestaetigen" in REGELN
+
+    def test_trigger_kette_startet_nicht_zweimal(self):
+        st = _state(("system", "Wie war es?"), ("behandler", "Er hat Suizidgedanken geäußert."),
+                    ("system", "Gab es konkrete Pläne oder Handlungen, und ist Herr Y. aktuell absprachefähig?"),
+                    ("behandler", "Keine Pläne, absprachefähig."),
+                    ("system", "Gab es Hinweise auf Selbstgefährdung?"),
+                    ("behandler", "Siehe oben, Suizidgedanken, keine Pläne."))
+        assert plan_turn(st).regie_typ != "trigger"
+        # waehrend der laufenden Kette (Stufe 1) greift Glied 2 weiterhin
+        st2 = _state(("system", "Gab es konkrete Pläne oder Handlungen, und ist Herr Y. aktuell absprachefähig?"),
+                     ("behandler", "Unsicher, ob er absprachefähig ist."), trigger_stufe=1)
+        p2 = plan_turn(st2)
+        assert p2.regie_typ == "trigger" and "Kooperationsbedingung" in p2.regie

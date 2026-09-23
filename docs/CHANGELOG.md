@@ -539,6 +539,31 @@ hinzuzuerfinden. Fragekarten bleiben als zweite Form erhalten.
   gegen die drei Skripte fahren und die Regeln (Ueberfragen, Einschmuggeln)
   nachziehen.
 
+
+### v19.31.2 — Befunde aus der ersten Eval (2026-09-23)
+
+Eval gemma4:31b, drei Skripte: alle abgeschlossen, 7/7 abgedeckt, nichts
+eingeschmuggelt. Beim Lesen der Gespraeche fielen auf und sind behoben:
+
+- **Zusammengesetzte Frage geteilt.** In den nonverbalen Sets war „Ergebnis +
+  Zustand + Prozess/Entwicklungsperspektive“ eine Frage; der letzte Teil
+  wurde regelmaessig nachgefragt. Jetzt `ergebnis`, `zustand` („Wie ging die
+  Person aus der Stunde?“, Pflichtaspekt) und `prozess` (neu: `optional=True`
+  - einmal kurz fragen, nicht nachbohren, blockiert den Abschluss nicht).
+  Formulierungen werden nach den ersten Tests optimiert.
+- **Regeln im Prompt:** eine Sache je Turn statt Teilfragen; die Liste nennt
+  Themen, nicht den Wortlaut; nicht jede Antwort bestaetigen, keine Floskel
+  zweimal (bereits benutzte Einstiege stehen im Prompt); beim Abschluss
+  „die Verlaufsnotiz kann jetzt erstellt werden“ statt „ich erstelle“.
+- **Anrede wie der Behandler.** `extract_klient()` liefert zusaetzlich
+  `nennung` („Frau Kaiser“); Trigger-Nachfragen und Prompt nutzen sie, die
+  Doku weiterhin nur das Kuerzel.
+- **Suizid-Kette laeuft nur einmal.** Ein spaeterer Verweis („siehe oben,
+  Suizidgedanken“) startet Glied 1 nicht erneut (im Probelauf gefunden).
+- **Eval-Skript:** antwortet auf Trigger-Nachfragen aus dem Ursprungsthema
+  (prueft so Glied 2), neues Skript `suizid_glied2`, Kennzahlen `floskeln`
+  und Latenz je Turn (Mittel/Max).
+
 ---
 
 ## [v19.24] — Interview-Dialog: Gespraechsfuehrung, Trigger, Abschluss-Check (2026-09-18)

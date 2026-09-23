@@ -73,8 +73,18 @@ REGELN = (
     "- Du sprichst mit dem Behandler (Therapeut/in) und duzt ihn. Die Person, "
     "um die es geht, ist Klient/in des Behandlers; nenne sie so, wie der "
     "Behandler sie nennt (Name, Vorname, Kuerzel oder 'sie/er').\n"
-    "- Stelle GENAU EINE Frage je Turn. Kurze Saetze, gesprochene Sprache - "
-    "deine Saetze werden vorgelesen. Keine Aufzaehlungen, keine Ueberschriften.\n"
+    "- Stelle GENAU EINE Frage je Turn - eine Sache, nicht mehrere Teilfragen "
+    "in einem Satz. Kurze Saetze, gesprochene Sprache - deine Saetze werden "
+    "vorgelesen. Keine Aufzaehlungen, keine Ueberschriften.\n"
+    "- Die Fragenliste nennt THEMEN, nicht den Wortlaut: formuliere jede Frage "
+    "in eigenen, knappen Worten. Lies sie nicht vor.\n"
+    "- Nicht jede Antwort bestaetigen. Eine kurze Bestaetigung ('Verstanden.') "
+    "nur vor einer Nachfrage oder nach einer schweren Antwort; sonst direkt "
+    "die naechste Frage. Keine Floskel zweimal im Gespraech - die bereits "
+    "verwendeten Einstiege stehen unten.\n"
+    "- Mit [OPTIONAL] markierte Punkte fragst du einmal kurz; was immer der "
+    "Behandler antwortet (auch 'nichts' oder 'weiss nicht'), ist genug - "
+    "nicht nachfragen. Sie muessen fuer den Abschluss nicht abgedeckt sein.\n"
     "- Die Fragenliste ist dein Rueckgrat: arbeite sie in ihrer Reihenfolge ab. "
     "Du darfst abweichen, wenn ein Punkt schon beantwortet wurde (dann NICHT "
     "erneut fragen) oder wenn eine Antwort einen spaeteren Punkt schon "
@@ -96,6 +106,9 @@ REGELN = (
     "nennt Schluessel, zu denen du noch nachfragen willst. `thema` ist der "
     "Schluessel der Frage, zu der dein aktueller Satz gehoert. `fertig` ist "
     "true, wenn alle Punkte abgedeckt sind und du dich verabschiedest.\n"
+    "- Beim Abschluss: bedanke dich kurz und sage, dass die Verlaufsnotiz "
+    "jetzt erstellt werden kann. Sage NICHT, dass du sie erstellst - das "
+    "startet der Behandler selbst.\n"
 )
 
 
@@ -188,9 +201,39 @@ def _checkliste_block(s: InterviewSet, state: ChatState) -> str:
     lines = ["FRAGENLISTE (dein Rueckgrat, mit Status):"]
     for i, f in enumerate(s.fragen, 1):
         st = state.checkliste.get(f.key, STATUS_OFFEN)
-        pflicht = " [PFLICHT]" if f.pflicht else ""
+        pflicht = " [PFLICHT]" if f.pflicht else (" [OPTIONAL]" if getattr(f, "optional", False) else "")
         lines.append(f"{i}. ({f.key}) [{st}]{pflicht} {f.text}")
     return "\n".join(lines)
+
+
+_EINSTIEG_MUSTER = (
+    "alles klar", "verstanden", "okay", "gut", "danke", "super", "prima",
+    "sehr gut", "in ordnung", "aha", "ah",
+)
+
+
+def verwendete_einstiege(historie: list[Turn]) -> list[str]:
+    """v19.31.2: Floskeln, mit denen das System bisher Saetze begonnen hat -
+    gehen in den Prompt, damit das Modell sie nicht wiederholt."""
+    out: list[str] = []
+    for t in historie:
+        if t.rolle != "system":
+            continue
+        lo = t.text.strip().lower()
+        for m in sorted(_EINSTIEG_MUSTER, key=len, reverse=True):
+            if lo.startswith(m) and (len(lo) == len(m) or not lo[len(m)].isalpha()):
+                if m not in out:
+                    out.append(m)
+                break
+    return out
+
+
+def klient_nennung(klient: dict | None) -> str | None:
+    """Wie das System die Person im Gespraech nennt: so, wie der Behandler sie
+    genannt hat (G2); Kuerzel nur als Rueckfall."""
+    if not klient:
+        return None
+    return klient.get("nennung") or (f"{klient.get('anrede', '')} {klient.get('initial', '')}".strip() or None)
 
 
 def build_system_prompt(state: ChatState, cfg: ChatConfig, regie: str | None) -> str:
@@ -205,7 +248,14 @@ def build_system_prompt(state: ChatState, cfg: ChatConfig, regie: str | None) ->
         f"Nachfragen insgesamt und hoechstens {cfg.max_rueckfragen_thema} je Punkt.",
     ]
     if state.klient:
-        parts.append(f"KLIENT/IN: {state.klient['anrede']} {state.klient['initial']} (Kuerzel).")
+        parts.append(
+            f"KLIENT/IN: im Gespraech '{klient_nennung(state.klient)}' "
+            f"(Kuerzel fuer die Doku: {state.klient['anrede']} {state.klient['initial']})."
+        )
+    einst = verwendete_einstiege(state.historie)
+    if einst:
+        parts.append("BEREITS VERWENDETE EINSTIEGE (nicht wiederholen): "
+                     + ", ".join(f"'{e.capitalize()}'" for e in einst))
     if regie:
         parts.append("REGIE-ANWEISUNG FUER DIESEN TURN: " + regie)
     return "\n\n".join(parts)
@@ -245,10 +295,16 @@ def plan_turn(state: ChatState, cfg: ChatConfig = ChatConfig()) -> Plan:
             state.klient = k
             state.checkliste[KLIENT_KEY] = STATUS_ABGEDECKT
 
-    # 1. Suizidalitaets-Trigger auf die letzte Antwort
-    if letzte:
-        anrede = f"{state.klient['anrede']} {state.klient['initial']}" if state.klient else None
-        tr = pruefe_trigger(letzte, stufe=state.trigger_stufe, anrede=anrede)
+    # 1. Suizidalitaets-Trigger auf die letzte Antwort.
+    # v19.31.2: Ist die Kette in diesem Gespraech schon gelaufen (Glied 1 wurde
+    # gestellt), startet ein spaeterer Verweis ("siehe oben, Suizidgedanken")
+    # sie nicht erneut - sonst fragt das System dieselbe Frage zweimal.
+    kette_gelaufen = any(
+        t.rolle == "system" and "konkrete Pläne oder Handlungen" in t.text
+        for t in state.historie
+    )
+    if letzte and not (kette_gelaufen and state.trigger_stufe == 0):
+        tr = pruefe_trigger(letzte, stufe=state.trigger_stufe, anrede=klient_nennung(state.klient))
         if tr.nachfrage:
             state.trigger_stufe = tr.stufe
             regie = f"Stelle jetzt genau diese Frage, ohne Umschweife: \"{tr.nachfrage}\""
@@ -258,11 +314,14 @@ def plan_turn(state: ChatState, cfg: ChatConfig = ChatConfig()) -> Plan:
 
     # 2./3. Abschluss nur, wenn Pflichtpunkte per Marker bestaetigt; sonst Budget
     if regie is None:
-        alle = all(state.checkliste.get(f.key) == STATUS_ABGEDECKT for f in s.fragen)
+        alle = all(state.checkliste.get(f.key) == STATUS_ABGEDECKT
+                   for f in s.fragen if not getattr(f, "optional", False))
         pf = pflicht_erfuellt(state)
         offen_pflicht = [f for f in s.fragen if f.pflicht and not pf.get(f.key, False)]
         if alle and not offen_pflicht:
-            regie = "Alle Punkte sind abgedeckt. Bedanke dich kurz, fasse in einem Satz zusammen, was du hast, und setze fertig auf true."
+            regie = ("Alle Punkte sind abgedeckt. Bedanke dich kurz und sage, dass die "
+                     "Verlaufsnotiz jetzt erstellt werden kann (NICHT, dass du sie erstellst). "
+                     "Setze fertig auf true.")
             typ = "abschluss"
         elif alle and offen_pflicht:
             f = offen_pflicht[0]
@@ -279,7 +338,8 @@ def plan_turn(state: ChatState, cfg: ChatConfig = ChatConfig()) -> Plan:
                 typ = "budget"
 
     if len(state.historie) >= cfg.max_turns and typ != "abschluss":
-        regie = "Das Gespraech ist lang genug. Schliesse jetzt ab: bedanke dich und setze fertig auf true."
+        regie = ("Das Gespraech ist lang genug. Schliesse jetzt ab: bedanke dich, sage, dass die "
+                 "Verlaufsnotiz jetzt erstellt werden kann, und setze fertig auf true.")
         typ = "abschluss"
 
     return Plan(

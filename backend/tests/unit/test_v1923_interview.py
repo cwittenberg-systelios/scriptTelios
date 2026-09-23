@@ -89,7 +89,7 @@ class TestSets:
         assert set(m["abschnitte"]) == set(ABSCHNITTE)
         assert len(m["sets"]) == len(INTERVIEW_SETS)
         f = m["sets"][0]["fragen"][0]
-        assert set(f) == {"key", "text", "ziel_abschnitt", "pflicht", "pflichtaspekte", "hinweis"}
+        assert set(f) == {"key", "text", "ziel_abschnitt", "pflicht", "pflichtaspekte", "hinweis", "optional"}
         json.dumps(m)  # serialisierbar
 
     def test_get_frage(self):

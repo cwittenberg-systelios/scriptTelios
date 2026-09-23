@@ -63,6 +63,10 @@ class InterviewFrage:
     pflichtaspekte: tuple[str, ...] = field(default_factory=tuple)
                                       # was die Antwort abdecken soll (D1=C)
     hinweis: str = ""                 # kurze UI-Hilfe unter der Frage
+    # v19.31.2: optionale Fragen muessen im Dialog-Modus nicht abgedeckt sein,
+    # damit das Gespraech abschliessen kann; das Modell fragt sie einmal kurz
+    # und bohrt nicht nach.
+    optional: bool = False
 
 
 @dataclass(frozen=True)
@@ -132,13 +136,28 @@ def _nonverbal_set(key: str, label: str, beschreibung: str, *,
                 pflichtaspekte=("Emotionen oder Ausdruck der Person",
                                 "Beziehungsgestaltung oder Kontakt"),
             ),
+            # v19.31.2: frueher EINE zusammengesetzte Frage (Ergebnis + Zustand
+            # + Prozess/Entwicklungsperspektive). In der Eval wurde der letzte
+            # Teil regelmaessig nachgefragt - jetzt drei Fragen, die dritte
+            # optional. Formulierungen werden nach den ersten Tests optimiert.
             InterviewFrage(
                 key="ergebnis",
-                text="Was war das Ergebnis der Stunde, und in welchem Zustand "
-                     "geht die Person? Wie schätzt du den Prozess und die "
-                     "Entwicklungsperspektive ein?",
+                text="Was war das Ergebnis der Stunde?",
+                ziel_abschnitt="hypothesen",
+                pflichtaspekte=("das Ergebnis der Stunde",),
+            ),
+            InterviewFrage(
+                key="zustand",
+                text="Wie ging die Person aus der Stunde?",
                 ziel_abschnitt="hypothesen",
                 pflichtaspekte=("der Zustand der Person am Ende der Stunde",),
+            ),
+            InterviewFrage(
+                key="prozess",
+                text="Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
+                ziel_abschnitt="hypothesen",
+                optional=True,
+                hinweis="Optional – eine kurze Einschätzung reicht.",
             ),
             _FRAGE_VEREINBARUNG,
             FRAGE_SELBSTGEFAEHRDUNG,
@@ -253,6 +272,7 @@ def to_manifest() -> dict:
                         "pflicht": f.pflicht,
                         "pflichtaspekte": list(f.pflichtaspekte),
                         "hinweis": f.hinweis,
+                        "optional": f.optional,
                     }
                     for f in s.fragen
                 ],

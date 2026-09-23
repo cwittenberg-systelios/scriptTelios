@@ -18,6 +18,13 @@ danach mit "Mehr weiss ich dazu nicht." Kennzahlen:
   redundant        Turns, die apply_turn als redundant gemeldet hat
   fertig           ob das Gespraech regulaer beendet wurde
   regie            Verteilung der Regie-Typen (trigger/pflicht/budget/abschluss)
+  floskeln         Interviewer-Turns, die mit einer bereits benutzten Floskel
+                   beginnen ("Alles klar", "Verstanden", ...) (v19.31.2)
+  latenz           Sekunden je Turn (Mittel / Max) (v19.31.2)
+
+Auf Trigger-Nachfragen (Suizidalitaet) antwortet der Behandler aus dem
+Thema, in dem die Suizidalitaet zur Sprache kam - so wird die Kette bis
+Glied 2 geprueft (v19.31.2).
 
 Das Skript ist bewusst simpel: es misst Ueberfragen, Vergessen und
 Einschmuggeln, nicht Gespraechsqualitaet - dafuer ist die Rueckmeldeplattform.
@@ -37,6 +44,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from app.services.interview_chat import (  # noqa: E402
     STATUS_ABGEDECKT, TURN_SCHEMA, ChatConfig, ChatState, Turn, apply_turn, plan_turn,
+    verwendete_einstiege,
 )
 from app.core.interview_sets import get_set  # noqa: E402
 from app.services.llm_chat import generate_chat_stream  # noqa: E402
@@ -53,7 +61,9 @@ SKRIPTE = [
             "anliegen": ["Umgang mit Scham nach dem Streit mit der Tochter am Wochenende."],
             "methode": ["Freies Malen mit Acryl, Thema was zwischen uns steht.", "Entstanden ist eine rote Fläche mit einem grauen Spalt."],
             "beobachtung": ["Anfangs zurückgezogen, hat schnell und fast wütend gemalt.", "Kaum Blickkontakt, erst beim Betrachten des Bildes."],
-            "ergebnis": ["Er konnte den Spalt als das benennen, was er nicht sagt. Geht ruhiger, aber erschöpft."],
+            "ergebnis": ["Er konnte den Spalt als das benennen, was er nicht sagt."],
+            "zustand": ["Geht ruhiger, aber erschöpft."],
+            "prozess": ["Er kommt langsam an das Thema ran."],
             "vereinbarung": ["Er schaut das Bild bis nächste Woche jeden Tag kurz an."],
             "selbstgefaehrdung": ["Keine Hinweise auf Selbstgefährdung."],
         },
@@ -68,7 +78,9 @@ SKRIPTE = [
             "beobachtung": ["Sehr still, hat lange an der Figur gedrückt. Zum Ende hin hat sie lebensmüde Gedanken geäußert.",
                             "Keine konkreten Pläne, sie ist absprachefähig, glaubhaft.",
                             "Wir haben eine Kooperationsbedingung vereinbart und den Nachtdienst informiert."],
-            "ergebnis": ["Sie geht ernst, aber gefasst."],
+            "ergebnis": ["Die Figur hat sie am Ende abgestellt, das war wichtig."],
+            "zustand": ["Sie geht ernst, aber gefasst."],
+            "prozess": ["Mehr weiß ich dazu nicht."],
             "vereinbarung": ["Morgen früh kurzes Gespräch, sonst nichts."],
             "selbstgefaehrdung": ["Siehe oben, lebensmüde Gedanken, distanziert, keine Pläne."],
         },
@@ -81,13 +93,35 @@ SKRIPTE = [
             "anliegen": ["Grenzen setzen."],
             "methode": ["Collage."],
             "beobachtung": ["Konzentriert, guter Kontakt."],
-            "ergebnis": ["Zufrieden, geht stabil."],
+            "ergebnis": ["Zufrieden mit der Collage."],
+            "zustand": ["Geht stabil."],
+            "prozess": ["Weiß ich nicht."],
             "vereinbarung": ["Nichts vereinbart."],
             "selbstgefaehrdung": ["Nein, keine Hinweise."],
         },
         "nicht_gesagt": ["Angst", "Familie", "Kind"],
     },
 ]
+
+SKRIPTE.append({
+    # v19.31.2: prueft Glied 2 der Suizidalitaets-Kette (fehlende/unsichere
+    # Absprachefaehigkeit -> Frage nach der Vereinbarung).
+    "name": "suizid_glied2",
+    "antworten": {
+        "klient": ["Um Herrn Yilmaz."],
+        "anliegen": ["Wut auf sich selbst nach dem Rückfall."],
+        "methode": ["Trommeln, freie Improvisation."],
+        "beobachtung": ["Laut, abgehackt, dann plötzlich still. Er hat gesagt, er denke manchmal an Suizid.",
+                        "Konkrete Pläne hat er verneint, aber ich bin unsicher, ob er absprachefähig ist.",
+                        "Wir haben eine Kooperationsbedingung vereinbart, die Stationsärztin ist informiert und der Nachtdienst weiß Bescheid."],
+        "ergebnis": ["Er hat den Rhythmus am Ende selbst verlangsamt."],
+        "zustand": ["Angespannt, aber im Kontakt."],
+        "prozess": ["Schwer einzuschätzen."],
+        "vereinbarung": ["Morgen früh Gespräch mit der Ärztin."],
+        "selbstgefaehrdung": ["Siehe oben, Suizidgedanken, Kooperationsbedingung vereinbart."],
+    },
+    "nicht_gesagt": ["Alkohol", "Familie", "Medikation"],
+})
 
 FALLBACK = "Mehr weiß ich dazu nicht."
 
@@ -103,6 +137,9 @@ async def run_skript(sk: dict, set_key: str, model: str, cfg: ChatConfig) -> dic
     regie: dict[str, int] = {}
     redundant = 0
     turns = 0
+    floskeln = 0
+    latenz: list[float] = []
+    letztes_thema = ""
     while not state.fertig and turns < cfg.max_turns:
         plan = plan_turn(state, cfg)
         if plan.regie_typ:
@@ -116,7 +153,12 @@ async def run_skript(sk: dict, set_key: str, model: str, cfg: ChatConfig) -> dic
                 result = payload
         data = result.get("structured_data") if result else None
         sage = (result.get("sage") or "").strip() if result else ""
+        if result and result.get("duration_s") is not None:
+            latenz.append(float(result["duration_s"]))
+        vorher = verwendete_einstiege(state.historie)
         meta = apply_turn(state, data, sage, plan, cfg)
+        if any(sage.lower().startswith(e) for e in vorher):
+            floskeln += 1
         turns += 1
         if meta["redundant"]:
             redundant += 1
@@ -124,7 +166,11 @@ async def run_skript(sk: dict, set_key: str, model: str, cfg: ChatConfig) -> dic
             break
         # Behandler antwortet aus dem Skript
         offen = [f.key for f in s.fragen if state.checkliste.get(f.key) != STATUS_ABGEDECKT]
-        thema = _thema_von(sage, meta["thema"], offen)
+        if meta.get("regie_typ") == "trigger" and letztes_thema:
+            thema = letztes_thema          # Trigger-Kette: aus dem Ursprungsthema antworten
+        else:
+            thema = _thema_von(sage, meta["thema"], offen)
+        letztes_thema = thema
         saetze = sk["antworten"].get(thema, [])
         i = verbrauch.get(thema, 0)
         antwort = saetze[i] if i < len(saetze) else FALLBACK
@@ -136,7 +182,9 @@ async def run_skript(sk: dict, set_key: str, model: str, cfg: ChatConfig) -> dic
         "name": sk["name"], "turns": turns, "fertig": state.fertig,
         "abgedeckt": sum(1 for f in s.fragen if state.checkliste.get(f.key) == STATUS_ABGEDECKT),
         "punkte": len(s.fragen), "nachfragen": dict(state.rueckfragen_je_thema),
-        "redundant": redundant, "erfunden": erfunden, "regie": regie,
+        "redundant": redundant, "erfunden": erfunden, "regie": regie, "floskeln": floskeln,
+        "latenz_mittel": round(sum(latenz) / len(latenz), 1) if latenz else None,
+        "latenz_max": round(max(latenz), 1) if latenz else None,
         "gespraech": [{"rolle": t.rolle, "text": t.text} for t in state.historie],
     }
 
@@ -162,7 +210,8 @@ async def main() -> int:
             continue
         print(f"{r['name']:14s} turns={r['turns']:2d} fertig={str(r['fertig']):5s} "
               f"abgedeckt={r['abgedeckt']}/{r['punkte']} redundant={r['redundant']} "
-              f"erfunden={r['erfunden'] or '-'} nachfragen={r['nachfragen']} regie={r['regie']}")
+              f"erfunden={r['erfunden'] or '-'} floskeln={r['floskeln']} "
+              f"latenz={r['latenz_mittel']}s/{r['latenz_max']}s nachfragen={r['nachfragen']} regie={r['regie']}")
     if a.json:
         with open(a.json, "w", encoding="utf-8") as fh:  # noqa: ASYNC230 - einmalig am Ende
             fh.write(json.dumps(out, ensure_ascii=False, indent=2))

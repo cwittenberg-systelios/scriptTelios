@@ -162,6 +162,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
           "key": "klient",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [],
           "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
@@ -170,6 +171,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "anliegen",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "das Anliegen oder Ziel des Gesprächs"
@@ -180,6 +182,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "inhalte",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "konkrete Inhalte des Gesprächs"
@@ -190,6 +193,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "hypothesen",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [],
           "text": "Welche Hypothesen, Reframings oder Sinnzuschreibungen habt ihr erarbeitet? Was wird möglich, wenn …?",
@@ -198,6 +202,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
           "key": "vereinbarung",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [],
           "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
@@ -206,6 +211,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
           "key": "selbstgefaehrdung",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [
             "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"
@@ -223,6 +229,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
           "key": "klient",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [],
           "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
@@ -231,6 +238,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "anliegen",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "das Anliegen oder Thema der Person"
@@ -241,6 +249,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "methode",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "die eingesetzte Methode oder Intervention"
@@ -251,6 +260,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "beobachtung",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "Emotionen oder Ausdruck der Person",
@@ -262,16 +272,38 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "ergebnis",
+          "optional": false,
+          "pflicht": false,
+          "pflichtaspekte": [
+            "das Ergebnis der Stunde"
+          ],
+          "text": "Was war das Ergebnis der Stunde?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "",
+          "key": "zustand",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "der Zustand der Person am Ende der Stunde"
           ],
-          "text": "Was war das Ergebnis der Stunde, und in welchem Zustand geht die Person? Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
+          "text": "Wie ging die Person aus der Stunde?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "Optional – eine kurze Einschätzung reicht.",
+          "key": "prozess",
+          "optional": true,
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
           "ziel_abschnitt": "hypothesen"
         },
         {
           "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
           "key": "vereinbarung",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [],
           "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
@@ -280,6 +312,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
           "key": "selbstgefaehrdung",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [
             "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"
@@ -297,6 +330,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
           "key": "klient",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [],
           "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
@@ -305,6 +339,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "anliegen",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "das Anliegen oder Thema der Person"
@@ -315,6 +350,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "methode",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "die eingesetzte Methode oder Intervention"
@@ -325,6 +361,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "beobachtung",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "Emotionen oder Ausdruck der Person",
@@ -336,16 +373,38 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "ergebnis",
+          "optional": false,
+          "pflicht": false,
+          "pflichtaspekte": [
+            "das Ergebnis der Stunde"
+          ],
+          "text": "Was war das Ergebnis der Stunde?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "",
+          "key": "zustand",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "der Zustand der Person am Ende der Stunde"
           ],
-          "text": "Was war das Ergebnis der Stunde, und in welchem Zustand geht die Person? Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
+          "text": "Wie ging die Person aus der Stunde?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "Optional – eine kurze Einschätzung reicht.",
+          "key": "prozess",
+          "optional": true,
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
           "ziel_abschnitt": "hypothesen"
         },
         {
           "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
           "key": "vereinbarung",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [],
           "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
@@ -354,6 +413,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
           "key": "selbstgefaehrdung",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [
             "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"
@@ -371,6 +431,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
           "key": "klient",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [],
           "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
@@ -379,6 +440,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "anliegen",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "das Anliegen oder Thema der Person"
@@ -389,6 +451,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "methode",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "die eingesetzte Methode oder Intervention"
@@ -399,6 +462,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "beobachtung",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "Emotionen oder Ausdruck der Person",
@@ -410,16 +474,38 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "ergebnis",
+          "optional": false,
+          "pflicht": false,
+          "pflichtaspekte": [
+            "das Ergebnis der Stunde"
+          ],
+          "text": "Was war das Ergebnis der Stunde?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "",
+          "key": "zustand",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "der Zustand der Person am Ende der Stunde"
           ],
-          "text": "Was war das Ergebnis der Stunde, und in welchem Zustand geht die Person? Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
+          "text": "Wie ging die Person aus der Stunde?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "Optional – eine kurze Einschätzung reicht.",
+          "key": "prozess",
+          "optional": true,
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
           "ziel_abschnitt": "hypothesen"
         },
         {
           "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
           "key": "vereinbarung",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [],
           "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
@@ -428,6 +514,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
           "key": "selbstgefaehrdung",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [
             "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"
@@ -445,6 +532,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Nur Anrede und Anfangsbuchstabe des Nachnamens – kein voller Name.",
           "key": "klient",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [],
           "text": "Um wen geht es? Bitte Anrede und Kürzel, zum Beispiel „Frau K.“.",
@@ -453,6 +541,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "anliegen",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "das Anliegen oder Thema der Person"
@@ -463,6 +552,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "methode",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "die eingesetzte Methode oder Intervention"
@@ -473,6 +563,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "beobachtung",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "Emotionen oder Ausdruck der Person",
@@ -484,16 +575,38 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "",
           "key": "ergebnis",
+          "optional": false,
+          "pflicht": false,
+          "pflichtaspekte": [
+            "das Ergebnis der Stunde"
+          ],
+          "text": "Was war das Ergebnis der Stunde?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "",
+          "key": "zustand",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [
             "der Zustand der Person am Ende der Stunde"
           ],
-          "text": "Was war das Ergebnis der Stunde, und in welchem Zustand geht die Person? Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
+          "text": "Wie ging die Person aus der Stunde?",
+          "ziel_abschnitt": "hypothesen"
+        },
+        {
+          "hinweis": "Optional – eine kurze Einschätzung reicht.",
+          "key": "prozess",
+          "optional": true,
+          "pflicht": false,
+          "pflichtaspekte": [],
+          "text": "Wie schätzt du den Prozess und die Entwicklungsperspektive ein?",
           "ziel_abschnitt": "hypothesen"
         },
         {
           "hinweis": "Nur was tatsächlich ausgesprochen wurde – 'nichts vereinbart' ist eine gültige Antwort.",
           "key": "vereinbarung",
+          "optional": false,
           "pflicht": false,
           "pflichtaspekte": [],
           "text": "Was habt ihr vereinbart, wie es weitergeht? Gab es Einladungen, Aufgaben oder Impulse für die Zeit bis zur nächsten Stunde?",
@@ -502,6 +615,7 @@ const INTERVIEW_SETS_DEFAULT = {
         {
           "hinweis": "Pflichtfrage – die Doku enthält immer einen Satz dazu.",
           "key": "selbstgefaehrdung",
+          "optional": false,
           "pflicht": true,
           "pflichtaspekte": [
             "eine klare Aussage, ob Hinweise auf Suizidalität vorlagen"

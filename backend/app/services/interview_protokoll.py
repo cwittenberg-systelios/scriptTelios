@@ -145,7 +145,11 @@ def extract_klient(antwort: str | None) -> dict | None:
     initial = pn["initial"]
     if not initial.endswith("."):
         initial = initial[0].upper() + "."
-    return {"anrede": anrede, "initial": initial, "gender": "m" if anrede == "Herr" else "w"}
+    # v19.31.2: `nennung` = Form, in der der Behandler die Person genannt hat
+    # ("Frau Kaiser") - nur fuer das Gespraech; die Doku nutzt das Kuerzel.
+    nennung = f"{anrede} {m.group(2).rstrip('.')}" + ("." if len(m.group(2).rstrip('.')) == 1 else "")
+    return {"anrede": anrede, "initial": initial, "gender": "m" if anrede == "Herr" else "w",
+            "nennung": nennung}
 
 
 class InterviewProtokollError(ValueError):
