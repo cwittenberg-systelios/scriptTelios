@@ -475,27 +475,36 @@ async def interview_lease_endpoint(req: LeaseIn, current_user: str = Depends(get
 async def interview_tts_engines(current_user: str = Depends(get_current_user)) -> dict:
     """v19.39: nur noch Chatterbox-Referenzstimmen (chatterbox:<key>) - Browser,
     Piper und die englische Standard-Referenz sind aus der Auswahl. `default`
-    = TTS_DEFAULT_VOICE; `reason` erklaert eine leere Liste."""
+    = TTS_DEFAULT_VOICE; `reason` erklaert eine leere Liste.
+    v19.40.1: Ohne Server-Stimmen oder mit Chatterbox auf der CPU (zu langsam,
+    Pausen) ist der Default "browser" - eine gespeicherte Nutzerwahl bleibt."""
     import httpx
     default = settings.TTS_DEFAULT_VOICE or None
     if not settings.TTS_ENABLED:
-        return {"engines": [], "default": default, "reason": "Server-Vorlesen ist aus (TTS_ENABLED)"}
+        return {"engines": [], "default": "browser", "reason": "Server-Vorlesen ist aus (TTS_ENABLED)"}
     try:
         async with httpx.AsyncClient(timeout=3.0, trust_env=False) as c:
             r = await c.get(f"{settings.TTS_SERVICE_URL}/engines")
             r.raise_for_status()
-            engines = [e for e in (r.json().get("engines") or [])
+            payload = r.json()
+            engines = [e for e in (payload.get("engines") or [])
                        if isinstance(e, dict) and str(e.get("key", "")).startswith("chatterbox:")]
     except Exception as e:  # noqa: BLE001
         logger.warning("TTS-Dienst nicht erreichbar: %s", e)
-        return {"engines": [], "default": default, "reason": "Vorlese-Dienst nicht erreichbar"}
+        return {"engines": [], "default": "browser", "reason": "Vorlese-Dienst nicht erreichbar"}
+    device = payload.get("chatterbox_device") if isinstance(payload, dict) else None
+    if (default or "").startswith("chatterbox") and device == "cpu":
+        logger.info("Chatterbox laeuft auf der CPU - Default-Stimme: browser")
+        default = "browser"
     # Anzeige ohne "Chatterbox – " (es gibt nur noch Chatterbox); Default zuerst
     for e in engines:
         lbl = str(e.get("label") or e["key"])
         e["label"] = lbl.split("– ", 1)[1] if "– " in lbl else lbl
     engines.sort(key=lambda e: (e["key"] != default, e["label"].lower()))
     reason = "" if engines else "keine Stimmen im Ordner /workspace/tts/voices"
-    return {"engines": engines, "default": default, "reason": reason}
+    if not engines:
+        default = "browser"
+    return {"engines": engines, "default": default, "reason": reason, "chatterbox_device": device}
 
 
 class TTSIn(BaseModel):

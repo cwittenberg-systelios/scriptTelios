@@ -272,6 +272,16 @@ const S = `
     animation: rec-pulse 1.2s ease-in-out infinite;
   }
   @keyframes rec-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  /* v19.40.1: Tipp-Indikator im Dialog (drei springende Punkte) */
+  .st-scope .chat-dots { display: inline-flex; gap: 4px; align-items: center; vertical-align: middle; margin-right: 8px; }
+  .st-scope .chat-dots span {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--st-red);
+    animation: chat-dot 1.2s ease-in-out infinite;
+  }
+  .st-scope .chat-dots span:nth-child(2) { animation-delay: 0.15s; }
+  .st-scope .chat-dots span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes chat-dot { 0%,60%,100% { transform: translateY(0); opacity: 0.35; } 30% { transform: translateY(-4px); opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .st-scope .chat-dots span { animation: rec-pulse 1.6s ease-in-out infinite; } }
   .st-scope .rec-buttons { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
   .st-scope .rec-btn {
     padding: 7px 16px; font-size: 12px; font-weight: 600;

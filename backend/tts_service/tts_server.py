@@ -550,7 +550,9 @@ def make_handler(service: TTSService) -> Callable:
 
         def do_GET(self):
             if self.path == "/engines":
-                return self._json(200, {"engines": service.list_engines()})
+                cb = getattr(service, "_chatterbox", None)          # v19.40.1: Geraet mitliefern
+                dev = getattr(cb, "device", None) if cb is not None and getattr(cb, "_loaded", False) else None
+                return self._json(200, {"engines": service.list_engines(), "chatterbox_device": dev})
             if self.path == "/health":
                 cb = getattr(service, "_chatterbox", None)
                 return self._json(200, {"ok": True, "chatterbox_device": getattr(cb, "device", None),

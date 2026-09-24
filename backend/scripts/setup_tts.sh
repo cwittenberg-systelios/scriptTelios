@@ -32,6 +32,12 @@ done
 
 echo "[tts] venv: $VENV"
 [ -x "$VENV/bin/python" ] || python3 -m venv "$VENV"
+# v19.40.1: Reste abgebrochener Installationen ("~orch" -> Warnung
+# "Ignoring invalid distribution") wegraeumen
+find "$VENV"/lib/python3*/site-packages -maxdepth 1 -name '~*' -exec rm -rf {} + 2>/dev/null || true
+# Grosse Pakete (torch ~1 GB Download, ~4 GB entpackt) mit Fortschritt statt -q;
+# auf dem Network Volume dauert allein das Entpacken 10-20 Min.
+PIP_BIG=("$VENV/bin/pip" install --progress-bar on)
 "$VENV/bin/pip" install -q --upgrade pip
 "$VENV/bin/pip" install -q piper-tts
 mkdir -p "$VOICE_DIR"
@@ -43,8 +49,8 @@ ls -l "$VOICE_DIR/$VOICE.onnx"
 
 if [ "$WITH_CB" = 1 ]; then
     echo "[tts] Chatterbox (CPU) installieren - dauert einige Minuten"
-    "$VENV/bin/pip" install -q torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
-    "$VENV/bin/pip" install -q chatterbox-tts
+    "${PIP_BIG[@]}" torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+    "${PIP_BIG[@]}" chatterbox-tts
     "$VENV/bin/python" -c "import chatterbox, torch; print('[tts] chatterbox ok, torch', torch.__version__)"
     echo "[tts] Chatterbox-Gewichte vorab laden (~2-3 GB, HF_HOME=${HF_HOME:-/workspace/hf-cache})"
     HF_HOME="${HF_HOME:-/workspace/hf-cache}" "$VENV/bin/python" - <<'PY'
@@ -57,8 +63,8 @@ print("[tts] Chatterbox-Gewichte im Cache")
 PY
 fi
 if [ "$WITH_CUDA" = 1 ]; then
-    echo "[tts] torch 2.7.1 mit CUDA 12.8 installieren (Blackwell)"
-    "$VENV/bin/pip" install -q torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+    echo "[tts] torch 2.7.1 mit CUDA 12.8 installieren (Blackwell) - Download ~1 GB, Entpacken 10-20 Min., nicht abbrechen"
+    "${PIP_BIG[@]}" torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
     "$VENV/bin/python" - <<'PY'
 import torch
 assert torch.cuda.is_available(), "torch sieht keine GPU"
@@ -68,7 +74,7 @@ PY
     echo "[tts] In /workspace/.env: TTS_CHATTERBOX_DEVICE=cuda, dann Dienst neu starten"
 fi
 if [ "$WITH_CPU" = 1 ]; then
-    "$VENV/bin/pip" install -q torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+    "${PIP_BIG[@]}" torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
     "$VENV/bin/pip" uninstall -y -q $("$VENV/bin/pip" list 2>/dev/null | awk '/^nvidia-/{print $1}') triton 2>/dev/null || true
     echo "[tts] zurueck auf torch-CPU; TTS_CHATTERBOX_DEVICE=cpu setzen"
 fi

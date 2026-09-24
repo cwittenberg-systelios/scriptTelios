@@ -174,6 +174,33 @@ function WaveBubble({ levels, state, seconds }) {
   );
 }
 
+// v19.40.1: Wartebubble bis zum ersten Wort - springende Punkte, Text und
+// nach ein paar Sekunden ein Zaehler (sonst wirkt der Start "haengend").
+function ThinkingBubble({ start, jobsBusy }) {
+  const [sek, setSek] = useState(0);
+  useEffect(() => {
+    const t0 = Date.now();
+    const id = setInterval(() => setSek(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const text = jobsBusy ? "Ein Auftrag läuft gerade noch – die Antwort kann etwas länger dauern"
+    : start ? "Interview wird vorbereitet" : "Denkt nach";
+  return (
+    <div data-testid="chat-thinking" role="status" aria-live="polite"
+      style={{ alignSelf: "flex-start", maxWidth: "85%", background: "var(--st-gray-light)", borderRadius: 10, padding: "8px 12px", fontSize: 13 }}>
+      <span className="chat-dots" aria-hidden="true"><span /><span /><span /></span>
+      <span style={{ color: "var(--st-text-soft)" }} data-testid={jobsBusy ? "chat-jobs-busy" : undefined}>
+        {text} …{sek >= 3 ? ` ${sek} s` : ""}
+      </span>
+      {start && sek >= 8 && !jobsBusy && (
+        <div style={{ fontSize: 11, color: "var(--st-text-soft)", marginTop: 4 }} data-testid="chat-thinking-hint">
+          Beim ersten Start wird das Sprachmodell geladen – das kann bis zu einer Minute dauern.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Komponente ──────────────────────────────────────────────────────────────
 function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const v = value && value.historie ? value : emptyChat();
@@ -401,7 +428,8 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
             </div>
           ))}
           {(recording || transcribing) && <WaveBubble levels={dict.levels} state={dict.state} seconds={dict.seconds} />}
-          {streaming && <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: "var(--st-gray-light)", borderRadius: 10, padding: "8px 12px", fontSize: 14, lineHeight: 1.45 }} data-testid="chat-live">{liveText || (jobsBusy ? <span style={soft} data-testid="chat-jobs-busy">… Ein Auftrag läuft gerade noch – die Antwort kann etwas länger dauern.</span> : "…")}</div>}
+          {streaming && !liveText && <ThinkingBubble start={!v.historie.some(t => t.rolle === "system")} jobsBusy={jobsBusy} />}
+          {streaming && liveText && <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: "var(--st-gray-light)", borderRadius: 10, padding: "8px 12px", fontSize: 14, lineHeight: 1.45 }} data-testid="chat-live">{liveText}</div>}
         </div>
         {v.phase === "fertig" ? (
           <>

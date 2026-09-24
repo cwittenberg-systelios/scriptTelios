@@ -170,18 +170,67 @@ class TestProxy:
         monkeypatch.setattr(settings, "TTS_ENABLED", True)
         monkeypatch.setattr(settings, "TTS_SERVICE_URL", "http://127.0.0.1:9")
         d = client.get("/api/interview/tts/engines").json()
-        assert d["engines"] == [] and "nicht erreichbar" in d["reason"]
+        assert d["engines"] == [] and "nicht erreichbar" in d["reason"] and d["default"] == "browser"   # v19.40.1
         assert client.post("/api/interview/tts", json={"text": "Hallo.", "engine": "piper"}).status_code == 503
+
+
+def _mk(key, label, ok=True):
+    e = FakeEngine(ok=ok, reason="" if ok else "Referenz fehlt")
+    e.key, e.label = key, label
+    return e
+
+
+class _FakeCb:
+    def __init__(self, device, loaded=True):
+        self.device, self._loaded = device, loaded
+
+
+def _engines_mit_geraet(client, monkeypatch, cb, default="chatterbox:gunther"):
+    svc = ts.TTSService(engines={e.key: e for e in (_mk("chatterbox:gunther", "Chatterbox – Gunther"),
+                                                    _mk("chatterbox:carsten", "Chatterbox – Carsten"))}, voices_dir="")
+    svc._chatterbox = cb
+    svc.refresh_voices = lambda: None          # kein Stimmen-Ordner im Test
+    srv = ts.ThreadingHTTPServer(("127.0.0.1", 0), ts.make_handler(svc))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setattr(settings, "TTS_ENABLED", True)
+        monkeypatch.setattr(settings, "TTS_DEFAULT_VOICE", default)
+        monkeypatch.setattr(settings, "TTS_SERVICE_URL", f"http://127.0.0.1:{srv.server_address[1]}")
+        return client.get("/api/interview/tts/engines").json()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+class TestDefaultNachGeraet:
+    """v19.40.1: Gunther ist Default - aber nur, wenn Chatterbox nicht auf der CPU laeuft."""
+
+    def test_config_default_ist_gunther(self):
+        from app.core.config import Settings
+        assert Settings.model_fields["TTS_DEFAULT_VOICE"].default == "chatterbox:gunther"
+
+    def test_gpu_behaelt_gunther(self, client, monkeypatch):
+        d = _engines_mit_geraet(client, monkeypatch, _FakeCb("cuda"))
+        assert d["default"] == "chatterbox:gunther" and d["chatterbox_device"] == "cuda"
+
+    def test_cpu_schlaegt_browser_vor(self, client, monkeypatch):
+        d = _engines_mit_geraet(client, monkeypatch, _FakeCb("cpu"))
+        assert d["default"] == "browser" and d["chatterbox_device"] == "cpu"
+        assert [e["key"] for e in d["engines"]] == ["chatterbox:carsten", "chatterbox:gunther"]   # Stimmen bleiben waehlbar
+
+    def test_noch_nicht_geladen_behaelt_gunther(self, client, monkeypatch):
+        d = _engines_mit_geraet(client, monkeypatch, _FakeCb("cpu", loaded=False))
+        assert d["default"] == "chatterbox:gunther" and d["chatterbox_device"] is None
+
+    def test_browser_als_konfig_bleibt(self, client, monkeypatch):
+        assert _engines_mit_geraet(client, monkeypatch, _FakeCb("cuda"), default="browser")["default"] == "browser"
 
 
 class TestStimmenListe:
     """v19.39: Auswahl nur Chatterbox-Referenzstimmen, Default zuerst, ohne Praefix."""
 
     def test_filter_sortierung_label(self, client, monkeypatch):
-        def mk(key, label, ok=True):
-            e = FakeEngine(ok=ok, reason="" if ok else "Referenz fehlt")
-            e.key, e.label = key, label
-            return e
+        mk = _mk
         svc = ts.TTSService(engines={e.key: e for e in (
             mk("piper", "Piper (Thorsten)"), mk("chatterbox", "Chatterbox (Standardstimme, englische Referenz)"),
             mk("chatterbox:carsten", "Chatterbox – Carsten"), mk("chatterbox:gunther", "Chatterbox – Gunther Schmidt"),
@@ -205,6 +254,10 @@ class TestStimmenListe:
 class TestSkripte:
     def test_setup_und_start(self):
         assert subprocess.run(["bash", "-n", str(BACKEND / "scripts" / "setup_tts.sh")]).returncode == 0
+        setup = (BACKEND / "scripts" / "setup_tts.sh").read_text()
+        # v19.40.1: torch mit Fortschritt, Reste abgebrochener Installationen weg
+        assert "--progress-bar on" in setup and "-name '~*'" in setup
+        assert not any("install -q torch" in z for z in setup.splitlines())
         start = (BACKEND / "runpod-start.sh").read_text()
         assert "tts_service/tts_server.py" in start and "venv-tts" in start
         # v19.37.2: Dienst startet VOR dem Backend
