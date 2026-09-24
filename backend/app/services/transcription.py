@@ -11,6 +11,8 @@ um CUDA-OOM-Fehler bei langen Therapiegesprächen zu vermeiden.
 import logging
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from app.core.config import settings
@@ -62,6 +64,9 @@ WHISPER_INITIAL_PROMPT = (
 
 # Modell-Cache – einmalig laden, dann wiederverwenden
 _model_cache: dict = {}
+# v19.33: Laden serialisieren - Interview-Warmup und erstes Diktat koennen
+# gleichzeitig kommen; ohne Lock laedt Whisper zweimal (doppelter VRAM).
+_model_lock = threading.Lock()
 _diarization_pipeline = None   # pyannote Pipeline-Cache
 
 
@@ -403,6 +408,11 @@ def _get_model(device: str, compute_type: str):
     fehl, wird der rohe HfHubHTTPError in eine verstaendliche Fehlermeldung
     uebersetzt (Silent-Failure-Prinzip: laut & diagnostizierbar).
     """
+    with _model_lock:
+        return _get_model_locked(device, compute_type)
+
+
+def _get_model_locked(device: str, compute_type: str):
     from faster_whisper import WhisperModel
     key = (settings.WHISPER_MODEL, device, compute_type)
     if key not in _model_cache:
@@ -770,20 +780,11 @@ async def _ollama_warmup() -> None:
     nicht 20-30s auf den Kaltstart warten muss.
     keep_alive=-1 = Ollama-Standard (Modell bleibt geladen).
     """
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            await client.post(
-                f"{settings.OLLAMA_HOST}/api/chat",
-                json={
-                    "model":      settings.OLLAMA_MODEL,
-                    "keep_alive": -1,
-                    "messages":   [{"role": "user", "content": ""}],
-                },
-            )
-        logger.info("Ollama-Modell vorgewaermt und bereit")
-    except Exception as e:
-        logger.debug("Ollama-Warmup nicht moeglich (ignoriert): %s", e)
+    # v19.33: das bereits geladene LLM warm halten statt OLLAMA_MODEL (mistral)
+    # zu laden - sonst verdraengt jede Aufnahme-Transkription gemma aus dem
+    # Dialog (MAX_LOADED_MODELS=1). Fester num_ctx, falls LLM_FIXED_CTX.
+    from app.services.llm import warm_model
+    await warm_model(None)
 
 
 def _free_gpu_after_transcription() -> None:
@@ -798,6 +799,12 @@ def _free_gpu_after_transcription() -> None:
     Verhalten (nur Whisper-Cache leeren, kein GC, pyannote bleibt resident).
     """
     global _diarization_pipeline
+
+    # v19.33: Mit zwei GPUs (GPU_PROFILE=dual) bleiben Whisper und pyannote
+    # geladen - Platz ist da, das naechste Diktat/die naechste Aufnahme
+    # startet ohne Ladezeit.
+    if settings.gpu_dual:
+        return
 
     # Whisper immer aus dem Cache nehmen (wie bisher).
     _model_cache.clear()
@@ -968,7 +975,10 @@ async def transcribe_dictation(file_path: Path) -> dict:
                 f"Diktat zu lang ({duration / 60:.1f} Min). "
                 f"Maximum: {DICTATION_MAX_SECONDS // 60} Minuten je Antwort."
             )
+        t_load = time.time()
         model = _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
+        load_s = time.time() - t_load
+        t_tr = time.time()
         segments, info, _beam = _transcribe_audio_segment(
             model, str(file_path), timeout=int(max(duration, 1.0) * 1.5) + 30
         )
@@ -988,10 +998,33 @@ async def transcribe_dictation(file_path: Path) -> dict:
             "language": getattr(info, "language", None),
             "duration_seconds": duration,
             "word_count": len(text.split()),
+            # v19.33: Zeitaufteilung (whisper_load_s > 1 = Whisper wurde geladen)
+            "perf": {"audio_s": round(duration, 1), "whisper_load_s": round(load_s, 2),
+                     "transcribe_s": round(time.time() - t_tr, 2)},
         }
 
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, _run)
+
+
+async def warm_whisper() -> float:
+    """v19.33: Whisper vorab laden (Interview-Warmup, Dual-Profil-Start).
+    Liefert die Ladezeit in Sekunden (≈0, wenn schon geladen); Fehler werden
+    geloggt, nie geworfen."""
+    import asyncio
+
+    def _run() -> float:
+        t0 = time.time()
+        _get_model(settings.WHISPER_DEVICE, settings.WHISPER_COMPUTE_TYPE)
+        return round(time.time() - t0, 2)
+
+    try:
+        load_s = await asyncio.get_running_loop().run_in_executor(None, _run)
+        logger.info("Whisper-Warmup: %.1fs", load_s)
+        return load_s
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Whisper-Warmup fehlgeschlagen: %s", e)
+        return -1.0
 
 
 def _assign_speakers(segments) -> str:

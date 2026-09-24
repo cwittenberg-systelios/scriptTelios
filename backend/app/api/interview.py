@@ -90,11 +90,22 @@ async def interview_transcribe(
         except OSError:
             logger.warning("Interview-Diktat: Tempdatei %s konnte nicht gelöscht werden", tmp.name)
 
+    perf = dict(result.get("perf") or {})
+    _log_interview_perf("interview_transcribe", current_user, perf)
     return {
         "transcript": result.get("transcript", ""),
         "duration_seconds": result.get("duration_seconds"),
         "word_count": result.get("word_count", 0),
+        "perf": perf,
     }
+
+
+def _log_interview_perf(kind: str, user: str, perf: dict, **extra) -> None:
+    """v19.33: eine Zeile je Schritt ins Server-Log und in performance.log."""
+    from app.services.job_queue import log_perf_event, running_job_count
+    fields = {"user": user, **perf, **extra, "jobs_running": running_job_count()}
+    logger.info("PERF %s %s", kind, " ".join(f"{k}={v}" for k, v in fields.items() if k != "user"))
+    log_perf_event(kind, fields)
 
 
 class TurnIn(BaseModel):
@@ -281,6 +292,9 @@ class ChatTurnIn(BaseModel):
     session_id: Optional[str] = Field(default=None, max_length=64)
     max_rueckfragen_thema: int = Field(default=4, ge=1, le=20)
     max_rueckfragen_gesamt: int = Field(default=24, ge=1, le=100)
+    # v19.33: Rundlaufzeiten aus dem Browser (ms): transcribe_ms der gerade
+    # gesendeten Antwort, prev_ttft_ms/prev_total_ms des vorigen Turns.
+    client_perf: Optional[dict[str, float]] = None
 
 
 @router.post("/interview/chat/stream")
@@ -362,9 +376,10 @@ async def interview_chat_stream(
         if not sage:
             sage = (result.get("text") or "").strip()[:600]
         meta = apply_turn(state, data if isinstance(data, dict) else None, sage, plan, cfg)
+        perf = dict(result.get("perf") or {})
         meta.update({"type": "meta", "sage": sage, "regie": plan.regie,
                      "model_used": result.get("model_used"), "duration_s": result.get("duration_s"),
-                     "parse_error": bool(result.get("structured_parse_error"))})
+                     "parse_error": bool(result.get("structured_parse_error")), "perf": perf})
         try:
             _log_output(call_id, "dokumentation", f"interview_chat:{req.set}:t{turn_no}",
                         result.get("text") or "", {"duration_s": result.get("duration_s"),
@@ -374,8 +389,40 @@ async def interview_chat_stream(
             logger.debug("Interview-Chat: Output-Log fehlgeschlagen", exc_info=True)
         logger.info("Interview-Chat %s t%d (user=%s set=%s): regie=%s fertig=%s",
                     call_id, turn_no, current_user, req.set, plan.regie_typ, meta.get("fertig"))
+        client = {f"client_{k}": v for k, v in (req.client_perf or {}).items()
+                  if isinstance(v, (int, float))}
+        _log_interview_perf("interview_chat", current_user, perf, session=call_id, turn=turn_no,
+                            model=result.get("model_used"), **client)
         yield _sse(meta)
         yield _sse({"type": "done"})
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ── v19.33 (S4): Vorladen beim Oeffnen des Interviews ────────────────────────
+#
+# POST /api/interview/warmup - startet im Hintergrund Whisper und das
+# Dialog-Modell (Workflow dokumentation, fester num_ctx falls aktiv) und kehrt
+# sofort zurueck. Wird vom Frontend beim Oeffnen des Interview-Tabs gerufen,
+# damit die erste Antwort nicht auf Kaltstart/Modellwechsel wartet.
+
+_WARMUP_TASKS: set = set()
+
+
+def _spawn(coro) -> None:
+    import asyncio
+    t = asyncio.create_task(coro)
+    _WARMUP_TASKS.add(t)
+    t.add_done_callback(_WARMUP_TASKS.discard)
+
+
+@router.post("/interview/warmup")
+async def interview_warmup(current_user: str = Depends(get_current_user)) -> dict:
+    from app.services.llm import ensure_generation_model, warm_model
+    from app.services.transcription import warm_whisper
+    model = await ensure_generation_model(None, "dokumentation")
+    _spawn(warm_whisper())
+    _spawn(warm_model(model))
+    logger.info("Interview-Warmup (user=%s): Whisper + %s", current_user, model)
+    return {"started": True, "model": model}

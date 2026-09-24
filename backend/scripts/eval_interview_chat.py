@@ -21,6 +21,9 @@ danach mit "Mehr weiss ich dazu nicht." Kennzahlen:
   floskeln         Interviewer-Turns, die mit einer bereits benutzten Floskel
                    beginnen ("Alles klar", "Verstanden", ...) (v19.31.2)
   latenz           Sekunden je Turn (Mittel / Max) (v19.31.2)
+  ttft             Sekunden bis zum ersten Wort (Mittel / Max) (v19.33)
+  reloads          Turns, in denen Ollama das Modell (neu) geladen hat
+                   (load_s > 1 s) - mit LLM_FIXED_CTX=true ab Turn 2 ≈ 0 (v19.33)
 
 Auf Trigger-Nachfragen (Suizidalitaet) antwortet der Behandler aus dem
 Thema, in dem die Suizidalitaet zur Sprache kam - so wird die Kette bis
@@ -139,6 +142,8 @@ async def run_skript(sk: dict, set_key: str, model: str, cfg: ChatConfig) -> dic
     turns = 0
     floskeln = 0
     latenz: list[float] = []
+    ttft: list[float] = []
+    reloads = 0
     letztes_thema = ""
     while not state.fertig and turns < cfg.max_turns:
         plan = plan_turn(state, cfg)
@@ -155,6 +160,11 @@ async def run_skript(sk: dict, set_key: str, model: str, cfg: ChatConfig) -> dic
         sage = (result.get("sage") or "").strip() if result else ""
         if result and result.get("duration_s") is not None:
             latenz.append(float(result["duration_s"]))
+        perf = (result or {}).get("perf") or {}
+        if perf.get("ttft_s") is not None:
+            ttft.append(float(perf["ttft_s"]))
+        if (perf.get("load_s") or 0) > 1.0:
+            reloads += 1
         vorher = verwendete_einstiege(state.historie)
         meta = apply_turn(state, data, sage, plan, cfg)
         if any(sage.lower().startswith(e) for e in vorher):
@@ -185,6 +195,9 @@ async def run_skript(sk: dict, set_key: str, model: str, cfg: ChatConfig) -> dic
         "redundant": redundant, "erfunden": erfunden, "regie": regie, "floskeln": floskeln,
         "latenz_mittel": round(sum(latenz) / len(latenz), 1) if latenz else None,
         "latenz_max": round(max(latenz), 1) if latenz else None,
+        "ttft_mittel": round(sum(ttft) / len(ttft), 1) if ttft else None,
+        "ttft_max": round(max(ttft), 1) if ttft else None,
+        "reloads": reloads,
         "gespraech": [{"rolle": t.rolle, "text": t.text} for t in state.historie],
     }
 
@@ -211,7 +224,8 @@ async def main() -> int:
         print(f"{r['name']:14s} turns={r['turns']:2d} fertig={str(r['fertig']):5s} "
               f"abgedeckt={r['abgedeckt']}/{r['punkte']} redundant={r['redundant']} "
               f"erfunden={r['erfunden'] or '-'} floskeln={r['floskeln']} "
-              f"latenz={r['latenz_mittel']}s/{r['latenz_max']}s nachfragen={r['nachfragen']} regie={r['regie']}")
+              f"latenz={r['latenz_mittel']}s/{r['latenz_max']}s ttft={r['ttft_mittel']}s/{r['ttft_max']}s "
+              f"reloads={r['reloads']} nachfragen={r['nachfragen']} regie={r['regie']}")
     if a.json:
         with open(a.json, "w", encoding="utf-8") as fh:  # noqa: ASYNC230 - einmalig am Ende
             fh.write(json.dumps(out, ensure_ascii=False, indent=2))

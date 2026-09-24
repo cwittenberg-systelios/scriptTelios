@@ -7,6 +7,62 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.33] — Dialog-Latenz: Messung, feste Kontextgröße, Vorladen, GPU-Profil (2026-09-24)
+
+Basis: `v19_QA_v02` @ `75d54bd` + v19.32 + commit_patch.sh. Ein Patch (Backend +
+Frontend, `systelios.js` neu gebaut). Sprintplan: `docs/sprintplan_v19_33.md`.
+
+Anlass: Live-Test des Dialogs. Die erste Transkription dauerte Minuten, die
+ersten zwei Antworten waren sehr langsam. Das Ollama-Log zeigt einen
+Modellwechsel (mistral → gemma) und ein Neuladen von gemma, weil sich
+`num_ctx` geändert hatte (2048 → größer).
+
+### Backend
+- **Messung:** `llm_chat` liefert `perf` (ttft_s, load_s, prompt_s/gen_s,
+  Tokens, num_ctx), das Diktat `perf` (audio_s, whisper_load_s, transcribe_s).
+  Pro Schritt eine Zeile in `performance.log` (`kind: interview_chat /
+  interview_transcribe`, inkl. `jobs_running` und den Browser-Zeiten
+  `client_*`), dazu `PERF …` im Server-Log. `perf_report.py` hat einen
+  Abschnitt „Interview" mit Latenzen, Neulade-Zählung und **Dialogen pro
+  Woche** (Indikator für den Umstieg auf 2 GPUs).
+- **`LLM_FIXED_CTX`** (Default aus): Ist es an, gilt `num_ctx = LLM_NUM_CTX_CAP`
+  für jeden LLM-Call (Jobs, Verdichtung, Dialog, Warmups, Start-Warmup in
+  `runpod-start.sh`).
+- **Warmups verdrängen nichts mehr:** `_ollama_warmup()` (nach
+  Aufnahme-Transkriptionen) und `_wait_for_ollama_ready()` (vor
+  P0-Transkriptionen) pingen das geladene LLM (`/api/ps`) statt immer
+  `OLLAMA_MODEL`. Vorher flog gemma bei jeder Aufnahme aus dem Speicher.
+  Neu in `llm.py`: `ollama_loaded_models`, `warm_target_model`, `warm_model`.
+- **`POST /interview/warmup`:** lädt beim Öffnen des Interviews im Hintergrund
+  Whisper und das Dialog-Modell.
+- **`GPU_PROFILE=single|dual`:** `runpod-start.sh` setzt
+  `OLLAMA_MAX_LOADED_MODELS` auf 1 bzw. 3 und fällt bei weniger als 2 GPUs
+  mit Warnung auf single zurück. Das effektive Profil wird exportiert. Bei
+  dual lädt das Backend beim Start alle Routing-Modelle und Whisper vor,
+  Whisper und pyannote bleiben nach Transkriptionen geladen.
+- Whisper-Laden ist serialisiert (`_model_lock`), damit Warmup und erstes
+  Diktat Whisper nicht doppelt laden.
+- `retention_task` startet den ersten Lauf erst nach 120 s. Das behebt
+  zeitabhängig hängende Testläufe (Abbruch mitten in einem SQLite-Cleanup
+  beim TestClient-Teardown).
+
+### Frontend
+- Vorlesen nur noch mit **lokalen Stimmen** (`localService`). „Google
+  Deutsch" und „… Online (Natural)" rechnen in der Cloud und sind gesperrt.
+  Ohne lokale deutsche Stimme erscheint ein Hinweis, vorgelesen wird dann nicht.
+- Erstes Wort: vor dem ersten Satz 150 ms Pause (speak direkt nach cancel
+  verschluckt den Anfang), nach mehr als 3 s Stille zusätzlich 300 ms Stille
+  über WebAudio, damit die Audioausgabe aufwacht.
+- `warmupInterviewServer()` ruft `/interview/warmup` auf, sobald der Server
+  läuft. Das gilt für beide Interview-Formen.
+- Der Dialog schickt die Rundlaufzeiten (Diktat, erstes Wort, Turn) als
+  `client_perf` mit.
+
+### Tests
+- `tests/unit/test_v1933_latenz.py` (20), `frontend/tests/v1933_latenz.test.jsx` (10).
+
+---
+
 ## [v19.29] — Live-QC für den ISM-Fragebogen (P6) + S6c-Rest (2026-09-22)
 
 Basis: `v19_QA_v02` @ `ff58d0d` (nach v19.27/v19.28). Ein Patch (Backend +
@@ -476,6 +532,57 @@ Neu: `test_v1925_befund_slots.py`, `test_v1925_stage1_robustheit.py`,
 `test_v1925_grammatik.py`, `test_v1925_source_plausibility.py`,
 `test_v1925_eb_laenge.py`, Frontend `tests/source_warnings.test.jsx`.
 Backend 1207 Unit + 296 Integration gruen, ruff 0, ESLint 0 Fehler, Jest 94.
+
+---
+
+## [v19.32] — Bundle-Auslieferung ueber den Worker statt Confluence-Anhang (2026-09-23)
+
+Basis: `v19_QA_v02` @ `62481c3`. Ein Patch (Worker, Makro, Skript, Sidebar)
+plus `backend/static/systelios.js`. Unabhaengig von v19.31.
+
+**Warum.** Jedes Redeploy hiess bisher: `systelios.js` von Hand als Anhang
+der Makro-Seite hochladen - und zwar vom Intranet-Rechner (Windows, kein
+Git, keine Adminrechte), waehrend die Entwicklung auf einem Rechner ohne
+Intranet stattfindet. Der Cloudflare Worker ist von beiden Seiten
+erreichbar und liefert das Bundle jetzt selbst.
+
+### Worker (`misc/cloudflareworker.js`)
+
+- `GET /systelios.js` (ohne Auth, CORS fuer `<script type="module">`,
+  `Cache-Control: no-cache`, `ETag` = SHA-256 → 304 bei unveraendertem
+  Stand), `GET /systelios.js/meta`, `POST /systelios.js` (Header
+  `X-Bundle-Secret`, optional `X-Bundle-Sha256`/`X-Bundle-Version`/
+  `X-Bundle-User`; current → previous), `POST /systelios.js/rollback`.
+- Ablage im vorhandenen KV-Namespace `LOGS` (`bundle:current`,
+  `bundle:previous`, jeweils `:meta`) - kein neues Binding noetig.
+- Neues Secret `BUNDLE_UPLOAD_SECRET` (Secrets Store, Fallback
+  `CONFLUENCE_SHARED_SECRET`). Upload/Rollback landen im Statusprotokoll.
+- Version = `YYYY-MM-DD HH:MM · vX.Y · sha7` (Europe/Berlin).
+- Tests: `frontend/tests/worker_bundle.test.js` (6, Node-Env).
+
+### Skript
+
+- `backend/scripts/deploy_bundle.sh [--build|--meta|--rollback]`: liest
+  `SYSTELIOS_PROXY_BASE` und `BUNDLE_UPLOAD_SECRET` aus Umgebung oder
+  `backend/.env`, laedt hoch, prueft die Pruefsumme gegen `/meta`. Label
+  kommt aus der obersten CHANGELOG-Version.
+
+### Makro / Frontend
+
+- `misc/confluence-user-macro.html`: laedt `${proxyUrl}/systelios.js`
+  (`crossorigin="anonymous"`); ohne `proxyUrl` oder bei Ladefehler weiterhin
+  der Seitenanhang (Uebergang).
+- Sidebar-Footer zeigt „Stand <Version>“ aus `/systelios.js/meta`.
+
+### Einrichtung (einmalig, Dashboard)
+
+1. Worker-Code aus `misc/cloudflareworker.js` einfuegen, deployen.
+2. Secrets Store: `BUNDLE_UPLOAD_SECRET` anlegen und als Binding an den
+   Worker haengen (wie die anderen Secrets).
+3. Lokal `backend/.env`: `SYSTELIOS_PROXY_BASE=https://…workers.dev` und
+   `BUNDLE_UPLOAD_SECRET=…` (nicht ins Repo).
+4. `backend/scripts/deploy_bundle.sh --build` - danach zeigt die Sidebar
+   den Stand; der Anhang auf der Makro-Seite kann bleiben (Fallback).
 
 ---
 

@@ -282,14 +282,26 @@ async function fetchInterviewSets() {
 // Intent), damit der Pod laeuft, wenn die erste Antwort kommt. Liefert den
 // ensure-Status; "ok" = laeuft, "starting" = faehrt hoch, sonst kein Proxy/
 // kein Start moeglich. Blockiert nie.
+// v19.33: Sobald der Server laeuft, zusaetzlich Whisper und das Dialog-Modell
+// vorladen lassen (POST /interview/warmup, kehrt sofort zurueck). Fehler
+// (alter Server ohne Endpoint, Netz) werden ignoriert.
+function warmInterviewModels() {
+  try {
+    const p = apiFetch(`${getApiBase()}/interview/warmup`, { method: "POST" });
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch (_) { /* ignoriert */ }
+}
+
 async function warmupInterviewServer() {
-  if (!getProxyBase()) return { status: "no_proxy" };
+  if (!getProxyBase()) { warmInterviewModels(); return { status: "no_proxy" }; }
   try {
     const h = await apiFetch(`${getApiBase()}/health`, { signal: AbortSignal.timeout(4000) });
-    if (h && h.ok) return { status: "ok" };
+    if (h && h.ok) { warmInterviewModels(); return { status: "ok" }; }
   } catch (_) { /* Server aus -> ensure */ }
   const ens = await ensureServer();
   announceServerState(ens);
+  if (ens.status === "ok") warmInterviewModels();
+  else if (ens.status === "starting") waitForHealthOk().then(warmInterviewModels).catch(() => {});
   return ens;
 }
 
@@ -459,4 +471,4 @@ function getConfluenceUser() {
   return "";
 }
 
-export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, fetchInterviewSets, warmupInterviewServer, interviewTranscribe, interviewTurn, interviewAbschluss, interviewChatStream, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };
+export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, fetchInterviewSets, warmupInterviewServer, warmInterviewModels, interviewTranscribe, interviewTurn, interviewAbschluss, interviewChatStream, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };

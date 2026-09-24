@@ -342,6 +342,16 @@ async def retention_task():
     Startet beim Backend-Start, läuft im Hintergrund.
     """
     INTERVAL = 6 * 3600  # 6 Stunden
+    # v19.33: erster Lauf erst nach STARTUP_DELAY - direkt beim Start
+    # konkurriert der Cleanup mit Modell-Warmup und ersten Requests. Zugleich
+    # Ursache haengender Test-Laeufe: jeder TestClient-Start loeste sofort
+    # DB-Cleanups aus, deren Abbruch beim Teardown in AsyncSession.close()
+    # (SQLite) haengen blieb.
+    STARTUP_DELAY = 120
+    try:
+        await asyncio.sleep(STARTUP_DELAY)
+    except asyncio.CancelledError:
+        return
     while True:
         try:
             await cleanup_recordings_audio()

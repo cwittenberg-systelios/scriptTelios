@@ -10,6 +10,25 @@ import { P5 } from "./src/panels/P5.jsx";
 import { P6 } from "./src/panels/P6.jsx";
 import { clearActiveJob, friendlyError, loadActiveJob } from "./src/shared.js";
 import { useDndGuard } from "./src/dnd-guard.jsx";
+
+// v19.32: Bundle-Stand aus dem Worker (GET /systelios.js/meta): lesbarer
+// Zeitstempel + CHANGELOG-Version + SHA-Kurzform. Ohne Proxy (alte Seiten,
+// Anhang-Deploy) bleibt die Zeile leer.
+function BundleVersion() {
+  const [v, setV] = useState(null);
+  useEffect(() => {
+    const base = (typeof window !== "undefined" && window.SYSTELIOS_PROXY_BASE || "").replace(/\/$/, "");
+    if (!base) return;
+    let alive = true;
+    fetch(`${base}/systelios.js/meta`, { signal: AbortSignal.timeout(5000) })
+      .then(r => (r.ok ? r.json() : null))
+      .then(m => { if (alive && m && m.version) setV(m.version); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (!v) return null;
+  return <div title="Stand des Frontend-Bundles (Worker-KV)">Stand {v}</div>;
+}
 import { S, useHeadStyle } from "./src/styles.jsx";
 
 
@@ -334,7 +353,8 @@ export default function App() {
             KI-Entw&#252;rfe — fachliche Pr&#252;fung erforderlich.
           </div>
           <div style={{fontSize:11,color:"rgba(255,255,255,0.35)",lineHeight:1.6,marginBottom:10}}>
-            scriptTelios · v0.1 · sysTelios Klinik f&#252;r Psychosomatik und Psychotherapie
+            scriptTelios · sysTelios Klinik f&#252;r Psychosomatik und Psychotherapie
+            <BundleVersion />
           </div>
           <button
             onClick={() => setShowSettings(true)}

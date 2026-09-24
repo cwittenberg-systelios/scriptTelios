@@ -30,6 +30,15 @@
 //                        23–05 Uhr → blocked_night. Basis fuer Start-on-Intent.
 //   Env DRY_RUN=1      → podTerminate/podFindAndDeployOnDemand nur protokollieren
 //
+//   v19.32 Bundle-Auslieferung (statt Confluence-Anhang):
+//   GET  /systelios.js         → Frontend-Bundle aus KV (ohne Auth, CORS fuer
+//                                 <script type="module">; ETag = SHA-256)
+//   GET  /systelios.js/meta    → { version, sha256, size, uploadedAt, uploadedBy }
+//   POST /systelios.js         → Upload (Header X-Bundle-Secret, X-Bundle-Sha256,
+//                                 X-Bundle-Version); current → previous
+//   POST /systelios.js/rollback→ previous → current (X-Bundle-Secret)
+//   Secret BUNDLE_UPLOAD_SECRET (Fallback: CONFLUENCE_SHARED_SECRET)
+//
 // Auth (spiegelt backend/app/core/auth.py):
 //   Header: X-Systelios-User / X-Systelios-Timestamp / X-Systelios-Signature
 //   sig = HMAC-SHA256(CONFLUENCE_SHARED_SECRET, "<user>:<timestamp>") hex
@@ -51,6 +60,8 @@
 // KV-Keys im LOGS-Namespace:
 //   "<epoch_ms>"    → JSON-Log-Eintrag (Key = Date.now().toString())
 //   "state:podId"   → aktuell gesetzte Pod-ID (mutabel, per /setPodId)
+//   "bundle:current"/"bundle:previous"           → Bundle-Inhalt (Text)
+//   "bundle:current:meta"/"bundle:previous:meta" → JSON-Metadaten
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Basis-URL des Pod-Backends (Cloudflare Named Tunnel). EINZIGE Stelle -
@@ -195,6 +206,12 @@ export default {
       return new Response("RunPod Proxy OK", { status: 200, headers: cors });
     }
 
+    // v19.32: Bundle-Endpunkte. GET ohne Auth (das Makro laedt per <script>,
+    // kann also keine HMAC-Header setzen); POST mit eigenem Upload-Secret.
+    if (url.pathname === "/systelios.js" || url.pathname.startsWith("/systelios.js/")) {
+      return await handleBundle(req, env, url, cors);
+    }
+
     try {
       const secrets = await getSecrets(env);
 
@@ -244,12 +261,13 @@ async function getSecrets(env) {
     return null;
   };
 
-  const [runpodKey, podId, telegramToken, telegramChatId, confluenceSecret] = await Promise.all([
+  const [runpodKey, podId, telegramToken, telegramChatId, confluenceSecret, bundleSecret] = await Promise.all([
     resolve("RUNPOD_API_KEY"),
     resolve("RUNPOD_POD_ID"),
     resolve("TELEGRAM_BOT_TOKEN"),
     resolve("TELEGRAM_CHAT_ID"),
     resolve("CONFLUENCE_SHARED_SECRET"),
+    resolve("BUNDLE_UPLOAD_SECRET"),
   ]);
 
   return {
@@ -258,6 +276,7 @@ async function getSecrets(env) {
     telegramToken: telegramToken?.trim() ?? null,
     telegramChatId: telegramChatId?.trim() ?? null,
     confluenceSecret: confluenceSecret?.trim() ?? null,
+    bundleSecret: (bundleSecret?.trim() || confluenceSecret?.trim()) ?? null,
   };
 }
 
@@ -343,7 +362,8 @@ function corsHeaders(env, req) {
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers":
-      "Content-Type, X-Systelios-User, X-Systelios-Timestamp, X-Systelios-Signature",
+      "Content-Type, X-Systelios-User, X-Systelios-Timestamp, X-Systelios-Signature, " +
+      "X-Bundle-Secret, X-Bundle-Sha256, X-Bundle-Version",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
   };
@@ -354,6 +374,138 @@ function json(data, { status = 200, env, req } = {}) {
     status,
     headers: { "content-type": "application/json", ...corsHeaders(env, req) },
   });
+}
+
+// ─────────────────────────────────────────────
+// BUNDLE (v19.32) — Frontend-Bundle aus KV statt Confluence-Anhang
+// ─────────────────────────────────────────────
+//
+// Warum hier: der Windows-Client im Intranet hat kein Git und keine
+// Adminrechte, der Entwicklungsrechner keinen Intranet-Zugang. Der Worker
+// ist von beiden Seiten erreichbar; das Makro laedt das Bundle von
+// `${proxyUrl}/systelios.js`, das Deploy-Skript (backend/scripts/
+// deploy_bundle.sh) laedt es von irgendwo mit Internet hoch.
+//
+// Cache: `Cache-Control: no-cache` + ETag → der Browser fragt bei jedem
+// Seitenaufruf kurz nach (304 ohne Body), bekommt nach einem Deploy sofort
+// die neue Fassung. Version = lesbarer Zeitstempel (Europe/Berlin) +
+// CHANGELOG-Version + SHA-Kurzform, angezeigt im Sidebar-Footer.
+
+const BUNDLE_KEY = "bundle:current";
+const BUNDLE_PREV_KEY = "bundle:previous";
+const BUNDLE_MAX_BYTES = 8 * 1024 * 1024;
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function berlinStamp(d = new Date()) {
+  // "2026-09-23 21:40" in Europe/Berlin - lesbar, sortierbar.
+  const parts = new Intl.DateTimeFormat("de-DE", {
+    timeZone: "Europe/Berlin", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(d).reduce((o, p) => (o[p.type] = p.value, o), {});
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+}
+
+async function bundleSecretOk(req, env) {
+  const given = (req.headers.get("X-Bundle-Secret") || "").trim();
+  const secrets = await getSecrets(env);
+  const want = secrets.bundleSecret;
+  if (!given || !want) return false;
+  // Laengenunabhaengiger Vergleich ueber Hashes.
+  const [a, b] = await Promise.all([sha256Hex(given), sha256Hex(want)]);
+  return a === b;
+}
+
+async function handleBundle(req, env, url, cors) {
+  if (!env.LOGS) return json({ error: "kv_missing" }, { status: 500, env, req });
+  const sub = url.pathname.slice("/systelios.js".length);   // "", "/meta", "/rollback"
+
+  if (req.method === "GET" && sub === "/meta") {
+    const meta = await env.LOGS.get(`${BUNDLE_KEY}:meta`, { type: "json" });
+    if (!meta) return json({ error: "no_bundle" }, { status: 404, env, req });
+    const prev = await env.LOGS.get(`${BUNDLE_PREV_KEY}:meta`, { type: "json" });
+    return json({ ...meta, previous: prev ? { version: prev.version, sha256: prev.sha256 } : null }, { env, req });
+  }
+
+  if (req.method === "GET" && sub === "") {
+    const meta = await env.LOGS.get(`${BUNDLE_KEY}:meta`, { type: "json" });
+    if (!meta) return new Response("// scriptTelios: kein Bundle hochgeladen (deploy_bundle.sh)\n",
+      { status: 404, headers: { ...cors, "Content-Type": "text/javascript; charset=utf-8" } });
+    const etag = `"${meta.sha256}"`;
+    const headers = {
+      ...cors,
+      "Content-Type": "text/javascript; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "ETag": etag,
+      "X-Bundle-Version": meta.version,
+    };
+    if ((req.headers.get("If-None-Match") || "") === etag) {
+      return new Response(null, { status: 304, headers });
+    }
+    const body = await env.LOGS.get(BUNDLE_KEY, { type: "text" });
+    if (body == null) return json({ error: "no_bundle" }, { status: 404, env, req });
+    return new Response(body, { status: 200, headers });
+  }
+
+  if (req.method === "POST" && (sub === "" || sub === "/rollback")) {
+    if (!(await bundleSecretOk(req, env))) {
+      return json({ error: "unauthorized" }, { status: 401, env, req });
+    }
+    if (sub === "/rollback") {
+      const [prev, prevMeta] = await Promise.all([
+        env.LOGS.get(BUNDLE_PREV_KEY, { type: "text" }),
+        env.LOGS.get(`${BUNDLE_PREV_KEY}:meta`, { type: "json" }),
+      ]);
+      if (prev == null || !prevMeta) return json({ error: "no_previous" }, { status: 404, env, req });
+      const [cur, curMeta] = await Promise.all([
+        env.LOGS.get(BUNDLE_KEY, { type: "text" }),
+        env.LOGS.get(`${BUNDLE_KEY}:meta`, { type: "json" }),
+      ]);
+      await Promise.all([
+        env.LOGS.put(BUNDLE_KEY, prev),
+        env.LOGS.put(`${BUNDLE_KEY}:meta`, JSON.stringify({ ...prevMeta, rolledBackAt: berlinStamp() })),
+        cur != null ? env.LOGS.put(BUNDLE_PREV_KEY, cur) : Promise.resolve(),
+        curMeta ? env.LOGS.put(`${BUNDLE_PREV_KEY}:meta`, JSON.stringify(curMeta)) : Promise.resolve(),
+      ]);
+      await log(env, { action: "bundle_rollback", user: "deploy", version: prevMeta.version });
+      return json({ ok: true, current: prevMeta, previous: curMeta }, { env, req });
+    }
+    const body = await req.text();
+    if (!body || body.length < 1000) return json({ error: "body_too_small" }, { status: 422, env, req });
+    if (body.length > BUNDLE_MAX_BYTES) return json({ error: "body_too_large" }, { status: 413, env, req });
+    const sha = await sha256Hex(body);
+    const claimed = (req.headers.get("X-Bundle-Sha256") || "").trim().toLowerCase();
+    if (claimed && claimed !== sha) return json({ error: "sha_mismatch", computed: sha }, { status: 422, env, req });
+    const label = (req.headers.get("X-Bundle-Version") || "").trim().slice(0, 40);
+    const stamp = berlinStamp();
+    const meta = {
+      version: `${stamp}${label ? " · " + label : ""} · ${sha.slice(0, 7)}`,
+      label, sha256: sha, size: body.length, uploadedAt: stamp,
+      uploadedBy: (req.headers.get("X-Bundle-User") || "deploy").slice(0, 64),
+    };
+    const [cur, curMeta] = await Promise.all([
+      env.LOGS.get(BUNDLE_KEY, { type: "text" }),
+      env.LOGS.get(`${BUNDLE_KEY}:meta`, { type: "json" }),
+    ]);
+    if (curMeta && curMeta.sha256 === sha) {
+      return json({ ok: true, unchanged: true, current: curMeta }, { env, req });
+    }
+    await Promise.all([
+      cur != null ? env.LOGS.put(BUNDLE_PREV_KEY, cur) : Promise.resolve(),
+      curMeta ? env.LOGS.put(`${BUNDLE_PREV_KEY}:meta`, JSON.stringify(curMeta)) : Promise.resolve(),
+    ]);
+    await Promise.all([
+      env.LOGS.put(BUNDLE_KEY, body),
+      env.LOGS.put(`${BUNDLE_KEY}:meta`, JSON.stringify(meta)),
+    ]);
+    await log(env, { action: "bundle_upload", user: meta.uploadedBy, version: meta.version, size: meta.size });
+    return json({ ok: true, current: meta, previous: curMeta || null }, { env, req });
+  }
+
+  return json({ error: "method_not_allowed" }, { status: 405, env, req });
 }
 
 // ─────────────────────────────────────────────
@@ -1807,4 +1959,4 @@ async function getLogs(env, req) {
 }
 
 // v19.21: reine Funktionen fuer Unit-Tests (frontend/tests/worker_lifecycle.test.js)
-export { buildDeployInput, deployMutation, sanitizeEnv, specFromPod, isValidSpec, isNoGpuMessage, retryDecision, isNightBlocked, missingSpecFields };
+export { buildDeployInput, deployMutation, sanitizeEnv, specFromPod, isValidSpec, isNoGpuMessage, retryDecision, isNightBlocked, missingSpecFields, handleBundle, berlinStamp, sha256Hex };

@@ -99,7 +99,22 @@
       if (!container) return;
       var s = document.createElement("script");
       s.type = "module";
-      s.src = AJS.contextPath() + "/download/attachments/$content.id/systelios.js";
+      // v19.32: Bundle kommt vom Cloudflare Worker (KV), nicht mehr als
+      // Seitenanhang. Deploy: backend/scripts/deploy_bundle.sh. Ohne
+      // proxyUrl (alte Seiten) weiterhin der Anhang.
+      var proxy = (window.SYSTELIOS_PROXY_BASE || "").replace(/\/$/, "");
+      s.src = proxy
+        ? proxy + "/systelios.js"
+        : AJS.contextPath() + "/download/attachments/$content.id/systelios.js";
+      s.crossOrigin = "anonymous";
+      s.onerror = function() {
+        if (!proxy) return;
+        // Fallback auf den Anhang, falls der Worker (noch) kein Bundle hat.
+        var f = document.createElement("script");
+        f.type = "module";
+        f.src = AJS.contextPath() + "/download/attachments/$content.id/systelios.js";
+        document.head.appendChild(f);
+      };
       document.head.appendChild(s);
     }
     if (document.readyState === "loading") {

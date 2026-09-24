@@ -79,7 +79,8 @@ function useDictation({ onText, onError, onStart }) {
         if (blob.size < 200) { setState("idle"); return; }
         const file = new File([blob], `antwort.${mime.includes("ogg") ? "ogg" : "webm"}`, { type: blob.type });
         setState("transcribing");
-        try { const d = await interviewTranscribe(file); onText?.((d.transcript || "").trim()); }
+        const t0 = Date.now();
+        try { const d = await interviewTranscribe(file); onText?.((d.transcript || "").trim(), { transcribe_ms: Date.now() - t0 }); }
         catch (e) { onError?.("Transkription fehlgeschlagen: " + friendlyError(e)); }
         finally { setState("idle"); }
       };
@@ -109,6 +110,16 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const speech = getSpeechProvider();
   const abortRef = useRef(null);
   const logRef = useRef(null);
+  // v19.33: Rundlaufzeiten fuer das Server-Log (client_perf im naechsten Turn)
+  const perfRef = useRef({});
+  const [voice, setVoice] = useState(() => (speech.voiceStatus ? speech.voiceStatus() : "ok"));
+  useEffect(() => {
+    const ss = typeof window !== "undefined" ? window.speechSynthesis : null;
+    if (!ss || !speech.voiceStatus || !ss.addEventListener) return undefined;
+    const upd = () => setVoice(speech.voiceStatus());
+    ss.addEventListener("voiceschanged", upd);
+    return () => ss.removeEventListener("voiceschanged", upd);
+  }, [speech]);
 
   const patch = useCallback((p) => onChange({ ...v, ...p }), [onChange, v]);
 
@@ -134,7 +145,10 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [v.historie.length, liveText]);
 
   const dict = useDictation({
-    onText: (t) => { if (t) setDraftText(prev => (prev.trim() ? prev.trim() + " " + t : t)); },
+    onText: (t, perf) => {
+      if (perf && perf.transcribe_ms != null) perfRef.current.transcribe_ms = perf.transcribe_ms;
+      if (t) setDraftText(prev => (prev.trim() ? prev.trim() + " " + t : t));
+    },
     onError: (m) => toast && toast(m),
     onStart: () => speech.cancel(),
   });
@@ -159,13 +173,23 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
     const tts = vorlesen ? speech.sayStream() : null;
     const ctrl = new AbortController(); abortRef.current = ctrl;
     let meta = null;
+    const clientPerf = { ...perfRef.current };
+    perfRef.current = {};
+    const t0 = Date.now(); let tFirst = null;
     try {
       meta = await interviewChatStream({
         set: cur.setKey, historie, checkliste: cur.checkliste, rueckfragen: cur.rueckfragen,
         trigger_stufe: cur.triggerStufe, klient: cur.klient, model: model || null, session_id: cur.sessionId || null,
+        client_perf: Object.keys(clientPerf).length ? clientPerf : null,
       }, (ev) => {
-        if (ev.type === "delta") { setLiveText(t => t + ev.text); tts && tts.push(ev.text); }
+        if (ev.type === "delta") {
+          if (tFirst === null) tFirst = Date.now();
+          setLiveText(t => t + ev.text); tts && tts.push(ev.text);
+        }
       }, { signal: ctrl.signal });
+      perfRef.current.prev_ttft_ms = tFirst === null ? null : tFirst - t0;
+      perfRef.current.prev_total_ms = Date.now() - t0;
+      if (perfRef.current.prev_ttft_ms === null) delete perfRef.current.prev_ttft_ms;
     } catch (e) {
       tts && tts.end();
       setStreaming(false); setLiveText("");
@@ -239,6 +263,9 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
       <label style={{ ...soft, display: "flex", alignItems: "center", gap: 4, marginLeft: "auto", cursor: "pointer" }}>
         <input type="checkbox" checked={vorlesen} onChange={toggleVorlesen} /> Vorlesen
       </label>
+      {vorlesen && voice === "none" && <span style={{ ...soft, width: "100%", textAlign: "right" }} data-testid="chat-voice-hint">
+        Keine lokale deutsche Stimme auf diesem Rechner – Online-Stimmen sind aus Datenschutzgründen gesperrt, daher wird nicht vorgelesen.
+      </span>}
     </div>
   );
 

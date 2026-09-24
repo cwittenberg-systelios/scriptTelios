@@ -112,6 +112,26 @@ def _log_performance(job: "JobState", queue_size: int) -> None:
     perf_logger.info(json.dumps(entry, ensure_ascii=False))
 
 
+def log_perf_event(kind: str, fields: dict) -> None:
+    """v19.33: Performance-Zeile fuer Nicht-Job-Ereignisse (Interview-Diktat,
+    Dialog-Turn) in dieselbe performance.log. `kind` unterscheidet sie von
+    Job-Zeilen (die kein `kind` haben); perf_report.py wertet beide aus."""
+    entry = {"ts": datetime.now(timezone.utc).isoformat(), "kind": kind, **fields}
+    try:
+        perf_logger.info(json.dumps(entry, ensure_ascii=False, default=str))
+    except Exception:  # noqa: BLE001 - Logging darf nie stoeren
+        pass
+
+
+def running_job_count() -> int:
+    """Anzahl laufender Jobs in diesem Prozess (fuer die Latenz-Diagnose:
+    laufen Jobs parallel, wartet der Dialog auf Ollama)."""
+    try:
+        return sum(1 for j in job_queue.get_all_jobs() if j.status == JobStatus.RUNNING.value)
+    except Exception:  # noqa: BLE001
+        return -1
+
+
 # ── Job Status ───────────────────────────────────────────────────────────────
 
 class JobStatus(str, Enum):

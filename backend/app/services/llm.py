@@ -1190,6 +1190,93 @@ async def generate_text(
     return result
 
 
+def fixed_num_ctx() -> Optional[int]:
+    """v19.33: num_ctx fuer ALLE LLM-Calls, wenn LLM_FIXED_CTX aktiv ist
+    (sonst None = dynamisch). Gleicher Wert fuer jeden Call verhindert, dass
+    Ollama das Modell wegen eines anderen num_ctx neu laedt."""
+    if not getattr(settings, "LLM_FIXED_CTX", False):
+        return None
+    return int(getattr(settings, "LLM_NUM_CTX_CAP", 16384))
+
+
+def _is_embedding_model(name: str) -> bool:
+    return "embed" in (name or "").lower()
+
+
+async def ollama_loaded_models() -> list[str]:
+    """v19.33: Modelle, die Ollama gerade im Speicher haelt (/api/ps).
+    Leere Liste, wenn Ollama nicht erreichbar ist."""
+    try:
+        r = await _get_ollama_client().get("/api/ps", timeout=5.0)
+        r.raise_for_status()
+        return [
+            _normalize_model_id(m.get("name") or m.get("model") or "")
+            for m in (r.json().get("models") or [])
+            if (m.get("name") or m.get("model"))
+        ]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Ollama /api/ps nicht abrufbar: %s", e)
+        return []
+
+
+async def warm_target_model(model: Optional[str] = None) -> str:
+    """v19.33: Welches Modell ein Warmup/Ping ansprechen soll, ohne ein
+    anderes zu verdraengen: das angeforderte, sonst das bereits geladene LLM,
+    sonst OLLAMA_MODEL. Vorher pingten Warmups immer OLLAMA_MODEL (mistral)
+    und warfen damit gemma mitten im Dialog aus dem Speicher (MAX_LOADED=1)."""
+    if model:
+        return _normalize_model_id(model)
+    for name in await ollama_loaded_models():
+        if not _is_embedding_model(name):
+            return name
+    return _normalize_model_id(settings.OLLAMA_MODEL)
+
+
+def warm_payload(model: str) -> dict:
+    """Payload fuer /api/generate, das ein Modell nur laedt (leerer Prompt)
+    und dabei den festen num_ctx benutzt, falls aktiv."""
+    payload: dict = {"model": model, "prompt": "", "stream": False, "keep_alive": -1}
+    fixed = fixed_num_ctx()
+    if fixed:
+        payload["options"] = {"num_ctx": fixed}
+    return payload
+
+
+async def warm_model(model: Optional[str] = None) -> dict:
+    """v19.33: Laedt ein Modell vorab (fire-and-forget-tauglich). Liefert
+    {"model", "load_s", "ok"}; Fehler werden geloggt, nie geworfen."""
+    target = await warm_target_model(model)
+    t0 = time.time()
+    try:
+        r = await _get_ollama_client().post("/api/generate", json=warm_payload(target), timeout=300.0)
+        r.raise_for_status()
+        load_s = round((r.json().get("load_duration") or 0) / 1e9, 1)
+        logger.info("Ollama-Warmup %s: geladen (load=%.1fs, gesamt=%.1fs, num_ctx=%s)",
+                    target, load_s, time.time() - t0, fixed_num_ctx() or "dynamisch")
+        return {"model": target, "load_s": load_s, "ok": True}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Ollama-Warmup %s fehlgeschlagen: %s", target, e)
+        return {"model": target, "load_s": None, "ok": False}
+
+
+def resident_models() -> list[str]:
+    """v19.33: alle Modelle, die im Dual-Profil dauerhaft geladen bleiben
+    sollen (Workflow-Routing + Verdichtung + Default), ohne Duplikate."""
+    names = [*(settings.WORKFLOW_MODEL or {}).values(),
+             getattr(settings, "SUMMARY_MODEL", None), settings.OLLAMA_MODEL]
+    out: list[str] = []
+    for n in names:
+        m = _normalize_model_id(n) if n else None
+        if m and m not in out:
+            out.append(m)
+    return out
+
+
+async def preload_resident_models() -> list[dict]:
+    """v19.33: Dual-Profil-Start - Routing-Modelle nacheinander laden."""
+    return [await warm_model(m) for m in resident_models()]
+
+
 def _estimate_num_ctx(system_prompt: str, user_content: str, max_tokens: int) -> int:
     """
     Schätzt den benötigten Kontext basierend auf der tatsächlichen Input-Länge.
@@ -1208,6 +1295,9 @@ def _estimate_num_ctx(system_prompt: str, user_content: str, max_tokens: int) ->
     funktioniert (RTX 4090 mit q8_0 KV-Cache, RTX Pro 4500 ohne).
     Fuer RTX Pro 4500 mit mehr Headroom: MAX_SAFE_CTX in generate_text() erhoehen.
     """
+    fixed = fixed_num_ctx()
+    if fixed:
+        return fixed
     total_chars = len(system_prompt) + len(user_content)
     estimated_tokens = int(total_chars / 3.5)
     needed = int(estimated_tokens * 1.2) + max_tokens

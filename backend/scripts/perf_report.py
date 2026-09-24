@@ -263,10 +263,76 @@ def compute_stats(entries: list[dict], backend_errors: list[dict] | None = None)
     }
 
 
+def _q(vals: list, frac: float):
+    vals = sorted(v for v in vals if isinstance(v, (int, float)))
+    if not vals:
+        return None
+    return round(vals[min(len(vals) - 1, int(len(vals) * frac))], 1)
+
+
+def compute_interview_stats(entries: list[dict]) -> dict:
+    """v19.33: Interview-Latenzen und Nutzung (kind=interview_chat /
+    interview_transcribe). "Dialoge pro Woche" ist der Indikator fuer den
+    Umstieg auf zwei GPUs (GPU_PROFILE=dual)."""
+    chats = [e for e in entries if e.get("kind") == "interview_chat"]
+    trans = [e for e in entries if e.get("kind") == "interview_transcribe"]
+    if not chats and not trans:
+        return {}
+    sessions: dict[str, str] = {}
+    for e in chats:
+        sid = e.get("session") or ""
+        if sid and sid not in sessions:
+            sessions[sid] = e.get("ts", "")
+    weeks: dict[str, int] = defaultdict(int)
+    for ts in sessions.values():
+        try:
+            y, w, _ = datetime.fromisoformat(ts).isocalendar()
+            weeks[f"{y}-KW{w:02d}"] += 1
+        except (ValueError, TypeError):
+            continue
+    users = {e.get("user") for e in chats if e.get("user")}
+
+    def col(rows, key):
+        return [r.get(key) for r in rows]
+
+    reloads = [e for e in chats if isinstance(e.get("load_s"), (int, float)) and e["load_s"] > 1.0]
+    return {
+        "turns": len(chats), "dialoge": len(sessions), "nutzer": len(users),
+        "dialoge_pro_woche": dict(sorted(weeks.items())),
+        "ttft_s": {"median": _q(col(chats, "ttft_s"), 0.5), "p90": _q(col(chats, "ttft_s"), 0.9)},
+        "total_s": {"median": _q(col(chats, "total_s"), 0.5), "p90": _q(col(chats, "total_s"), 0.9)},
+        "reloads": len(reloads),
+        "reload_load_s": {"median": _q(col(reloads, "load_s"), 0.5), "max": _q(col(reloads, "load_s"), 1.0)},
+        "turns_mit_jobs": sum(1 for e in chats if (e.get("jobs_running") or 0) > 0),
+        "diktate": len(trans),
+        "transcribe_s": {"median": _q(col(trans, "transcribe_s"), 0.5), "p90": _q(col(trans, "transcribe_s"), 0.9)},
+        "whisper_loads": sum(1 for e in trans if (e.get("whisper_load_s") or 0) > 1.0),
+    }
+
+
+def print_interview(iv: dict) -> None:
+    if not iv:
+        return
+    print("── Interview (Dialog-Modus) ───────────────────────────")
+    print(f"  Dialoge: {iv['dialoge']} | Turns: {iv['turns']} | Nutzer: {iv['nutzer']} | Diktate: {iv['diktate']}")
+    if iv["dialoge_pro_woche"]:
+        print("  Dialoge/Woche: " + ", ".join(f"{k}: {v}" for k, v in iv["dialoge_pro_woche"].items()))
+    print(f"  Erstes Wort:  Median {iv['ttft_s']['median']}s | p90 {iv['ttft_s']['p90']}s")
+    print(f"  Turn gesamt:  Median {iv['total_s']['median']}s | p90 {iv['total_s']['p90']}s")
+    print(f"  Modell neu geladen: {iv['reloads']}x (Median {iv['reload_load_s']['median']}s, "
+          f"max {iv['reload_load_s']['max']}s) | Turns mit parallelen Jobs: {iv['turns_mit_jobs']}")
+    print(f"  Diktat:       Median {iv['transcribe_s']['median']}s | p90 {iv['transcribe_s']['p90']}s | "
+          f"Whisper geladen: {iv['whisper_loads']}x")
+    print()
+
+
 def print_report(stats: dict, args):
     """Gibt den Report als Text aus."""
     if stats["total"] == 0:
-        print("Keine Einträge gefunden.")
+        if stats.get("interview"):
+            print_interview(stats["interview"])
+        else:
+            print("Keine Einträge gefunden.")
         return
 
     print("=" * 60)
@@ -298,6 +364,8 @@ def print_report(stats: dict, args):
     print("── Dauer (alle Workflows) ─────────────────────────────")
     print(f"  Durchschnitt: {d['avg_s']:.1f}s | Median: {d['median_s']:.1f}s | Min: {d['min_s']:.1f}s | Max: {d['max_s']:.1f}s")
     print()
+
+    print_interview(stats.get("interview") or {})
 
     # Output
     o = stats["output"]
@@ -362,7 +430,11 @@ def main():
     log_dir = str(Path(log_path).parent)
     backend_errors = load_backend_errors(log_dir, since)
 
-    stats = compute_stats(entries, backend_errors)
+    # v19.33: Interview-Zeilen (mit "kind") getrennt von Job-Zeilen auswerten
+    jobs = [e for e in entries if not e.get("kind")]
+    interview = [e for e in entries if str(e.get("kind", "")).startswith("interview_")]
+    stats = compute_stats(jobs, backend_errors)
+    stats["interview"] = compute_interview_stats(interview)
 
     if args.json:
         print(json.dumps(stats, indent=2, ensure_ascii=False))

@@ -14,7 +14,10 @@ Oeffentliche Funktion:
     async for ev in generate_chat_stream(system, messages, model=..., ...):
         ev = ("delta", "text-Stueck")        # nur Inhalt von `sage` bei JSON
            | ("done", {text, structured_data, structured_parse_error,
-                       model_used, token_count, duration_s, sage})
+                       model_used, token_count, duration_s, sage, perf})
+
+`perf` (v19.33): ttft_s (erstes Token), load_s / prompt_s / gen_s und
+prompt_tokens / gen_tokens aus Ollamas Abschluss-Objekt, num_ctx.
            | ("error", "Meldung")
 
 Der Aufrufer (api/interview.py) uebersetzt die Events in SSE.
@@ -31,10 +34,30 @@ import httpx
 from app.core.config import settings
 from app.services.llm import (
     _classify_ollama_error, _get_model_profile, _get_ollama_client,
-    _normalize_model_id, _repeat_sampling_opts,
+    _normalize_model_id, _repeat_sampling_opts, fixed_num_ctx,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _ns(v) -> Optional[float]:
+    return round(v / 1e9, 2) if isinstance(v, (int, float)) and v else None
+
+
+def _perf(final: dict, t0: float, t_first: Optional[float], num_ctx: int) -> dict:
+    """v19.33: Zeitaufteilung eines Chat-Calls. load_s > ~1 s heisst: Ollama
+    hat das Modell (neu) geladen - Kaltstart, Modellwechsel oder anderer
+    num_ctx."""
+    return {
+        "ttft_s": round(t_first - t0, 2) if t_first else None,
+        "total_s": round(time.time() - t0, 2),
+        "load_s": _ns(final.get("load_duration")),
+        "prompt_s": _ns(final.get("prompt_eval_duration")),
+        "prompt_tokens": final.get("prompt_eval_count"),
+        "gen_s": _ns(final.get("eval_duration")),
+        "gen_tokens": final.get("eval_count"),
+        "num_ctx": num_ctx,
+    }
 
 
 # ── Inkrementeller Extraktor fuer das erste String-Feld eines JSON-Stroms ─────
@@ -135,6 +158,8 @@ async def generate_chat_stream(
     effective_model = _normalize_model_id(model) or settings.OLLAMA_MODEL
     profile = _get_model_profile(effective_model)
     if num_ctx is None:
+        num_ctx = fixed_num_ctx()
+    if num_ctx is None:
         total_chars = len(system_prompt) + sum(len(m.get("content", "")) for m in messages)
         est = int(total_chars / 3.2 * 1.2) + max_tokens
         num_ctx = max(profile.get("min_ctx", 2048), ((est + 1023) // 1024) * 1024)
@@ -160,6 +185,8 @@ async def generate_chat_stream(
     raw_parts: list[str] = []
     token_count = 0
     t0 = time.time()
+    t_first: Optional[float] = None
+    final: dict = {}
     client = _get_ollama_client()
 
     try:
@@ -178,6 +205,8 @@ async def generate_chat_stream(
                     raise RuntimeError(f"Ollama: {obj['error']}")
                 piece = (obj.get("message") or {}).get("content", "") or ""
                 if piece:
+                    if t_first is None:
+                        t_first = time.time()
                     raw_parts.append(piece)
                     token_count += 1
                     if extractor is not None:
@@ -187,6 +216,7 @@ async def generate_chat_stream(
                     else:
                         yield ("delta", piece)
                 if obj.get("done"):
+                    final = obj
                     token_count = obj.get("eval_count") or token_count
                     break
     except httpx.ConnectError:
@@ -206,6 +236,7 @@ async def generate_chat_stream(
         "structured_data": None,
         "structured_parse_error": False,
         "sage": extractor.text if extractor else raw,
+        "perf": _perf(final, t0, t_first, num_ctx),
     }
     if response_format is not None:
         try:

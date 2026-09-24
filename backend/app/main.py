@@ -130,6 +130,17 @@ async def lifespan(app: FastAPI):
         app.state.whisper_check_task = whisper_check_task
     except Exception:
         pass
+    # v19.33: Dual-GPU-Profil - alle Routing-Modelle und Whisper vorladen,
+    # damit kein Nutzer auf einen Kaltstart wartet (single: nur on demand).
+    if settings.gpu_dual:
+        async def _preload_dual():
+            from app.services.llm import preload_resident_models
+            from app.services.transcription import warm_whisper
+            await preload_resident_models()
+            await warm_whisper()
+        app.state.dual_preload_task = asyncio.create_task(_preload_dual())
+    logger.info("GPU-Profil: %s, feste Kontextgroesse: %s", settings.GPU_PROFILE,
+                settings.LLM_NUM_CTX_CAP if settings.LLM_FIXED_CTX else "aus")
     yield
     try: p0_worker_task.cancel()
     except Exception: pass

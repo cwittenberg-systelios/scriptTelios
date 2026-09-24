@@ -260,6 +260,28 @@ class Settings(BaseSettings):
     # setzen schliesst die Luecke. Hoeher als ~32768 nur mit mehr VRAM.
     LLM_NUM_CTX_CAP: int = 16384
 
+    # v19.33: Feste Kontextgroesse. Ollama laedt ein Modell NEU, sobald eine
+    # Anfrage mit anderem num_ctx kommt (Live-Befund 24.09.: gemma mit
+    # num_ctx=2048 geladen, naechster Dialog-Turn -> Reload). True = jeder
+    # LLM-Call (Jobs, Verdichtung, Dialog, Warmups) nutzt num_ctx =
+    # LLM_NUM_CTX_CAP. Kostet nichts an Rechenzeit, belegt aber dauerhaft den
+    # KV-Cache fuer den vollen Kontext -> Abnahme: `ollama ps` zeigt 100% GPU.
+    LLM_FIXED_CTX: bool = False
+
+    # v19.33: GPU-Profil des Pods.
+    #   single - eine 32-GB-GPU: genau ein LLM resident (OLLAMA_MAX_LOADED_MODELS=1,
+    #            gesetzt in runpod-start.sh), Whisper wird nach Aufnahme-
+    #            Transkriptionen freigegeben.
+    #   dual   - zwei GPUs (>= 48 GB): gemma, mistral und nomic-embed resident
+    #            (MAX_LOADED_MODELS=3), Backend laedt beim Start alle Routing-
+    #            Modelle + Whisper vor, Whisper/pyannote bleiben geladen.
+    # runpod-start.sh stellt bei weniger als 2 GPUs mit Warnung auf single zurueck.
+    GPU_PROFILE: str = "single"
+
+    @property
+    def gpu_dual(self) -> bool:
+        return (self.GPU_PROFILE or "").strip().lower() == "dual"
+
     # ── CORS ──────────────────────────────────────────────────────
     # Confluence-Instanz eintragen (internes Netz):
     # z.B. "http://intranet.systelios.local" oder "https://wiki.systelios.de"

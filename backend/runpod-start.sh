@@ -571,6 +571,20 @@ fi
 NEED_RESTART=false
 OLLAMA_GPU_OK=false
 
+# v19.33: GPU-Profil (single|dual) ermitteln - VOR dem Ollama-Block, damit
+# es auch exportiert wird, wenn Ollama schon laeuft. Das effektive Profil geht
+# per export an uvicorn (Umgebung schlaegt .env in pydantic-settings).
+if [ -z "${GPU_PROFILE:-}" ] && [ -f "$BACKEND_DIR/.env" ]; then
+    GPU_PROFILE=$(grep "^GPU_PROFILE=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'")
+fi
+GPU_PROFILE=$(echo "${GPU_PROFILE:-single}" | tr '[:upper:]' '[:lower:]')
+GPU_COUNT=$(nvidia-smi -L 2>/dev/null | grep -c "^GPU" || true)
+if [ "$GPU_PROFILE" = "dual" ] && [ "${GPU_COUNT:-0}" -lt 2 ]; then
+    echo "${WARN}GPU_PROFILE=dual, aber nur ${GPU_COUNT:-0} GPU gefunden -> single"
+    GPU_PROFILE="single"
+fi
+export GPU_PROFILE
+
 if pgrep -f "ollama serve" >/dev/null 2>&1; then
     # Ollama laeuft – GPU-Status per API pruefen (schneller als Log-Analyse)
     sleep 2
@@ -580,6 +594,7 @@ if pgrep -f "ollama serve" >/dev/null 2>&1; then
         if grep -q "library=cuda" "$LOG_DIR/ollama.log" 2>/dev/null; then
             OLLAMA_GPU_OK=true
             echo "${OK}Ollama laeuft mit GPU-Support"
+            echo "${WARN}Hinweis: ein geaendertes GPU_PROFILE greift fuer Ollama erst nach Neustart (pkill -f 'ollama serve')"
         else
             echo "${WARN}Ollama laeuft aber ohne GPU – neu starten..."
             pkill -f "ollama serve" 2>/dev/null || true
@@ -653,7 +668,19 @@ if [ "$NEED_RESTART" = "true" ]; then
     # gleichzeitig in 32 GB VRAM. MAX_LOADED_MODELS=1 erzwingt genau ein
     # Modell im VRAM: sauberer Wechsel bei Workflow-Wechsel (~30-60s Ladezeit
     # beim ersten Job nach dem Umschalten) statt unkontrollierter Verdraengung.
-    export OLLAMA_MAX_LOADED_MODELS=1
+    #
+    # v19.33: GPU_PROFILE=single|dual (in /workspace/.env oder backend/.env).
+    #   single - wie bisher, genau ein LLM im VRAM.
+    #   dual   - zwei GPUs: gemma, mistral und nomic-embed bleiben resident
+    #            (MAX_LOADED_MODELS=3). Bei weniger als 2 GPUs wird mit Warnung
+    #            auf single zurueckgestellt (Ermittlung oben, vor dem
+    #            Ollama-Start).
+    if [ "$GPU_PROFILE" = "dual" ]; then
+        export OLLAMA_MAX_LOADED_MODELS=3
+    else
+        export OLLAMA_MAX_LOADED_MODELS=1
+    fi
+    echo "${OK}GPU-Profil: $GPU_PROFILE ($GPU_COUNT GPU) -> OLLAMA_MAX_LOADED_MODELS=$OLLAMA_MAX_LOADED_MODELS, OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-auto}"
     nohup "$OLLAMA_BIN" serve > "$LOG_DIR/ollama.log" 2>&1 &
     sleep 10
 
@@ -1005,10 +1032,19 @@ done
 # 8b. Ollama-Modell in VRAM vorwaermen (im Hintergrund, blockiert Start nicht)
 # Erstmaliges Laden eines 20GB-Modells dauert 60-90s (Disk→VRAM).
 OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "mistral-small3.2")
+# v19.33: bei fester Kontextgroesse (LLM_FIXED_CTX=true) mit demselben num_ctx
+# vorwaermen wie die Jobs - sonst laedt der erste Job das Modell gleich neu.
+_env_val() { local v; v=$(eval "echo \${$1:-}"); [ -z "$v" ] && v=$(grep "^$1=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"'); echo "$v"; }
+WARM_OPTS='"num_predict": 1'
+if [ "$(_env_val LLM_FIXED_CTX | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+    WARM_CTX=$(_env_val LLM_NUM_CTX_CAP); WARM_CTX=${WARM_CTX:-16384}
+    WARM_OPTS="$WARM_OPTS, \"num_ctx\": $WARM_CTX"
+    echo "${OK}Feste Kontextgroesse: num_ctx=$WARM_CTX"
+fi
 (
     WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
         -H "Content-Type: application/json" \
-        -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": \"/no_think\", \"keep_alive\": -1, \"stream\": false, \"options\": {\"num_predict\": 1}}" \
+        -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": \"/no_think\", \"keep_alive\": -1, \"stream\": false, \"options\": {${WARM_OPTS}}}" \
         --max-time 180 2>/dev/null) || true
     if echo "$WARMUP_RESPONSE" | grep -q '"done":true'; then
         echo "[OK]    ${OLLAMA_MODEL} im VRAM geladen (Hintergrund-Warmup abgeschlossen)"

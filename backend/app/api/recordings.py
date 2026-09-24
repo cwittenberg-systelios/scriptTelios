@@ -113,6 +113,14 @@ async def _wait_for_ollama_ready(timeout_s: float = 180.0) -> bool:
     import httpx
     deadline = time.monotonic() + timeout_s
     attempt = 0
+    # v19.33: das bereits geladene LLM anpingen statt OLLAMA_MODEL - sonst
+    # verdraengt jede P0-Transkription gemma aus einem laufenden Dialog
+    # (MAX_LOADED_MODELS=1). Fester num_ctx, falls LLM_FIXED_CTX.
+    from app.services.llm import fixed_num_ctx, warm_target_model
+    target = await warm_target_model(None)
+    options: dict = {"num_predict": 1}
+    if fixed_num_ctx():
+        options["num_ctx"] = fixed_num_ctx()
     while time.monotonic() < deadline:
         attempt += 1
         t0 = time.monotonic()
@@ -121,11 +129,11 @@ async def _wait_for_ollama_ready(timeout_s: float = 180.0) -> bool:
                 r = await client.post(
                     f"{settings.OLLAMA_HOST}/api/generate",
                     json={
-                        "model":      settings.OLLAMA_MODEL,
+                        "model":      target,
                         "prompt":     "/no_think",
                         "stream":     False,
                         "keep_alive": -1,
-                        "options":    {"num_predict": 1},
+                        "options":    options,
                     },
                 )
             if r.status_code == 200:

@@ -11,12 +11,66 @@
 // Auswahl ueber window.SYSTELIOS_TTS ("browser" | "server"), Default browser.
 // ────────────────────────────────────────────────────────────────────────────
 
-function pickGermanVoice() {
+// v19.33: NUR Stimmen, die im Rechner selbst laufen (localService). "Google
+// Deutsch" (Chrome) und "… Online (Natural)" (Edge) rechnen in der Cloud -
+// der vorgelesene Text (Kuerzel, Inhalte der Antworten) ginge an Google bzw.
+// Microsoft. Ohne lokale deutsche Stimme wird nicht vorgelesen (kein
+// Rueckfall auf die Browser-Standardstimme, die ebenfalls remote sein kann).
+function isLocalVoice(v) {
+  if (!v) return false;
+  if (v.localService === false) return false;
+  return !/online|natural|google/i.test(v.name || "");
+}
+
+function localGermanVoices() {
   try {
     const voices = window.speechSynthesis?.getVoices?.() || [];
-    return voices.find(v => /^de/i.test(v.lang) && /google|microsoft|premium|enhanced|siri/i.test(v.name))
-        || voices.find(v => /^de/i.test(v.lang)) || null;
-  } catch { return null; }
+    return voices.filter(v => /^de/i.test(v.lang || "") && isLocalVoice(v));
+  } catch { return []; }
+}
+
+function pickGermanVoice() {
+  const local = localGermanVoices();
+  return local.find(v => /premium|enhanced|siri/i.test(v.name)) || local[0] || null;
+}
+
+// "ok" | "none" (keine lokale deutsche Stimme) | "loading" (Liste noch leer)
+function voiceStatus() {
+  try {
+    const all = window.speechSynthesis?.getVoices?.() || [];
+    if (!all.length) return "loading";
+    return pickGermanVoice() ? "ok" : "none";
+  } catch { return "none"; }
+}
+
+// v19.33: Das erste Wort ging oft verloren. Zwei Ursachen, beide abgefangen:
+// (1) speak() direkt nach cancel() verschluckt in Chrome den Anfang ->
+//     kurze Pause vor dem ersten Satz; (2) die Audioausgabe (v.a. Bluetooth)
+//     schlaeft nach Stille ein und wacht verzoegert auf -> nach laengerer
+//     Pause zuerst 300 ms Stille ueber WebAudio abspielen.
+const LEAD_GAP_MS = 150;
+const WAKE_AFTER_IDLE_MS = 3000;
+const WAKE_SILENCE_MS = 300;
+let _lastSpokeAt = 0;
+let _audioCtx = null;
+
+function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function wakeAudio() {
+  const idle = Date.now() - _lastSpokeAt > WAKE_AFTER_IDLE_MS;
+  if (!idle) { await _sleep(LEAD_GAP_MS); return false; }
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) { await _sleep(LEAD_GAP_MS); return false; }
+    _audioCtx = _audioCtx || new Ctx();
+    if (_audioCtx.state === "suspended" && _audioCtx.resume) await _audioCtx.resume();
+    const len = Math.max(1, Math.floor(_audioCtx.sampleRate * WAKE_SILENCE_MS / 1000));
+    const buf = _audioCtx.createBuffer(1, len, _audioCtx.sampleRate);
+    const src = _audioCtx.createBufferSource();
+    src.buffer = buf; src.connect(_audioCtx.destination); src.start();
+  } catch { /* ohne WebAudio nur Pause */ }
+  await _sleep(WAKE_SILENCE_MS);
+  return true;
 }
 
 function browserAvailable() {
@@ -36,12 +90,13 @@ function createBrowserProvider() {
   function speakOne(text, myToken) {
     return new Promise((resolve) => {
       if (myToken !== token || !text) return resolve(false);
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = "de-DE";
-      u.rate = 1.0;
       const v = pickGermanVoice();
-      if (v) u.voice = v;
-      u.onend = () => resolve(true);
+      if (!v) return resolve(false);          // nie auf Cloud-/Standardstimme ausweichen
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = v.lang || "de-DE";
+      u.rate = 1.0;
+      u.voice = v;
+      u.onend = () => { _lastSpokeAt = Date.now(); resolve(true); };
       u.onerror = () => resolve(false);
       try { window.speechSynthesis.speak(u); } catch { resolve(false); }
     });
@@ -50,6 +105,7 @@ function createBrowserProvider() {
     cancel();
     const myToken = token;
     const list = (Array.isArray(parts) ? parts : [parts]).map(p => (p || "").trim()).filter(Boolean);
+    if (list.length && pickGermanVoice()) await wakeAudio();
     for (let i = 0; i < list.length; i++) {
       if (myToken !== token) return false;
       const ok = await speakOne(list[i], myToken);
@@ -68,11 +124,13 @@ function createBrowserProvider() {
     const queue = [];
     let running = false;
     let ended = false;
+    let first = true;
     let resolveDone = null;
     const done = new Promise(r => { resolveDone = r; });
     async function pump() {
       if (running) return;
       running = true;
+      if (first) { first = false; if (pickGermanVoice()) await wakeAudio(); }
       while (queue.length) {
         if (myToken !== token) { queue.length = 0; break; }
         const s = queue.shift();
@@ -100,7 +158,7 @@ function createBrowserProvider() {
     }
     return { push, end, done };
   }
-  return { name: "browser", available: browserAvailable, say, sayStream, cancel };
+  return { name: "browser", available: browserAvailable, say, sayStream, cancel, voiceStatus };
 }
 
 // Satzgrenzen: . ! ? gefolgt von Leerzeichen/Ende; Abkuerzungen wie "z.B."
@@ -122,7 +180,7 @@ function splitSentences(text) {
 
 function createNullProvider() {
   const noop = () => ({ push: () => {}, end: async () => false, done: Promise.resolve(false) });
-  return { name: "none", available: () => false, say: async () => false, sayStream: noop, cancel: () => {} };
+  return { name: "none", available: () => false, say: async () => false, sayStream: noop, cancel: () => {}, voiceStatus: () => "none" };
 }
 
 let _provider = null;
@@ -139,4 +197,7 @@ function getSpeechProvider() {
 // Fuer Tests: Provider ersetzen.
 function _setSpeechProvider(p) { _provider = p; }
 
-export { getSpeechProvider, _setSpeechProvider, pickGermanVoice, browserAvailable, splitSentences, PART_GAP_MS };
+// Fuer Tests: Zeitpunkt des letzten gesprochenen Satzes setzen.
+function _setLastSpokeAt(t) { _lastSpokeAt = t; }
+
+export { getSpeechProvider, _setSpeechProvider, pickGermanVoice, localGermanVoices, isLocalVoice, voiceStatus, wakeAudio, _setLastSpokeAt, browserAvailable, splitSentences, PART_GAP_MS, LEAD_GAP_MS, WAKE_SILENCE_MS };
