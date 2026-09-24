@@ -180,6 +180,13 @@ class TestSkripte:
         assert subprocess.run(["bash", "-n", str(BACKEND / "scripts" / "setup_tts.sh")]).returncode == 0
         start = (BACKEND / "runpod-start.sh").read_text()
         assert "tts_service/tts_server.py" in start and "venv-tts" in start
+        # v19.37.2: Dienst startet VOR dem Backend
+        assert start.index("tts_service/tts_server.py") < start.index("# 7. Backend starten")
+
+    def test_proxy_wird_ignoriert(self):
+        src = (BACKEND / "app" / "api" / "interview.py").read_text()
+        tts = src[src.index("# ── v19.35: Server-Vorlesen"):]
+        assert tts.count("trust_env=False") == 2
 
 
 class TestReport:

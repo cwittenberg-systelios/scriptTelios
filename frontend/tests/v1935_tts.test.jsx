@@ -141,3 +141,43 @@ describe("TtsSelect", () => {
     expect(screen.getByTestId("tts-fallback").textContent).toBe("Server-Stimme weg");
   });
 });
+
+describe("TtsSelect v19.37.2 – unvollstaendige Liste wird nicht gemerkt", () => {
+  const OFF = [
+    { key: "browser", label: "Browser", available: true, reason: "" },
+    { key: "piper", label: "Piper (Thorsten)", available: false, reason: "Vorlese-Dienst nicht erreichbar" },
+  ];
+  const ON = [
+    { key: "browser", label: "Browser", available: true, reason: "" },
+    { key: "piper", label: "Piper (Thorsten)", available: true, reason: "" },
+  ];
+  beforeEach(() => { fetchTtsEngines.mockReset(); _resetTtsEngines(); });
+
+  test("beim Oeffnen der Auswahl wird neu gefragt, danach verfuegbar", async () => {
+    fetchTtsEngines.mockResolvedValueOnce(OFF).mockResolvedValue(ON);
+    render(<TtsSelect />);
+    const sel = await screen.findByTestId("tts-engine");
+    expect(sel.querySelector('option[value="piper"]').disabled).toBe(true);
+    await act(async () => { fireEvent.mouseDown(sel); });
+    expect(sel.querySelector('option[value="piper"]').disabled).toBe(false);
+    expect(fetchTtsEngines).toHaveBeenCalledTimes(2);
+  });
+
+  test("nach 'Server laeuft' (st-health-ok) wird neu gefragt", async () => {
+    fetchTtsEngines.mockResolvedValueOnce(OFF).mockResolvedValue(ON);
+    render(<TtsSelect />);
+    const sel = await screen.findByTestId("tts-engine");
+    await act(async () => { window.dispatchEvent(new Event("st-health-ok")); });
+    expect(sel.querySelector('option[value="piper"]').disabled).toBe(false);
+  });
+
+  test("vollstaendige Liste wird gemerkt (kein erneuter Abruf beim naechsten Mount)", async () => {
+    fetchTtsEngines.mockResolvedValue(ON);
+    const { unmount } = render(<TtsSelect />);
+    await screen.findByTestId("tts-engine");
+    unmount();
+    render(<TtsSelect />);
+    await screen.findByTestId("tts-engine");
+    expect(fetchTtsEngines).toHaveBeenCalledTimes(1);
+  });
+});

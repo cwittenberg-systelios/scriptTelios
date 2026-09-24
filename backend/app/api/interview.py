@@ -483,7 +483,7 @@ async def interview_tts_engines(current_user: str = Depends(get_current_user)) -
                     for k, lbl in _SERVER_ENGINES]
         return {"engines": engines}
     try:
-        async with httpx.AsyncClient(timeout=3.0) as c:
+        async with httpx.AsyncClient(timeout=3.0, trust_env=False) as c:
             r = await c.get(f"{settings.TTS_SERVICE_URL}/engines")
             r.raise_for_status()
             engines += [e for e in (r.json().get("engines") or []) if isinstance(e, dict) and e.get("key")]
@@ -512,7 +512,7 @@ async def interview_tts(req: TTSIn, current_user: str = Depends(get_current_user
     t0 = _time.time()
     try:
         # Chatterbox auf der CPU braucht fuer einen langen Satz leicht 10-20 s.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=3.0)) as c:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=3.0), trust_env=False) as c:
             r = await c.post(f"{settings.TTS_SERVICE_URL}/synthesize", json={"text": req.text, "engine": req.engine})
     except Exception as e:  # noqa: BLE001
         logger.warning("TTS-Dienst nicht erreichbar: %s", e)

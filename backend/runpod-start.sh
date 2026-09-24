@@ -996,6 +996,23 @@ else
     echo "${OK}.env vorhanden"
 fi
 
+# 6b. v19.35: Vorlese-Dienst (Piper/Chatterbox) im eigenen venv, nur localhost.
+# v19.37.2: VOR dem Backend starten - sonst fragt das erste Frontend nach den
+# Stimmen, bevor der Dienst laeuft, und bekommt "nicht erreichbar".
+# Einrichtung einmalig: bash backend/scripts/setup_tts.sh [--chatterbox]
+TTS_ON=$(echo "${TTS_ENABLED:-$(grep "^TTS_ENABLED=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"')}" | tr '[:upper:]' '[:lower:]')
+if [ "$TTS_ON" = "true" ]; then
+    if [ -x /workspace/venv-tts/bin/python ]; then
+        pkill -f "tts_service/tts_server.py" 2>/dev/null || true
+        OMP_NUM_THREADS="${TTS_PIPER_THREADS:-2}" HF_HOME="${HF_HOME:-/workspace/hf-cache}" \
+            nohup /workspace/venv-tts/bin/python "$BACKEND_DIR/tts_service/tts_server.py" \
+            --port "${TTS_PORT:-8011}" > "$LOG_DIR/tts.log" 2>&1 &
+        echo "${OK}Vorlese-Dienst gestartet (Port ${TTS_PORT:-8011}, Log $LOG_DIR/tts.log)"
+    else
+        echo "${WARN}TTS_ENABLED=true, aber /workspace/venv-tts fehlt -> bash backend/scripts/setup_tts.sh"
+    fi
+fi
+
 # 7. Backend starten
 echo ""
 echo "${GO}Backend starten..."
@@ -1061,21 +1078,6 @@ fi
     fi
 ) &
 echo "${OK}${OLLAMA_MODEL} Warmup gestartet (Hintergrund, ~60-90s)"
-
-# 8c. v19.35: Vorlese-Dienst (Piper/Chatterbox) im eigenen venv, nur localhost.
-# Einrichtung einmalig: bash backend/scripts/setup_tts.sh [--chatterbox]
-TTS_ON=$(echo "${TTS_ENABLED:-$(grep "^TTS_ENABLED=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"')}" | tr '[:upper:]' '[:lower:]')
-if [ "$TTS_ON" = "true" ]; then
-    if [ -x /workspace/venv-tts/bin/python ]; then
-        pkill -f "tts_service/tts_server.py" 2>/dev/null || true
-        OMP_NUM_THREADS="${TTS_PIPER_THREADS:-2}" HF_HOME="${HF_HOME:-/workspace/hf-cache}" \
-            nohup /workspace/venv-tts/bin/python "$BACKEND_DIR/tts_service/tts_server.py" \
-            --port "${TTS_PORT:-8011}" > "$LOG_DIR/tts.log" 2>&1 &
-        echo "${OK}Vorlese-Dienst gestartet (Port ${TTS_PORT:-8011}, Log $LOG_DIR/tts.log)"
-    else
-        echo "${WARN}TTS_ENABLED=true, aber /workspace/venv-tts fehlt -> bash backend/scripts/setup_tts.sh"
-    fi
-fi
 
 # 9. Cloudflare Named Tunnel starten (feste URL: https://scriptelios.win)
 echo ""

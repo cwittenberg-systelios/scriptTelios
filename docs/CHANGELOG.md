@@ -7,6 +7,26 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.37.2] — Stimmen-Auswahl: „Vorlese-Dienst nicht erreichbar“ bleibt nicht mehr hängen (2026-09-24)
+
+Basis: `539086e`. Backend-Skript + Frontend (`systelios.js` neu gebaut).
+
+Befund: Auf dem Pod lief alles (Dienst, Einstellungen, Backend-Aufruf
+direkt geprüft), die Auswahl zeigte trotzdem „Vorlese-Dienst nicht
+erreichbar“. Ursache: `runpod-start.sh` startete den Vorlese-Dienst nach dem
+Backend, und das Frontend merkte sich die erste, beim Start geholte Liste
+bis zum Neuladen der Seite.
+
+- `runpod-start.sh`: Vorlese-Dienst startet als Schritt 6b vor dem Backend.
+- `tts-select.jsx`: Nur eine vollständige Liste wird gemerkt. Sonst fragt die
+  Auswahl erneut beim Öffnen, beim Ereignis „Server läuft“ (`st-health-ok`)
+  und alle 20 s (höchstens 15-mal).
+- Backend: Aufrufe an den lokalen Dienst ignorieren Proxy-Variablen
+  (`trust_env=False`).
+- Tests: `v1935_tts.test.jsx` (+3), `test_v1935_tts.py` (+1, Startreihenfolge).
+
+---
+
 ## [v19.37.1] — „Interview abbrechen“ abgesetzt unter dem Chat (2026-09-24)
 
 Basis: v19.37. Nur Frontend (`systelios.js` neu gebaut).
