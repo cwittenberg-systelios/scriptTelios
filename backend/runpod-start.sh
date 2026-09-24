@@ -888,9 +888,17 @@ NEEDS_BUILD=false
 if [ ! -f "$BUNDLE" ]; then
     NEEDS_BUILD=true
     echo "${GO}Bundle nicht vorhanden – wird gebaut..."
-elif [ "$FRONTEND_DIR/klinische-dokumentation.jsx" -nt "$BUNDLE" ]; then
+elif NEWER=$(find "$FRONTEND_DIR/klinische-dokumentation.jsx" "$FRONTEND_DIR/src" \
+                  "$FRONTEND_DIR/package.json" "$FRONTEND_DIR"/vite.config.* \
+                  "$BACKEND_DIR/app/services/prompts.py" "$BACKEND_DIR/app/core/interview_sets.py" \
+                  "$BACKEND_DIR/scripts/export_prompt_defaults.py" \
+                  -type f -newer "$BUNDLE" 2>/dev/null | head -1) && [ -n "$NEWER" ]; then
+    # v19.36.1: vorher wurde nur klinische-dokumentation.jsx geprueft -
+    # Aenderungen in src/*.jsx (fast der ganze Code) loesten keinen Build aus.
+    # prompts.py/interview_sets.py zaehlen mit, weil der prebuild daraus
+    # src/prompt-defaults.jsx erzeugt.
     NEEDS_BUILD=true
-    echo "${GO}Quellcode neuer als Bundle – wird neu gebaut..."
+    echo "${GO}Quellcode neuer als Bundle (${NEWER#$FRONTEND_DIR/}) – wird neu gebaut..."
 else
     echo "${OK}Bundle aktuell – kein Rebuild noetig"
 fi

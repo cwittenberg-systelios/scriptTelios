@@ -7,6 +7,21 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.36.1] — Frontend-Rebuild beim Pod-Start erkennt alle Änderungen (2026-09-24)
+
+Basis: `fab97c2`. Nur `runpod-start.sh`.
+
+- Schritt 5 prüfte nur `klinische-dokumentation.jsx` gegen das Bundle.
+  Änderungen in `frontend/src/*.jsx` (fast der ganze Code) lösten keinen
+  Build aus, der Pod lieferte ein veraltetes `backend/static/systelios.js`.
+  Jetzt zählen `klinische-dokumentation.jsx`, `src/`, `package.json`,
+  `vite.config.*` und die Quellen von `prompt-defaults.jsx` (`prompts.py`,
+  `interview_sets.py`, `export_prompt_defaults.py`). Das Log nennt die
+  auslösende Datei.
+- Tests: `tests/unit/test_v19361_frontend_rebuild.py` (4).
+
+---
+
 ## [v19.36] — Vision-OCR: Vergleich llava ↔ gemma4 vorbereitet (2026-09-24)
 
 Basis: `1c3a998`. Nur Backend, kein Bundle. Sprintplan: `docs/sprintplan_v19_36.md`.
