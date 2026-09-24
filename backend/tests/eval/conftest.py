@@ -5,13 +5,12 @@ Conftest fuer das Evaluations-Framework.
 
 Diese Tests sprechen mit dem laufenden Backend + Ollama. Sie brauchen:
   - Erreichbares Ollama (sonst session-Abbruch oder Soft-Skip)
-  - Optional: llava fuer Vision-OCR
+  - Optional: Vision-Modell (VISION_MODEL, seit v19.36 gemma4:31b) fuer OCR-Stufe 3
   - Optional: Wechselbares Whisper-Modell
 
 Im Gegensatz zu unit/ und integration/ haben wir hier echte Netz-Aufrufe.
 """
 import os
-import subprocess
 import urllib.request
 
 import pytest
@@ -58,28 +57,24 @@ def pytest_addoption(parser):
 @pytest.fixture(scope="session", autouse=True)
 def ollama_vision_setup():
     """
-    Zieht 'llava' einmalig pro Test-Session wenn Ollama erreichbar ist.
-    Schlaegt fehl wenn Ollama nicht erreichbar — Tests werden dann via
-    httpx-Exception abgebrochen, was korrekt ist (eval braucht LLM).
+    Prueft einmal pro Session, ob das Vision-Modell (VISION_MODEL) in Ollama
+    liegt, und warnt sonst. v19.36.2: KEIN automatischer Pull mehr - frueher
+    zog jeder Eval-Lauf 'llava' (4,7 GB) nach, auch auf fast voller Platte
+    (runpod-start.sh verzichtet aus genau diesem Grund auf Auto-Pull).
+    Seit v19.36 ist gemma4:31b das Vision-Modell (eval_vision_ocr.py).
     """
-    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    import json
 
+    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    vision = os.environ.get("VISION_MODEL", "gemma4:31b")
     try:
-        urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=3)
+        with urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=3) as r:
+            names = [m.get("name", "") for m in json.loads(r.read()).get("models", [])]
     except Exception:
         return
-
-    try:
-        result = subprocess.run(
-            ["ollama", "pull", "llava"],
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode != 0:
-            print(f"\n[WARN] ollama pull llava fehlgeschlagen: {result.stderr.strip()}")
-    except FileNotFoundError:
-        print("\n[WARN] ollama nicht im PATH - llava wird nicht geladen")
-    except subprocess.TimeoutExpired:
-        print("\n[WARN] ollama pull llava Timeout (>5 Min) - wird uebersprungen")
+    if not any(vision in n for n in names):
+        print(f"\n[WARN] Vision-Modell '{vision}' nicht in Ollama - OCR-Stufe 3 wird in Evals "
+              f"fehlschlagen. Kein Auto-Pull (Plattenschutz); bei Bedarf manuell: ollama pull {vision}")
 
 
 @pytest.fixture(scope="session", autouse=True)

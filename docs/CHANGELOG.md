@@ -22,6 +22,22 @@ Basis: `fab97c2`. Nur `runpod-start.sh`.
 
 ---
 
+## [v19.36.2] — gemma4 ist Vision-Modell, kein Auto-Pull von llava (2026-09-24)
+
+Basis: `fab97c2` (unabhängig von v19.36.1). Nur Backend.
+
+- `VISION_MODEL` Default `llava` → `gemma4:31b`. Grundlage ist die Eval vom
+  24.09. (`eval_vision_ocr.py`, 6 synthetische Scans): gemma 55/60
+  Checkboxen, 0 fälschlich als angekreuzt gelesen, 18/18 Textfelder,
+  ~7 s/Seite. llava 0/60 Checkboxen, 1/18 Felder.
+- `tests/eval/conftest.py`: Der autouse-Fixture zog bei **jedem Eval-Lauf**
+  `ollama pull llava` nach (4,7 GB, auch auf fast voller Platte). Jetzt prüft
+  er nur, ob `VISION_MODEL` vorhanden ist, und warnt sonst.
+- `eval_vision_ocr.py`: Default `--models gemma4:31b`.
+- Tests: `tests/unit/test_v19362_vision_default.py` (2).
+
+---
+
 ## [v19.36] — Vision-OCR: Vergleich llava ↔ gemma4 vorbereitet (2026-09-24)
 
 Basis: `1c3a998`. Nur Backend, kein Bundle. Sprintplan: `docs/sprintplan_v19_36.md`.

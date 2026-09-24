@@ -4,7 +4,7 @@ eval_vision_ocr.py - Vision-OCR (Stufe 3) mit verschiedenen Modellen
 vergleichen, v.a. Checkboxen [X]/[ ] (v19.36). Braucht Ollama (Pod).
 
     cd /workspace/scriptTelios/backend && source /workspace/venv/bin/activate
-    python scripts/eval_vision_ocr.py [--models llava,gemma4:31b] [--json out.json]
+    python scripts/eval_vision_ocr.py [--models gemma4:31b,llava] [--json out.json]
                                       [--pdf scan.pdf --truth truth.json] [--save-dir DIR]
 
 Standard: sechs SYNTHETISCHE Formularseiten (keine Klientendaten) mit
@@ -271,7 +271,7 @@ def pdf_pages(pdf: Path, truth_path: Path) -> list[tuple[str, Image.Image, dict]
 
 async def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--models", default="llava,gemma4:31b")
+    ap.add_argument("--models", default="gemma4:31b")
     ap.add_argument("--pdf", type=Path)
     ap.add_argument("--truth", type=Path)
     ap.add_argument("--json", type=Path)

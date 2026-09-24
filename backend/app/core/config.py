@@ -79,8 +79,11 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE_OVERRIDE: float | None = None
 
     # Vision-Modell fuer OCR-Fallback (Stufe 3: wenn pdfplumber + Tesseract scheitern)
-    # Modell einmalig laden: ollama pull llava
-    VISION_MODEL: str = "llava"
+    # v19.36.2: gemma4:31b statt llava. Eval 24.09. (scripts/eval_vision_ocr.py,
+    # 6 synthetische Scans): gemma 55/60 Checkboxen, 0 falsch angekreuzt,
+    # 18/18 Textfelder, ~7 s/Seite; llava 0/60 Checkboxen, 1/18 Felder.
+    # gemma liegt ohnehin fuer Doku/EB im VRAM -> kein Modellwechsel beim Scan.
+    VISION_MODEL: str = "gemma4:31b"
 
     @property
     def LLM_MODEL(self) -> str:
