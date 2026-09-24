@@ -7,6 +7,34 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.38.1] — Vorlese-Dienst wärmt beim Start vor (2026-09-25)
+
+Basis: `9a9dd4d`. Nur TTS-Dienst.
+
+- Nach jedem Start lädt der Dienst im Hintergrund alle verfügbaren Engines
+  (Piper, Chatterbox) und verarbeitet alle Referenzstimmen vor. Vorher musste
+  der erste Chatterbox-Satz nach jedem Pod-Start auf das Laden des Modells
+  (~20–60 s CPU) und die Referenz (~1–5 s je Stimme) warten. Anfragen werden
+  währenddessen angenommen. Abschaltbar mit `TTS_WARMUP=false`. Das Ergebnis
+  steht in `/workspace/tts.log` („Vorwaermen … bereit (x s)“).
+- Tests: +3 in `tests/unit/test_v1938_tts_stimmen.py`.
+
+---
+
+## [v19.38.2] — Kürzel wie „Frau K.“ werden ausgesprochen (2026-09-25)
+
+Basis: `9a9dd4d` (+ v19.38.1). Nur TTS-Dienst.
+
+- Chatterbox erfand bei „Frau K.“ am Satzende Silben („Frau KaKa“, „Frau
+  Kakamas“). Die Textbereinigung spricht Einzelbuchstaben-Kürzel nach
+  Frau/Herr/Herrn/Fr./Hr. jetzt aus: „Frau Ka“, „Herr Emm“, „Herrn Be“.
+  Folgt ein Großbuchstabe, bleibt der Punkt als Satzende erhalten, doppelte
+  Punkte nach entfernten Anführungszeichen werden zusammengefasst. Ganze
+  Namen („Frau Kaiser“) bleiben unverändert.
+- Tests: `test_v1938_tts_stimmen.py` (+1).
+
+---
+
 ## [v19.38] — Chatterbox: eigene Referenzstimmen, Textbereinigung, Nachlauf-Schnitt (2026-09-24)
 
 Basis: `120adbb`. Nur Backend und TTS-Dienst, kein Bundle.

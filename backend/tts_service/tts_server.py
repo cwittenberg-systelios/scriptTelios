@@ -27,6 +27,8 @@ Umgebung:
                              temperature) -> Engine "chatterbox:<key>" (v19.38)
     TTS_CHATTERBOX_CFG / _EXAGGERATION / _TEMPERATURE   Defaults 0.3 / 0.5 / 0.8
     TTS_PIPER_LENGTH_SCALE   Sprechtempo Piper, >1 = langsamer (Default 1.1)
+    TTS_WARMUP               true (Default) = beim Start alle Engines laden und
+                             Referenzstimmen vorverarbeiten (v19.38.1)
 
 Datenschutz: Texte werden weder geloggt noch gespeichert (nur im RAM-Cache).
 """
@@ -193,14 +195,21 @@ class ChatterboxEngine(Engine):
             "temperature": float(params.get("temperature", v.get("temperature", _env_float("TTS_CHATTERBOX_TEMPERATURE", 0.8)))),
         }
 
+    def prepare_voice(self, voice: dict, exaggeration: Optional[float] = None) -> None:
+        """Conditionals einer Referenzstimme berechnen und cachen (Aufrufer
+        haelt den Lock). v19.38.1: auch fuer das Vorwaermen beim Start."""
+        if voice["key"] in self._conds:
+            return
+        ex = exaggeration if exaggeration is not None else self._gen_kwargs({}, voice)["exaggeration"]
+        self.model.prepare_conditionals(voice["wav"], exaggeration=ex)
+        self._conds[voice["key"]] = self.model.conds
+
     def synth_voice(self, text: str, params: dict, voice: Optional[dict]) -> bytes:
         import numpy as np
         import torch
         kw = self._gen_kwargs(params, voice)
         if voice:
-            if voice["key"] not in self._conds:
-                self.model.prepare_conditionals(voice["wav"], exaggeration=kw["exaggeration"])
-                self._conds[voice["key"]] = self.model.conds
+            self.prepare_voice(voice, kw["exaggeration"])
             self.model.conds = self._conds[voice["key"]]
         elif self._default_conds is not None:
             self.model.conds = self._default_conds
@@ -281,17 +290,38 @@ _ABK = [
 ]
 
 
+# v19.38.2: Einzelbuchstaben-Kuerzel ("Frau K.") ausgesprochen - Chatterbox
+# erfand bei "K." am Satzende Silben ("Frau KaKa", "Frau Kakamas").
+BUCHSTABEN = {
+    "A": "A", "B": "Be", "C": "Ze", "D": "De", "E": "E", "F": "Eff", "G": "Ge", "H": "Ha",
+    "I": "I", "J": "Jott", "K": "Ka", "L": "Ell", "M": "Emm", "N": "Enn", "O": "O", "P": "Pe",
+    "Q": "Ku", "R": "Err", "S": "Ess", "T": "Te", "U": "U", "V": "Fau", "W": "We", "X": "Ix",
+    "Y": "Üpsilon", "Z": "Zett", "Ä": "Ä", "Ö": "Ö", "Ü": "Ü",
+}
+_KUERZEL_RE = re.compile(r"\b(Frau|Herrn|Herr|Fr\.|Hr\.)\s+([A-ZÄÖÜ])\.(?=\s|$|[.,;:!?])(\s*)(\S?)")
+
+
+def _kuerzel(m: "re.Match") -> str:
+    anrede = {"Fr.": "Frau", "Hr.": "Herr"}.get(m.group(1), m.group(1))
+    folgt, naechstes = m.group(3), m.group(4)
+    # Grossbuchstabe danach -> der Punkt war zugleich Satzende
+    ende = "." if (naechstes and naechstes[0].isupper()) or not naechstes else ""
+    return f"{anrede} {BUCHSTABEN.get(m.group(2), m.group(2))}{ende}{folgt}{naechstes}"
+
+
 def normalize_for_tts(text: str) -> str:
     """Macht Text sprechbar: Anfuehrungszeichen weg (loesen bei Chatterbox
     Nachlaute aus), gaengige Abkuerzungen ausschreiben, Satzzeichen am Ende."""
     t = text or ""
     t = re.sub(r"[„“”\"«»‚‘’]", "", t)
     t = re.sub(r"(?<=\w)'(?=\w)", "", t)
+    t = _KUERZEL_RE.sub(_kuerzel, t)
     for pat, rep in _ABK:
         t = re.sub(pat, rep, t)
     t = re.sub(r"[\u2013\u2014]", ", ", t)          # Gedankenstrich -> Pause
     t = re.sub(r"\s+", " ", t).strip()
     t = re.sub(r"\s+([,.!?;:])", r"\1", t)
+    t = re.sub(r"\.{2,}", ".", t)                     # "K.." nach Anfuehrungszeichen
     if t and t[-1] not in ".!?":
         t += "."
     return t
@@ -364,6 +394,35 @@ class TTSService:
                 if isinstance(cur, ChatterboxVoice):
                     self._chatterbox._conds.pop(v["key"], None)   # Referenz geaendert
                 self.engines[k] = ChatterboxVoice(self._chatterbox, v)
+
+    def warmup(self) -> dict:
+        """v19.38.1: Nach dem Start alle verfuegbaren Engines laden und die
+        Referenzstimmen vorverarbeiten - sonst wartet der erste Satz nach
+        jedem Pod-Start auf Modell-Laden (Chatterbox ~20-60 s CPU) und
+        Referenz (~1-5 s je Stimme). Laeuft im Hintergrund; Anfragen werden
+        waehrenddessen angenommen (sie warten ggf. am Lock der Engine)."""
+        self.refresh_voices()
+        result: dict = {}
+        for key, eng in list(self.engines.items()):
+            ok, reason = eng.check()
+            if not ok:
+                result[key] = f"uebersprungen: {reason}"
+                continue
+            t0 = time.time()
+            try:
+                if isinstance(eng, ChatterboxVoice):
+                    with eng._lock:
+                        eng.base.ensure_loaded()
+                        eng.base.prepare_voice(eng.voice)
+                else:
+                    with eng._lock:
+                        eng.ensure_loaded()
+                result[key] = f"bereit ({time.time() - t0:.1f}s)"
+            except Exception as e:  # noqa: BLE001 - Vorwaermen darf den Dienst nie stoppen
+                logger.warning("Vorwaermen %s fehlgeschlagen: %s", key, e)
+                result[key] = f"Fehler: {type(e).__name__}"
+            logger.info("Vorwaermen %-24s %s", key, result[key])
+        return result
 
     def list_engines(self) -> list[dict]:
         self.refresh_voices()
@@ -463,6 +522,8 @@ def main() -> None:
     service = TTSService(cache_size=int(os.environ.get("TTS_CACHE_SIZE", "256")))
     for e in service.list_engines():
         logger.info("Engine %-10s verfuegbar=%s %s", e["key"], e["available"], e["reason"])
+    if _env_bool("TTS_WARMUP", True):
+        threading.Thread(target=service.warmup, name="tts-warmup", daemon=True).start()
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(service))
     logger.info("TTS-Dienst auf %s:%d", a.host, a.port)
     srv.serve_forever()
