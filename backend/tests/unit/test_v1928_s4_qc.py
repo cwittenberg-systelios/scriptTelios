@@ -169,3 +169,41 @@ class TestTestwerteD7:
         assert not QC._pair_in_text("Wert 112 → 2", "12", "2")
         assert not QC._pair_in_text("Wert 12 → 20", "12", "2")
         assert QC._pair_in_text("von 12 auf 2 Punkte", "12", "2")
+
+
+# ── v19.28.3: nur Aufnahmewerte (Feedback 24.09., Herr N.) ───────────────────
+from app.services.quality_check import ISSUE_CODE_TESTWERTE_NUR_PRAE, parse_testwert_prae_only  # noqa: E402
+
+VORLAGE_PRAE = (
+    "Das ISR ... Werte (prä; post): Depression: 2.5; (<1: unauffällig) Angst: 1.5; (<1) "
+    "Zwang: 0; (<1) Im DASS-21 wurden Werte erreicht (prä; post): Depression: 12 (<10) "
+    "Angst: 2 (<8) Stress: 16 (<15) Körperlicher Untersuchungsbefund"
+)
+
+
+class TestTestwerteNurPrae:
+    def test_parse_prae_only(self):
+        p = parse_testwert_prae_only(VORLAGE_PRAE)
+        assert [(x["instrument"], x["skala"], x["prae_raw"]) for x in p] == [
+            ("ISR", "Depression", "2.5"), ("ISR", "Angst", "1.5"), ("ISR", "Zwang", "0"),
+            ("DASS-21", "Depression", "12"), ("DASS-21", "Angst", "2"), ("DASS-21", "Stress", "16"),
+        ]
+        # Vorlage mit vollstaendigen Paaren liefert keine Prae-only-Treffer
+        assert parse_testwert_prae_only(VORLAGE) == []
+
+    def test_bericht_referiert_aufnahmewerte(self):
+        txt = ("Testpsychologisch zeigte sich bei Aufnahme eine deutlich erhöhte depressive Symptomatik "
+               "(ISR Depression 2.5, DASS-21 Depression 12) bei erhöhtem Stresserleben (16).")
+        iss = _run(txt, vorlage=VORLAGE_PRAE, only={"testwerte", "testwerte_nur_prae"})
+        assert [i.code for i in iss] == [ISSUE_CODE_TESTWERTE_NUR_PRAE]
+        assert "ISR Depression 2.5" in iss[0].message and "DASS-21 Depression 12" in iss[0].message
+        assert iss[0].severity == "warning"
+
+    def test_bericht_ohne_testwerte_still(self):
+        txt = "Zu Beginn zeigte sich Herr N. erschöpft; 2 Wochen später stabiler. Er nahm an 16 Sitzungen teil."
+        assert _run(txt, vorlage=VORLAGE_PRAE, only={"testwerte", "testwerte_nur_prae"}) == []
+
+    def test_mischfall_mit_paaren_nicht_moniert(self):
+        v = VORLAGE + " Zusatzskala: 3.1 (<1)"
+        txt = "ISR Depression 2.5 → 0.5; Zusatzskala bei Aufnahme 3.1."
+        assert not any(i.code == ISSUE_CODE_TESTWERTE_NUR_PRAE for i in _run(txt, vorlage=v, only={"testwerte_nur_prae"}))

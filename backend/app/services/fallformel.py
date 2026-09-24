@@ -160,19 +160,58 @@ def _user_content(
 _H_RE = re.compile(r"^\s*#{2,4}\s*(.+?)\s*$", re.MULTILINE)
 _ITEM_RE = re.compile(r"^\s*(\d+)[.)]\s+(.*)$")
 
+# v19.28.2: llm._postprocess_text -> strip_markdown_formatting laeuft fuer
+# JEDEN LLM-Call und entfernt "### " und "**...**" - auch aus der Fallformel.
+# Feedback 24.09. (Jobs a4777926, d3d33845): Modell-Output war inhaltlich
+# gut, kam aber als "Auftrag" statt "### Auftrag" an -> 0 Abschnitte, keine
+# Themen, leeres Formular. Deshalb: eine Zeile, die (ohne Rautenmarker, mit
+# optionalem Doppelpunkt) exakt einem der fuenf Abschnittsnamen entspricht,
+# gilt ebenfalls als Ueberschrift.
+_SECTION_NAMES = tuple(s.lstrip("# ").strip() for s in (
+    "### Auftrag", "### Themenkandidaten", "### Wendepunkte je Modalität",
+    "### Symptomveränderung", "### Offene Themen",
+))
+_PLAIN_H_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?\**(" + "|".join(re.escape(n) for n in _SECTION_NAMES) + r")\s*:?\s*\**\s*:?\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _heading_matches(text: str) -> list[tuple[int, int, str]]:
+    """[(start, end, key)] aller Ueberschriften - Markdown ODER nackte Abschnittsnamen."""
+    found: dict[int, tuple[int, int, str]] = {}
+    for m in _H_RE.finditer(text):
+        found[m.start()] = (m.start(), m.end(), m.group(1).strip().rstrip(":").strip("* "))
+    for m in _PLAIN_H_RE.finditer(text):
+        if m.start() not in found:
+            canon = next(n for n in _SECTION_NAMES if n.lower() == m.group(1).strip().lower())
+            found[m.start()] = (m.start(), m.end(), canon)
+    return [found[k] for k in sorted(found)]
+
 
 def split_sections(text: str) -> dict[str, str]:
-    """{'Auftrag': body, 'Themenkandidaten': body, ...} - Schluessel ohne '### '."""
+    """{'Auftrag': body, 'Themenkandidaten': body, ...} - Schluessel ohne '### '.
+    Tolerant gegen gestripptes Markdown (v19.28.2)."""
     out: dict[str, str] = {}
     if not text:
         return out
-    matches = list(_H_RE.finditer(text))
-    for i, m in enumerate(matches):
-        key = m.group(1).strip()
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        out[key] = text[start:end].strip()
+    matches = _heading_matches(text)
+    for i, (_s, end, key) in enumerate(matches):
+        nxt = matches[i + 1][0] if i + 1 < len(matches) else len(text)
+        out[key] = text[end:nxt].strip()
     return out
+
+
+def normalize_fallformel(text: str) -> str:
+    """Schreibt die Fallformel im Sollformat zurueck ("### Abschnitt"), egal ob
+    das Postprocessing die Marker entfernt hat. Unbekannte Abschnitte bleiben
+    erhalten, Reihenfolge = Sollreihenfolge, Rest hinten."""
+    sections = split_sections(text)
+    if not sections:
+        return (text or "").strip()
+    parts = [f"### {k}\n{sections[k]}".rstrip() for k in _SECTION_NAMES if k in sections]
+    parts += [f"### {k}\n{v}".rstrip() for k, v in sections.items() if k not in _SECTION_NAMES]
+    return "\n\n".join(parts).strip()
 
 
 def parse_themenkandidaten(text: str) -> list[str]:
@@ -295,6 +334,8 @@ async def build_fallformel(
     text = (result.get("text") or "").strip()
     if not text:
         raise RuntimeError("Stage 1b: Fallformel leer")
+    # v19.28.2: Sollformat wiederherstellen (Postprocessing strippt "### ").
+    text = normalize_fallformel(text)
     check_source = raw_source_text if raw_source_text else "\n".join(
         t for t in (verlauf_text, antragsvorlage_text or "", prozessreflexion_text or "") if t
     )

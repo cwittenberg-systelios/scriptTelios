@@ -15,6 +15,18 @@ const KEIN_MUSTER_SATZ = "Kein durchgängiges Muster dokumentiert.";
 
 const H_RE = /^\s*#{2,4}\s*(.+?)\s*$/;
 const ITEM_RE = /^\s*(\d+)[.)]\s+(.*)$/;
+// v19.28.2: das Backend-Postprocessing strippt "### " und "**" - eine Zeile,
+// die nackt einem Abschnittsnamen entspricht (optional ":"), zaehlt ebenfalls
+// als Ueberschrift (Feedback 24.09.: Formular blieb leer).
+const PLAIN_H_RE = new RegExp("^\\s*(?:#{1,6}\\s*)?\\**(" + SECTION_ORDER.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")\\s*:?\\s*\\**\\s*:?\\s*$", "i");
+
+function _headingOf(line) {
+  const m = H_RE.exec(line);
+  if (m) return m[1].trim().replace(/:$/, "").replace(/^\*+|\*+$/g, "").trim();
+  const p = PLAIN_H_RE.exec(line);
+  if (p) return SECTION_ORDER.find(n => n.toLowerCase() === p[1].trim().toLowerCase()) || p[1].trim();
+  return null;
+}
 
 // {name: body} in Dateireihenfolge (Map, damit unbekannte Abschnitte erhalten bleiben)
 function splitSections(text) {
@@ -23,10 +35,10 @@ function splitSections(text) {
   let key = null;
   let buf = [];
   for (const line of String(text).split("\n")) {
-    const m = H_RE.exec(line);
-    if (m) {
+    const h = _headingOf(line);
+    if (h !== null) {
       if (key !== null) out.set(key, buf.join("\n").trim());
-      key = m[1].trim();
+      key = h;
       buf = [];
     } else if (key !== null) {
       buf.push(line);

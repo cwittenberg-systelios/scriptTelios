@@ -161,3 +161,42 @@ describe("parseFallformel / serializeFallformel", () => {
     expect(out).not.toContain("Viertes");
   });
 });
+
+// ── v19.28.2: gestripptes Markdown (Feedback 24.09.) ─────────────────────────
+const STRIPPED = `Auftrag
+Herr B. sucht Unterstützung (Antragsvorlage).
+
+Themenkandidaten
+1. Kompetenzfassade durch Leistungsdruck – Ein Muster aus strengem Fordern (Einzel 31.07.). Belege: (Einzel 31.07.), (Einzel 06.08.)
+2. Körperliche Signale als Bedürfnisrückmeldung – Die Wahrnehmung verschiebt sich. Belege: (Einzel 29.07.)
+
+Wendepunkte je Modalität
+- Einzeltherapie: Erkenntnis der Differenzierung zwischen Selbst und Anteilen.
+- Gruppentherapie: Übergang zur Öffnung (Gruppe 03.08.).
+- Nonverbale Therapien: Blumenwiese (Kunsttherapie 06.08.).
+
+Symptomveränderung
+Ausgangszustand emotional überfordert (Einzel 28.07.).
+
+Offene Themen
+Übertragung in den Beruf offen (Epikrise).`;
+
+describe("gestripptes Markdown (v19.28.2)", () => {
+  test("Abschnitte ohne ### werden erkannt", () => {
+    expect([...splitSections(STRIPPED).keys()]).toEqual(["Auftrag", "Themenkandidaten", "Wendepunkte je Modalität", "Symptomveränderung", "Offene Themen"]);
+  });
+  test("Themen ohne Fettdruck: Titel am Gedankenstrich, Belege getrennt", () => {
+    const ff = parseFallformel(STRIPPED);
+    expect(ff.themen).toHaveLength(2);
+    expect(ff.themen[0].titel).toBe("Kompetenzfassade durch Leistungsdruck");
+    expect(ff.themen[0].belege).toBe("(Einzel 31.07.), (Einzel 06.08.)");
+    expect(ff.wendepunkte.Gruppentherapie).toEqual(["Übergang zur Öffnung (Gruppe 03.08.)."]);
+    expect(ff.offen).toMatch(/^Übertragung/);
+  });
+  test("Ueberschrift mit Doppelpunkt/Fett und Fliesstext-Treffer im Satz", () => {
+    expect([...splitSections("**Auftrag:**\nA\n\nThemenkandidaten:\n1. T – d").keys()]).toEqual(["Auftrag", "Themenkandidaten"]);
+    const sec = splitSections("### Auftrag\nDer Auftrag war klar.\nOffene Themen gab es viele.\n\n### Offene Themen\no");
+    expect([...sec.keys()]).toEqual(["Auftrag", "Offene Themen"]);
+    expect(sec.get("Auftrag")).toContain("Offene Themen gab es viele.");
+  });
+});

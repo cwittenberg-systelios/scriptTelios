@@ -99,7 +99,7 @@ Teil 1 – BEHANDLUNGSVERLAUF (Hauptteil, ausführlich):
 Beschreibe ausführlich den therapeutischen Verlauf. Eingesetzte Methoden (IFS/Anteilearbeit, hypnosystemisch, Stuhlarbeit, Biographiearbeit, Gruppenarbeit), konkrete Wendepunkte und Entwicklungsschritte. Der Einzeltherapie, der Gruppentherapie und den nonverbalen Therapien (Kunst-, Musik-, Körperpsychotherapie/Körperarbeit) jeweils einen eigenen Absatz widmen, sofern sie in den Quellen dokumentiert sind – nur die tatsächlich dokumentierten Verfahren nennen. Stil folgt der Vorlage (Wir-Sicht oder empathische 3.-Person), NIE objektiv-distanzierter Berichtston ('Der Patient zeigte X').
 
 Teil 2 – EPIKRISE (kompakte Gesamtbewertung):
-Symptomatik-Entwicklung im Vergleich zu Aufnahme, entlastete Schutzanteile, verbliebener Bedarf, Ressourcen, Prognose. Sofern die Berichtsvorlage Prä-/Post-Testwerte enthält, diese explizit mit den konkreten Werten referenzieren.
+Symptomatik-Entwicklung im Vergleich zu Aufnahme, entlastete Schutzanteile, verbliebener Bedarf, Ressourcen, Prognose. Sofern die Berichtsvorlage Prä-/Post-Testwerte enthält, diese explizit mit den konkreten Werten referenzieren (nur Aufnahmewerte ohne Entlasswerte: Testwerte weglassen).
 
 Teil 3 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss, DARF NICHT FEHLEN):
 Konkrete Empfehlungen für die ambulante Weiterbehandlung: Therapieform, Schwerpunkte, Frequenz, Nachsorge.`;
@@ -134,7 +134,7 @@ Teil 3 – PROZESSFORTSCHRITTE (Hauptteil):
 Für JEDE dokumentierte Therapieform – Einzeltherapie, Gruppentherapie, nonverbale Therapien (Kunst-, Musik-, Körperpsychotherapie/Körperarbeit) – ein EIGENER Absatz. Jeder Absatz beantwortet: Welcher neue Schritt im Umgang mit dem zentralen Thema wurde GENAU DORT möglich? Welcher Wendepunkt, welche konkrete Erfahrung, welche Beziehungsdynamik? Nur dokumentierte Verfahren nennen. Keine Wiederholung dessen, was Teil 2 schon erklärt hat – ein kurzer Rückbezug („dieses Muster zeigte sich in der Gruppe darin, dass …“) genügt. Eine Therapieform darf nur fehlen, wenn die Quellen sie nicht dokumentieren.
 
 Teil 4 – REFLEXION UND SYMPTOMVERÄNDERUNG (kompakt):
-Wie der Klient/die Klientin den eigenen Prozess zum Abschluss reflektiert (sofern eine Prozessreflexion vorliegt: in indirekter Rede, ohne Zitate, ohne Dank/Feedback ans Team). Dann die Symptomatik im Vergleich zur Aufnahme, verbliebener Bedarf, Ressourcen, Prognose. Prä-/Post-Testwerte vollständig, wenn die Antragsvorlage sie enthält – auch ungünstige.
+Wie der Klient/die Klientin den eigenen Prozess zum Abschluss reflektiert (sofern eine Prozessreflexion vorliegt: in indirekter Rede, ohne Zitate, ohne Dank/Feedback ans Team). Dann die Symptomatik im Vergleich zur Aufnahme, verbliebener Bedarf, Ressourcen, Prognose. Prä-/Post-Testwerte vollständig, wenn die Antragsvorlage sie enthält – auch ungünstige; liegen nur Aufnahmewerte ohne Entlasswerte vor, Testwerte ganz weglassen.
 
 Teil 5 – THERAPIEEMPFEHLUNGEN (kompakter Abschluss, DARF NICHT FEHLEN):
 Empfehlungen für die ambulante Weiterbehandlung als Vertiefung des in Teil 2–3 beschriebenen Weges: Therapieform, Schwerpunkte, Frequenz, Nachsorge.

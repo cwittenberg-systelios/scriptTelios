@@ -15,7 +15,7 @@ def test_registry_reihenfolge_entspricht_v1920():
         "patient_initial", "gender", "think_blocks", "befund_separator",
         "befund_fragment", "length", "eb_length_below_target", "doku_length_below_target",
         "required_keywords", "required_sections",
-        "thema_kohaerenz", "wendepunkte", "redundanz", "testwerte",
+        "thema_kohaerenz", "wendepunkte", "redundanz", "testwerte", "testwerte_nur_prae",
         "recommended_sections", "doku_struktur", "stichpunkte", "verfahren", "kompositum_klebebugs",
         "source_fidelity", "suizid_note",
     ]  # v19.27: + stage1_audit, doku_length_below_target, doku_struktur, verfahren

@@ -190,6 +190,55 @@ Editieren gingen unbemerkt ins XML. `checks_run` stand für ISM auf 34.
 
 ---
 
+## [v19.28.3] — Testwerte nur bei Prä/Post (2026-09-24)
+
+Patch auf v19.28.2 (Backend + generiertes `prompt-defaults.jsx`, `systelios.js`
+neu gebaut). Feedback 24.09. (Herr N.): Antragsvorlage enthielt nur
+Aufnahmewerte, der Bericht ordnete deren Schwere ein — im Verlaufsteil ohne
+Sinn. Regel: ohne Entlasswerte tauchen Testwerte im EB gar nicht auf.
+
+- `prompts.py`: TESTWERTE-Pflichtregel, Status-quo-Anweisung (Epikrise) und
+  thematische Anweisung (Teil 4) sagen jetzt explizit: nur Aufnahmewerte
+  ohne Entlasswerte → Testwerte komplett weglassen, keine Schweregrad-
+  Einordnung aus Prä-Werten.
+- `quality_check.py`: `parse_testwert_prae_only()` („Skala: 2.5 (" bzw.
+  „2.5; (" / „2.5; – (" / „n.e.") + Check `TESTWERTE_NUR_PRAE` (warning,
+  repair-faehig): feuert nur, wenn die Vorlage GAR keine Prä/Post-Paare
+  hat und der Bericht einen Aufnahmewert im Testwert-Kontext nennt.
+  Mischfaelle (einzelne Skalen ohne Post) werden nicht moniert.
+
+---
+
+## [v19.28.2] — Fallformel nach Markdown-Stripping lesbar, Gruppentherapie-Synonyme (2026-09-24)
+
+Patch auf v19.28.1 (Backend + Frontend, `systelios.js` neu gebaut).
+Ausloeser: Feedback 24.09. (Jobs `a4777926`, `d3d33845`, Rating 2): „keine
+Themen vorgeschlagen, keine Wendepunkte gefunden, Formular komplett leer".
+prompts.log zeigt: der Stage-1b-Output war inhaltlich gut, aber
+`llm._postprocess_text` → `strip_markdown_formatting` (laeuft fuer jeden
+LLM-Call) hatte `### ` und `**…**` entfernt → `split_sections` fand 0
+Abschnitte → keine Themen, `abschnitt_fehlt` ×5, Formular leer. In S0 nicht
+sichtbar, weil die Fallformel dort handgemacht ueber das Fokus-Feld lief.
+
+- `services/fallformel.py`: `split_sections` erkennt zusaetzlich nackte
+  Abschnittsnamen als Ueberschrift (optional `:`/`**`); Fliesstext, der ein
+  Abschnittswort enthaelt, bleibt Text. Neu `normalize_fallformel()` stellt
+  das Sollformat (`### …`, Sollreihenfolge, unbekannte Abschnitte hinten)
+  wieder her — laeuft nach dem LLM-Call und auf dem Override der
+  Therapeut:in, bevor Check, Persistenz und Stage 2 den Text sehen.
+  `strip_markdown_formatting` selbst bleibt unangetastet (wirkt auf alle
+  Workflows).
+- `quality_specs.py`: Gruppentherapie-Synonyme `gruppentherapeutisch`,
+  `bezugsgruppe`, `gruppenangebot`, `gruppensitzung` (Fehlalarm
+  MODALITY_NOT_COVERED_GRUPPENTHERAPIE bei „gruppentherapeutischen
+  Angebote").
+- `frontend/src/fallformel.js`: `splitSections` mit derselben Toleranz
+  (fuer bereits gespeicherte Jobs ohne `###`).
+- Tests: Regression mit dem Original-Output aus dem Log (Backend + Jest),
+  Roundtrip Sollformat → strip → normalize.
+
+---
+
 ## [v19.28.1] — Fallformel als strukturierter Editor (2026-09-22)
 
 Frontend-Patch auf v19.28 (`systelios.js` neu gebaut, kein Backend-Anteil).

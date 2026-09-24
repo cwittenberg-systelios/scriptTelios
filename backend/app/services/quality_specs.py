@@ -156,6 +156,9 @@ KEYWORD_SYNONYMS: dict[str, list[str]] = {
         "einzelgespräch", "einzelsitzung", "im einzelkontakt",
     ],
     "gruppentherapie": [
+        # v19.28.2: Feedback 24.09. - Absatz begann mit "Gruppentherapeutischen
+        # Angebote", Check schlug trotzdem an.
+        "gruppentherapeutisch", "bezugsgruppe", "gruppenangebot", "gruppensitzung",
         "gruppentherapie", "therapeutischen gruppen", "therapeutische gruppe",
         "in der gruppe", "in den gruppen", "gruppenprozess", "gruppensetting",
     ],

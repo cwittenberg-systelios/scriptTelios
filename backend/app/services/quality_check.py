@@ -227,6 +227,10 @@ ISSUE_CODE_REDUNDANZ_ABSAETZE = "REDUNDANZ_ABSAETZE"
 ISSUE_CODE_TESTWERTE_UNGUENSTIG_VERSCHWIEGEN = "TESTWERTE_UNGUENSTIG_VERSCHWIEGEN"
 ISSUE_CODE_TESTWERTE_UNVOLLSTAENDIG = "TESTWERTE_UNVOLLSTAENDIG"
 ISSUE_CODE_TESTWERTE_FEHLEN = "TESTWERTE_FEHLEN"
+# v19.28.3 (Feedback 24.09., Herr N.): die Vorlage hat nur Aufnahmewerte
+# (kein Post), der Bericht referiert trotzdem deren Schweregrad. Im
+# Verlaufsteil ohne Sinn -> warning, repair-faehig (Satz entfernen).
+ISSUE_CODE_TESTWERTE_NUR_PRAE = "TESTWERTE_NUR_PRAE"
 
 
 # v19.25 (Sprint G3): Postprocessing hat Grammatik deterministisch korrigiert
@@ -1603,6 +1607,53 @@ def _num_variants(s: str) -> list[str]:
     return sorted(out, key=len, reverse=True)
 
 
+# "Depression: 2.5 (" oder "Depression: 2.5; (" / "2.5; - (" / "2.5; n.e. (" -
+# Aufnahmewert ohne Entlasswert.
+_TESTWERT_PRAE_ONLY_RE = re.compile(
+    r"([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß /-]{2,28}?)\s*:\s*(\d+(?:[.,]\d+)?)\s*"
+    r"(?:;\s*(?:[-–]|n\.?\s?e\.?|k\.?\s?A\.?|offen|fehlt)?\s*)?\("
+)
+
+
+def parse_testwert_prae_only(antragsvorlage_text: "str | None") -> list[dict]:
+    """[{instrument, skala, prae_raw}] - Skalen der Vorlage OHNE Post-Wert."""
+    text = antragsvorlage_text or ""
+    if not text:
+        return []
+    paired = {(p["skala"], p["prae_raw"]) for p in parse_testwert_paare(text)}
+    out: list[dict] = []
+    instrument = ""
+    pos = 0
+    for m in _TESTWERT_PRAE_ONLY_RE.finditer(text):
+        for im in _INSTRUMENT_RE.finditer(text, pos, m.start()):
+            instrument = im.group(1).upper()
+        pos = m.start()
+        skala = m.group(1).strip()
+        if len(skala.split()) > 3:
+            skala = skala.split()[-1]
+        if (skala, m.group(2)) in paired:
+            continue
+        out.append({"instrument": instrument, "skala": skala, "prae_raw": m.group(2)})
+    return out
+
+
+_TESTWERT_CONTEXT_RE = re.compile(
+    r"(ISR|DASS|BDI|BSI|PHQ|GAD|SCL|prä|prae|aufnahmewert|testwert|testpsycholog|skala|symptomrating)",
+    re.IGNORECASE,
+)
+
+
+def _prae_in_text(text: str, prae_raw: str, skala: str) -> bool:
+    """Aufnahmewert im Bericht referiert? Zahl (als Token) im Umkreis von 80
+    Zeichen eines Testwert-Kontexts (Instrument/Skala/'prä')."""
+    for a in _num_variants(prae_raw):
+        for m in re.finditer(r"(?<![\d.,])" + re.escape(a) + r"(?![\d])", text):
+            window = text[max(0, m.start() - 80): m.end() + 80]
+            if _TESTWERT_CONTEXT_RE.search(window) or skala.lower() in window.lower():
+                return True
+    return False
+
+
 def parse_testwert_paare(antragsvorlage_text: "str | None") -> list[dict]:
     """[{instrument, skala, prae, post, prae_raw, post_raw}] aus der Vorlage."""
     text = antragsvorlage_text or ""
@@ -1636,6 +1687,35 @@ def _pair_in_text(text: str, prae_raw: str, post_raw: str) -> bool:
             if re.search(pat, text, re.DOTALL):
                 return True
     return False
+
+
+def _check_testwerte_nur_prae(text: str, workflow: str, antragsvorlage_text: "str | None") -> list[QualityIssue]:
+    """v19.28.3: Vorlage hat Aufnahmewerte ohne Entlasswerte, Bericht nennt sie."""
+    if workflow != "entlassbericht":
+        return []
+    prae_only = parse_testwert_prae_only(antragsvorlage_text)
+    if not prae_only or parse_testwert_paare(antragsvorlage_text):
+        # Mischfaelle (einzelne Skalen ohne Post) nicht monieren - nur wenn
+        # GAR keine Prae/Post-Paare vorliegen.
+        return []
+    genannt = [p for p in prae_only if _prae_in_text(text, p["prae_raw"], p["skala"])]
+    if not genannt:
+        return []
+    lbl = "; ".join(f"{p['instrument'] + ' ' if p['instrument'] else ''}{p['skala']} {p['prae_raw']}" for p in genannt)
+    return [QualityIssue(
+        code=ISSUE_CODE_TESTWERTE_NUR_PRAE,
+        severity=SEVERITY_WARNING,
+        message=(
+            "Die Antragsvorlage enthaelt nur Aufnahmewerte ohne Entlasswerte, der Bericht "
+            f"referiert sie trotzdem: {lbl}."
+        ),
+        repair_hint=(
+            "Entferne alle Aussagen zu Testwerten/Schweregraden aus dem Verlaufsteil - ohne "
+            "Entlasswerte gibt es keine Prae/Post-Veraenderung, die Schwere der Aufnahmewerte "
+            "allein gehoert nicht in den Verlauf. Uebrigen Text unveraendert lassen."
+        ),
+        code_detail={"genannt": [f"{p['skala']} {p['prae_raw']}" for p in genannt]},
+    )]
 
 
 def _check_testwerte(text: str, workflow: str, antragsvorlage_text: "str | None") -> list[QualityIssue]:
@@ -2219,6 +2299,8 @@ CHECK_REGISTRY: tuple[QCCheck, ...] = (
     QCCheck("testwerte", lambda c: _check_testwerte(c.text, c.workflow, c.antragsvorlage_text),
             (ISSUE_CODE_TESTWERTE_UNGUENSTIG_VERSCHWIEGEN, ISSUE_CODE_TESTWERTE_UNVOLLSTAENDIG,
              ISSUE_CODE_TESTWERTE_FEHLEN), "v19.28 (D7): nur entlassbericht mit Antragsvorlage"),
+    QCCheck("testwerte_nur_prae", lambda c: _check_testwerte_nur_prae(c.text, c.workflow, c.antragsvorlage_text),
+            (ISSUE_CODE_TESTWERTE_NUR_PRAE,), "v19.28.3: Vorlage ohne Entlasswerte, Bericht nennt Aufnahmewerte"),
     QCCheck("recommended_sections", lambda c: _check_recommended_sections(c.text, c.workflow, source_text=c.source_text),
             (ISSUE_CODE_PREFIX_MODALITY_NOT_COVERED,), "info; empfohlene Modalitaet nicht erwaehnt"),
     QCCheck("doku_struktur", lambda c: _check_doku_struktur(c.text, c.workflow, c.source_text),

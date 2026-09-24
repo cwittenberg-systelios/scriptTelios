@@ -1255,14 +1255,14 @@ async def _run_fallformel(ctx: PipelineInput, job, st: PipelineState) -> None:
     Hypothesen der Verlaufsdoku zurueck) und das Audit sagt warum.
     """
     from app.services.fallformel import (
-        EB_STRUKTUR_THEMATISCH, build_fallformel, parse_themenkandidaten, select_themen,
+        EB_STRUKTUR_THEMATISCH, build_fallformel, normalize_fallformel, parse_themenkandidaten, select_themen,
     )
     st.fallformel_text = None
     st._fallformel_audit = None
     if ctx.workflow != "entlassbericht" or ctx.eb_struktur != EB_STRUKTUR_THEMATISCH:
         return
     if ctx.fallformel_override and ctx.fallformel_override.strip():
-        txt = select_themen(ctx.fallformel_override.strip(), None)
+        txt = select_themen(normalize_fallformel(ctx.fallformel_override.strip()), None)
         st.fallformel_text = txt
         st._fallformel_audit = {
             "applied": True, "source": "therapeut", "struktur": ctx.eb_struktur,
