@@ -7,6 +7,28 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.35.1] — Dialog-Bedienung nach dem ersten Praxistest (2026-09-24)
+
+Basis: `fab51cc`. Nur Frontend (`systelios.js` neu gebaut).
+
+- **Ein Stopp-Button:** Während der Aufnahme blieb „Senden“ bzw. in den
+  Fragenkarten „Weiter“/„Antworten“ als zweiter „Stopp“ stehen. Jetzt gibt es
+  nur noch „■ Stopp (n s)“, die anderen Buttons sind währenddessen gesperrt.
+- **Automatisch senden:** Im Dialog wird nach dem Stopp transkribiert und
+  sofort gesendet. Getippter Text im Feld wird vorangestellt. Ist die
+  Transkription leer, erscheint ein Hinweis und es wird nichts gesendet.
+- **„Interview abbrechen“** ersetzt „Abbrechen“ (das nur die laufende Antwort
+  stoppte). Nach Rückfrage (sofern schon Inhalte da sind) stoppt es die
+  laufende Antwort, das Vorlesen und die Aufnahme (ohne Transkription),
+  verwirft alles und geht zurück zum Start. Die Reservierung (v19.34) wird
+  freigegeben.
+- **„Abschließen“** erst nach der ersten Antwort. Vorher bekam das Modell
+  „bitte abschließen“ ohne Inhalt und antwortete mit einer sinnlosen
+  Abschlussmeldung.
+- Tests: `frontend/tests/v19351_chat_bedienung.test.jsx` (6).
+
+---
+
 ## [v19.35] — Server-Vorlesen zum Testen: Browser | Piper | Chatterbox (2026-09-24)
 
 Basis: 4230a30 + v19.34. Ein Patch (Backend + Frontend, `systelios.js` neu

@@ -542,8 +542,8 @@ function InterviewDialog({ value, onChange, toast, model, onKlient }) {
           <span style={{ marginLeft: "auto" }} />
           <button type="button" className="btn-secondary" onClick={abschlussUeberspringen} disabled={recording || transcribing}>Alles überspringen</button>
           <button type="button" className="btn-secondary" onClick={abschlussBelassen} disabled={recording || transcribing} data-testid="interview-belassen">So lassen</button>
-          <button type="button" className="btn-primary" onClick={abschlussAntworten} disabled={transcribing} data-testid="interview-weiter">
-            {recording ? "Stopp" : "Antworten"}
+          <button type="button" className="btn-primary" onClick={abschlussAntworten} disabled={transcribing || recording} data-testid="interview-weiter">
+            Antworten
           </button>
         </div>
       </div>
@@ -623,8 +623,8 @@ function InterviewDialog({ value, onChange, toast, model, onKlient }) {
         <span style={{ marginLeft: "auto" }} />
         <button type="button" className="btn-secondary" onClick={zurueck} disabled={(v.idx === 0 && !istNachfrage) || busy !== null || recording}>Zurück</button>
         {!frage?.pflicht && <button type="button" className="btn-secondary" onClick={ueberspringen} disabled={busy !== null || recording || transcribing}>Überspringen</button>}
-        <button type="button" className="btn-primary" onClick={weiter} disabled={busy !== null || transcribing} data-testid="interview-weiter">
-          {recording ? "Stopp" : (v.idx + 1 >= total ? "Abschließen" : "Weiter")}
+        <button type="button" className="btn-primary" onClick={weiter} disabled={busy !== null || transcribing || recording} data-testid="interview-weiter">
+          {v.idx + 1 >= total ? "Abschließen" : "Weiter"}
         </button>
       </div>
     </div>

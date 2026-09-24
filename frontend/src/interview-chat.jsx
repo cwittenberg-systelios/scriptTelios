@@ -56,6 +56,7 @@ function anredeOf(k) { return k && k.anrede && k.initial ? `${k.anrede} ${k.init
 function useDictation({ onText, onError, onStart, sessionId }) {
   const [state, setState] = useState("idle");
   const recRef = useRef(null); const chunksRef = useRef([]); const streamRef = useRef(null);
+  const discardRef = useRef(false);
   const [seconds, setSeconds] = useState(0); const timerRef = useRef(null);
   const stopTracks = () => {
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
@@ -76,6 +77,7 @@ function useDictation({ onText, onError, onStart, sessionId }) {
       rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
       rec.onstop = async () => {
         stopTracks();
+        if (discardRef.current) { discardRef.current = false; chunksRef.current = []; setState("idle"); return; }
         const blob = new Blob(chunksRef.current, { type: mime || "audio/webm" });
         chunksRef.current = [];
         if (blob.size < 200) { setState("idle"); return; }
@@ -95,8 +97,10 @@ function useDictation({ onText, onError, onStart, sessionId }) {
     }
   }
   function stop() { const rec = recRef.current; if (rec && rec.state !== "inactive") { try { rec.stop(); } catch { /* ignoriert */ } } recRef.current = null; }
+  // v19.35.1: Aufnahme verwerfen (Interview abbrechen) - ohne Transkription
+  function cancel() { discardRef.current = true; stop(); }
   useEffect(() => () => { stopTracks(); }, []);
-  return { state, seconds, start, stop };
+  return { state, seconds, start, stop, cancel };
 }
 
 // ── Komponente ──────────────────────────────────────────────────────────────
@@ -150,7 +154,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const dict = useDictation({
     onText: (t, perf) => {
       if (perf && perf.transcribe_ms != null) perfRef.current.transcribe_ms = perf.transcribe_ms;
-      if (t) setDraftText(prev => (prev.trim() ? prev.trim() + " " + t : t));
+      autoSendRef.current && autoSendRef.current(t);
     },
     onError: (m) => toast && toast(m),
     onStart: () => { speech.cancel(); interviewLease(v.sessionId, "touch"); },
@@ -226,13 +230,33 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
     onChange({ ...v, ...p });
     turn([], p);
   }
-  function senden() {
-    if (dict.state === "recording") { dict.stop(); return; }
-    const t = draftText.trim(); if (!t || streaming) return;
+  function senden(text) {
+    const t = (typeof text === "string" ? text : draftText).trim();
+    if (!t || streaming || dict.state === "recording") return;
     setDraftText("");
     turn([...v.historie, { rolle: "behandler", text: t }]);
   }
-  function abbrechen() { abortRef.current?.abort(); speech.cancel(); setStreaming(false); setLiveText(""); }
+  // v19.35.1: nach dem Stopp der Aufnahme automatisch senden (getippter Text
+  // im Feld wird vorangestellt). Ref, weil der onstop-Handler der Aufnahme
+  // beim Start gebunden wird und sonst eine veraltete Historie saehe.
+  const autoSendRef = useRef(null);
+  useEffect(() => { autoSendRef.current = autoSend; });
+  function autoSend(t) {
+    const text = [draftText.trim(), (t || "").trim()].filter(Boolean).join(" ");
+    if (!text) { toast && toast("Nichts verstanden – bitte nochmal aufnehmen oder tippen."); return; }
+    if (streaming) { setDraftText(text); return; }
+    setDraftText("");
+    turn([...v.historie, { rolle: "behandler", text }]);
+  }
+  // v19.35.1: ganzes Interview abbrechen - laufende Antwort, Vorlesen und
+  // Aufnahme stoppen, alles verwerfen, zurueck zum Start (die Reservierung
+  // gibt useInterviewLease frei, weil die Phase nicht mehr "laeuft" ist).
+  function interviewAbbrechen() {
+    if (chatHasContent(v) && !confirm("Interview abbrechen? Alle bisherigen Antworten werden verworfen.")) return;
+    abortRef.current?.abort(); speech.cancel(); if (dict.state === "recording") dict.cancel();
+    setStreaming(false); setLiveText(""); setJobsBusy(false); setDraftText("");
+    patch({ ...emptyChat(), setKey: v.setKey, setLabel: v.setLabel, fragen: v.fragen });
+  }
   function beenden() {
     // Behandler beendet aktiv: ein Turn mit Bitte um Abschluss (Backend verweigert ohne Pflicht)
     turn([...v.historie, { rolle: "behandler", text: "Das war's von meiner Seite, bitte abschließen." }]);
@@ -257,6 +281,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const pflichtFragen = v.fragen.filter(f => !f.optional);
   const abgedeckt = pflichtFragen.filter(f => v.checkliste[f.key] === "abgedeckt").length;
   const recording = dict.state === "recording", transcribing = dict.state === "transcribing";
+  const hatAntwort = v.historie.some(t => t.rolle === "behandler" && (t.text || "").trim());
 
   const header = (
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
@@ -337,10 +362,12 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
                 ? <button type="button" className="rec-btn rec-btn-start" onClick={dict.start} disabled={transcribing || streaming}>🎙 Aufnehmen</button>
                 : <button type="button" className="rec-btn rec-btn-stop" onClick={dict.stop}>■ Stopp ({dict.seconds}s)</button>}
               {transcribing && <span style={soft}>Transkribiere …</span>}
-              {streaming && <><span style={soft}>Antwortet …</span><button type="button" className="btn-xs" onClick={abbrechen}>Abbrechen</button></>}
+              {streaming && <span style={soft}>Antwortet …</span>}
               <span style={{ marginLeft: "auto" }} />
-              <button type="button" className="btn-secondary" onClick={beenden} disabled={streaming || recording} title="Bittet das System um den Abschluss">Abschließen</button>
-              <button type="button" className="btn-primary" onClick={senden} disabled={streaming || transcribing || (!recording && !draftText.trim())} data-testid="chat-senden">{recording ? "Stopp" : "Senden"}</button>
+              <button type="button" className="btn-secondary" onClick={interviewAbbrechen} data-testid="chat-abbrechen">Interview abbrechen</button>
+              <button type="button" className="btn-secondary" onClick={beenden} disabled={streaming || recording || transcribing || !hatAntwort}
+                title={hatAntwort ? "Bittet das System um den Abschluss" : "Erst nach der ersten Antwort möglich"} data-testid="chat-abschliessen">Abschließen</button>
+              <button type="button" className="btn-primary" onClick={() => senden()} disabled={streaming || transcribing || recording || !draftText.trim()} data-testid="chat-senden">Senden</button>
             </div>
           </>
         )}
