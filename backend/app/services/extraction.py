@@ -1116,19 +1116,46 @@ def _tesseract_extract_image(img: Image.Image):
 
 # ── Stufe 3: Ollama Vision ────────────────────────────────────────────────────
 
-async def _check_vision_model_available() -> bool:
+async def _check_vision_model_available(model: Optional[str] = None) -> bool:
+    target = model or settings.VISION_MODEL
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(f"{settings.OLLAMA_HOST}/api/tags")
             if r.status_code == 200:
                 models = [m["name"] for m in r.json().get("models", [])]
-                return any(settings.VISION_MODEL in m for m in models)
+                return any(target in m for m in models)
     except Exception:
         pass
     return False
 
 
-async def _ollama_vision_page(b64_image: str, page_num: int, total_pages: int) -> str:
+def vision_payload(prompt: str, b64_image: str, model: Optional[str] = None) -> dict:
+    """v19.36: Payload fuer die Vision-Stufe. Mit fester Kontextgroesse
+    (LLM_FIXED_CTX) wird derselbe num_ctx wie bei allen anderen Calls
+    geschickt - ist das Vision-Modell ein Routing-Modell (z.B. gemma4:31b),
+    laedt Ollama es dann nicht neu. think=False: gemma soll direkt antworten."""
+    from app.services.llm import _normalize_model_id, fixed_num_ctx, resident_models
+    target = model or settings.VISION_MODEL
+    options: dict = {"temperature": 0.1, "num_predict": 2048}
+    if fixed_num_ctx():
+        options["num_ctx"] = fixed_num_ctx()
+    payload = {
+        "model": target,
+        "prompt": prompt,
+        "images": [b64_image],
+        "stream": False,
+        "think": False,
+        "options": options,
+    }
+    # Ein Routing-Modell bleibt wie ueberall geladen; ein reines Vision-Modell
+    # (llava) behaelt Ollamas Standard-Verweildauer.
+    if _normalize_model_id(target) in resident_models():
+        payload["keep_alive"] = -1
+    return payload
+
+
+async def _ollama_vision_page(b64_image: str, page_num: int, total_pages: int,
+                              model: Optional[str] = None) -> str:
     prompt = (
         f"Dies ist Seite {page_num} von {total_pages} eines medizinischen Dokuments "
         "der sysTelios Klinik. "
@@ -1137,14 +1164,9 @@ async def _ollama_vision_page(b64_image: str, page_num: int, total_pages: int) -
         "Angekreuzte Checkboxen mit [X], nicht angekreuzte mit [ ]. "
         "Nur der extrahierte Text, keine Kommentare."
     )
-    payload = {
-        "model": settings.VISION_MODEL,
-        "prompt": prompt,
-        "images": [b64_image],
-        "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 2048},
-    }
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    payload = vision_payload(prompt, b64_image, model)
+    # 31B-Modelle brauchen fuer eine volle Seite deutlich laenger als llava
+    async with httpx.AsyncClient(timeout=300.0) as client:
         r = await client.post(f"{settings.OLLAMA_HOST}/api/generate", json=payload)
         r.raise_for_status()
     return r.json().get("response", "").strip()

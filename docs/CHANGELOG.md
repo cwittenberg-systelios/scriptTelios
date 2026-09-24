@@ -7,6 +7,21 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.36] — Vision-OCR: Vergleich llava ↔ gemma4 vorbereitet (2026-09-24)
+
+Basis: `1c3a998`. Nur Backend, kein Bundle. Sprintplan: `docs/sprintplan_v19_36.md`.
+
+- `extraction.vision_payload()` + `_ollama_vision_page(..., model=None)`:
+  Modell-Override, `think: false`, fester `num_ctx` bei `LLM_FIXED_CTX`,
+  `keep_alive: -1` nur für Routing-Modelle, Timeout 300 s. Damit kann
+  `VISION_MODEL=gemma4:31b` gesetzt werden, ohne dass ein Scan gemma neu lädt.
+- `scripts/eval_vision_ocr.py`: Vergleich auf synthetischen, gescannten
+  Formularen mit bekannter Wahrheit (Checkboxen, Textfelder, Laufzeit) oder
+  auf einer eigenen anonymisierten Seite.
+- Tests: `tests/unit/test_v1936_vision_eval.py` (6).
+
+---
+
 ## [v19.35.1] — Dialog-Bedienung nach dem ersten Praxistest (2026-09-24)
 
 Basis: `fab51cc`. Nur Frontend (`systelios.js` neu gebaut).
