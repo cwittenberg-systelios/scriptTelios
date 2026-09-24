@@ -40,7 +40,7 @@ class FakeEngine(ts.Engine):
     def _load(self):
         self.loads += 1
 
-    def _synth(self, text):
+    def _synth(self, text, params=None):
         self.calls.append(text)
         return ts.pcm16_to_wav(b"\x00\x00" * 22050, 22050)   # 1 s Stille
 

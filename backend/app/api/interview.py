@@ -496,7 +496,7 @@ async def interview_tts_engines(current_user: str = Depends(get_current_user)) -
 
 class TTSIn(BaseModel):
     text: str = Field(min_length=1, max_length=600)
-    engine: str = Field(pattern="^(piper|chatterbox)$")
+    engine: str = Field(pattern="^(piper|chatterbox)(:[a-z0-9_-]{1,32})?$")   # v19.38: chatterbox:<stimme>
     session_id: Optional[str] = Field(default=None, max_length=64)
 
 

@@ -11,7 +11,8 @@ beruehren. Hoert nur auf 127.0.0.1; das Backend reicht die Anfragen durch
 
 Endpoints:
     GET  /engines     -> {"engines": [{"key","label","available","reason"}]}
-    POST /synthesize  {"text": "...", "engine": "piper|chatterbox"} -> audio/wav
+    POST /synthesize  {"text": "...", "engine": "piper|chatterbox|chatterbox:<stimme>",
+                       "params": {...}  (optional, Hoertest)} -> audio/wav
                       Header X-TTS-Synth-S (Rechenzeit), X-TTS-Audio-S (Laenge)
 
 Umgebung:
@@ -21,6 +22,11 @@ Umgebung:
     TTS_CHATTERBOX_ENABLED   true = Chatterbox Multilingual anbieten (Default false)
     TTS_CHATTERBOX_THREADS   CPU-Threads fuer Chatterbox (Default 8)
     TTS_CACHE_SIZE           Anzahl gecachter Saetze (Default 256)
+    TTS_VOICES_DIR           Referenzstimmen fuer Chatterbox (Default /workspace/tts/voices):
+                             <key>.wav (+ <key>.json: label, cfg_weight, exaggeration,
+                             temperature) -> Engine "chatterbox:<key>" (v19.38)
+    TTS_CHATTERBOX_CFG / _EXAGGERATION / _TEMPERATURE   Defaults 0.3 / 0.5 / 0.8
+    TTS_PIPER_LENGTH_SCALE   Sprechtempo Piper, >1 = langsamer (Default 1.1)
 
 Datenschutz: Texte werden weder geloggt noch gespeichert (nur im RAM-Cache).
 """
@@ -31,6 +37,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 import wave
@@ -78,19 +85,22 @@ class Engine:
     def _load(self) -> None:
         raise NotImplementedError
 
-    def _synth(self, text: str) -> bytes:           # -> WAV
+    def _synth(self, text: str, params: dict) -> bytes:   # -> WAV
         raise NotImplementedError
 
-    def synthesize(self, text: str) -> bytes:
+    def ensure_loaded(self) -> None:
+        if not self._loaded:
+            t0 = time.time()
+            self._load()
+            self._loaded = True
+            logger.info("Engine %s geladen (%.1fs)", self.key, time.time() - t0)
+
+    def synthesize(self, text: str, params: Optional[dict] = None) -> bytes:
         # Ein Satz nach dem anderen je Engine: begrenzt die CPU-Last und
         # vermeidet Thread-Konflikte in onnxruntime/torch.
         with self._lock:
-            if not self._loaded:
-                t0 = time.time()
-                self._load()
-                self._loaded = True
-                logger.info("Engine %s geladen (%.1fs)", self.key, time.time() - t0)
-            return self._synth(text)
+            self.ensure_loaded()
+            return self._synth(text, params or {})
 
 
 class PiperEngine(Engine):
@@ -116,20 +126,44 @@ class PiperEngine(Engine):
         from piper import PiperVoice
         self.voice = PiperVoice.load(self.voice_path)
 
-    def _synth(self, text: str) -> bytes:
+    def _synth(self, text: str, params: dict) -> bytes:
+        # v19.38: etwas langsamer (Default 1.1) - Thorsten klingt sonst gehetzt
+        ls = float(params.get("length_scale") or os.environ.get("TTS_PIPER_LENGTH_SCALE", "1.1"))
+        cfg = None
+        try:
+            from piper import SynthesisConfig
+            cfg = SynthesisConfig(length_scale=ls)
+        except Exception:  # noqa: BLE001 - aeltere piper-Versionen
+            cfg = None
         buf = io.BytesIO()
         with wave.open(buf, "wb") as w:
-            self.voice.synthesize_wav(text, w)
+            if cfg is not None:
+                self.voice.synthesize_wav(text, w, syn_config=cfg)
+            else:
+                self.voice.synthesize_wav(text, w)
         return buf.getvalue()
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
 class ChatterboxEngine(Engine):
+    """Chatterbox Multilingual auf der CPU. Die Standard-Referenz des Modells
+    ist englisch -> deutlicher Akzent; deshalb v19.38 eigene deutsche
+    Referenzstimmen (ChatterboxVoice). Die Conditionals je Stimme werden
+    einmal berechnet und gecacht."""
     key = "chatterbox"
-    label = "Chatterbox (CPU, Test)"
+    label = "Chatterbox (Standardstimme, englische Referenz)"
 
     def __init__(self):
         super().__init__()
         self.model = None
+        self._default_conds = None
+        self._conds: dict[str, object] = {}
 
     def check(self) -> tuple[bool, str]:
         if not _env_bool("TTS_CHATTERBOX_ENABLED"):
@@ -148,53 +182,224 @@ class ChatterboxEngine(Engine):
             self.model = ChatterboxMultilingualTTS.from_pretrained(device="cpu", t3_model="v3")
         except TypeError:                           # aeltere Versionen ohne t3_model
             self.model = ChatterboxMultilingualTTS.from_pretrained(device="cpu")
+        self._default_conds = getattr(self.model, "conds", None)
 
-    def _synth(self, text: str) -> bytes:
+    def _gen_kwargs(self, params: dict, voice: Optional[dict]) -> dict:
+        v = voice or {}
+        return {
+            # v19.38: cfg_weight 0.3 statt 0.5 -> ruhigeres Tempo (Doku-Empfehlung)
+            "cfg_weight": float(params.get("cfg_weight", v.get("cfg_weight", _env_float("TTS_CHATTERBOX_CFG", 0.3)))),
+            "exaggeration": float(params.get("exaggeration", v.get("exaggeration", _env_float("TTS_CHATTERBOX_EXAGGERATION", 0.5)))),
+            "temperature": float(params.get("temperature", v.get("temperature", _env_float("TTS_CHATTERBOX_TEMPERATURE", 0.8)))),
+        }
+
+    def synth_voice(self, text: str, params: dict, voice: Optional[dict]) -> bytes:
         import numpy as np
         import torch
+        kw = self._gen_kwargs(params, voice)
+        if voice:
+            if voice["key"] not in self._conds:
+                self.model.prepare_conditionals(voice["wav"], exaggeration=kw["exaggeration"])
+                self._conds[voice["key"]] = self.model.conds
+            self.model.conds = self._conds[voice["key"]]
+        elif self._default_conds is not None:
+            self.model.conds = self._default_conds
         with torch.inference_mode():
-            wav = self.model.generate(text, language_id="de")
+            wav = self.model.generate(text, language_id="de", **kw)
         arr = wav.squeeze().detach().cpu().numpy() if hasattr(wav, "detach") else np.asarray(wav).squeeze()
+        sr = int(self.model.sr)
+        if not params.get("no_trim"):
+            arr = trim_tail(arr, sr)
         pcm = (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
-        return pcm16_to_wav(pcm, int(self.model.sr))
+        return pcm16_to_wav(pcm, sr)
+
+    def _synth(self, text: str, params: dict) -> bytes:
+        return self.synth_voice(text, params, None)
+
+
+class ChatterboxVoice(Engine):
+    """Eigene Referenzstimme fuer Chatterbox: <TTS_VOICES_DIR>/<key>.wav
+    (+ optional <key>.json mit label, cfg_weight, exaggeration, temperature).
+    Nutzt Modell und Lock der Chatterbox-Engine."""
+
+    def __init__(self, base: ChatterboxEngine, voice: dict):
+        super().__init__()
+        self.base = base
+        self.voice = voice
+        self.key = f"chatterbox:{voice['key']}"
+        self.label = f"Chatterbox – {voice.get('label') or voice['key']}"
+        self._lock = base._lock
+
+    def check(self) -> tuple[bool, str]:
+        ok, reason = self.base.check()
+        if not ok:
+            return ok, reason
+        if not os.path.exists(self.voice["wav"]):
+            return False, f"Referenz fehlt: {self.voice['wav']}"
+        return True, ""
+
+    def synthesize(self, text: str, params: Optional[dict] = None) -> bytes:
+        with self._lock:
+            self.base.ensure_loaded()
+            return self.base.synth_voice(text, params or {}, self.voice)
+
+
+VOICE_KEY_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+
+def discover_voices(voices_dir: str) -> list[dict]:
+    """Referenzstimmen im Ordner: <key>.wav, optional <key>.json."""
+    out: list[dict] = []
+    if not voices_dir or not os.path.isdir(voices_dir):
+        return out
+    for fn in sorted(os.listdir(voices_dir)):
+        key, ext = os.path.splitext(fn)
+        if ext.lower() != ".wav" or not VOICE_KEY_RE.match(key):
+            continue
+        meta: dict = {}
+        jpath = os.path.join(voices_dir, key + ".json")
+        if os.path.exists(jpath):
+            try:
+                with open(jpath, encoding="utf-8") as fh:
+                    meta = json.load(fh) or {}
+            except (OSError, ValueError):
+                logger.warning("Stimme %s: %s nicht lesbar", key, jpath)
+        v = {"key": key, "wav": os.path.join(voices_dir, fn), "label": meta.get("label") or key}
+        for k in ("cfg_weight", "exaggeration", "temperature"):
+            if isinstance(meta.get(k), (int, float)):
+                v[k] = float(meta[k])
+        out.append(v)
+    return out
+
+
+# ── Textbereinigung und Nachlauf-Schnitt (v19.38) ────────────────────────────
+
+_ABK = [
+    (r"\bz\.\s?B\.", "zum Beispiel"), (r"\bd\.\s?h\.", "das heißt"), (r"\bu\.\s?a\.", "unter anderem"),
+    (r"\bbzw\.", "beziehungsweise"), (r"\bggf\.", "gegebenenfalls"), (r"\bca\.", "circa"),
+    (r"\busw\.", "und so weiter"), (r"\bNr\.", "Nummer"), (r"\bDr\.", "Doktor"), (r"\bevtl\.", "eventuell"),
+]
+
+
+def normalize_for_tts(text: str) -> str:
+    """Macht Text sprechbar: Anfuehrungszeichen weg (loesen bei Chatterbox
+    Nachlaute aus), gaengige Abkuerzungen ausschreiben, Satzzeichen am Ende."""
+    t = text or ""
+    t = re.sub(r"[„“”\"«»‚‘’]", "", t)
+    t = re.sub(r"(?<=\w)'(?=\w)", "", t)
+    for pat, rep in _ABK:
+        t = re.sub(pat, rep, t)
+    t = re.sub(r"[\u2013\u2014]", ", ", t)          # Gedankenstrich -> Pause
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"\s+([,.!?;:])", r"\1", t)
+    if t and t[-1] not in ".!?":
+        t += "."
+    return t
+
+
+def trim_tail(arr, sr: int, frame_ms: int = 20, gap_s: float = 0.25, blip_s: float = 0.6, pad_s: float = 0.12):
+    """Schneidet Nachlaute ab: ein kurzer Laut (< blip_s) nach einer Pause
+    (>= gap_s) am Ende wird entfernt (bis zu zwei Mal), danach Stille bis auf
+    pad_s gekuerzt. Wirkt nur auf das Ende - der Satz selbst bleibt unangetastet."""
+    import numpy as np
+    x = np.asarray(arr, dtype="float32").reshape(-1)
+    n = max(1, int(sr * frame_ms / 1000))
+    if x.size < n * 5:
+        return x
+    frames = x[: (x.size // n) * n].reshape(-1, n)
+    rms = np.sqrt((frames ** 2).mean(axis=1))
+    thr = max(1e-4, float(rms.max()) * 0.06)
+    voiced = rms > thr
+    end = len(voiced)
+    for _ in range(2):
+        idx = np.nonzero(voiced[:end])[0]
+        if idx.size == 0:
+            break
+        last = idx[-1] + 1
+        start = last
+        while start > 0 and voiced[start - 1]:
+            start -= 1
+        gap_end = start
+        gap_start = gap_end
+        while gap_start > 0 and not voiced[gap_start - 1]:
+            gap_start -= 1
+        blip = (last - start) * frame_ms / 1000
+        gap = (gap_end - gap_start) * frame_ms / 1000
+        if gap_start > 0 and gap >= gap_s and blip < blip_s:
+            end = gap_start
+            continue
+        end = last
+        break
+    cut = min(x.size, end * n + int(pad_s * sr))
+    return x[:cut]
 
 
 # ── Dienst ───────────────────────────────────────────────────────────────────
 
 class TTSService:
-    def __init__(self, engines: Optional[dict[str, Engine]] = None, cache_size: int = 256):
-        self.engines = engines if engines is not None else {e.key: e for e in (PiperEngine(), ChatterboxEngine())}
+    def __init__(self, engines: Optional[dict[str, Engine]] = None, cache_size: int = 256,
+                 voices_dir: Optional[str] = None):
+        if engines is None:
+            self._chatterbox = ChatterboxEngine()
+            engines = {e.key: e for e in (PiperEngine(), self._chatterbox)}
+        else:
+            self._chatterbox = next((e for e in engines.values() if isinstance(e, ChatterboxEngine)), None)
+        self.engines = engines
+        self.voices_dir = voices_dir if voices_dir is not None else os.environ.get("TTS_VOICES_DIR", "/workspace/tts/voices")
         self.cache_size = cache_size
-        self._cache: OrderedDict[tuple[str, str], bytes] = OrderedDict()
+        self._cache: OrderedDict[tuple, bytes] = OrderedDict()
         self._cache_lock = threading.Lock()
+        self.refresh_voices()
+
+    def refresh_voices(self) -> None:
+        """Stimmen-Ordner neu einlesen (neue .wav ohne Neustart nutzbar)."""
+        if self._chatterbox is None:
+            return
+        found = {f"chatterbox:{v['key']}": v for v in discover_voices(self.voices_dir)}
+        for k in [k for k in self.engines if k.startswith("chatterbox:") and k not in found]:
+            del self.engines[k]
+        for k, v in found.items():
+            cur = self.engines.get(k)
+            if not isinstance(cur, ChatterboxVoice) or cur.voice != v:
+                if isinstance(cur, ChatterboxVoice):
+                    self._chatterbox._conds.pop(v["key"], None)   # Referenz geaendert
+                self.engines[k] = ChatterboxVoice(self._chatterbox, v)
 
     def list_engines(self) -> list[dict]:
+        self.refresh_voices()
         out = []
         for e in self.engines.values():
             ok, reason = e.check()
             out.append({"key": e.key, "label": e.label, "available": ok, "reason": reason})
         return out
 
-    def synthesize(self, text: str, engine: str) -> tuple[bytes, float, bool]:
-        """-> (wav, rechenzeit_s, aus_cache). ValueError bei ungueltiger Anfrage."""
+    def synthesize(self, text: str, engine: str, params: Optional[dict] = None) -> tuple[bytes, float, bool]:
+        """-> (wav, rechenzeit_s, aus_cache). ValueError bei ungueltiger Anfrage.
+        params (nur fuer das Hoertest-Skript): cfg_weight, exaggeration,
+        temperature, length_scale, no_trim."""
         text = (text or "").strip()
         if not text:
             raise ValueError("leerer Text")
         if len(text) > MAX_CHARS:
             raise ValueError(f"Text zu lang (max. {MAX_CHARS} Zeichen)")
+        text = normalize_for_tts(text)
+        if engine not in self.engines and engine.startswith("chatterbox:"):
+            self.refresh_voices()
         eng = self.engines.get(engine)
         if eng is None:
             raise ValueError(f"unbekannte Engine: {engine}")
         ok, reason = eng.check()
         if not ok:
             raise LookupError(reason)
-        key = (engine, text)
+        p = {k: v for k, v in (params or {}).items()
+             if k in ("cfg_weight", "exaggeration", "temperature", "length_scale", "no_trim")}
+        key = (engine, text, json.dumps(p, sort_keys=True))
         with self._cache_lock:
             if key in self._cache:
                 self._cache.move_to_end(key)
                 return self._cache[key], 0.0, True
         t0 = time.time()
-        wav = eng.synthesize(text)
+        wav = eng.synthesize(text, p)
         dt = round(time.time() - t0, 2)
         with self._cache_lock:
             self._cache[key] = wav
@@ -229,7 +434,8 @@ def make_handler(service: TTSService) -> Callable:
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 data = json.loads(self.rfile.read(n) or b"{}")
-                wav, dt, cached = service.synthesize(str(data.get("text") or ""), str(data.get("engine") or ""))
+                params = data.get("params") if isinstance(data.get("params"), dict) else None
+                wav, dt, cached = service.synthesize(str(data.get("text") or ""), str(data.get("engine") or ""), params)
             except LookupError as e:
                 return self._json(503, {"error": str(e)})
             except (ValueError, json.JSONDecodeError) as e:

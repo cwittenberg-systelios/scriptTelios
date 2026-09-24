@@ -7,6 +7,36 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.38] — Chatterbox: eigene Referenzstimmen, Textbereinigung, Nachlauf-Schnitt (2026-09-24)
+
+Basis: `120adbb`. Nur Backend und TTS-Dienst, kein Bundle.
+
+Hörtest-Befunde: Chatterbox klingt am natürlichsten, aber mit Akzent (die
+Standard-Referenz des Modells ist englisch) und zu schnell, und am Ende von
+„Um wen geht es? … „Frau K.““ kam ein Nachlaut („Ach Tsch“). Piper klingt blechern.
+
+- **Eigene Referenzstimmen:** `/workspace/tts/voices/<key>.wav` (+ `<key>.json`
+  mit label, cfg_weight, exaggeration, temperature) erscheint als
+  „Chatterbox – <label>“ (Engine `chatterbox:<key>`). Der Ordner wird bei
+  jeder Abfrage neu gelesen, ein Neustart ist nicht nötig. Die Conditionals
+  werden je Stimme gecacht.
+- `scripts/prepare_voice.py`: schneidet aus einer Aufnahme eine Referenz
+  (Start, Dauer), dann Filter, Rauschminderung, Lautheit, 24 kHz mono. Nur mit
+  Einverständnis der Person.
+- **Textbereinigung** für alle Server-Stimmen: Anführungszeichen weg,
+  gängige Abkürzungen ausgeschrieben, Gedankenstrich → Pause, immer mit
+  Satzzeichen am Ende.
+- **Nachlauf-Schnitt** (Chatterbox): Ein kurzer Laut (< 0,6 s) nach einer
+  Pause (≥ 0,25 s) am Ende wird entfernt, Stille gekürzt.
+- **Tempo:** Chatterbox `cfg_weight` 0,5 → 0,3 (`TTS_CHATTERBOX_CFG`), Piper
+  `length_scale` 1,1 (`TTS_PIPER_LENGTH_SCALE`).
+- `scripts/tts_probe.py`: Hörtest, gleiche Sätze mit allen Stimmen und mehreren
+  `cfg_weight`-Werten als WAV, dazu einmal ohne Schnitt zum Vergleich.
+- Backend: Engine-Schlüssel `chatterbox:<stimme>` erlaubt.
+- Tests: `tests/unit/test_v1938_tts_stimmen.py` (12).
+
+---
+
 ## [v19.37.2] — Stimmen-Auswahl: „Vorlese-Dienst nicht erreichbar“ bleibt nicht mehr hängen (2026-09-24)
 
 Basis: `539086e`. Backend-Skript + Frontend (`systelios.js` neu gebaut).
