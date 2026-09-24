@@ -27,6 +27,10 @@ Umgebung:
                              temperature) -> Engine "chatterbox:<key>" (v19.38)
     TTS_CHATTERBOX_CFG / _EXAGGERATION / _TEMPERATURE   Defaults 0.3 / 0.5 / 0.8
     TTS_PIPER_LENGTH_SCALE   Sprechtempo Piper, >1 = langsamer (Default 1.1)
+    TTS_CHATTERBOX_DEVICE    cpu (Default) | cuda - GPU nur mit >= TTS_GPU_MIN_FREE_GB
+                             (Default 5) freiem Grafikspeicher, bei Speicherfehler
+                             Rueckfall auf CPU (v19.40). Braucht torch mit CUDA
+                             (setup_tts.sh --cuda).
     TTS_WARMUP               true (Default) = beim Start alle Engines laden und
                              Referenzstimmen vorverarbeiten (v19.38.1)
 
@@ -153,6 +157,38 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _is_oom(e: BaseException) -> bool:
+    m = str(e).lower()
+    return "out of memory" in m or "cuda error" in m or "cublas" in m
+
+
+def choose_device(wanted: str, *, mem_get_info=None, cuda_available=None) -> str:
+    """v19.40: TTS_CHATTERBOX_DEVICE = cpu (Default) | cuda.
+    cuda nur, wenn eine GPU da ist und mindestens TTS_GPU_MIN_FREE_GB frei sind
+    (Default 5 GB: Modell ~3 GB + Luft, damit gemma nicht auf die CPU
+    ausweichen muss) - sonst CPU mit Log-Hinweis."""
+    wanted = (wanted or "cpu").strip().lower()
+    if wanted != "cuda":
+        return "cpu"
+    try:
+        if cuda_available is None or mem_get_info is None:
+            import torch
+            cuda_available = torch.cuda.is_available() if cuda_available is None else cuda_available
+            mem_get_info = mem_get_info or torch.cuda.mem_get_info
+        if not cuda_available:
+            logger.warning("TTS_CHATTERBOX_DEVICE=cuda, aber keine GPU fuer torch - CPU")
+            return "cpu"
+        free, _total = mem_get_info()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("GPU-Pruefung fehlgeschlagen (%s) - CPU", e)
+        return "cpu"
+    need = _env_float("TTS_GPU_MIN_FREE_GB", 5.0)
+    if free / 1024 ** 3 < need:
+        logger.warning("Nur %.1f GB Grafikspeicher frei (< %.1f GB) - Chatterbox auf CPU", free / 1024 ** 3, need)
+        return "cpu"
+    return "cuda"
+
+
 class ChatterboxEngine(Engine):
     """Chatterbox Multilingual auf der CPU. Die Standard-Referenz des Modells
     ist englisch -> deutlicher Akzent; deshalb v19.38 eigene deutsche
@@ -176,15 +212,35 @@ class ChatterboxEngine(Engine):
             return False, "chatterbox-tts nicht installiert (setup_tts.sh --chatterbox)"
         return True, ""
 
+    device = "cpu"
+
     def _load(self) -> None:
         import torch
         torch.set_num_threads(int(os.environ.get("TTS_CHATTERBOX_THREADS", "8")))
+        self._load_on(choose_device(os.environ.get("TTS_CHATTERBOX_DEVICE", "cpu")))
+
+    def _load_on(self, device: str) -> None:
         from chatterbox.mtl_tts import ChatterboxMultilingualTTS
         try:
-            self.model = ChatterboxMultilingualTTS.from_pretrained(device="cpu", t3_model="v3")
+            self.model = ChatterboxMultilingualTTS.from_pretrained(device=device, t3_model="v3")
         except TypeError:                           # aeltere Versionen ohne t3_model
-            self.model = ChatterboxMultilingualTTS.from_pretrained(device="cpu")
+            self.model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+        self.device = device
         self._default_conds = getattr(self.model, "conds", None)
+        self._conds = {}                            # Conditionals liegen auf dem Geraet
+        logger.info("Chatterbox auf %s geladen", device)
+
+    def fall_back_to_cpu(self, reason: str) -> None:
+        """v19.40: Grafikspeicher-Fehler auf der GPU -> Modell auf der CPU neu
+        laden (langsamer, aber gemma behaelt die GPU). Gilt bis zum Neustart."""
+        logger.warning("Chatterbox: %s - Rueckfall auf CPU", reason)
+        self.model = None
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001
+            pass
+        self._load_on("cpu")
 
     def _gen_kwargs(self, params: dict, voice: Optional[dict]) -> dict:
         v = voice or {}
@@ -205,16 +261,28 @@ class ChatterboxEngine(Engine):
         self._conds[voice["key"]] = self.model.conds
 
     def synth_voice(self, text: str, params: dict, voice: Optional[dict]) -> bytes:
+        import contextlib
+
         import numpy as np
-        import torch
+        try:
+            import torch
+            no_grad = torch.inference_mode
+        except ImportError:                         # nur in Tests ohne torch
+            no_grad = contextlib.nullcontext
         kw = self._gen_kwargs(params, voice)
         if voice:
             self.prepare_voice(voice, kw["exaggeration"])
             self.model.conds = self._conds[voice["key"]]
         elif self._default_conds is not None:
             self.model.conds = self._default_conds
-        with torch.inference_mode():
-            wav = self.model.generate(text, language_id="de", **kw)
+        try:
+            with no_grad():
+                wav = self.model.generate(text, language_id="de", **kw)
+        except RuntimeError as e:
+            if self.device == "cpu" or not _is_oom(e):
+                raise
+            self.fall_back_to_cpu(f"kein Grafikspeicher ({str(e)[:80]})")
+            return self.synth_voice(text, params, voice)
         arr = wav.squeeze().detach().cpu().numpy() if hasattr(wav, "detach") else np.asarray(wav).squeeze()
         sr = int(self.model.sr)
         if not params.get("no_trim"):
@@ -484,7 +552,9 @@ def make_handler(service: TTSService) -> Callable:
             if self.path == "/engines":
                 return self._json(200, {"engines": service.list_engines()})
             if self.path == "/health":
-                return self._json(200, {"ok": True})
+                cb = getattr(service, "_chatterbox", None)
+                return self._json(200, {"ok": True, "chatterbox_device": getattr(cb, "device", None),
+                                        "chatterbox_geladen": bool(cb and cb._loaded)})
             return self._json(404, {"error": "not found"})
 
         def do_POST(self):

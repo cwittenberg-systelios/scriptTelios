@@ -7,6 +7,29 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.40] — Browser vorerst Standard, Chatterbox wahlweise auf der GPU (2026-09-25)
+
+Basis: `6c4130a`. Backend und TTS-Dienst, kein Bundle.
+
+Messung 25.09. mit 16 Threads (der Pod hat 24 Kerne): Chatterbox braucht auf
+der CPU etwa 2,5-mal so lange, wie der Satz dauert (12–14 s für 4–6 s
+Sprache). Dadurch entstehen Pausen zwischen den Sätzen.
+
+- `TTS_DEFAULT_VOICE` Default → `browser`. Chatterbox-Stimmen bleiben wählbar,
+  die Wahl des Nutzers bleibt gespeichert. Mit GPU wieder
+  `TTS_DEFAULT_VOICE=chatterbox:gunther`.
+- `TTS_CHATTERBOX_DEVICE=cuda` (Default `cpu`): Chatterbox läuft auf der GPU,
+  wenn beim Laden mindestens `TTS_GPU_MIN_FREE_GB` (Default 5) frei sind,
+  sonst auf der CPU. Bei einem Grafikspeicher-Fehler wird das Modell auf der
+  CPU neu geladen (gilt bis zum Neustart). `/health` des Dienstes zeigt das
+  Gerät.
+- `setup_tts.sh --cuda`: torch 2.7.1 mit CUDA 12.8 im TTS-venv (Blackwell
+  braucht ≥ 2.7; chatterbox pinnt 2.6, pip warnt, es läuft trotzdem). Prüft
+  eine Rechnung auf der GPU. `--cpu-torch` stellt zurück.
+- Tests: `test_v1938_tts_stimmen.py` (+4), `test_v1935_tts.py` angepasst.
+
+---
+
 ## [v19.38.1] — Vorlese-Dienst wärmt beim Start vor (2026-09-25)
 
 Basis: `9a9dd4d`. Nur TTS-Dienst.

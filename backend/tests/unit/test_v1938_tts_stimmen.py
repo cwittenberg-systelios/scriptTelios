@@ -214,3 +214,63 @@ class TestWarmup:
     def test_start_mit_vorwaermen_konfigurierbar(self):
         src = (BACKEND / "tts_service" / "tts_server.py").read_text()
         assert 'if _env_bool("TTS_WARMUP", True):' in src and "target=service.warmup" in src
+
+
+# ── v19.40: Chatterbox auf der GPU (Schalter + Rueckfall) ────────────────────
+
+GB = 1024 ** 3
+
+
+class TestGeraet:
+    def test_default_cpu(self):
+        assert ts.choose_device("cpu") == "cpu" and ts.choose_device("") == "cpu"
+
+    def test_cuda_nur_mit_genug_speicher(self, monkeypatch):
+        monkeypatch.setenv("TTS_GPU_MIN_FREE_GB", "5")
+        assert ts.choose_device("cuda", cuda_available=True, mem_get_info=lambda: (7 * GB, 32 * GB)) == "cuda"
+        assert ts.choose_device("cuda", cuda_available=True, mem_get_info=lambda: (4 * GB, 32 * GB)) == "cpu"
+        assert ts.choose_device("cuda", cuda_available=False) == "cpu"
+
+    def test_oom_erkennung(self):
+        assert ts._is_oom(RuntimeError("CUDA out of memory. Tried to allocate 20 MiB"))
+        assert not ts._is_oom(RuntimeError("shape mismatch"))
+
+
+class _GpuModel:
+    """generate wirft beim ersten Mal OOM (GPU), auf der CPU klappt es."""
+    sr = 1000
+
+    def __init__(self, device):
+        self.device = device
+        self.conds = "default"
+
+    def prepare_conditionals(self, wav, exaggeration=0.5):
+        self.conds = f"conds:{wav}@{self.device}"
+
+    def generate(self, text, language_id, **kw):
+        if self.device == "cuda":
+            raise RuntimeError("CUDA out of memory. Tried to allocate 64.00 MiB")
+        return np.zeros(500, dtype="float32")
+
+
+class GpuCB(ts.ChatterboxEngine):
+    def check(self):
+        return True, ""
+
+    def _load(self):
+        self._load_on("cuda")
+
+    def _load_on(self, device):
+        self.model = _GpuModel(device)
+        self.device = device
+        self._default_conds = self.model.conds
+        self._conds = {}
+
+
+class TestRueckfall:
+    def test_oom_auf_gpu_faellt_auf_cpu_zurueck(self, voices):
+        cb = GpuCB()
+        svc = ts.TTSService(engines={"chatterbox": cb}, voices_dir=str(voices))
+        wav, _, _ = svc.synthesize("Hallo.", "chatterbox:carsten")
+        assert wav[:4] == b"RIFF" and cb.device == "cpu"
+        assert cb._conds["carsten"].endswith("@cpu")       # Referenz neu auf der CPU berechnet

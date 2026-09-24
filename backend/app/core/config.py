@@ -293,8 +293,11 @@ class Settings(BaseSettings):
     # backend/tts_service/tts_server.py im eigenen venv (setup_tts.sh).
     TTS_ENABLED: bool = False
     TTS_SERVICE_URL: str = "http://127.0.0.1:8011"
-    # v19.39: Standardstimme, solange der Nutzer keine eigene gewaehlt hat
-    TTS_DEFAULT_VOICE: str = "chatterbox:gunther"
+    # v19.39: Standardstimme, solange der Nutzer keine eigene gewaehlt hat.
+    # v19.40: vorerst "browser" - Chatterbox auf der CPU rechnet ~2,5x langsamer
+    # als gesprochen (Pausen zwischen Saetzen). Mit Chatterbox auf der GPU bzw.
+    # zweiter GPU wieder "chatterbox:gunther" (per /workspace/.env).
+    TTS_DEFAULT_VOICE: str = "browser"
 
     @property
     def gpu_dual(self) -> bool:

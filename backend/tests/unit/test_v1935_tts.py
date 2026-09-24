@@ -146,7 +146,7 @@ class TestProxy:
     def test_aus_nur_browser_verfuegbar(self, client, monkeypatch):
         monkeypatch.setattr(settings, "TTS_ENABLED", False)
         d = client.get("/api/interview/tts/engines").json()          # v19.39: nur Chatterbox-Stimmen
-        assert d["engines"] == [] and "TTS_ENABLED" in d["reason"] and d["default"] == "chatterbox:gunther"
+        assert d["engines"] == [] and "TTS_ENABLED" in d["reason"] and d["default"] == "browser"   # v19.40
         r = client.post("/api/interview/tts", json={"text": "Hallo.", "engine": "piper"})
         assert r.status_code == 503
 
@@ -191,6 +191,7 @@ class TestStimmenListe:
         t.start()
         try:
             monkeypatch.setattr(settings, "TTS_ENABLED", True)
+            monkeypatch.setattr(settings, "TTS_DEFAULT_VOICE", "chatterbox:gunther")
             monkeypatch.setattr(settings, "TTS_SERVICE_URL", f"http://127.0.0.1:{srv.server_address[1]}")
             d = client.get("/api/interview/tts/engines").json()
         finally:

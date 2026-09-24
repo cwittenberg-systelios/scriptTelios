@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # setup_tts.sh - richtet den Vorlese-Dienst auf dem Pod ein (v19.35).
 #
-#   bash backend/scripts/setup_tts.sh [--chatterbox]
+#   bash backend/scripts/setup_tts.sh [--chatterbox] [--cuda | --cpu-torch]
 #
 # Eigenes venv (/workspace/venv-tts), damit piper-tts (onnxruntime) und
 # chatterbox-tts (torch==2.6.0) das Backend-venv nicht veraendern.
@@ -16,8 +16,19 @@ set -euo pipefail
 VENV="${TTS_VENV:-/workspace/venv-tts}"
 VOICE_DIR="${TTS_VOICE_DIR:-/workspace/tts}"
 VOICE="${TTS_PIPER_VOICE_NAME:-de_DE-thorsten-high}"
-WITH_CB=0
-[ "${1:-}" = "--chatterbox" ] && WITH_CB=1
+WITH_CB=0; WITH_CUDA=0; WITH_CPU=0
+for arg in "$@"; do
+    case "$arg" in
+        --chatterbox) WITH_CB=1 ;;
+        # v19.40: torch mit CUDA fuer Chatterbox auf der GPU (TTS_CHATTERBOX_DEVICE=cuda).
+        # Die RTX PRO 4500 ist Blackwell (sm_120) -> erst ab torch 2.7 / CUDA 12.8.
+        # chatterbox-tts pinnt torch==2.6.0; pip warnt darueber, laeuft aber.
+        # ~4-5 GB zusaetzlich (CUDA-Bibliotheken).
+        --cuda) WITH_CUDA=1 ;;
+        --cpu-torch) WITH_CPU=1 ;;   # zurueck auf die CPU-Variante (spart den Platz wieder)
+        *) echo "unbekannte Option: $arg"; exit 2 ;;
+    esac
+done
 
 echo "[tts] venv: $VENV"
 [ -x "$VENV/bin/python" ] || python3 -m venv "$VENV"
@@ -44,5 +55,21 @@ except TypeError:
     M.from_pretrained(device="cpu")
 print("[tts] Chatterbox-Gewichte im Cache")
 PY
+fi
+if [ "$WITH_CUDA" = 1 ]; then
+    echo "[tts] torch 2.7.1 mit CUDA 12.8 installieren (Blackwell)"
+    "$VENV/bin/pip" install -q torch==2.7.1 torchaudio==2.7.1 --index-url https://download.pytorch.org/whl/cu128
+    "$VENV/bin/python" - <<'PY'
+import torch
+assert torch.cuda.is_available(), "torch sieht keine GPU"
+x = torch.ones(4, device="cuda") * 2          # prueft, ob Kernel fuer diese GPU da sind
+print("[tts] CUDA ok:", torch.__version__, torch.cuda.get_device_name(), torch.cuda.get_device_capability(), float(x.sum()))
+PY
+    echo "[tts] In /workspace/.env: TTS_CHATTERBOX_DEVICE=cuda, dann Dienst neu starten"
+fi
+if [ "$WITH_CPU" = 1 ]; then
+    "$VENV/bin/pip" install -q torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+    "$VENV/bin/pip" uninstall -y -q $("$VENV/bin/pip" list 2>/dev/null | awk '/^nvidia-/{print $1}') triton 2>/dev/null || true
+    echo "[tts] zurueck auf torch-CPU; TTS_CHATTERBOX_DEVICE=cpu setzen"
 fi
 echo "[tts] fertig. In /workspace/.env: TTS_ENABLED=true$([ "$WITH_CB" = 1 ] && echo ' und TTS_CHATTERBOX_ENABLED=true')"
