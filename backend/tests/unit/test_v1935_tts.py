@@ -145,9 +145,8 @@ def client():
 class TestProxy:
     def test_aus_nur_browser_verfuegbar(self, client, monkeypatch):
         monkeypatch.setattr(settings, "TTS_ENABLED", False)
-        eng = {e["key"]: e for e in client.get("/api/interview/tts/engines").json()["engines"]}
-        assert eng["browser"]["available"] is True
-        assert eng["piper"]["available"] is False and eng["chatterbox"]["available"] is False
+        d = client.get("/api/interview/tts/engines").json()          # v19.39: nur Chatterbox-Stimmen
+        assert d["engines"] == [] and "TTS_ENABLED" in d["reason"] and d["default"] == "chatterbox:gunther"
         r = client.post("/api/interview/tts", json={"text": "Hallo.", "engine": "piper"})
         assert r.status_code == 503
 
@@ -157,8 +156,8 @@ class TestProxy:
         monkeypatch.setattr(settings, "TTS_SERVICE_URL", base)
         events = []
         monkeypatch.setattr("app.services.job_queue.log_perf_event", lambda kind, f: events.append((kind, f)))
-        lst = {e["key"]: e for e in client.get("/api/interview/tts/engines").json()["engines"]}
-        assert lst["piper"]["available"] is True and lst["chatterbox"]["available"] is False
+        d = client.get("/api/interview/tts/engines").json()
+        assert d["engines"] == [] and "keine Stimmen" in d["reason"]    # piper/chatterbox ohne Stimme: ausgeblendet
         r = client.post("/api/interview/tts", json={"text": "Wie ging es ihr?", "engine": "piper", "session_id": "t1"})
         assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content[:4] == b"RIFF"
         kind, f = events[-1]
@@ -170,9 +169,36 @@ class TestProxy:
     def test_dienst_nicht_erreichbar(self, client, monkeypatch):
         monkeypatch.setattr(settings, "TTS_ENABLED", True)
         monkeypatch.setattr(settings, "TTS_SERVICE_URL", "http://127.0.0.1:9")
-        lst = {e["key"]: e for e in client.get("/api/interview/tts/engines").json()["engines"]}
-        assert lst["piper"]["available"] is False and "nicht erreichbar" in lst["piper"]["reason"]
+        d = client.get("/api/interview/tts/engines").json()
+        assert d["engines"] == [] and "nicht erreichbar" in d["reason"]
         assert client.post("/api/interview/tts", json={"text": "Hallo.", "engine": "piper"}).status_code == 503
+
+
+class TestStimmenListe:
+    """v19.39: Auswahl nur Chatterbox-Referenzstimmen, Default zuerst, ohne Praefix."""
+
+    def test_filter_sortierung_label(self, client, monkeypatch):
+        def mk(key, label, ok=True):
+            e = FakeEngine(ok=ok, reason="" if ok else "Referenz fehlt")
+            e.key, e.label = key, label
+            return e
+        svc = ts.TTSService(engines={e.key: e for e in (
+            mk("piper", "Piper (Thorsten)"), mk("chatterbox", "Chatterbox (Standardstimme, englische Referenz)"),
+            mk("chatterbox:carsten", "Chatterbox – Carsten"), mk("chatterbox:gunther", "Chatterbox – Gunther Schmidt"),
+            mk("chatterbox:alt", "Chatterbox – Alt", ok=False))}, voices_dir="")
+        srv = ts.ThreadingHTTPServer(("127.0.0.1", 0), ts.make_handler(svc))
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        try:
+            monkeypatch.setattr(settings, "TTS_ENABLED", True)
+            monkeypatch.setattr(settings, "TTS_SERVICE_URL", f"http://127.0.0.1:{srv.server_address[1]}")
+            d = client.get("/api/interview/tts/engines").json()
+        finally:
+            srv.shutdown()
+            srv.server_close()
+        assert [e["key"] for e in d["engines"]] == ["chatterbox:gunther", "chatterbox:alt", "chatterbox:carsten"]
+        assert d["engines"][0]["label"] == "Gunther Schmidt" and d["default"] == "chatterbox:gunther"
+        assert d["engines"][1]["available"] is False and d["reason"] == ""
 
 
 class TestSkripte:

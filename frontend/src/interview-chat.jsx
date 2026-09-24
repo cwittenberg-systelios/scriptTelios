@@ -190,14 +190,6 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const logRef = useRef(null);
   // v19.33: Rundlaufzeiten fuer das Server-Log (client_perf im naechsten Turn)
   const perfRef = useRef({});
-  const [voice, setVoice] = useState(() => (speech.voiceStatus ? speech.voiceStatus() : "ok"));
-  useEffect(() => {
-    const ss = typeof window !== "undefined" ? window.speechSynthesis : null;
-    if (!ss || !speech.voiceStatus || !ss.addEventListener) return undefined;
-    const upd = () => setVoice(speech.voiceStatus());
-    ss.addEventListener("voiceschanged", upd);
-    return () => ss.removeEventListener("voiceschanged", upd);
-  }, [speech]);
 
   const patch = useCallback((p) => onChange({ ...v, ...p }), [onChange, v]);
 
@@ -366,10 +358,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
       <label style={{ ...soft, display: "flex", alignItems: "center", gap: 4, marginLeft: "auto", cursor: "pointer" }}>
         <input type="checkbox" checked={vorlesen} onChange={toggleVorlesen} /> Vorlesen
       </label>
-      {vorlesen && <TtsSelect onChange={() => { speech.cancel(); setVoice(speech.voiceStatus ? speech.voiceStatus() : "ok"); }} />}
-      {vorlesen && voice === "none" && <span style={{ ...soft, width: "100%", textAlign: "right" }} data-testid="chat-voice-hint">
-        Keine lokale deutsche Stimme auf diesem Rechner – Online-Stimmen sind aus Datenschutzgründen gesperrt, daher wird nicht vorgelesen.
-      </span>}
+      {vorlesen && <TtsSelect onChange={() => speech.cancel()} />}
     </div>
   );
 

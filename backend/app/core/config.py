@@ -293,6 +293,8 @@ class Settings(BaseSettings):
     # backend/tts_service/tts_server.py im eigenen venv (setup_tts.sh).
     TTS_ENABLED: bool = False
     TTS_SERVICE_URL: str = "http://127.0.0.1:8011"
+    # v19.39: Standardstimme, solange der Nutzer keine eigene gewaehlt hat
+    TTS_DEFAULT_VOICE: str = "chatterbox:gunther"
 
     @property
     def gpu_dual(self) -> bool:

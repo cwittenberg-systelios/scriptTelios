@@ -7,10 +7,10 @@
 //
 // Provider "browser" = speechSynthesis (kein Server, keine Klientendaten,
 // funktioniert bei ausgeschaltetem Pod). v19.35: Provider "server" holt je
-// Satz ein WAV vom Backend (Piper/Chatterbox, POST /interview/tts), gleiche
-// Schnittstelle. Welche Stimme gilt, bestimmt die Auswahl im UI
-// (setTtsEngine, localStorage st_tts_engine); getSpeechProvider() liefert
-// einen Umschalter, der an browser bzw. server weiterreicht.
+// Satz ein WAV vom Backend (Chatterbox, POST /interview/tts). v19.39: die
+// Browser-Stimme ist nur noch letzte Option ("schnell") und Ersatz, wenn die
+// Server-Stimme ausfaellt. Welche Stimme gilt, bestimmt tts-select.jsx
+// (setTtsEngine = Nutzerwahl in localStorage, setActiveTtsEngine = wirksam).
 // ────────────────────────────────────────────────────────────────────────────
 import { interviewTts } from "./api.js";
 
@@ -188,14 +188,25 @@ function createNullProvider() {
 
 // ── v19.35: Server-Vorlesen ─────────────────────────────────────────────────
 
+// v19.39: Nur noch Server-Stimmen (Chatterbox mit Referenzstimmen); Browser
+// und Piper sind aus der Auswahl. _stored = Wahl des Nutzers (localStorage,
+// nur bei aktiver Auswahl geschrieben), _active = tatsaechlich genutzte
+// Stimme (gespeicherte Wahl, sonst Server-Default, sonst erste verfuegbare) -
+// setzt tts-select.jsx nach dem Laden der Liste, ohne die Wahl zu
+// ueberschreiben. Leer = kein Vorlesen.
 const LS_TTS_ENGINE = "st_tts_engine";
 const TTS_FALLBACK_EVENT = "st-tts-fallback";
-let _engine = (() => { try { return localStorage.getItem(LS_TTS_ENGINE) || "browser"; } catch { return "browser"; } })();
-function getTtsEngine() { return _engine; }
+let _stored = (() => { try { return localStorage.getItem(LS_TTS_ENGINE) || ""; } catch { return ""; } })();
+let _active = "";
+function getTtsEngine() { return _active; }
+function getStoredTtsEngine() { return _stored; }
 function setTtsEngine(e) {
-  _engine = e || "browser";
-  try { localStorage.setItem(LS_TTS_ENGINE, _engine); } catch { /* ignoriert */ }
+  _stored = e || ""; _active = _stored;
+  try { localStorage.setItem(LS_TTS_ENGINE, _stored); } catch { /* ignoriert */ }
 }
+function setActiveTtsEngine(e) { _active = e || ""; }
+function _serverActive() { return !!_active && _active !== "browser"; }
+const BROWSER_ENGINE = { key: "browser", label: "Browser (schnell, einfache Stimme)", available: true, reason: "" };
 
 function _notifyFallback(msg) {
   try { window.dispatchEvent(new CustomEvent(TTS_FALLBACK_EVENT, { detail: { message: msg } })); } catch { /* ignoriert */ }
@@ -203,7 +214,7 @@ function _notifyFallback(msg) {
 
 // fetchAudio(text, engine, signal) -> Promise<Blob>; fallback = Browser-Provider
 // fuer Saetze, die der Server nicht liefern kann (Dienst aus, Fehler).
-function createServerProvider({ fetchAudio = interviewTts, fallback = null, engine = () => _engine } = {}) {
+function createServerProvider({ fetchAudio = interviewTts, fallback = null, engine = () => _active } = {}) {
   let token = 0;
   let current = null;           // laufendes <audio>
   let controllers = [];
@@ -239,7 +250,9 @@ function createServerProvider({ fetchAudio = interviewTts, fallback = null, engi
     if (myToken !== token) return false;
     if (res.blob) return play(res.blob, myToken);
     if (res.err && res.err.name === "AbortError") return false;
-    _notifyFallback(`Server-Stimme nicht verfügbar (${res.err?.message || "Fehler"}) – Browser-Stimme übernimmt.`);
+    _notifyFallback(fallback
+      ? `Server-Stimme nicht verfügbar (${res.err?.message || "Fehler"}) – Browser-Stimme übernimmt.`
+      : `Vorlesen gerade nicht möglich (${res.err?.message || "Fehler"}).`);
     return fallback ? fallback.say([item.text]) : false;
   }
   function sayStream() {
@@ -291,16 +304,20 @@ function createServerProvider({ fetchAudio = interviewTts, fallback = null, engi
   return { name: "server", available: () => true, say, sayStream, cancel, voiceStatus: () => "ok" };
 }
 
-// Umschalter: reicht je nach gewaehlter Engine an browser oder server weiter.
+// Umschalter: aktive Server-Stimme -> Server; "browser" -> Browser-Stimme
+// (schnelle Notloesung, letzte Option in der Auswahl); leer -> stumm.
+// Faellt die Server-Stimme waehrend des Vorlesens aus, uebernimmt der
+// Browser den Satz (letzte Option, v19.39).
 function createSwitchingProvider(browser, server) {
-  const pick = () => (_engine !== "browser" && server ? server : browser);
+  const pick = () => (_active === "browser" ? browser : (_serverActive() && server ? server : null));
+  const none = createNullProvider();
   return {
     name: "switch",
     available: () => browser.available() || !!server,
-    say: (p) => pick().say(p),
-    sayStream: () => pick().sayStream(),
+    say: (p) => (pick() || none).say(p),
+    sayStream: () => (pick() || none).sayStream(),
     cancel: () => { browser.cancel(); if (server) server.cancel(); },
-    voiceStatus: () => (_engine === "browser" ? browser.voiceStatus() : "ok"),
+    voiceStatus: () => (_active === "browser" ? browser.voiceStatus() : (_serverActive() ? "ok" : "none")),
   };
 }
 
@@ -318,4 +335,4 @@ function _setSpeechProvider(p) { _provider = p; }
 // Fuer Tests: Zeitpunkt des letzten gesprochenen Satzes setzen.
 function _setLastSpokeAt(t) { _lastSpokeAt = t; }
 
-export { getSpeechProvider, _setSpeechProvider, createServerProvider, createSwitchingProvider, getTtsEngine, setTtsEngine, LS_TTS_ENGINE, TTS_FALLBACK_EVENT, pickGermanVoice, localGermanVoices, isLocalVoice, voiceStatus, wakeAudio, _setLastSpokeAt, browserAvailable, splitSentences, PART_GAP_MS, LEAD_GAP_MS, WAKE_SILENCE_MS };
+export { BROWSER_ENGINE, getSpeechProvider, _setSpeechProvider, createServerProvider, createSwitchingProvider, createBrowserProvider, getTtsEngine, getStoredTtsEngine, setTtsEngine, setActiveTtsEngine, LS_TTS_ENGINE, TTS_FALLBACK_EVENT, pickGermanVoice, localGermanVoices, isLocalVoice, voiceStatus, wakeAudio, _setLastSpokeAt, browserAvailable, splitSentences, PART_GAP_MS, LEAD_GAP_MS, WAKE_SILENCE_MS };

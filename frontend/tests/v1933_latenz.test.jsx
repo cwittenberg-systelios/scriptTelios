@@ -9,7 +9,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 
 import {
   isLocalVoice, pickGermanVoice, voiceStatus, wakeAudio, _setLastSpokeAt,
-  getSpeechProvider, _setSpeechProvider, LEAD_GAP_MS, WAKE_SILENCE_MS,
+  getSpeechProvider, _setSpeechProvider, createBrowserProvider, LEAD_GAP_MS, WAKE_SILENCE_MS,
 } from "../src/speech.js";
 
 function voice(name, lang = "de-DE", localService = true) { return { name, lang, localService }; }
@@ -52,10 +52,10 @@ describe("speech.js – nur lokale Stimmen", () => {
     expect(voiceStatus()).toBe("loading");
   });
 
-  test("mit lokaler Stimme wird gesprochen", async () => {
+  test("mit lokaler Stimme wird gesprochen (Browser-Baustein, v19.39 nicht mehr in der Auswahl)", async () => {
     installVoices([voice("Anna")]);
     _setLastSpokeAt(Date.now());
-    const p = getSpeechProvider();
+    const p = createBrowserProvider();
     expect(await p.say(["Hallo du."])).toBe(true);
     expect(window.speechSynthesis.speak).toHaveBeenCalledTimes(1);
   });
@@ -165,10 +165,4 @@ describe("InterviewChat – Messung und Stimmen-Hinweis", () => {
     expect(screen.queryByTestId("chat-voice-hint")).toBeNull();
   });
 
-  test("ohne lokale deutsche Stimme erscheint der Hinweis", async () => {
-    provider("none");
-    render(<Harness />);
-    fireEvent.click(await screen.findByTestId("chat-start-btn"));
-    expect(await screen.findByTestId("chat-voice-hint")).toBeTruthy();
-  });
 });

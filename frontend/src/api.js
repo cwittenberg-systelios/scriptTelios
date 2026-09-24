@@ -330,17 +330,17 @@ function interviewLease(sessionId, action = "touch") {
   } catch (_) { return Promise.resolve(null); }
 }
 
-// v19.35: Server-Vorlesen. GET /interview/tts/engines -> [{key,label,available,reason}]
-// (Browser immer dabei). Fehler -> nur Browser.
+// v19.35/v19.39: GET /interview/tts/engines -> {engines:[{key,label,available,reason}],
+// default, reason}. Fehler -> leere Liste (kein Vorlesen).
 async function fetchTtsEngines() {
   try {
     const r = await apiFetch(`${getApiBase()}/interview/tts/engines`);
     if (r && r.ok) {
       const d = await r.json();
-      if (d && Array.isArray(d.engines) && d.engines.length) return d.engines;
+      if (d && Array.isArray(d.engines)) return d;
     }
   } catch (_) { /* Server aus */ }
-  return [{ key: "browser", label: "Browser", available: true, reason: "" }];
+  return { engines: [], default: null, reason: "Server nicht erreichbar" };
 }
 
 // POST /api/interview/tts {text, engine} -> Blob (audio/wav). Wirft bei Fehler.

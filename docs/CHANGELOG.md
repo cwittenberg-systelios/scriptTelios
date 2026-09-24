@@ -35,6 +35,31 @@ Basis: `9a9dd4d` (+ v19.38.1). Nur TTS-Dienst.
 
 ---
 
+## [v19.39] — Vorlesen: Chatterbox-Stimmen, Default Gunther, Browser als letzte Option (2026-09-25)
+
+Basis: `6aac0a4`. Backend und Frontend (`systelios.js` neu gebaut).
+
+Hörtest-Entscheidung: Piper und die englische Chatterbox-Standardreferenz
+fallen weg. Die Browser-Stimme bleibt als letzte, schnelle Option.
+
+- Backend `GET /interview/tts/engines` liefert nur noch `chatterbox:<stimme>`
+  als `{engines, default, reason}`. Labels ohne „Chatterbox –“, die
+  Standardstimme steht zuerst. Neu: `TTS_DEFAULT_VOICE` (Default
+  `chatterbox:gunther`). Der Dienst selbst kann Piper weiterhin (Hörtest-Skript).
+- Frontend: Die Auswahl zeigt die Chatterbox-Stimmen, zuletzt „Browser
+  (schnell, einfache Stimme)“. Die wirksame Stimme ist die gespeicherte Wahl
+  des Nutzers (localStorage `st_tts_engine`, nur bei aktiver Auswahl
+  geschrieben), sonst der Default, sonst die erste verfügbare, der Browser
+  zuletzt. Eine gerade nicht verfügbare Wahl wird **nicht** überschrieben.
+- Fällt die Server-Stimme beim Vorlesen aus, übernimmt die Browser-Stimme
+  den Satz, mit Hinweis. Ohne Server-Stimmen erscheint „Server-Stimmen gerade
+  nicht verfügbar (Grund)“. Hat der Rechner bei gewählter Browser-Stimme
+  keine lokale deutsche Stimme, erscheint ein Hinweis.
+- Tests: `test_v1935_tts.py` angepasst (+1), `v1935_tts.test.jsx` neu gefasst
+  (+3 Browser-Option), `v1933_latenz.test.jsx` angepasst.
+
+---
+
 ## [v19.38] — Chatterbox: eigene Referenzstimmen, Textbereinigung, Nachlauf-Schnitt (2026-09-24)
 
 Basis: `120adbb`. Nur Backend und TTS-Dienst, kein Bundle.

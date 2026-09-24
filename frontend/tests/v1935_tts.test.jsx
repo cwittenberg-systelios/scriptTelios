@@ -1,8 +1,8 @@
 /**
  * scriptTelios Frontend – Tests v19.35 (Server-Vorlesen zum Testen):
  *  - speech.js Server-Provider: Vorab-Abruf, Reihenfolge, Abbruch, Fallback
- *  - Umschalter browser/server
- *  - TtsSelect: Liste, ausgegraute Engines, Rueckfall auf Browser, Hinweis
+ *  - Umschalter: Server-Stimme oder stumm (v19.39)
+ *  - TtsSelect: nur Chatterbox-Stimmen, Default Gunther, Wahl im localStorage
  */
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
@@ -13,10 +13,10 @@ jest.mock("../src/api.js", () => ({
 
 import { fetchTtsEngines } from "../src/api.js";
 import {
-  createServerProvider, createSwitchingProvider, setTtsEngine, getTtsEngine,
+  createServerProvider, createSwitchingProvider, setTtsEngine, getTtsEngine, setActiveTtsEngine, getStoredTtsEngine,
   _setLastSpokeAt, TTS_FALLBACK_EVENT, LS_TTS_ENGINE,
 } from "../src/speech.js";
-import { TtsSelect, _resetTtsEngines } from "../src/tts-select.jsx";
+import { TtsSelect, chooseEngine, _resetTtsEngines } from "../src/tts-select.jsx";
 
 // <audio>-Attrappe: spielt sofort "zu Ende", merkt sich die Reihenfolge
 let played;
@@ -31,7 +31,7 @@ beforeEach(() => {
     this.play = () => { played.push(url.replace("blob:", "")); setTimeout(() => this.onended && this.onended(), 0); return Promise.resolve(); };
   };
   localStorage.clear();
-  setTtsEngine("browser");
+  setTtsEngine("");
   _resetTtsEngines();
 });
 
@@ -82,84 +82,112 @@ describe("Server-Provider", () => {
   });
 });
 
-describe("Umschalter", () => {
-  test("waehlt je nach Engine browser oder server", () => {
-    const mk = (name) => ({ name, available: () => true, say: jest.fn(), sayStream: jest.fn(() => name), cancel: jest.fn(), voiceStatus: () => "none" });
-    const b = mk("browser"); const s = mk("server");
+describe("Umschalter (v19.39: Server, Browser als letzte Option, sonst stumm)", () => {
+  test("waehlt nach aktiver Stimme", () => {
+    const mk = (name, vs = "none") => ({ name, available: () => true, say: jest.fn(), sayStream: jest.fn(() => name), cancel: jest.fn(), voiceStatus: () => vs });
+    const b = mk("browser", "ok"); const s = mk("server");
     const sw = createSwitchingProvider(b, s);
-    expect(sw.sayStream()).toBe("browser");
+    setActiveTtsEngine("");
+    expect(sw.sayStream()).not.toBe("browser");
+    expect(sw.sayStream()).not.toBe("server");
     expect(sw.voiceStatus()).toBe("none");
-    setTtsEngine("piper");
-    expect(getTtsEngine()).toBe("piper");
-    expect(localStorage.getItem(LS_TTS_ENGINE)).toBe("piper");
-    expect(sw.sayStream()).toBe("server");
+    setActiveTtsEngine("browser");
+    expect(sw.sayStream()).toBe("browser");
     expect(sw.voiceStatus()).toBe("ok");
+    setActiveTtsEngine("chatterbox:gunther");
+    expect(sw.sayStream()).toBe("server");
     sw.cancel();
     expect(b.cancel).toHaveBeenCalled(); expect(s.cancel).toHaveBeenCalled();
   });
+
+  test("setTtsEngine speichert, setActiveTtsEngine nicht", () => {
+    setTtsEngine("chatterbox:carsten");
+    expect(localStorage.getItem(LS_TTS_ENGINE)).toBe("chatterbox:carsten");
+    setActiveTtsEngine("chatterbox:gunther");
+    expect(getTtsEngine()).toBe("chatterbox:gunther");
+    expect(getStoredTtsEngine()).toBe("chatterbox:carsten");
+    expect(localStorage.getItem(LS_TTS_ENGINE)).toBe("chatterbox:carsten");
+  });
 });
 
-describe("TtsSelect", () => {
-  const ENGINES = [
-    { key: "browser", label: "Browser", available: true, reason: "" },
-    { key: "piper", label: "Piper (Thorsten)", available: true, reason: "" },
-    { key: "chatterbox", label: "Chatterbox (CPU, Test)", available: false, reason: "abgeschaltet" },
-  ];
+describe("TtsSelect (v19.39)", () => {
+  const V = (key, label, available = true) => ({ key, label, available, reason: available ? "" : "Referenz fehlt" });
+  const DATA = { default: "chatterbox:gunther", reason: "", engines: [
+    V("chatterbox:gunther", "Gunther Schmidt"), V("chatterbox:carsten", "Carsten"), V("chatterbox:charlotte", "Charlotte", false),
+  ] };
 
-  test("zeigt Engines, sperrt nicht verfuegbare, speichert Wahl", async () => {
-    fetchTtsEngines.mockResolvedValue(ENGINES);
+  test("chooseEngine: Nutzerwahl > Default > erste verfuegbare", () => {
+    expect(chooseEngine(DATA, "chatterbox:carsten")).toBe("chatterbox:carsten");
+    expect(chooseEngine(DATA, "chatterbox:charlotte")).toBe("chatterbox:gunther");   // Wahl nicht verfuegbar
+    expect(chooseEngine(DATA, "browser")).toBe("chatterbox:gunther");                 // Altlast
+    expect(chooseEngine({ ...DATA, default: "chatterbox:weg" }, "")).toBe("chatterbox:gunther");
+    expect(chooseEngine({ engines: [], default: "chatterbox:gunther" }, "")).toBe("");
+  });
+
+  test("ohne gespeicherte Wahl: Gunther aktiv, nichts gespeichert; Wahl wird gespeichert", async () => {
+    fetchTtsEngines.mockResolvedValue(DATA);
     const onChange = jest.fn();
     render(<TtsSelect onChange={onChange} />);
     const sel = await screen.findByTestId("tts-engine");
-    const opts = [...sel.querySelectorAll("option")];
-    expect(opts.map(o => o.value)).toEqual(["browser", "piper", "chatterbox"]);
-    expect(opts[2].disabled).toBe(true);
-    fireEvent.change(sel, { target: { value: "piper" } });
-    expect(getTtsEngine()).toBe("piper");
-    expect(onChange).toHaveBeenCalledWith("piper");
+    expect(sel.value).toBe("chatterbox:gunther");
+    expect(getTtsEngine()).toBe("chatterbox:gunther");
+    expect(localStorage.getItem(LS_TTS_ENGINE)).toBe("");
+    expect([...sel.querySelectorAll("option")].map(o => o.value)).toEqual(["chatterbox:gunther", "chatterbox:carsten", "chatterbox:charlotte"]);
+    expect(sel.querySelector('option[value="chatterbox:charlotte"]').disabled).toBe(true);
+    fireEvent.change(sel, { target: { value: "chatterbox:carsten" } });
+    expect(localStorage.getItem(LS_TTS_ENGINE)).toBe("chatterbox:carsten");
+    expect(onChange).toHaveBeenCalledWith("chatterbox:carsten");
   });
 
-  test("gespeicherte, nicht mehr verfuegbare Wahl faellt auf Browser zurueck", async () => {
-    setTtsEngine("chatterbox");
-    fetchTtsEngines.mockResolvedValue(ENGINES);
+  test("gespeicherte Wahl bleibt nach Neuladen", async () => {
+    setTtsEngine("chatterbox:carsten");
+    fetchTtsEngines.mockResolvedValue(DATA);
     render(<TtsSelect />);
-    const sel = await screen.findByTestId("tts-engine");
-    expect(sel.value).toBe("browser");
-    expect(getTtsEngine()).toBe("browser");
+    expect((await screen.findByTestId("tts-engine")).value).toBe("chatterbox:carsten");
   });
 
-  test("nur Browser: keine Auswahl; Fallback-Hinweis wird angezeigt", async () => {
-    fetchTtsEngines.mockResolvedValue([{ key: "browser", label: "Browser", available: true }]);
-    const { container } = render(<TtsSelect />);
-    await act(async () => { await Promise.resolve(); });
-    expect(container.innerHTML).toBe("");
-    _resetTtsEngines();
-    fetchTtsEngines.mockResolvedValue(ENGINES);
+  test("gespeicherte Wahl gerade nicht verfuegbar: Default wirkt, Wahl bleibt gespeichert", async () => {
+    setTtsEngine("chatterbox:charlotte");
+    fetchTtsEngines.mockResolvedValue(DATA);
+    render(<TtsSelect />);
+    expect((await screen.findByTestId("tts-engine")).value).toBe("chatterbox:gunther");
+    expect(localStorage.getItem(LS_TTS_ENGINE)).toBe("chatterbox:charlotte");
+  });
+
+  test("keine Stimme verfuegbar: Hinweis statt Auswahl, kein Vorlesen", async () => {
+    fetchTtsEngines.mockResolvedValue({ engines: [], default: "chatterbox:gunther", reason: "Vorlese-Dienst nicht erreichbar" });
+    render(<TtsSelect />);
+    expect((await screen.findByTestId("tts-none")).textContent).toMatch(/nicht erreichbar/);
+    expect(getTtsEngine()).toBe("");
+  });
+
+  test("Fehler beim Vorlesen: Hinweis", async () => {
+    fetchTtsEngines.mockResolvedValue(DATA);
     render(<TtsSelect />);
     await screen.findByTestId("tts-engine");
-    act(() => { window.dispatchEvent(new CustomEvent(TTS_FALLBACK_EVENT, { detail: { message: "Server-Stimme weg" } })); });
-    expect(screen.getByTestId("tts-fallback").textContent).toBe("Server-Stimme weg");
+    act(() => { window.dispatchEvent(new CustomEvent(TTS_FALLBACK_EVENT, { detail: { message: "Vorlesen gerade nicht möglich" } })); });
+    expect(screen.getByTestId("tts-fallback").textContent).toBe("Vorlesen gerade nicht möglich");
   });
 });
 
 describe("TtsSelect v19.37.2 – unvollstaendige Liste wird nicht gemerkt", () => {
-  const OFF = [
-    { key: "browser", label: "Browser", available: true, reason: "" },
-    { key: "piper", label: "Piper (Thorsten)", available: false, reason: "Vorlese-Dienst nicht erreichbar" },
-  ];
-  const ON = [
-    { key: "browser", label: "Browser", available: true, reason: "" },
-    { key: "piper", label: "Piper (Thorsten)", available: true, reason: "" },
-  ];
+  const OFF = { default: "chatterbox:gunther", reason: "", engines: [
+    { key: "chatterbox:gunther", label: "Gunther Schmidt", available: false, reason: "Referenz fehlt" },
+    { key: "chatterbox:carsten", label: "Carsten", available: true, reason: "" },
+  ] };
+  const ON = { default: "chatterbox:gunther", reason: "", engines: [
+    { key: "chatterbox:gunther", label: "Gunther Schmidt", available: true, reason: "" },
+    { key: "chatterbox:carsten", label: "Carsten", available: true, reason: "" },
+  ] };
   beforeEach(() => { fetchTtsEngines.mockReset(); _resetTtsEngines(); });
 
   test("beim Oeffnen der Auswahl wird neu gefragt, danach verfuegbar", async () => {
     fetchTtsEngines.mockResolvedValueOnce(OFF).mockResolvedValue(ON);
     render(<TtsSelect />);
     const sel = await screen.findByTestId("tts-engine");
-    expect(sel.querySelector('option[value="piper"]').disabled).toBe(true);
+    expect(sel.querySelector('option[value="chatterbox:gunther"]').disabled).toBe(true);
     await act(async () => { fireEvent.mouseDown(sel); });
-    expect(sel.querySelector('option[value="piper"]').disabled).toBe(false);
+    expect(sel.querySelector('option[value="chatterbox:gunther"]').disabled).toBe(false);
     expect(fetchTtsEngines).toHaveBeenCalledTimes(2);
   });
 
@@ -168,7 +196,7 @@ describe("TtsSelect v19.37.2 – unvollstaendige Liste wird nicht gemerkt", () =
     render(<TtsSelect />);
     const sel = await screen.findByTestId("tts-engine");
     await act(async () => { window.dispatchEvent(new Event("st-health-ok")); });
-    expect(sel.querySelector('option[value="piper"]').disabled).toBe(false);
+    expect(sel.querySelector('option[value="chatterbox:gunther"]').disabled).toBe(false);
   });
 
   test("vollstaendige Liste wird gemerkt (kein erneuter Abruf beim naechsten Mount)", async () => {
@@ -179,5 +207,43 @@ describe("TtsSelect v19.37.2 – unvollstaendige Liste wird nicht gemerkt", () =
     render(<TtsSelect />);
     await screen.findByTestId("tts-engine");
     expect(fetchTtsEngines).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TtsSelect – Browser als letzte Option (v19.39)", () => {
+  const V = (key, label, available = true) => ({ key, label, available, reason: "" });
+  beforeEach(() => {
+    fetchTtsEngines.mockReset(); _resetTtsEngines();
+    window.speechSynthesis = { getVoices: () => [{ name: "Anna", lang: "de-DE", localService: true }], speak: jest.fn(), cancel: jest.fn() };
+    global.SpeechSynthesisUtterance = function (t) { this.text = t; };
+  });
+  afterEach(() => { delete window.speechSynthesis; delete global.SpeechSynthesisUtterance; });
+
+  test("Browser steht als letzte Option in der Liste, Default bleibt Gunther", async () => {
+    fetchTtsEngines.mockResolvedValue({ default: "chatterbox:gunther", reason: "", engines: [V("chatterbox:gunther", "Gunther Schmidt"), V("chatterbox:carsten", "Carsten")] });
+    render(<TtsSelect />);
+    const sel = await screen.findByTestId("tts-engine");
+    expect([...sel.querySelectorAll("option")].map(o => o.value)).toEqual(["chatterbox:gunther", "chatterbox:carsten", "browser"]);
+    expect(sel.value).toBe("chatterbox:gunther");
+    fireEvent.change(sel, { target: { value: "browser" } });
+    expect(getTtsEngine()).toBe("browser");
+    expect(localStorage.getItem(LS_TTS_ENGINE)).toBe("browser");
+  });
+
+  test("ohne Server-Stimmen: Browser wirkt, Grund wird angezeigt, Wahl bleibt", async () => {
+    setTtsEngine("chatterbox:carsten");
+    fetchTtsEngines.mockResolvedValue({ engines: [], default: "chatterbox:gunther", reason: "Vorlese-Dienst nicht erreichbar" });
+    render(<TtsSelect />);
+    const sel = await screen.findByTestId("tts-engine");
+    expect(sel.value).toBe("browser");
+    expect(screen.getByTestId("tts-server-reason").textContent).toMatch(/nicht erreichbar/);
+    expect(localStorage.getItem(LS_TTS_ENGINE)).toBe("chatterbox:carsten");
+  });
+
+  test("Server-Fehler beim Vorlesen: Browser-Stimme uebernimmt den Satz", async () => {
+    const fallback = { say: jest.fn(async () => true), cancel: jest.fn() };
+    const sp = createServerProvider({ fetchAudio: () => Promise.reject(new Error("weg")), fallback, engine: () => "chatterbox:gunther" });
+    await act(async () => { await sp.say(["Danke."]); });
+    expect(fallback.say).toHaveBeenCalledWith(["Danke."]);
   });
 });
