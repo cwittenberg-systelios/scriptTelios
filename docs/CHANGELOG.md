@@ -7,6 +7,38 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.37.1] — „Interview abbrechen“ abgesetzt unter dem Chat (2026-09-24)
+
+Basis: v19.37. Nur Frontend (`systelios.js` neu gebaut).
+
+- „Interview abbrechen“ steht nicht mehr in der Button-Zeile neben Senden
+  und Absenden, sondern unter dem ganzen Chat, abgetrennt durch eine Linie,
+  rechts, dezent als Textlink. Es ist eine seltene, übergeordnete Aktion,
+  das soll auch die Position zeigen. Die Rückfrage bleibt.
+- Test in `frontend/tests/v19351_chat_bedienung.test.jsx`.
+
+---
+
+## [v19.37] — Dialog: Aufnahme mit Absenden/Verwerfen und Wellen-Bubble (2026-09-24)
+
+Basis: `0387cf8`. Nur Frontend (`systelios.js` neu gebaut).
+
+- Während der Aufnahme gibt es nur **„■ Absenden“** und **„Verwerfen“**
+  (dazu „Interview abbrechen“). Senden, Abschließen und Aufnehmen sind
+  ausgeblendet, das Textfeld ist gesperrt.
+- **Absenden** transkribiert und schickt das Ergebnis sofort ans Modell (zwei
+  Server-Calls, für den Nutzer nur als Status sichtbar). **Verwerfen** wirft
+  die Aufnahme ohne Transkription weg.
+- **Wellen-Bubble im Chat:** Während der Aufnahme zeigt eine Bubble auf der
+  Behandler-Seite den Pegelverlauf (WebAudio-Analyser, 48 Balken, 24 fps)
+  und die Aufnahmedauer. Beim Absenden bleibt die Welle blass stehen
+  („Transkribiere …“), bis das Transkript sie ersetzt. Ohne WebAudio
+  erscheint eine flache Linie.
+- Aufnahmen unter ~0,2 s ergeben den Hinweis „Aufnahme zu kurz“.
+- Tests: `frontend/tests/v19351_chat_bedienung.test.jsx` angepasst und erweitert (9).
+
+---
+
 ## [v19.36.1] — Frontend-Rebuild beim Pod-Start erkennt alle Änderungen (2026-09-24)
 
 Basis: `fab97c2`. Nur `runpod-start.sh`.

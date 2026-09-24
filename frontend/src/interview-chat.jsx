@@ -52,16 +52,58 @@ function chatHasContent(v) {
 
 function anredeOf(k) { return k && k.anrede && k.initial ? `${k.anrede} ${k.initial}` : null; }
 
-// ── Push-to-talk (identisch zu interview.jsx) ───────────────────────────────
+// ── Aufnahme (v19.37) ───────────────────────────────────────────────────────
+// start() -> "recording"; submit() -> "transcribing" -> onText(); discard()
+// verwirft ohne Transkription. `levels` = Pegelverlauf (0..1) fuer die
+// Wellen-Bubble; beim Absenden bleibt der letzte Stand stehen.
+const WAVE_BARS = 48;
+const WAVE_FPS = 24;
+
 function useDictation({ onText, onError, onStart, sessionId }) {
   const [state, setState] = useState("idle");
   const recRef = useRef(null); const chunksRef = useRef([]); const streamRef = useRef(null);
   const discardRef = useRef(false);
   const [seconds, setSeconds] = useState(0); const timerRef = useRef(null);
+  const [levels, setLevels] = useState(() => new Array(WAVE_BARS).fill(0));
+  const audioRef = useRef(null);       // {ctx, analyser, raf, last}
+  const stopMeter = () => {
+    const a = audioRef.current; audioRef.current = null;
+    if (!a) return;
+    if (a.raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(a.raf);
+    try { a.ctx.close(); } catch { /* ignoriert */ }
+  };
   const stopTracks = () => {
+    stopMeter();
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   };
+  function startMeter(stream) {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx || typeof requestAnimationFrame !== "function") return;
+      const ctx = new Ctx();
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      const a = { ctx, analyser, raf: 0, last: 0 };
+      audioRef.current = a;
+      const tick = (ts) => {
+        if (audioRef.current !== a) return;
+        if (ts - a.last >= 1000 / WAVE_FPS) {
+          a.last = ts;
+          analyser.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; sum += x * x; }
+          const rms = Math.sqrt(sum / buf.length);
+          const lvl = Math.min(1, rms * 4);          // Sprache liegt grob bei rms 0.02-0.25
+          setLevels(prev => [...prev.slice(1), lvl]);
+        }
+        a.raf = requestAnimationFrame(tick);
+      };
+      a.raf = requestAnimationFrame(tick);
+    } catch { /* ohne Pegel - Bubble zeigt flache Linie */ }
+  }
   async function start() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       onError?.("Mikrofon-Aufnahme wird von diesem Browser nicht unterstützt (HTTPS nötig). Du kannst auch tippen.");
@@ -74,13 +116,14 @@ function useDictation({ onText, onError, onStart, sessionId }) {
       const mime = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm"].find(m => MediaRecorder.isTypeSupported(m)) || "";
       const rec = new MediaRecorder(stream, { mimeType: mime || undefined, audioBitsPerSecond: 24000 });
       chunksRef.current = [];
+      discardRef.current = false;
       rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
       rec.onstop = async () => {
         stopTracks();
         if (discardRef.current) { discardRef.current = false; chunksRef.current = []; setState("idle"); return; }
         const blob = new Blob(chunksRef.current, { type: mime || "audio/webm" });
         chunksRef.current = [];
-        if (blob.size < 200) { setState("idle"); return; }
+        if (blob.size < 200) { setState("idle"); onError?.("Aufnahme zu kurz – bitte nochmal."); return; }
         const file = new File([blob], `antwort.${mime.includes("ogg") ? "ogg" : "webm"}`, { type: blob.type });
         setState("transcribing");
         const t0 = Date.now();
@@ -88,19 +131,47 @@ function useDictation({ onText, onError, onStart, sessionId }) {
         catch (e) { onError?.("Transkription fehlgeschlagen: " + friendlyError(e)); }
         finally { setState("idle"); }
       };
+      setLevels(new Array(WAVE_BARS).fill(0));
       rec.start(1000); recRef.current = rec; setSeconds(0);
       timerRef.current = setInterval(() => setSeconds(s => s + 1), 1000);
+      startMeter(stream);
       setState("recording");
     } catch (err) {
       stopTracks();
       onError?.(err?.name === "NotAllowedError" ? "Mikrofon-Zugriff verweigert. Bitte in den Browser-Einstellungen erlauben." : `Aufnahme fehlgeschlagen: ${err?.message || err}`);
     }
   }
-  function stop() { const rec = recRef.current; if (rec && rec.state !== "inactive") { try { rec.stop(); } catch { /* ignoriert */ } } recRef.current = null; }
-  // v19.35.1: Aufnahme verwerfen (Interview abbrechen) - ohne Transkription
-  function cancel() { discardRef.current = true; stop(); }
+  function stopRec() { const rec = recRef.current; if (rec && rec.state !== "inactive") { try { rec.stop(); } catch { /* ignoriert */ } } recRef.current = null; }
+  // Absenden: Pegel einfrieren, transkribieren, dann onText (-> Senden an das LLM)
+  function submit() { stopMeter(); stopRec(); }
+  // Verwerfen: Aufnahme ohne Transkription wegwerfen
+  function discard() { discardRef.current = true; stopRec(); }
+  // Nur beim Unmount: Mikrofon und Pegelmessung freigeben
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => () => { stopTracks(); }, []);
-  return { state, seconds, start, stop, cancel };
+  return { state, seconds, levels, start, submit, discard };
+}
+
+// Wellen-Bubble: Pegelverlauf als gespiegelte Balken (SVG).
+function WaveBubble({ levels, state, seconds }) {
+  const w = 240, h = 36, bw = w / levels.length;
+  const frozen = state !== "recording";
+  const mmss = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  return (
+    <div data-testid="chat-rec-bubble" data-state={state}
+      style={{ alignSelf: "flex-end", maxWidth: "85%", background: "var(--st-red-pale)", borderRadius: 10, padding: "8px 12px" }}>
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true" style={{ display: "block", opacity: frozen ? 0.55 : 1 }}>
+        {levels.map((l, i) => {
+          const bh = Math.max(2, l * (h - 4));
+          return <rect key={i} x={i * bw + 1} y={(h - bh) / 2} width={Math.max(1, bw - 2)} height={bh} rx={1}
+            fill="var(--st-red)" />;
+        })}
+      </svg>
+      <div style={{ fontSize: 11, color: "var(--st-text-soft)", marginTop: 4 }}>
+        {state === "recording" ? <>● Aufnahme {mmss}</> : "Transkribiere …"}
+      </div>
+    </div>
+  );
 }
 
 // ── Komponente ──────────────────────────────────────────────────────────────
@@ -149,7 +220,6 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   }, [manifest]);
 
   useEffect(() => () => { speech.cancel(); abortRef.current?.abort(); }, [speech]);
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [v.historie.length, liveText]);
 
   const dict = useDictation({
     onText: (t, perf) => {
@@ -160,6 +230,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
     onStart: () => { speech.cancel(); interviewLease(v.sessionId, "touch"); },
     sessionId: v.sessionId,
   });
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [v.historie.length, liveText, dict.state]);
   // v19.34: Reservierung freigeben, sobald das Gespraech nicht mehr laeuft
   useInterviewLease(v.sessionId, v.phase === "laeuft");
 
@@ -253,7 +324,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   // gibt useInterviewLease frei, weil die Phase nicht mehr "laeuft" ist).
   function interviewAbbrechen() {
     if (chatHasContent(v) && !confirm("Interview abbrechen? Alle bisherigen Antworten werden verworfen.")) return;
-    abortRef.current?.abort(); speech.cancel(); if (dict.state === "recording") dict.cancel();
+    abortRef.current?.abort(); speech.cancel(); if (dict.state === "recording") dict.discard();
     setStreaming(false); setLiveText(""); setJobsBusy(false); setDraftText("");
     patch({ ...emptyChat(), setKey: v.setKey, setLabel: v.setLabel, fragen: v.fragen });
   }
@@ -340,6 +411,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
               {t.text}
             </div>
           ))}
+          {(recording || transcribing) && <WaveBubble levels={dict.levels} state={dict.state} seconds={dict.seconds} />}
           {streaming && <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: "var(--st-gray-light)", borderRadius: 10, padding: "8px 12px", fontSize: 14, lineHeight: 1.45 }} data-testid="chat-live">{liveText || (jobsBusy ? <span style={soft} data-testid="chat-jobs-busy">… Ein Auftrag läuft gerade noch – die Antwort kann etwas länger dauern.</span> : "…")}</div>}
         </div>
         {v.phase === "fertig" ? (
@@ -354,26 +426,42 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
           </>
         ) : (
           <>
-            <textarea rows={3} value={draftText} onChange={e => setDraftText(e.target.value)} disabled={transcribing || streaming}
+            <textarea rows={3} value={draftText} onChange={e => setDraftText(e.target.value)} disabled={transcribing || streaming || recording}
               placeholder={recording ? "Aufnahme läuft …" : "Antwort einsprechen oder tippen … (Enter = senden)"} style={{ marginTop: 8 }} data-testid="chat-antwort"
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); senden(); } }} />
             <div style={row}>
-              {!recording
-                ? <button type="button" className="rec-btn rec-btn-start" onClick={dict.start} disabled={transcribing || streaming}>🎙 Aufnehmen</button>
-                : <button type="button" className="rec-btn rec-btn-stop" onClick={dict.stop}>■ Stopp ({dict.seconds}s)</button>}
-              {transcribing && <span style={soft}>Transkribiere …</span>}
-              {streaming && <span style={soft}>Antwortet …</span>}
-              <span style={{ marginLeft: "auto" }} />
-              <button type="button" className="btn-secondary" onClick={interviewAbbrechen} data-testid="chat-abbrechen">Interview abbrechen</button>
-              <button type="button" className="btn-secondary" onClick={beenden} disabled={streaming || recording || transcribing || !hatAntwort}
-                title={hatAntwort ? "Bittet das System um den Abschluss" : "Erst nach der ersten Antwort möglich"} data-testid="chat-abschliessen">Abschließen</button>
-              <button type="button" className="btn-primary" onClick={() => senden()} disabled={streaming || transcribing || recording || !draftText.trim()} data-testid="chat-senden">Senden</button>
+              {recording ? (
+                <>
+                  <button type="button" className="btn-primary" onClick={dict.submit} data-testid="chat-rec-absenden">■ Absenden</button>
+                  <button type="button" className="btn-secondary" onClick={dict.discard} data-testid="chat-rec-verwerfen">Verwerfen</button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="rec-btn rec-btn-start" onClick={dict.start} disabled={transcribing || streaming} data-testid="chat-rec-start">🎙 Aufnehmen</button>
+                  {streaming && <span style={soft}>Antwortet …</span>}
+                  <span style={{ marginLeft: "auto" }} />
+                  <button type="button" className="btn-secondary" onClick={beenden} disabled={streaming || transcribing || !hatAntwort}
+                    title={hatAntwort ? "Bittet das System um den Abschluss" : "Erst nach der ersten Antwort möglich"} data-testid="chat-abschliessen">Abschließen</button>
+                  <button type="button" className="btn-primary" onClick={() => senden()} disabled={streaming || transcribing || !draftText.trim()} data-testid="chat-senden">Senden</button>
+                </>
+              )}
             </div>
           </>
         )}
       </div>
       {checkliste}
     </div>
+    {/* v19.37.1: uebergeordnete Aktion fuer das ganze Interview - bewusst
+        abgesetzt unter dem Chat, selten gebraucht, dezent. */}
+    {v.phase === "laeuft" && (
+      <div style={{ marginTop: 14, paddingTop: 8, borderTop: "1px solid var(--st-gray-border)", display: "flex", justifyContent: "flex-end" }}>
+        <button type="button" onClick={interviewAbbrechen} data-testid="chat-abbrechen"
+          title="Das ganze Interview verwerfen und zurück zum Start"
+          style={{ background: "none", border: "none", padding: "2px 0", cursor: "pointer", fontSize: 12, color: "var(--st-text-soft)", textDecoration: "underline" }}>
+          Interview abbrechen
+        </button>
+      </div>
+    )}
   </div>;
 }
 
