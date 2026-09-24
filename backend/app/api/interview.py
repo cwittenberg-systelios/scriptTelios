@@ -25,13 +25,14 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user
 from app.core.config import settings
 from app.core.files import ALLOWED_AUDIO, upload_dir
 from app.core.interview_sets import to_manifest
+from app.services import interview_lease
 from app.services.interview_dialog import TurnRequest, decide_turn
 from app.services.prompt_log import _log_output, _log_prompt
 
@@ -53,9 +54,11 @@ async def interview_sets(current_user: str = Depends(get_current_user)) -> dict:
 @router.post("/interview/transcribe")
 async def interview_transcribe(
     audio: UploadFile = File(...),
+    session_id: Optional[str] = Form(default=None, max_length=64),
     current_user: str = Depends(get_current_user),
 ) -> dict:
     """Transkribiert ein Kurzdiktat (eine Interview-Antwort) synchron."""
+    interview_lease.touch(session_id, current_user)   # v19.34: Aktivitaet
     suffix = Path(audio.filename or "diktat.webm").suffix.lower() or ".webm"
     if suffix not in ALLOWED_AUDIO:
         raise HTTPException(
@@ -145,6 +148,7 @@ async def interview_turn(
     current_user: str = Depends(get_current_user),
 ) -> TurnOut:
     """Entscheidet, ob zu dieser Antwort EINE Rueckfrage gestellt wird."""
+    interview_lease.touch(req.session_id, current_user)   # v19.34
     turn = TurnRequest(
         set_key=req.set, frage_key=req.frage_key, frage_text=req.frage_text,
         antwort=req.antwort, pflicht=req.pflicht,
@@ -230,6 +234,7 @@ async def interview_abschluss(
 ) -> AbschlussOut:
     """Einmaliger Check ueber das ganze Protokoll: bis zu drei Fragen an
     den Behandler (Widerspruch, Luecke, Plausibilitaet)."""
+    interview_lease.touch(req.session_id, current_user)   # v19.34
     import json as _json
     from app.services.interview_abschluss import (
         SYSTEM_PROMPT as _ABS_SYS, build_user_content as _abs_user, pruefe_abschluss,
@@ -339,6 +344,9 @@ async def interview_chat_stream(
 
     call_id = _session_call_id(req.session_id)
     turn_no = sum(1 for t in historie if t.rolle == "system") + 1
+    interview_lease.touch(req.session_id, current_user)   # v19.34: Vorrang vor neuen Jobs
+    from app.services.job_queue import running_job_count
+    jobs_running = running_job_count()
     try:
         _log_prompt(call_id, "dokumentation", f"interview_chat:{req.set}:t{turn_no}",
                     plan.system_prompt, _json.dumps(plan.messages, ensure_ascii=False))
@@ -350,6 +358,9 @@ async def interview_chat_stream(
 
     async def gen():
         result = None
+        # v19.34: vorab melden, ob gerade ein Job rechnet - der Dialog zeigt
+        # dann "Ein Auftrag laeuft noch, die Antwort kann laenger dauern".
+        yield _sse({"type": "status", "jobs_running": jobs_running})
         try:
             async for kind, payload in generate_chat_stream(
                 plan.system_prompt, plan.messages, model=model, max_tokens=400,
@@ -393,6 +404,8 @@ async def interview_chat_stream(
                   if isinstance(v, (int, float))}
         _log_interview_perf("interview_chat", current_user, perf, session=call_id, turn=turn_no,
                             model=result.get("model_used"), **client)
+        if meta.get("fertig"):
+            interview_lease.release(req.session_id)
         yield _sse(meta)
         yield _sse({"type": "done"})
 
@@ -426,3 +439,100 @@ async def interview_warmup(current_user: str = Depends(get_current_user)) -> dic
     _spawn(warm_model(model))
     logger.info("Interview-Warmup (user=%s): Whisper + %s", current_user, model)
     return {"started": True, "model": model}
+
+
+# ── v19.34: Reservierung (Vorrang des Interviews vor neuen Jobs) ─────────────
+#
+# POST /api/interview/lease {session_id, action: touch|release}
+#   touch   - Aktivitaet ohne LLM-Call (Aufnahme-Start)
+#   release - Gespraech verworfen, Tab geschlossen, Doku erzeugt
+# Turn-/Diktat-/Chat-Endpoints verlaengern selbst; der Chat gibt bei
+# fertig frei. Ohne Aktivitaet verfaellt die Reservierung nach 5 min.
+
+class LeaseIn(BaseModel):
+    session_id: str = Field(min_length=1, max_length=64)
+    action: str = Field(default="touch", pattern="^(touch|release)$")
+
+
+@router.post("/interview/lease")
+async def interview_lease_endpoint(req: LeaseIn, current_user: str = Depends(get_current_user)) -> dict:
+    from app.services.job_queue import running_job_count
+    if req.action == "release":
+        interview_lease.release(req.session_id)
+    else:
+        interview_lease.touch(req.session_id, current_user)
+    return {"enabled": interview_lease.enabled(), "active": interview_lease.active_count(),
+            "jobs_running": running_job_count()}
+
+
+# ── v19.35: Server-Vorlesen (Test: Browser | Piper | Chatterbox) ────────────
+#
+# Das Backend reicht nur durch: Der TTS-Dienst laeuft im eigenen venv auf
+# 127.0.0.1 (tts_service/tts_server.py). Texte werden nicht geloggt, nur
+# Laenge und Zeiten (performance.log, kind=interview_tts).
+
+_SERVER_ENGINES = (("piper", "Piper (Thorsten)"), ("chatterbox", "Chatterbox (CPU, Test)"))
+
+
+@router.get("/interview/tts/engines")
+async def interview_tts_engines(current_user: str = Depends(get_current_user)) -> dict:
+    import httpx
+    engines = [{"key": "browser", "label": "Browser", "available": True, "reason": ""}]
+    if not settings.TTS_ENABLED:
+        engines += [{"key": k, "label": lbl, "available": False, "reason": "Server-Vorlesen ist aus (TTS_ENABLED)"}
+                    for k, lbl in _SERVER_ENGINES]
+        return {"engines": engines}
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{settings.TTS_SERVICE_URL}/engines")
+            r.raise_for_status()
+            engines += [e for e in (r.json().get("engines") or []) if isinstance(e, dict) and e.get("key")]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TTS-Dienst nicht erreichbar: %s", e)
+        engines += [{"key": k, "label": lbl, "available": False, "reason": "Vorlese-Dienst nicht erreichbar"}
+                    for k, lbl in _SERVER_ENGINES]
+    return {"engines": engines}
+
+
+class TTSIn(BaseModel):
+    text: str = Field(min_length=1, max_length=600)
+    engine: str = Field(pattern="^(piper|chatterbox)$")
+    session_id: Optional[str] = Field(default=None, max_length=64)
+
+
+@router.post("/interview/tts")
+async def interview_tts(req: TTSIn, current_user: str = Depends(get_current_user)):
+    import time as _time
+
+    import httpx
+    from starlette.responses import Response
+    if not settings.TTS_ENABLED:
+        raise HTTPException(status_code=503, detail="Server-Vorlesen ist aus (TTS_ENABLED).")
+    interview_lease.touch(req.session_id, current_user)
+    t0 = _time.time()
+    try:
+        # Chatterbox auf der CPU braucht fuer einen langen Satz leicht 10-20 s.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=3.0)) as c:
+            r = await c.post(f"{settings.TTS_SERVICE_URL}/synthesize", json={"text": req.text, "engine": req.engine})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("TTS-Dienst nicht erreichbar: %s", e)
+        raise HTTPException(status_code=503, detail="Vorlese-Dienst nicht erreichbar.") from e
+    if r.status_code != 200:
+        try:
+            msg = r.json().get("error") or r.text
+        except Exception:  # noqa: BLE001
+            msg = r.text
+        raise HTTPException(status_code=503 if r.status_code == 503 else 502, detail=f"Vorlesen: {msg}"[:300])
+
+    def _f(h: str):
+        try:
+            return float(r.headers.get(h, ""))
+        except ValueError:
+            return None
+    perf = {"engine": req.engine, "chars": len(req.text), "synth_s": _f("X-TTS-Synth-S"),
+            "audio_s": _f("X-TTS-Audio-S"), "cached": r.headers.get("X-TTS-Cached") == "1",
+            "total_s": round(_time.time() - t0, 2)}
+    _log_interview_perf("interview_tts", current_user, perf, session=_session_call_id(req.session_id))
+    return Response(content=r.content, media_type="audio/wav",
+                    headers={"Cache-Control": "no-store", "X-TTS-Synth-S": str(perf["synth_s"] or ""),
+                             "X-TTS-Audio-S": str(perf["audio_s"] or "")})

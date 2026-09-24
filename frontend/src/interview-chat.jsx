@@ -11,9 +11,11 @@
 // onKlient({anrede, initial, gender}) fuellt Kuerzel/Geschlecht in P1.
 // ────────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchInterviewSets, interviewChatStream, interviewTranscribe, warmupInterviewServer } from "./api.js";
+import { fetchInterviewSets, interviewChatStream, interviewLease, interviewTranscribe, warmupInterviewServer } from "./api.js";
+import { useInterviewLease } from "./interview-lease.js";
 import { friendlyError } from "./shared.js";
 import { getSpeechProvider } from "./speech.js";
+import { TtsSelect } from "./tts-select.jsx";
 import { FeedbackButton } from "./ui.jsx";
 
 const LS_SET_KEY = "st_interview_set";
@@ -51,7 +53,7 @@ function chatHasContent(v) {
 function anredeOf(k) { return k && k.anrede && k.initial ? `${k.anrede} ${k.initial}` : null; }
 
 // ── Push-to-talk (identisch zu interview.jsx) ───────────────────────────────
-function useDictation({ onText, onError, onStart }) {
+function useDictation({ onText, onError, onStart, sessionId }) {
   const [state, setState] = useState("idle");
   const recRef = useRef(null); const chunksRef = useRef([]); const streamRef = useRef(null);
   const [seconds, setSeconds] = useState(0); const timerRef = useRef(null);
@@ -80,7 +82,7 @@ function useDictation({ onText, onError, onStart }) {
         const file = new File([blob], `antwort.${mime.includes("ogg") ? "ogg" : "webm"}`, { type: blob.type });
         setState("transcribing");
         const t0 = Date.now();
-        try { const d = await interviewTranscribe(file); onText?.((d.transcript || "").trim(), { transcribe_ms: Date.now() - t0 }); }
+        try { const d = await interviewTranscribe(file, sessionId); onText?.((d.transcript || "").trim(), { transcribe_ms: Date.now() - t0 }); }
         catch (e) { onError?.("Transkription fehlgeschlagen: " + friendlyError(e)); }
         finally { setState("idle"); }
       };
@@ -105,6 +107,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const [serverState, setServerState] = useState(null);
   const [streaming, setStreaming] = useState(false);
   const [liveText, setLiveText] = useState("");        // gerade gestreamter Satz
+  const [jobsBusy, setJobsBusy] = useState(false);     // v19.34: Auftrag rechnet gerade
   const [draftText, setDraftText] = useState("");
   const [vorlesen, setVorlesen] = useState(() => { try { return localStorage.getItem(LS_VORLESEN) !== "0"; } catch { return true; } });
   const speech = getSpeechProvider();
@@ -150,8 +153,11 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
       if (t) setDraftText(prev => (prev.trim() ? prev.trim() + " " + t : t));
     },
     onError: (m) => toast && toast(m),
-    onStart: () => speech.cancel(),
+    onStart: () => { speech.cancel(); interviewLease(v.sessionId, "touch"); },
+    sessionId: v.sessionId,
   });
+  // v19.34: Reservierung freigeben, sobald das Gespraech nicht mehr laeuft
+  useInterviewLease(v.sessionId, v.phase === "laeuft");
 
   function toggleVorlesen() {
     const next = !vorlesen; setVorlesen(next);
@@ -182,8 +188,9 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
         trigger_stufe: cur.triggerStufe, klient: cur.klient, model: model || null, session_id: cur.sessionId || null,
         client_perf: Object.keys(clientPerf).length ? clientPerf : null,
       }, (ev) => {
+        if (ev.type === "status") setJobsBusy((ev.jobs_running || 0) > 0);
         if (ev.type === "delta") {
-          if (tFirst === null) tFirst = Date.now();
+          if (tFirst === null) { tFirst = Date.now(); setJobsBusy(false); }
           setLiveText(t => t + ev.text); tts && tts.push(ev.text);
         }
       }, { signal: ctrl.signal });
@@ -192,14 +199,14 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
       if (perfRef.current.prev_ttft_ms === null) delete perfRef.current.prev_ttft_ms;
     } catch (e) {
       tts && tts.end();
-      setStreaming(false); setLiveText("");
+      setStreaming(false); setLiveText(""); setJobsBusy(false);
       if (e?.name === "AbortError") return;
       toast && toast("Antwort nicht möglich (" + friendlyError(e) + ") – bitte nochmal.");
       patch({ ...extra, historie });
       return;
     } finally { abortRef.current = null; }
     tts && tts.end();
-    setStreaming(false); setLiveText("");
+    setStreaming(false); setLiveText(""); setJobsBusy(false);
     if (!meta) { patch({ ...extra, historie }); return; }
     const neu = [...historie, { rolle: "system", text: meta.sage || "", thema: meta.thema || "" }];
     const p = {
@@ -263,6 +270,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
       <label style={{ ...soft, display: "flex", alignItems: "center", gap: 4, marginLeft: "auto", cursor: "pointer" }}>
         <input type="checkbox" checked={vorlesen} onChange={toggleVorlesen} /> Vorlesen
       </label>
+      {vorlesen && <TtsSelect onChange={() => { speech.cancel(); setVoice(speech.voiceStatus ? speech.voiceStatus() : "ok"); }} />}
       {vorlesen && voice === "none" && <span style={{ ...soft, width: "100%", textAlign: "right" }} data-testid="chat-voice-hint">
         Keine lokale deutsche Stimme auf diesem Rechner – Online-Stimmen sind aus Datenschutzgründen gesperrt, daher wird nicht vorgelesen.
       </span>}
@@ -307,7 +315,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
               {t.text}
             </div>
           ))}
-          {streaming && <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: "var(--st-gray-light)", borderRadius: 10, padding: "8px 12px", fontSize: 14, lineHeight: 1.45 }} data-testid="chat-live">{liveText || "…"}</div>}
+          {streaming && <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: "var(--st-gray-light)", borderRadius: 10, padding: "8px 12px", fontSize: 14, lineHeight: 1.45 }} data-testid="chat-live">{liveText || (jobsBusy ? <span style={soft} data-testid="chat-jobs-busy">… Ein Auftrag läuft gerade noch – die Antwort kann etwas länger dauern.</span> : "…")}</div>}
         </div>
         {v.phase === "fertig" ? (
           <>

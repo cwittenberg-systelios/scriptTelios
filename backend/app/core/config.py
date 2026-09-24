@@ -278,6 +278,19 @@ class Settings(BaseSettings):
     # runpod-start.sh stellt bei weniger als 2 GPUs mit Warnung auf single zurueck.
     GPU_PROFILE: str = "single"
 
+    # v19.34: Vorrang fuer laufende Interviews (nur GPU_PROFILE=single).
+    # Waehrend ein Interview aktiv ist, starten neue LLM-Jobs und P0-
+    # Transkriptionen nicht. Reservierung verfaellt nach IDLE ohne
+    # Aktivitaet; kein Job wartet laenger als MAX_JOB_WAIT.
+    INTERVIEW_PRIORITY: bool = True
+    INTERVIEW_LEASE_IDLE_S: int = 300
+    INTERVIEW_MAX_JOB_WAIT_S: int = 600
+
+    # v19.35: Server-Vorlesen (Piper/Chatterbox) ueber den lokalen Dienst
+    # backend/tts_service/tts_server.py im eigenen venv (setup_tts.sh).
+    TTS_ENABLED: bool = False
+    TTS_SERVICE_URL: str = "http://127.0.0.1:8011"
+
     @property
     def gpu_dual(self) -> bool:
         return (self.GPU_PROFILE or "").strip().lower() == "dual"

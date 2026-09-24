@@ -306,11 +306,56 @@ async function warmupInterviewServer() {
 }
 
 // POST /api/interview/transcribe (Kurzdiktat) -> { transcript, duration_seconds, word_count }
-async function interviewTranscribe(file) {
+async function interviewTranscribe(file, sessionId) {
   const fd = new FormData();
   fd.append("audio", file);
+  if (sessionId) fd.append("session_id", sessionId);   // v19.34: verlaengert die Reservierung
   const r = await _postEnsured(`${getApiBase()}/interview/transcribe`, { method: "POST", body: fd });
   return _jsonOrThrow(r);
+}
+
+// v19.34: POST /api/interview/lease {session_id, action: touch|release}.
+// Nie werfend (fire-and-forget); release mit keepalive, damit es auch beim
+// Schliessen des Tabs noch ankommt. Liefert {enabled, active, jobs_running} oder null.
+function interviewLease(sessionId, action = "touch") {
+  if (!sessionId) return Promise.resolve(null);
+  try {
+    const p = apiFetch(`${getApiBase()}/interview/lease`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, action }),
+      keepalive: action === "release",
+    });
+    return Promise.resolve(p).then(r => (r && r.ok ? r.json().catch(() => null) : null)).catch(() => null);
+  } catch (_) { return Promise.resolve(null); }
+}
+
+// v19.35: Server-Vorlesen. GET /interview/tts/engines -> [{key,label,available,reason}]
+// (Browser immer dabei). Fehler -> nur Browser.
+async function fetchTtsEngines() {
+  try {
+    const r = await apiFetch(`${getApiBase()}/interview/tts/engines`);
+    if (r && r.ok) {
+      const d = await r.json();
+      if (d && Array.isArray(d.engines) && d.engines.length) return d.engines;
+    }
+  } catch (_) { /* Server aus */ }
+  return [{ key: "browser", label: "Browser", available: true, reason: "" }];
+}
+
+// POST /api/interview/tts {text, engine} -> Blob (audio/wav). Wirft bei Fehler.
+async function interviewTts(text, engine, { signal } = {}) {
+  const r = await apiFetch(`${getApiBase()}/interview/tts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, engine }),
+    signal,
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error((d && d.detail) || r.statusText || `HTTP ${r.status}`);
+  }
+  return r.blob();
 }
 
 // POST /api/interview/turn -> { rueckfrage: string|null, fehlende_aspekte, quelle, model_used }
@@ -471,4 +516,4 @@ function getConfluenceUser() {
   return "";
 }
 
-export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, fetchInterviewSets, warmupInterviewServer, warmInterviewModels, interviewTranscribe, interviewTurn, interviewAbschluss, interviewChatStream, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };
+export { apiFetch, downloadViaApi, pollJob, buildJobFormData, startJob, downloadTranscript, fetchInterviewSets, warmupInterviewServer, warmInterviewModels, interviewLease, fetchTtsEngines, interviewTts, interviewTranscribe, interviewTurn, interviewAbschluss, interviewChatStream, repairPreview, repairStart, fetchRepairResult, getApiBase, getConfluenceUser, getProxyBase, ensureServer, isServerDownError, announceServerState, SERVER_STATE_EVENT };

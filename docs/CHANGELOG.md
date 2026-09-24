@@ -7,6 +7,80 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.35] — Server-Vorlesen zum Testen: Browser | Piper | Chatterbox (2026-09-24)
+
+Basis: 4230a30 + v19.34. Ein Patch (Backend + Frontend, `systelios.js` neu
+gebaut). Sprintplan: `docs/sprintplan_v19_35.md`.
+
+Ziel: die drei Stimmen im echten Dialog vergleichen. Der Umschalter ist für
+alle Nutzer sichtbar, Chatterbox läuft auf der CPU (kein Risiko für gemma im VRAM).
+
+### Backend
+- `tts_service/tts_server.py`: eigener Dienst im eigenen venv
+  (`/workspace/venv-tts`, 127.0.0.1:8011), nur Standardbibliothek plus
+  Engines. Piper (Stimme `de_DE-thorsten-high`) und Chatterbox Multilingual
+  (CPU, nur mit `TTS_CHATTERBOX_ENABLED=true`). Engines werden beim ersten
+  Satz geladen, ein Satz nach dem anderen je Engine, Threads begrenzt,
+  LRU-Cache für wiederkehrende Sätze. Texte werden nicht geloggt.
+- `scripts/setup_tts.sh [--chatterbox]`: legt das venv an, installiert Piper
+  und die Stimme, optional torch-CPU 2.6 und chatterbox-tts und lädt die
+  Gewichte vorab. `runpod-start.sh` startet den Dienst bei `TTS_ENABLED=true`.
+- `GET /interview/tts/engines`, `POST /interview/tts` (Proxy, max. 600
+  Zeichen, WAV). perf-Zeile `kind: interview_tts` (Engine, Zeichen,
+  Synthesezeit, Audiolänge, Cache), ohne Text. `perf_report.py` zeigt je
+  Engine Median/p90 und RTF.
+- `lint_gate.sh` prüft auch `tts_service/`.
+
+### Frontend
+- `speech.js`: Server-Provider mit gleicher Schnittstelle. Jeder Satz wird
+  sofort abgerufen, gespielt wird in Reihenfolge, `cancel` bricht Abrufe
+  ab. Liefert der Server nicht, übernimmt die Browser-Stimme mit Hinweis.
+  `getSpeechProvider()` ist jetzt ein Umschalter (`setTtsEngine`,
+  localStorage `st_tts_engine`).
+- `tts-select.jsx`: Auswahl „Stimme“ neben „Vorlesen“ in Dialog und
+  Fragenkarten. Nicht verfügbare Engines sind ausgegraut (Grund im Tooltip).
+  Eine nicht mehr verfügbare Wahl fällt auf Browser zurück.
+
+### Tests
+- `tests/unit/test_v1935_tts.py` (11), `frontend/tests/v1935_tts.test.jsx` (7).
+
+---
+
+## [v19.34] — Vorrang laufender Interviews vor neuen Jobs (2026-09-24)
+
+Basis: v19.33. Ein Patch (Backend + Frontend, `systelios.js` neu gebaut).
+Sprintplan: `docs/sprintplan_v19_34.md`. Wirkt nur bei `GPU_PROFILE=single`.
+
+### Backend
+- `services/interview_lease.py`: Reservierung je Interview-Session. Aktivität
+  verlängert sie (Turn, Diktat, Abschluss-Check, Chat, Aufnahme-Start). Nach
+  `INTERVIEW_LEASE_IDLE_S` (300 s) ohne Aktivität verfällt sie, der Chat gibt
+  sie bei fertig frei.
+- `run_job`: Neue Jobs warten vor dem Start, solange ein Interview läuft,
+  höchstens `INTERVIEW_MAX_JOB_WAIT_S` (600 s). Der Fortschritt zeigt
+  „Wartet auf ein laufendes Interview (höchstens noch n Min)“. Die Wartezeit
+  steht als `interview_wait_s` in `performance.log`. Laufende Jobs werden
+  nicht unterbrochen.
+- P0-Worker: wartet ebenfalls, höchstens 10 min.
+- `POST /interview/lease` (touch/release). `/interview/transcribe` nimmt
+  optional `session_id`. Der Chat-Stream sendet vorab
+  `{"type":"status","jobs_running":n}`.
+- `running_job_count()` zählt wartende Jobs nicht mit.
+
+### Frontend
+- `interview-lease.js` (`useInterviewLease`): Freigabe bei Ende oder
+  Verwerfen des Gesprächs, beim Unmount und beim Schließen des Tabs
+  (keepalive). Gilt für Dialog und Fragenkarten.
+- Der Aufnahme-Start verlängert die Reservierung, das Diktat schickt die
+  `session_id` mit.
+- Dialog: Solange ein Auftrag rechnet, steht bis zum ersten Wort „Ein
+  Auftrag läuft gerade noch – die Antwort kann etwas länger dauern.“
+
+### Tests
+- `tests/unit/test_v1934_vorrang.py` (13), `frontend/tests/v1934_vorrang.test.jsx` (3).
+
+---
+
 ## [v19.33] — Dialog-Latenz: Messung, feste Kontextgröße, Vorladen, GPU-Profil (2026-09-24)
 
 Basis: `v19_QA_v02` @ `75d54bd` + v19.32 + commit_patch.sh. Ein Patch (Backend +

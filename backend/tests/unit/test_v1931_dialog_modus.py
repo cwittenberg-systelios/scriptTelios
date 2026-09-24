@@ -316,8 +316,8 @@ class TestChatEndpoint:
         })
         assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
         ev = _events(r.text)
-        assert [e["type"] for e in ev] == ["delta", "delta", "meta", "done"]
-        meta = ev[2]
+        assert [e["type"] for e in ev] == ["status", "delta", "delta", "meta", "done"]   # v19.34: status vorab
+        meta = ev[3]
         assert meta["sage"] == "Worum ging es?" and meta["checkliste"]["klient"] == "abgedeckt"
         assert meta["klient"]["initial"] == "M." and meta["fertig"] is False and meta["regie"] is None
 

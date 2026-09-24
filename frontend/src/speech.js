@@ -6,10 +6,13 @@
 // cancel() bricht alles ab (z.B. beim Start einer Aufnahme).
 //
 // Provider "browser" = speechSynthesis (kein Server, keine Klientendaten,
-// funktioniert bei ausgeschaltetem Pod). Ein spaeterer Provider "server"
-// ersetzt nur diese Datei: gleiche Schnittstelle, Audio vom Backend.
-// Auswahl ueber window.SYSTELIOS_TTS ("browser" | "server"), Default browser.
+// funktioniert bei ausgeschaltetem Pod). v19.35: Provider "server" holt je
+// Satz ein WAV vom Backend (Piper/Chatterbox, POST /interview/tts), gleiche
+// Schnittstelle. Welche Stimme gilt, bestimmt die Auswahl im UI
+// (setTtsEngine, localStorage st_tts_engine); getSpeechProvider() liefert
+// einen Umschalter, der an browser bzw. server weiterreicht.
 // ────────────────────────────────────────────────────────────────────────────
+import { interviewTts } from "./api.js";
 
 // v19.33: NUR Stimmen, die im Rechner selbst laufen (localService). "Google
 // Deutsch" (Chrome) und "… Online (Natural)" (Edge) rechnen in der Cloud -
@@ -183,14 +186,129 @@ function createNullProvider() {
   return { name: "none", available: () => false, say: async () => false, sayStream: noop, cancel: () => {}, voiceStatus: () => "none" };
 }
 
+// ── v19.35: Server-Vorlesen ─────────────────────────────────────────────────
+
+const LS_TTS_ENGINE = "st_tts_engine";
+const TTS_FALLBACK_EVENT = "st-tts-fallback";
+let _engine = (() => { try { return localStorage.getItem(LS_TTS_ENGINE) || "browser"; } catch { return "browser"; } })();
+function getTtsEngine() { return _engine; }
+function setTtsEngine(e) {
+  _engine = e || "browser";
+  try { localStorage.setItem(LS_TTS_ENGINE, _engine); } catch { /* ignoriert */ }
+}
+
+function _notifyFallback(msg) {
+  try { window.dispatchEvent(new CustomEvent(TTS_FALLBACK_EVENT, { detail: { message: msg } })); } catch { /* ignoriert */ }
+}
+
+// fetchAudio(text, engine, signal) -> Promise<Blob>; fallback = Browser-Provider
+// fuer Saetze, die der Server nicht liefern kann (Dienst aus, Fehler).
+function createServerProvider({ fetchAudio = interviewTts, fallback = null, engine = () => _engine } = {}) {
+  let token = 0;
+  let current = null;           // laufendes <audio>
+  let controllers = [];
+  function cancel() {
+    token += 1;
+    controllers.forEach(c => { try { c.abort(); } catch { /* ignoriert */ } });
+    controllers = [];
+    if (current) { try { current.pause(); } catch { /* ignoriert */ } current = null; }
+    if (fallback) fallback.cancel();
+  }
+  function request(text) {
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    if (ctrl) controllers.push(ctrl);
+    return fetchAudio(text, engine(), { signal: ctrl ? ctrl.signal : undefined })
+      .then(blob => ({ blob }), err => ({ err }));
+  }
+  function play(blob, myToken) {
+    return new Promise((resolve) => {
+      if (myToken !== token) return resolve(false);
+      let url = null;
+      try { url = URL.createObjectURL(blob); } catch { return resolve(false); }
+      const a = new Audio(url);
+      current = a;
+      const done = (ok) => { try { URL.revokeObjectURL(url); } catch { /* ignoriert */ } if (current === a) current = null; _lastSpokeAt = Date.now(); resolve(ok); };
+      a.onended = () => done(true);
+      a.onerror = () => done(false);
+      const p = a.play();
+      if (p && typeof p.catch === "function") p.catch(() => done(false));
+    });
+  }
+  async function speakItem(item, myToken) {
+    const res = await item.pending;
+    if (myToken !== token) return false;
+    if (res.blob) return play(res.blob, myToken);
+    if (res.err && res.err.name === "AbortError") return false;
+    _notifyFallback(`Server-Stimme nicht verfügbar (${res.err?.message || "Fehler"}) – Browser-Stimme übernimmt.`);
+    return fallback ? fallback.say([item.text]) : false;
+  }
+  function sayStream() {
+    cancel();
+    const myToken = token;
+    let buf = "";
+    const queue = [];
+    let running = false; let ended = false; let first = true;
+    let resolveDone = null;
+    const done = new Promise(r => { resolveDone = r; });
+    async function pump() {
+      if (running) return;
+      running = true;
+      if (first) { first = false; await wakeAudio(); }
+      while (queue.length) {
+        if (myToken !== token) { queue.length = 0; break; }
+        await speakItem(queue.shift(), myToken);
+      }
+      running = false;
+      if (ended && !queue.length) resolveDone(myToken === token);
+    }
+    // Abruf sofort starten (Satz n+1 rechnet, waehrend Satz n laeuft)
+    const enqueue = (text) => queue.push({ text, pending: request(text) });
+    function push(delta) {
+      if (myToken !== token || !delta) return;
+      buf += delta;
+      const parts = splitSentences(buf);
+      buf = parts.rest;
+      parts.sentences.forEach(enqueue);
+      if (parts.sentences.length) pump();
+    }
+    function end() {
+      if (ended) return done;
+      ended = true;
+      const rest = buf.trim(); buf = "";
+      if (rest) enqueue(rest);
+      if (!running && !queue.length) resolveDone(myToken === token); else pump();
+      return done;
+    }
+    // add(text): ganzer Teil als ein Eintrag (fuer say(), ohne Satzsplit)
+    function add(text) { if (myToken !== token || !text) return; enqueue(text); pump(); }
+    return { push, end, done, add };
+  }
+  async function say(parts) {
+    const s = sayStream();
+    (Array.isArray(parts) ? parts : [parts]).map(p => (p || "").trim()).filter(Boolean).forEach(p => s.add(p));
+    return s.end();
+  }
+  return { name: "server", available: () => true, say, sayStream, cancel, voiceStatus: () => "ok" };
+}
+
+// Umschalter: reicht je nach gewaehlter Engine an browser oder server weiter.
+function createSwitchingProvider(browser, server) {
+  const pick = () => (_engine !== "browser" && server ? server : browser);
+  return {
+    name: "switch",
+    available: () => browser.available() || !!server,
+    say: (p) => pick().say(p),
+    sayStream: () => pick().sayStream(),
+    cancel: () => { browser.cancel(); if (server) server.cancel(); },
+    voiceStatus: () => (_engine === "browser" ? browser.voiceStatus() : "ok"),
+  };
+}
+
 let _provider = null;
 function getSpeechProvider() {
   if (_provider) return _provider;
-  const wanted = (typeof window !== "undefined" && window.SYSTELIOS_TTS) || "browser";
-  // "server" ist vorbereitet, aber nicht implementiert - faellt auf browser zurueck.
-  _provider = (wanted === "browser" || wanted === "server") && browserAvailable()
-    ? createBrowserProvider()
-    : createNullProvider();
+  const browser = browserAvailable() ? createBrowserProvider() : createNullProvider();
+  _provider = createSwitchingProvider(browser, createServerProvider({ fallback: browser }));
   return _provider;
 }
 
@@ -200,4 +318,4 @@ function _setSpeechProvider(p) { _provider = p; }
 // Fuer Tests: Zeitpunkt des letzten gesprochenen Satzes setzen.
 function _setLastSpokeAt(t) { _lastSpokeAt = t; }
 
-export { getSpeechProvider, _setSpeechProvider, pickGermanVoice, localGermanVoices, isLocalVoice, voiceStatus, wakeAudio, _setLastSpokeAt, browserAvailable, splitSentences, PART_GAP_MS, LEAD_GAP_MS, WAKE_SILENCE_MS };
+export { getSpeechProvider, _setSpeechProvider, createServerProvider, createSwitchingProvider, getTtsEngine, setTtsEngine, LS_TTS_ENGINE, TTS_FALLBACK_EVENT, pickGermanVoice, localGermanVoices, isLocalVoice, voiceStatus, wakeAudio, _setLastSpokeAt, browserAvailable, splitSentences, PART_GAP_MS, LEAD_GAP_MS, WAKE_SILENCE_MS };

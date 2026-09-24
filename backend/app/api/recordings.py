@@ -155,6 +155,12 @@ async def p0_worker():
     while True:
         try:
             prio, rec_id, audio_path = await p0_queue.get()
+            # v19.34: laufendes Interview hat Vorrang (hoechstens 10 min) -
+            # eine P0-Transkription wirft Whisper danach aus dem Speicher.
+            from app.services import interview_lease
+            if interview_lease.is_active():
+                logger.info("P0-Worker wartet auf laufendes Interview (Recording %d)", rec_id)
+                await interview_lease.wait_until_free()
             waited = 0
             while await _active_job_running():
                 if waited == 0:

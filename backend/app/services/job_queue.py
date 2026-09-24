@@ -62,6 +62,9 @@ def _log_performance(job: "JobState", queue_size: int) -> None:
         "output_chars": len(job.result_text) if job.result_text else 0,
         "queue_size":   queue_size,
     }
+    # v19.34: Wartezeit auf ein laufendes Interview (nur wenn gewartet wurde)
+    if getattr(job, "interview_wait_s", None):
+        entry["interview_wait_s"] = job.interview_wait_s
     # v19.1: Think-Block-Telemetrie ins Performance-Log einbetten.
     # Erlaubt Auswertung "wie oft hat der Retry-Layer angeschlagen" und
     # "wie oft kam degraded=true" ohne DB-Abfrage.
@@ -127,7 +130,8 @@ def running_job_count() -> int:
     """Anzahl laufender Jobs in diesem Prozess (fuer die Latenz-Diagnose:
     laufen Jobs parallel, wartet der Dialog auf Ollama)."""
     try:
-        return sum(1 for j in job_queue.get_all_jobs() if j.status == JobStatus.RUNNING.value)
+        return sum(1 for j in job_queue.get_all_jobs()
+                   if j.status == JobStatus.RUNNING.value and not getattr(j, "interview_waiting", False))
     except Exception:  # noqa: BLE001
         return -1
 
@@ -230,6 +234,9 @@ class JobState:
         self.parent_job_id : Optional[str]  = None
         self.repair_input  : Optional[dict] = None
         self._cancel_requested  : bool = False
+        # v19.34: Warten auf ein laufendes Interview (Vorrang, eine GPU)
+        self.interview_waiting  : bool = False
+        self.interview_wait_s   : Optional[float] = None
         self.input_meta         : Optional[dict] = None
         # v19.25 (Sprint Q): Quellen-Warnungen aus der Extraktionsphase
         # (in-process; im Job-Status/SSE sichtbar, spaeter Teil des QC).
@@ -259,6 +266,7 @@ class JobState:
             "progress":        self.progress,
             "progress_phase":  self.progress_phase,
             "progress_detail": self.progress_detail,
+            "interview_waiting": self.interview_waiting,
             "source_warnings": self.source_warnings or [],
             "befund_text":     self.result_befund or "",
             "akut_text":       self.result_akut or "",
@@ -829,6 +837,23 @@ class JobQueue:
         t0 = asyncio.get_event_loop().time()
 
         try:
+            # v19.34: laeuft ein Interview (eine GPU), wartet der Job - hoechstens
+            # INTERVIEW_MAX_JOB_WAIT_S. Ein bereits laufender Job wird nie
+            # unterbrochen; dies greift nur vor dem Start.
+            from app.services import interview_lease
+            if interview_lease.is_active():
+                job.interview_waiting = True
+
+                def _on_wait(rest_min: int) -> None:
+                    job.set_progress(5, "Warteschlange",
+                                     f"Wartet auf ein laufendes Interview (höchstens noch {rest_min} Min)")
+                try:
+                    job.interview_wait_s = await interview_lease.wait_until_free(
+                        is_cancelled=lambda: job._cancel_requested, on_wait=_on_wait)
+                finally:
+                    job.interview_waiting = False
+                job.set_progress(5, "Warteschlange")
+
             if job._cancel_requested:
                 job.status = JobStatus.CANCELLED.value
                 job.duration_s = round(asyncio.get_event_loop().time() - t0, 1)

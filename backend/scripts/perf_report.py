@@ -276,7 +276,8 @@ def compute_interview_stats(entries: list[dict]) -> dict:
     Umstieg auf zwei GPUs (GPU_PROFILE=dual)."""
     chats = [e for e in entries if e.get("kind") == "interview_chat"]
     trans = [e for e in entries if e.get("kind") == "interview_transcribe"]
-    if not chats and not trans:
+    tts = [e for e in entries if e.get("kind") == "interview_tts"]
+    if not chats and not trans and not tts:
         return {}
     sessions: dict[str, str] = {}
     for e in chats:
@@ -307,7 +308,22 @@ def compute_interview_stats(entries: list[dict]) -> dict:
         "diktate": len(trans),
         "transcribe_s": {"median": _q(col(trans, "transcribe_s"), 0.5), "p90": _q(col(trans, "transcribe_s"), 0.9)},
         "whisper_loads": sum(1 for e in trans if (e.get("whisper_load_s") or 0) > 1.0),
+        "tts": _tts_stats(tts),
     }
+
+
+def _tts_stats(rows: list[dict]) -> dict:
+    """v19.35: Vorlese-Zeiten je Engine (ohne Cache-Treffer). rtf = Rechenzeit
+    / Audiolaenge; < 1 heisst schneller als Echtzeit (keine Luecken)."""
+    out: dict = {}
+    for eng in sorted({r.get("engine") for r in rows if r.get("engine")}):
+        rs = [r for r in rows if r.get("engine") == eng and not r.get("cached")]
+        rtf = [r["synth_s"] / r["audio_s"] for r in rs
+               if isinstance(r.get("synth_s"), (int, float)) and r.get("audio_s")]
+        out[eng] = {"saetze": len(rs), "cache_treffer": sum(1 for r in rows if r.get("engine") == eng and r.get("cached")),
+                    "synth_s": {"median": _q([r.get("synth_s") for r in rs], 0.5), "p90": _q([r.get("synth_s") for r in rs], 0.9)},
+                    "rtf_median": round(sorted(rtf)[len(rtf) // 2], 2) if rtf else None}
+    return out
 
 
 def print_interview(iv: dict) -> None:
@@ -323,6 +339,9 @@ def print_interview(iv: dict) -> None:
           f"max {iv['reload_load_s']['max']}s) | Turns mit parallelen Jobs: {iv['turns_mit_jobs']}")
     print(f"  Diktat:       Median {iv['transcribe_s']['median']}s | p90 {iv['transcribe_s']['p90']}s | "
           f"Whisper geladen: {iv['whisper_loads']}x")
+    for eng, t in (iv.get("tts") or {}).items():
+        print(f"  Vorlesen {eng:11s} {t['saetze']} Saetze | Median {t['synth_s']['median']}s | "
+              f"p90 {t['synth_s']['p90']}s | RTF {t['rtf_median']} | Cache {t['cache_treffer']}x")
     print()
 
 

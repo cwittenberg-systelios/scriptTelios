@@ -16,9 +16,11 @@
 // Prompt-Log-Eintraege und die Feedback-Fallkopie.
 // ────────────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchInterviewSets, interviewAbschluss, interviewTranscribe, interviewTurn, warmupInterviewServer } from "./api.js";
+import { fetchInterviewSets, interviewAbschluss, interviewLease, interviewTranscribe, interviewTurn, warmupInterviewServer } from "./api.js";
+import { useInterviewLease } from "./interview-lease.js";
 import { friendlyError } from "./shared.js";
 import { getSpeechProvider } from "./speech.js";
+import { TtsSelect } from "./tts-select.jsx";
 import { FeedbackButton } from "./ui.jsx";
 
 const LS_SET_KEY = "st_interview_set";       // gemerktes Set je Nutzer (E3)
@@ -81,7 +83,7 @@ function anredeOf(klient) {
 }
 
 // ── Push-to-talk (ein Clip je Antwort) ─────────────────────────────────────
-function useDictation({ onText, onError, onStart }) {
+function useDictation({ onText, onError, onStart, sessionId }) {
   const [state, setState] = useState("idle"); // idle | recording | transcribing
   const recRef = useRef(null);
   const chunksRef = useRef([]);
@@ -119,7 +121,7 @@ function useDictation({ onText, onError, onStart }) {
         const file = new File([blob], `antwort.${ext}`, { type: blob.type });
         setState("transcribing");
         try {
-          const d = await interviewTranscribe(file);
+          const d = await interviewTranscribe(file, sessionId);
           onText?.((d.transcript || "").trim());
         } catch (e) {
           onError?.("Transkription fehlgeschlagen: " + friendlyError(e));
@@ -222,8 +224,11 @@ function InterviewDialog({ value, onChange, toast, model, onKlient }) {
   const dict = useDictation({
     onText: (t) => { if (t) setDraftText(prev => (prev.trim() ? prev.trim() + " " + t : t)); },
     onError: (m) => toast && toast(m),
-    onStart: () => speech.cancel(),
+    onStart: () => { speech.cancel(); interviewLease(v.sessionId, "touch"); },
+    sessionId: v.sessionId,
   });
+  // v19.34: Reservierung freigeben, sobald das Interview nicht mehr laeuft
+  useInterviewLease(v.sessionId, ["antwort", "nachfrage", "abschluss"].includes(v.phase));
 
   function toggleVorlesen() {
     const next = !vorlesen;
@@ -465,6 +470,7 @@ function InterviewDialog({ value, onChange, toast, model, onKlient }) {
       <label style={{ ...soft, display: "flex", alignItems: "center", gap: 4, marginLeft: "auto", cursor: "pointer" }}>
         <input type="checkbox" checked={vorlesen} onChange={toggleVorlesen} /> Vorlesen
       </label>
+      {vorlesen && <TtsSelect onChange={() => { speech.cancel(); }} />}
       {v.phase === "start" && (
         <button className="btn-xs" type="button" onClick={() => setEditFragen(e => !e)}>
           {editFragen ? "Fragen schließen" : "Fragen anpassen"}

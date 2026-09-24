@@ -12,6 +12,7 @@ jest.mock("../src/api.js", () => ({
   interviewTranscribe: jest.fn(),
   interviewChatStream: jest.fn(),
   warmupInterviewServer: jest.fn(() => Promise.resolve({ status: "ok" })),
+  interviewLease: jest.fn(() => Promise.resolve(null)),
   apiFetch: jest.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) })),
   getApiBase: () => "http://api",
 }));
