@@ -201,6 +201,76 @@ function ThinkingBubble({ start, jobsBusy }) {
   );
 }
 
+// v19.42: Buchstaben eines Satzes ueber ~85 % seiner Sprechdauer einblenden
+// (sieht aus wie mitgesprochen). prefers-reduced-motion: Satz auf einmal.
+const ROLL_TICK_MS = 40;
+function _reducedMotion() {
+  try { return !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { return false; }
+}
+function RollingText({ text, durationMs }) {
+  const [n, setN] = useState(() => (_reducedMotion() ? text.length : 0));
+  useEffect(() => {
+    if (_reducedMotion()) { setN(text.length); return undefined; }
+    const t0 = Date.now();
+    const span = Math.max(300, (durationMs || 0) * 0.85);
+    const id = setInterval(() => {
+      const k = Math.min(text.length, Math.ceil(text.length * (Date.now() - t0) / span));
+      setN(k);
+      if (k >= text.length) clearInterval(id);
+    }, ROLL_TICK_MS);
+    return () => clearInterval(id);
+  }, [text, durationMs]);
+  return <>{text.slice(0, n)}<span aria-hidden="true" style={{ visibility: "hidden" }}>{text.slice(n)}</span></>;
+}
+
+// Sprechblase waehrend des Vorlesens: fertige Saetze ganz, der laufende rollt.
+// Klick stoppt das Vorlesen und zeigt den ganzen Text.
+function SpeakingBubble({ spoken, onStop }) {
+  return (
+    <div data-testid="chat-live" data-speaking="1" role="button" tabIndex={0} title="Vorlesen stoppen und ganzen Text zeigen"
+      onClick={onStop} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onStop(); } }}
+      style={{ alignSelf: "flex-start", maxWidth: "85%", background: "var(--st-gray-light)", borderRadius: 10, padding: "8px 12px", fontSize: 14, lineHeight: 1.45, cursor: "pointer", whiteSpace: "pre-wrap" }}>
+      <span aria-hidden="true" style={{ fontSize: 12, marginRight: 6 }} data-testid="chat-speaking">🔊</span>
+      {spoken.map((s, i) => (
+        <span key={i}>{i > 0 ? " " : ""}{i === spoken.length - 1 ? <RollingText text={s.text} durationMs={s.durationMs} /> : s.text}</span>
+      ))}
+    </div>
+  );
+}
+
+// v19.42: Fragenliste als eine Statuszeile, aufklappbar.
+function FragenStatus({ fragen, checkliste, thema, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const pflicht = fragen.filter(f => !f.optional);
+  const abgedeckt = pflicht.filter(f => checkliste[f.key] === "abgedeckt").length;
+  const jetzt = thema ? fragen.find(f => f.key === thema) : null;
+  const kurz = (t) => (t.length > 40 ? t.slice(0, 38) + "…" : t);
+  return (
+    <div data-testid="chat-checkliste" style={{ marginBottom: 8 }}>
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} data-testid="chat-fragen-toggle"
+        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 12, color: "var(--st-text-soft)", textAlign: "left" }}>
+        {open ? "▾" : "▸"} Fragen {abgedeckt}/{pflicht.length}{jetzt ? <> · jetzt: {kurz(jetzt.text)}</> : null}
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 6 }} data-testid="chat-fragen-liste">
+          {fragen.map((f, i) => {
+            const st = checkliste[f.key] || "offen";
+            const mark = st === "abgedeckt" ? "✓" : st === "unklar" ? "?" : "·";
+            const col = st === "abgedeckt" ? "var(--st-text-soft)" : st === "unklar" ? "var(--st-red)" : "var(--st-text)";
+            return <div key={f.key} style={{ fontSize: 12, color: col, display: "flex", gap: 6 }}>
+              <span style={{ width: 12, textAlign: "center", fontWeight: 700 }}>{mark}</span>
+              <span style={{ textDecoration: st === "abgedeckt" ? "line-through" : "none" }}>{i + 1}. {f.text}{f.pflicht ? " *" : ""}{f.optional ? " (optional)" : ""}</span>
+            </div>;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Ohne Ton so lange -> ganzer Text (Stimme haengt, Dienst langsam).
+const SPEAK_WATCHDOG_MS = 8000;
+
 // ── Komponente ──────────────────────────────────────────────────────────────
 function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const v = value && value.historie ? value : emptyChat();
@@ -213,6 +283,10 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const [draftText, setDraftText] = useState("");
   const [vorlesen, setVorlesen] = useState(() => { try { return localStorage.getItem(LS_VORLESEN) !== "0"; } catch { return true; } });
   const speech = getSpeechProvider();
+  // v19.42: Text erst beim Vorlesen. active = Anzeige folgt der Stimme;
+  // hideIdx = Historien-Eintrag dieser Antwort (bis dahin verborgen).
+  const [sp, setSp] = useState({ id: 0, active: false, spoken: [], hideIdx: -1 });
+  const spTimeRef = useRef({ firstText: 0, lastEnd: 0 });
   const abortRef = useRef(null);
   const logRef = useRef(null);
   // v19.33: Rundlaufzeiten fuer das Server-Log (client_perf im naechsten Turn)
@@ -240,23 +314,38 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
 
   useEffect(() => () => { speech.cancel(); abortRef.current?.abort(); }, [speech]);
 
+  const revealAll = useCallback((id) => setSp(p => (p.active && (id == null || p.id === id) ? { ...p, active: false } : p)), []);
+  // Vorlesen stoppen (Nutzeraktion) -> ganzer Text sofort
+  const stopSpeaking = useCallback(() => { speech.cancel(); revealAll(); }, [speech, revealAll]);
+  // Sicherung: laenger als SPEAK_WATCHDOG_MS kein neuer Satz, obwohl Text da ist
+  useEffect(() => {
+    if (!sp.active) return undefined;
+    const id = setInterval(() => {
+      const t = spTimeRef.current;
+      if (!t.firstText) return;                       // Modell denkt noch - nichts zu zeigen
+      if (Date.now() > Math.max(t.firstText, t.lastEnd) + SPEAK_WATCHDOG_MS) revealAll();
+    }, 500);
+    return () => clearInterval(id);
+  }, [sp.active, revealAll]);
+
   const dict = useDictation({
     onText: (t, perf) => {
       if (perf && perf.transcribe_ms != null) perfRef.current.transcribe_ms = perf.transcribe_ms;
       autoSendRef.current && autoSendRef.current(t);
     },
     onError: (m) => toast && toast(m),
-    onStart: () => { speech.cancel(); interviewLease(v.sessionId, "touch"); },
+    onStart: () => { stopSpeaking(); interviewLease(v.sessionId, "touch"); },
     sessionId: v.sessionId,
   });
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [v.historie.length, liveText, dict.state]);
+  const spokenChars = sp.spoken.reduce((n, x) => n + x.text.length, 0);
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [v.historie.length, liveText, dict.state, spokenChars, sp.active]);
   // v19.34: Reservierung freigeben, sobald das Gespraech nicht mehr laeuft
   useInterviewLease(v.sessionId, v.phase === "laeuft");
 
   function toggleVorlesen() {
     const next = !vorlesen; setVorlesen(next);
     try { localStorage.setItem(LS_VORLESEN, next ? "1" : "0"); } catch { /* ignoriert */ }
-    if (!next) speech.cancel();
+    if (!next) stopSpeaking();
   }
   function chooseSet(key) {
     const set = manifest?.sets.find(s => s.key === key); if (!set) return;
@@ -270,7 +359,19 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
     // die in `v` noch nicht angekommen sind - deshalb hier zusammenfuehren.
     const cur = { ...v, ...extra };
     setStreaming(true); setLiveText("");
-    const tts = vorlesen ? speech.sayStream() : null;
+    const spId = Date.now() + Math.random();
+    spTimeRef.current = { firstText: 0, lastEnd: 0 };
+    const tts = vorlesen ? speech.sayStream({
+      onSentence: ({ text, durationMs }) => {
+        spTimeRef.current.lastEnd = Date.now() + (durationMs || 0);
+        setSp(p => (p.id === spId && p.active ? { ...p, spoken: [...p.spoken, { text, durationMs }] } : p));
+      },
+      onSkip: () => revealAll(spId),
+    }) : null;
+    // Nur wenn die Stimme wirklich spricht, folgt die Anzeige ihr (sonst sofort).
+    const synced = !!(tts && tts.speaks === true);
+    setSp({ id: spId, active: synced, spoken: [], hideIdx: historie.length });
+    const finishSpeech = () => { if (!tts) return; Promise.resolve(tts.end()).then(() => revealAll(spId), () => revealAll(spId)); };
     const ctrl = new AbortController(); abortRef.current = ctrl;
     let meta = null;
     const clientPerf = { ...perfRef.current };
@@ -284,7 +385,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
       }, (ev) => {
         if (ev.type === "status") setJobsBusy((ev.jobs_running || 0) > 0);
         if (ev.type === "delta") {
-          if (tFirst === null) { tFirst = Date.now(); setJobsBusy(false); }
+          if (tFirst === null) { tFirst = Date.now(); setJobsBusy(false); spTimeRef.current.firstText = tFirst; }
           setLiveText(t => t + ev.text); tts && tts.push(ev.text);
         }
       }, { signal: ctrl.signal });
@@ -292,14 +393,14 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
       perfRef.current.prev_total_ms = Date.now() - t0;
       if (perfRef.current.prev_ttft_ms === null) delete perfRef.current.prev_ttft_ms;
     } catch (e) {
-      tts && tts.end();
+      finishSpeech(); if (e?.name === "AbortError") revealAll(spId);
       setStreaming(false); setLiveText(""); setJobsBusy(false);
       if (e?.name === "AbortError") return;
       toast && toast("Antwort nicht möglich (" + friendlyError(e) + ") – bitte nochmal.");
       patch({ ...extra, historie });
       return;
     } finally { abortRef.current = null; }
-    tts && tts.end();
+    finishSpeech();
     setStreaming(false); setLiveText(""); setJobsBusy(false);
     if (!meta) { patch({ ...extra, historie }); return; }
     const neu = [...historie, { rolle: "system", text: meta.sage || "", thema: meta.thema || "" }];
@@ -315,7 +416,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   }
 
   function start() {
-    speech.cancel();
+    stopSpeaking();
     const p = { sessionId: newSessionId(), historie: [], checkliste: {}, rueckfragen: {}, triggerStufe: 0, klient: null, fertig: false, phase: "laeuft" };
     onChange({ ...v, ...p });
     turn([], p);
@@ -343,7 +444,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   // gibt useInterviewLease frei, weil die Phase nicht mehr "laeuft" ist).
   function interviewAbbrechen() {
     if (chatHasContent(v) && !confirm("Interview abbrechen? Alle bisherigen Antworten werden verworfen.")) return;
-    abortRef.current?.abort(); speech.cancel(); if (dict.state === "recording") dict.discard();
+    abortRef.current?.abort(); stopSpeaking(); if (dict.state === "recording") dict.discard();
     setStreaming(false); setLiveText(""); setJobsBusy(false); setDraftText("");
     patch({ ...emptyChat(), setKey: v.setKey, setLabel: v.setLabel, fragen: v.fragen });
   }
@@ -353,7 +454,7 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   }
   function neu() {
     if (chatHasContent(v) && !confirm("Gespräch verwerfen und neu beginnen?")) return;
-    speech.cancel(); abortRef.current?.abort();
+    stopSpeaking(); abortRef.current?.abort();
     patch({ ...emptyChat(), setKey: v.setKey, setLabel: v.setLabel, fragen: v.fragen });
   }
   function weiterfuehren() { patch({ phase: "laeuft", fertig: false }); }
@@ -367,69 +468,60 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
   const serverNote = serverState === "starting" ? "Server startet – Antworten werden verarbeitet, sobald er läuft (3–6 min)."
     : serverState === "no_server" ? "Kein Server verfügbar – bitte später erneut versuchen."
     : serverState === "blocked_night" ? "Zwischen 23 und 5 Uhr startet kein Server automatisch." : null;
-  // v19.31.2: optionale Punkte zaehlen nicht in den Fortschritt.
-  const pflichtFragen = v.fragen.filter(f => !f.optional);
-  const abgedeckt = pflichtFragen.filter(f => v.checkliste[f.key] === "abgedeckt").length;
   const recording = dict.state === "recording", transcribing = dict.state === "transcribing";
   const hatAntwort = v.historie.some(t => t.rolle === "behandler" && (t.text || "").trim());
+  const letztesThema = [...v.historie].reverse().find(t => t.rolle === "system")?.thema || "";
 
+  // v19.42: eine Zeile - Verfahren (nur vor dem Start), Klient, Vorlesen + Stimme
   const header = (
-    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
-      <span style={{ ...soft, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Verfahren</span>
-      <select value={v.setKey} onChange={e => chooseSet(e.target.value)} disabled={v.phase !== "start"} data-testid="chat-set"
-        style={{ fontSize: 12, padding: "3px 6px", borderRadius: 3, border: "1px solid var(--st-gray-border)", background: "var(--st-bg)", color: "var(--st-text)" }}>
-        {manifest.sets.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-      </select>
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+      {v.phase === "start" && (
+        <select value={v.setKey} onChange={e => chooseSet(e.target.value)} data-testid="chat-set" title="Verfahren"
+          style={{ fontSize: 12, padding: "3px 6px", borderRadius: 3, border: "1px solid var(--st-gray-border)", background: "var(--st-bg)", color: "var(--st-text)" }}>
+          {manifest.sets.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+        </select>
+      )}
       {anredeOf(v.klient) && <span style={{ ...soft, fontWeight: 600 }} data-testid="chat-klient">{anredeOf(v.klient)}</span>}
       {serverNote && <span style={{ ...soft, color: "var(--st-red)" }}>{serverNote}</span>}
-      <label style={{ ...soft, display: "flex", alignItems: "center", gap: 4, marginLeft: "auto", cursor: "pointer" }}>
-        <input type="checkbox" checked={vorlesen} onChange={toggleVorlesen} /> Vorlesen
-      </label>
-      {vorlesen && <TtsSelect onChange={() => speech.cancel()} />}
-    </div>
-  );
-
-  const checkliste = (
-    <div style={{ display: "flex", flexDirection: "column", gap: 3, minWidth: 180 }} data-testid="chat-checkliste">
-      <div style={{ ...soft, fontWeight: 600 }}>Fragenliste · {abgedeckt}/{pflichtFragen.length}</div>
-      {v.fragen.map((f, i) => {
-        const st = v.checkliste[f.key] || "offen";
-        const mark = st === "abgedeckt" ? "✓" : st === "unklar" ? "?" : "·";
-        const col = st === "abgedeckt" ? "var(--st-text-soft)" : st === "unklar" ? "var(--st-red)" : "var(--st-text)";
-        return <div key={f.key} title={f.text} style={{ fontSize: 12, color: col, display: "flex", gap: 6 }}>
-          <span style={{ width: 12, textAlign: "center", fontWeight: 700 }}>{mark}</span>
-          <span style={{ textDecoration: st === "abgedeckt" ? "line-through" : "none" }}>{i + 1}. {f.text.length > 44 ? f.text.slice(0, 42) + "…" : f.text}{f.pflicht ? " *" : ""}{f.optional ? " (optional)" : ""}</span>
-        </div>;
-      })}
+      <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <label style={{ ...soft, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+          <input type="checkbox" checked={vorlesen} onChange={toggleVorlesen} /> Vorlesen
+        </label>
+        {vorlesen && <TtsSelect onChange={() => stopSpeaking()} />}
+      </span>
     </div>
   );
 
   if (v.phase === "start") {
     return <div data-testid="chat-start">
       {header}
-      <div className="info-note">Du erzählst, das System fragt nach – entlang der Fragenliste, aber im Gespräch. Am Ende wird aus deinen Antworten die Dokumentation erstellt.</div>
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 16, marginTop: 10 }}>
-        <ol style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "var(--st-text)" }}>{v.fragen.map(f => <li key={f.key} style={{ marginBottom: 4 }}>{f.text}</li>)}</ol>
-      </div>
-      <div style={row}><button className="btn-primary" type="button" onClick={start} data-testid="chat-start-btn">Gespräch beginnen</button><span style={soft}>{v.fragen.length} Punkte · Antworten per Mikrofon oder Tastatur</span></div>
+      <div className="info-note">Du erzählst, das System fragt nach. Aus deinen Antworten entsteht am Ende die Dokumentation.</div>
+      <div style={{ marginTop: 8 }}><FragenStatus fragen={v.fragen} checkliste={{}} thema="" /></div>
+      <div style={row}><button className="btn-primary" type="button" onClick={start} data-testid="chat-start-btn">Gespräch beginnen</button><span style={soft}>Antworten per Mikrofon oder Tastatur</span></div>
     </div>;
   }
 
+  const syncing = sp.active;
+  const system = { alignSelf: "flex-start", maxWidth: "85%", background: "var(--st-gray-light)", borderRadius: 10, padding: "8px 12px", fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" };
   return <div data-testid="chat-dialog">
     {header}
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 16 }}>
-      <div>
-        <div ref={logRef} style={{ maxHeight: 360, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, padding: "4px 2px" }} data-testid="chat-log">
-          {v.historie.map((t, i) => (
-            <div key={i} style={{ alignSelf: t.rolle === "system" ? "flex-start" : "flex-end", maxWidth: "85%",
-              background: t.rolle === "system" ? "var(--st-gray-light)" : "var(--st-red-pale)", color: "var(--st-text)",
-              borderRadius: 10, padding: "8px 12px", fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+    <FragenStatus fragen={v.fragen} checkliste={v.checkliste} thema={letztesThema} />
+    <div>
+        <div ref={logRef} style={{ maxHeight: 420, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, padding: "4px 2px" }} data-testid="chat-log">
+          {v.historie.map((t, i) => (syncing && i === sp.hideIdx) ? null : (
+            <div key={i} style={t.rolle === "system" ? { ...system, color: "var(--st-text)" } : { ...system, alignSelf: "flex-end", background: "var(--st-red-pale)", color: "var(--st-text)" }}>
               {t.text}
             </div>
           ))}
           {(recording || transcribing) && <WaveBubble levels={dict.levels} state={dict.state} seconds={dict.seconds} />}
-          {streaming && !liveText && <ThinkingBubble start={!v.historie.some(t => t.rolle === "system")} jobsBusy={jobsBusy} />}
-          {streaming && liveText && <div style={{ alignSelf: "flex-start", maxWidth: "85%", background: "var(--st-gray-light)", borderRadius: 10, padding: "8px 12px", fontSize: 14, lineHeight: 1.45 }} data-testid="chat-live">{liveText}</div>}
+          {syncing ? (
+            sp.spoken.length
+              ? <SpeakingBubble spoken={sp.spoken} onStop={stopSpeaking} />
+              : <ThinkingBubble start={!v.historie.some(t => t.rolle === "system")} jobsBusy={jobsBusy} />
+          ) : (<>
+            {streaming && !liveText && <ThinkingBubble start={!v.historie.some(t => t.rolle === "system")} jobsBusy={jobsBusy} />}
+            {streaming && liveText && <div style={system} data-testid="chat-live">{liveText}</div>}
+          </>)}
         </div>
         {v.phase === "fertig" ? (
           <>
@@ -443,8 +535,8 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
           </>
         ) : (
           <>
-            <textarea rows={3} value={draftText} onChange={e => setDraftText(e.target.value)} disabled={transcribing || streaming || recording}
-              placeholder={recording ? "Aufnahme läuft …" : "Antwort einsprechen oder tippen … (Enter = senden)"} style={{ marginTop: 8 }} data-testid="chat-antwort"
+            <textarea rows={2} value={draftText} onChange={e => setDraftText(e.target.value)} disabled={transcribing || streaming || recording}
+              placeholder={recording ? "Aufnahme läuft …" : "Antwort einsprechen oder tippen … (Enter = senden)"} style={{ marginTop: 8, width: "100%", boxSizing: "border-box" }} data-testid="chat-antwort"
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); senden(); } }} />
             <div style={row}>
               {recording ? (
@@ -455,18 +547,16 @@ function InterviewChat({ value, onChange, toast, model, onKlient }) {
               ) : (
                 <>
                   <button type="button" className="rec-btn rec-btn-start" onClick={dict.start} disabled={transcribing || streaming} data-testid="chat-rec-start">🎙 Aufnehmen</button>
+                  <button type="button" className="btn-primary" onClick={() => senden()} disabled={streaming || transcribing || !draftText.trim()} data-testid="chat-senden">Senden</button>
                   {streaming && <span style={soft}>Antwortet …</span>}
                   <span style={{ marginLeft: "auto" }} />
                   <button type="button" className="btn-secondary" onClick={beenden} disabled={streaming || transcribing || !hatAntwort}
                     title={hatAntwort ? "Bittet das System um den Abschluss" : "Erst nach der ersten Antwort möglich"} data-testid="chat-abschliessen">Abschließen</button>
-                  <button type="button" className="btn-primary" onClick={() => senden()} disabled={streaming || transcribing || !draftText.trim()} data-testid="chat-senden">Senden</button>
                 </>
               )}
             </div>
           </>
         )}
-      </div>
-      {checkliste}
     </div>
     {/* v19.37.1: uebergeordnete Aktion fuer das ganze Interview - bewusst
         abgesetzt unter dem Chat, selten gebraucht, dezent. */}

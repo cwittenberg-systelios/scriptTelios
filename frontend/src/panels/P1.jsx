@@ -266,9 +266,10 @@ function P1({ toast, resumeJob, onResumed }) {
         txtFile:      isInterview ? null : (d.txtFile || null),
         interviewProtokoll: protokoll,
         interviewGespraech: gespraech,
-        style:        d.style,
-        styleText:    d.styleText || null,
-        bullets:      d.bullets || null,
+        // v19.42: im Gespraechsmodus sind Stil/Stichpunkte ausgeblendet -> nicht mitschicken
+        style:        d.quelle === "chat" ? null : d.style,
+        styleText:    d.quelle === "chat" ? null : (d.styleText || null),
+        bullets:      d.quelle === "chat" ? null : (d.bullets || null),
         model:        jobModel || null,
         patientName:  patientNameExplicit,
         geschlecht:   d.geschlecht,   // v19.8: strukturiert, unabhaengig vom Kuerzel
@@ -327,6 +328,9 @@ function P1({ toast, resumeJob, onResumed }) {
   // v19.23: Quelle haengt am aktiven Tab - im Interview-Tab zaehlt nur ein
   // abgeschlossenes Interview, in den anderen Tabs nur Audio/Datei/Text.
   const isInterviewTab = currentDraft?.quelle === "interview" || currentDraft?.quelle === "chat";
+  // v19.42: Gespraechsmodus schlank - Aktionsleiste erst nach "Abschliessen"
+  const chatModus = currentDraft?.quelle === "chat";
+  const chatFertig = chatModus && currentDraft?.chat?.phase === "fertig";
   const hasSource = currentDraft && (currentDraft.quelle === "interview"
     ? !!buildInterviewProtokoll(currentDraft.interview)
     : currentDraft.quelle === "chat"
@@ -422,7 +426,6 @@ function P1({ toast, resumeJob, onResumed }) {
         {quelleGruppe === "interview" && (
           <div style={{marginTop:12}}>
             <div style={{display:"flex", gap:6, alignItems:"center", marginBottom:10, fontSize:12}}>
-              <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Form</span>
               {[["chat","Gespräch"],["fragen","Fragenkarten"]].map(([m, label]) => {
                 const on = (m === "chat") === (currentDraft.quelle === "chat");
                 return <button key={m} type="button" onClick={() => setInterviewModus(m)} data-testid={"p1-modus-" + m} style={{
@@ -431,7 +434,6 @@ function P1({ toast, resumeJob, onResumed }) {
                   border: on ? "1px solid var(--st-red)" : "1px solid var(--st-gray-border)",
                 }}>{label}</button>;
               })}
-              <span style={{fontSize:11, color:"var(--st-text-soft)"}}>{currentDraft.quelle === "chat" ? "Das System führt das Gespräch entlang der Fragenliste." : "Eine Frage nach der anderen, mit Rückfragen."}</span>
             </div>
             {currentDraft.quelle === "chat" ? (
               <InterviewChat
@@ -454,6 +456,9 @@ function P1({ toast, resumeJob, onResumed }) {
         )}
       </Card>
 
+      {/* v19.42: im Gespraechsmodus nur der Dialog - Stichpunkte, Stil, Prompt
+          ausgeblendet; die Aktionsleiste erst nach dem Abschluss. */}
+      {!chatModus && <>
       <Card num="B" title="Stichpunkte" badge="opt" open={false} hasContent={!!(currentDraft.bullets || "").trim()}>
         <label className="field-label">Relevante Themen und Beobachtungen</label>
         <textarea rows={4}
@@ -494,8 +499,9 @@ function P1({ toast, resumeJob, onResumed }) {
           onChange={(v) => updateDraft(currentDraft.id, { prompt: v })}
           def={P_DOKU} />
       </Card>
+      </>}
 
-      <div className="action-bar">
+      {(!chatModus || chatFertig) && <div className="action-bar" data-testid="p1-action-bar">
         <div style={{display:"flex", alignItems:"center", gap:6, marginRight:"auto", flexWrap:"wrap"}}>
           <span style={{fontSize:11, fontWeight:600, color:"var(--st-text-soft)", textTransform:"uppercase", letterSpacing:"0.06em"}}>Klient</span>
           {[
@@ -548,7 +554,7 @@ function P1({ toast, resumeJob, onResumed }) {
               }
             >Verlaufsnotiz generieren</button>
         }
-      </div>
+      </div>}
     </div>
   ) : null;
 

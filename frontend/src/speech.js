@@ -84,13 +84,23 @@ function browserAvailable() {
 // Pause zwischen zwei Teilen (Quittung -> Rueckfrage) in ms.
 const PART_GAP_MS = 350;
 
+// v19.42: geschaetzte Sprechdauer eines Satzes (deutsch ~14 Zeichen/s), wenn
+// die echte Dauer nicht bekannt ist (Browser-Stimme, Audio ohne Metadaten).
+const MS_PER_CHAR = 70;
+function estimateMs(text) { return Math.max(600, (text || "").length * MS_PER_CHAR); }
+
+// v19.42: Satz-Ereignisse fuer die Textanzeige synchron zum Vorlesen.
+// opts.onSentence({text, durationMs}) beim Start der Wiedergabe eines Satzes,
+// opts.onSkip({text}) wenn ein Satz nicht gesprochen werden kann.
+function _emit(fn, arg) { try { fn && fn(arg); } catch { /* Anzeige darf Vorlesen nie stoeren */ } }
+
 function createBrowserProvider() {
   let token = 0;
   function cancel() {
     token += 1;
     try { window.speechSynthesis.cancel(); } catch { /* ignoriert */ }
   }
-  function speakOne(text, myToken) {
+  function speakOne(text, myToken, onStart) {
     return new Promise((resolve) => {
       if (myToken !== token || !text) return resolve(false);
       const v = pickGermanVoice();
@@ -99,6 +109,7 @@ function createBrowserProvider() {
       u.lang = v.lang || "de-DE";
       u.rate = 1.0;
       u.voice = v;
+      u.onstart = () => onStart && onStart();
       u.onend = () => { _lastSpokeAt = Date.now(); resolve(true); };
       u.onerror = () => resolve(false);
       try { window.speechSynthesis.speak(u); } catch { resolve(false); }
@@ -120,7 +131,7 @@ function createBrowserProvider() {
   // v19.31 (G5): Streaming-Vorlesen. push(delta) sammelt Text, spricht jeden
   // fertigen Satz sofort; end() spricht den Rest. Saetze werden ueber eine
   // Warteschlange nacheinander gesprochen, cancel() bricht alles ab.
-  function sayStream() {
+  function sayStream(opts = {}) {
     cancel();
     const myToken = token;
     let buf = "";
@@ -128,6 +139,7 @@ function createBrowserProvider() {
     let running = false;
     let ended = false;
     let first = true;
+    const speaks = !!pickGermanVoice();
     let resolveDone = null;
     const done = new Promise(r => { resolveDone = r; });
     async function pump() {
@@ -137,7 +149,9 @@ function createBrowserProvider() {
       while (queue.length) {
         if (myToken !== token) { queue.length = 0; break; }
         const s = queue.shift();
-        await speakOne(s, myToken);
+        let started = false;
+        const ok = await speakOne(s, myToken, () => { started = true; _emit(opts.onSentence, { text: s, durationMs: estimateMs(s) }); });
+        if (!started && myToken === token) _emit(ok ? opts.onSentence : opts.onSkip, ok ? { text: s, durationMs: 0 } : { text: s });
       }
       running = false;
       if (ended && !queue.length) resolveDone(myToken === token);
@@ -159,7 +173,7 @@ function createBrowserProvider() {
       if (!running && !queue.length) resolveDone(myToken === token); else pump();
       return done;
     }
-    return { push, end, done };
+    return { push, end, done, speaks };
   }
   return { name: "browser", available: browserAvailable, say, sayStream, cancel, voiceStatus };
 }
@@ -182,7 +196,7 @@ function splitSentences(text) {
 }
 
 function createNullProvider() {
-  const noop = () => ({ push: () => {}, end: async () => false, done: Promise.resolve(false) });
+  const noop = () => ({ push: () => {}, end: async () => false, done: Promise.resolve(false), speaks: false });
   return { name: "none", available: () => false, say: async () => false, sayStream: noop, cancel: () => {}, voiceStatus: () => "none" };
 }
 
@@ -217,12 +231,14 @@ function _notifyFallback(msg) {
 function createServerProvider({ fetchAudio = interviewTts, fallback = null, engine = () => _active } = {}) {
   let token = 0;
   let current = null;           // laufendes <audio>
+  let currentDone = null;       // v19.42: beendet play() auch beim Abbruch (pause() feuert kein Ereignis)
   let controllers = [];
   function cancel() {
     token += 1;
     controllers.forEach(c => { try { c.abort(); } catch { /* ignoriert */ } });
     controllers = [];
     if (current) { try { current.pause(); } catch { /* ignoriert */ } current = null; }
+    if (currentDone) { const d = currentDone; currentDone = null; d(false); }
     if (fallback) fallback.cancel();
   }
   function request(text) {
@@ -231,31 +247,54 @@ function createServerProvider({ fetchAudio = interviewTts, fallback = null, engi
     return fetchAudio(text, engine(), { signal: ctrl ? ctrl.signal : undefined })
       .then(blob => ({ blob }), err => ({ err }));
   }
-  function play(blob, myToken) {
+  function play(blob, myToken, onStart) {
     return new Promise((resolve) => {
       if (myToken !== token) return resolve(false);
       let url = null;
       try { url = URL.createObjectURL(blob); } catch { return resolve(false); }
       const a = new Audio(url);
       current = a;
-      const done = (ok) => { try { URL.revokeObjectURL(url); } catch { /* ignoriert */ } if (current === a) current = null; _lastSpokeAt = Date.now(); resolve(ok); };
+      let finished = false;
+      const done = (ok) => {
+        if (finished) return; finished = true;
+        try { URL.revokeObjectURL(url); } catch { /* ignoriert */ }
+        if (current === a) current = null;
+        if (currentDone === done) currentDone = null;
+        _lastSpokeAt = Date.now(); resolve(ok);
+      };
+      currentDone = done;
       a.onended = () => done(true);
       a.onerror = () => done(false);
+      const started = () => {
+        if (finished || myToken !== token) return;
+        const d = Number(a.duration);
+        onStart && onStart(Number.isFinite(d) && d > 0 ? Math.round(d * 1000) : null);
+      };
       const p = a.play();
-      if (p && typeof p.catch === "function") p.catch(() => done(false));
+      if (p && typeof p.then === "function") p.then(started, () => done(false));
+      else started();
     });
   }
-  async function speakItem(item, myToken) {
+  async function speakItem(item, myToken, opts = {}) {
     const res = await item.pending;
     if (myToken !== token) return false;
-    if (res.blob) return play(res.blob, myToken);
+    if (res.blob) {
+      let started = false;
+      const ok = await play(res.blob, myToken, (ms) => {
+        started = true; _emit(opts.onSentence, { text: item.text, durationMs: ms || estimateMs(item.text) });
+      });
+      if (!started && myToken === token) _emit(opts.onSkip, { text: item.text });
+      return ok;
+    }
     if (res.err && res.err.name === "AbortError") return false;
     _notifyFallback(fallback
       ? `Server-Stimme nicht verfügbar (${res.err?.message || "Fehler"}) – Browser-Stimme übernimmt.`
       : `Vorlesen gerade nicht möglich (${res.err?.message || "Fehler"}).`);
+    // Ersatzstimme: Text beim Einsatz zeigen (Dauer geschaetzt), sonst sofort
+    _emit(fallback ? opts.onSentence : opts.onSkip, fallback ? { text: item.text, durationMs: estimateMs(item.text) } : { text: item.text });
     return fallback ? fallback.say([item.text]) : false;
   }
-  function sayStream() {
+  function sayStream(opts = {}) {
     cancel();
     const myToken = token;
     let buf = "";
@@ -269,7 +308,7 @@ function createServerProvider({ fetchAudio = interviewTts, fallback = null, engi
       if (first) { first = false; await wakeAudio(); }
       while (queue.length) {
         if (myToken !== token) { queue.length = 0; break; }
-        await speakItem(queue.shift(), myToken);
+        await speakItem(queue.shift(), myToken, opts);
       }
       running = false;
       if (ended && !queue.length) resolveDone(myToken === token);
@@ -294,7 +333,7 @@ function createServerProvider({ fetchAudio = interviewTts, fallback = null, engi
     }
     // add(text): ganzer Teil als ein Eintrag (fuer say(), ohne Satzsplit)
     function add(text) { if (myToken !== token || !text) return; enqueue(text); pump(); }
-    return { push, end, done, add };
+    return { push, end, done, add, speaks: true };
   }
   async function say(parts) {
     const s = sayStream();
@@ -315,7 +354,7 @@ function createSwitchingProvider(browser, server) {
     name: "switch",
     available: () => browser.available() || !!server,
     say: (p) => (pick() || none).say(p),
-    sayStream: () => (pick() || none).sayStream(),
+    sayStream: (opts) => (pick() || none).sayStream(opts),
     cancel: () => { browser.cancel(); if (server) server.cancel(); },
     voiceStatus: () => (_active === "browser" ? browser.voiceStatus() : (_serverActive() ? "ok" : "none")),
   };
@@ -335,4 +374,4 @@ function _setSpeechProvider(p) { _provider = p; }
 // Fuer Tests: Zeitpunkt des letzten gesprochenen Satzes setzen.
 function _setLastSpokeAt(t) { _lastSpokeAt = t; }
 
-export { BROWSER_ENGINE, getSpeechProvider, _setSpeechProvider, createServerProvider, createSwitchingProvider, createBrowserProvider, getTtsEngine, getStoredTtsEngine, setTtsEngine, setActiveTtsEngine, LS_TTS_ENGINE, TTS_FALLBACK_EVENT, pickGermanVoice, localGermanVoices, isLocalVoice, voiceStatus, wakeAudio, _setLastSpokeAt, browserAvailable, splitSentences, PART_GAP_MS, LEAD_GAP_MS, WAKE_SILENCE_MS };
+export { BROWSER_ENGINE, getSpeechProvider, _setSpeechProvider, createServerProvider, createSwitchingProvider, createBrowserProvider, getTtsEngine, getStoredTtsEngine, setTtsEngine, setActiveTtsEngine, LS_TTS_ENGINE, TTS_FALLBACK_EVENT, pickGermanVoice, localGermanVoices, isLocalVoice, voiceStatus, wakeAudio, _setLastSpokeAt, browserAvailable, splitSentences, estimateMs, PART_GAP_MS, LEAD_GAP_MS, WAKE_SILENCE_MS };
