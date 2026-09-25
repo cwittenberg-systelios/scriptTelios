@@ -61,6 +61,8 @@ class Settings(BaseSettings):
         # v19.18 (PX): ISM-Fragebogen arbeitet direkt auf dem Rohtranskript -
         # gemma4 ist dort die staerkste Familie (Rollen-/Verlaufstreue).
         "ism_fragebogen":     "gemma4:31b",
+        # v19.41: SNS-Verlaufsauswertung (Stage A JSON + Stage B Bericht)
+        "sns_verlauf":        "gemma4:31b",
     }
 
     def model_for_workflow(self, workflow: Optional[str]) -> str:

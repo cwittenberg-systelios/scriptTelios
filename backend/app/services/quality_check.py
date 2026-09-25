@@ -2143,6 +2143,12 @@ def run_quality_check(
         from app.services.ism import run_ism_quality_check
         return run_ism_quality_check(text)
 
+    # v19.41: SNS-Verlaufsauswertung - Ergebnis ist JSON (Text + Fakten +
+    # Grafiken); eigener Regelkatalog in sns_qc (Spec Abschnitt 6).
+    if workflow == "sns_verlauf" and text and text.strip():
+        from app.services.sns_qc import run_sns_quality_check
+        return run_sns_quality_check(text)
+
     if not text or not text.strip():
         # Leerer Output -> hat sich vermutlich woanders schon als
         # Job-Error gezeigt; trotzdem geben wir ein critical-Issue mit zurueck
@@ -2381,6 +2387,9 @@ def serialize_issues(
         # die Registry.
         from app.services.ism import ISM_CHECKS_RUN
         summary["checks_run"] = ISM_CHECKS_RUN
+    elif workflow == "sns_verlauf":
+        from app.services.sns_qc import SNS_CHECKS_RUN
+        summary["checks_run"] = SNS_CHECKS_RUN
     else:
         summary["checks_run"] = len(CHECK_REGISTRY)
     return {

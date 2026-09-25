@@ -1,0 +1,212 @@
+{
+  "zeitraum": {
+    "start": "2026-03-02",
+    "ende": "2026-04-10",
+    "tage": 40,
+    "messtage_hsf": 39,
+    "messtage_ind": 31,
+    "tagebucheintraege": 39
+  },
+  "luecken": {
+    "hsf_fehlend": [
+      "2026-03-22"
+    ],
+    "hsf_x": [
+      "2026-03-22"
+    ],
+    "ind_fehlend": [
+      "2026-03-22"
+    ],
+    "ind_x": [
+      "2026-03-22"
+    ]
+  },
+  "ordnungsuebergang": "2026-03-19",
+  "uebergaenge": [
+    {
+      "datum": "2026-03-19",
+      "shift": 47.0,
+      "typ": "ordnungsuebergang",
+      "vorlaeufer": {
+        "datum": "2026-03-18",
+        "dk": 0.063,
+        "p75": 0.05,
+        "resonanz": 11,
+        "kritisch": true
+      },
+      "phasengrenze": true
+    },
+    {
+      "datum": "2026-03-30",
+      "shift": 14.3,
+      "typ": "niveauverschiebung",
+      "vorlaeufer": {
+        "datum": "2026-03-23",
+        "dk": 0.154,
+        "p75": 0.05,
+        "resonanz": 10,
+        "kritisch": true
+      },
+      "phasengrenze": true
+    }
+  ],
+  "phasen": [
+    {
+      "label": "P1",
+      "start": "2026-03-02",
+      "ende": "2026-03-09",
+      "typ": "ankommen"
+    },
+    {
+      "label": "P2",
+      "start": "2026-03-10",
+      "ende": "2026-03-18",
+      "typ": "krise"
+    },
+    {
+      "label": "P3",
+      "start": "2026-03-19",
+      "ende": "2026-03-29",
+      "typ": "uebergang"
+    },
+    {
+      "label": "P4",
+      "start": "2026-03-30",
+      "ende": "2026-04-10",
+      "typ": "niveauverschiebung"
+    }
+  ],
+  "dk_mittel_max": {
+    "datum": "2026-03-21",
+    "wert": 0.164
+  },
+  "resonanz_max": {
+    "datum": "2026-03-21",
+    "anzahl": 18
+  },
+  "kritische_tage": [
+    [
+      "2026-03-13",
+      2
+    ],
+    [
+      "2026-03-15",
+      6
+    ],
+    [
+      "2026-03-16",
+      9
+    ],
+    [
+      "2026-03-17",
+      8
+    ],
+    [
+      "2026-03-18",
+      11
+    ],
+    [
+      "2026-03-19",
+      13
+    ],
+    [
+      "2026-03-20",
+      13
+    ],
+    [
+      "2026-03-21",
+      18
+    ],
+    [
+      "2026-03-23",
+      10
+    ]
+  ],
+  "einbrueche": [
+    {
+      "datum": "2026-03-14",
+      "tiefe": 13.4,
+      "dauer": 1,
+      "erholt_am": "2026-03-15"
+    },
+    {
+      "datum": "2026-03-16",
+      "tiefe": 21.9,
+      "dauer": 3,
+      "erholt_am": "2026-03-19"
+    }
+  ],
+  "konstante_items": [
+    "Sicherheit Klinik",
+    "Augenhöhe"
+  ],
+  "flags": [
+    "ISM_ANKER_FAKTOR",
+    "ISM_FAKTOR_UNBESETZT",
+    "ISM_LANGSAMSTER_FAKTOR",
+    "KONSTANTE_ITEMS",
+    "LUECKEN"
+  ],
+  "ism_unbesetzt": [
+    "VI"
+  ],
+  "ism_tragend": [
+    "IV",
+    "I",
+    "III",
+    "II",
+    "V"
+  ],
+  "ism_anker": "II",
+  "ism_langsam": "V",
+  "ism_faktorexport": {
+    "faktor": "I Zielerleben",
+    "tage": 31,
+    "max_abweichung": 0.0
+  },
+  "ism_sprung": {
+    "I": 41.4,
+    "II": 33.8,
+    "III": 41.3,
+    "IV": 58.7,
+    "V": 26.4,
+    "VI": null
+  },
+  "recurrence": {
+    "block_anfang": 3.0,
+    "block_ende": 2.7,
+    "anfang_ende": 6.6
+  },
+  "polung_check": [
+    {
+      "item": "I · Heute bin ich einen Schritt näher…",
+      "r": 0.94,
+      "fraglich": false
+    },
+    {
+      "item": "II · Heute konnte ich meine Ruhe in de…",
+      "r": 0.95,
+      "fraglich": false
+    },
+    {
+      "item": "III · Heute haben Ängste und Selbstzwei…",
+      "r": 0.92,
+      "fraglich": false
+    },
+    {
+      "item": "IV · Heute habe ich mich in meinem Kör…",
+      "r": 0.95,
+      "fraglich": false
+    },
+    {
+      "item": "V · Heute konnte ich mich davon verab…",
+      "r": 0.84,
+      "fraglich": false
+    }
+  ],
+  "komposit": {
+    "anfang": 48.1,
+    "ende": 84.7,
+    "tau": 0.54
+  }
+}

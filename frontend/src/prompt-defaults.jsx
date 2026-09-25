@@ -119,6 +119,17 @@ TONALITÄT:
 BEGRÜSSUNG UND VERABSCHIEDUNG:
 - Formuliere eine kurze, persönliche Begrüßung (1-2 Sätze) und Verabschiedung (1-2 Sätze) für den täglichen Fragebogen - warm, einladend, gerne mit einem Motiv aus dem Gespräch des Klienten.`;
 
+// sns_verlauf
+const P_SNS = `Schreibe die Verlaufsauswertung des SNS-Prozessmonitorings als klinischen Bericht für das Behandlungsteam und die Nachsorge.
+
+LESART: Veränderung als Selbstorganisation - Ankommen, Destabilisierung, Übergang, Stabilisierung. Kritische Fluktuationen (DK-Gipfel, Resonanz) sind Vorboten eines Ordnungsübergangs; sinkende Komplexität danach zeigt Stabilisierung. Verknüpfe den Übergang inhaltlich mit den Tagebuch-Ereignissen im Fenster von ±2 Tagen, vorrangig Autonomie-Erfahrungen und therapeutische Interventionen.
+
+INDIVIDUELLER BOGEN ALS SYSTEMMODELL: Kernanliegen (I) wird von Ressourcen (II) gebahnt und von Hindernissen (III) gehemmt; Hilfreiche (IV) und Herausfordernde Auswirkungen (V) sind Gewinn und Preis; Utilisierung (VI) wandelt Hindernisse in Ressourcen. Aussagen zu Faktoren nur aus den ISM-Kennwerten: tragende Faktoren (Sprung), Anker (Krisenminimum), langsamster Faktor (Endniveau), unbesetzte Faktoren als Anregung für die Fortsetzung des Bogens.
+
+EINBRÜCHE nach Auslösekategorien gruppieren; ein Muster nur benennen, wenn es sich in Zitaten UND in den Items zeigt. Belastbarkeit über Einbruchsdauer vorher/nachher und Recurrence beschreiben (Rückfall in den Anfangsblock ja/nein).
+
+NACHSORGE (Abschnitt 9): Kontrollparameter = Auslösekategorien; Frühwarnzeichen = Einbruch länger als 2 Tage oder erneuter DK-Anstieg; SNS-Monitoring ambulant fortsetzen; Vorschläge zur Weiterentwicklung des individuellen Bogens (unbesetzte Faktoren, langsamster Faktor, ereignisbezogene Items umformulieren).`;
+
 // entlassbericht (Struktur: thematisch, v19.28)
 const P_ENTL_THEMATISCH = `Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, ohne Einleitung und ohne Abschluss.
 
@@ -630,4 +641,4 @@ const INTERVIEW_SETS_DEFAULT = {
   ]
 };
 
-export { P_DOKU, P_ANAMNESE, P_VERL, P_VERL_FOLGE, P_AKUT, P_ENTL, P_ISM, P_ENTL_THEMATISCH, P_BEFUND_VORLAGE, INTERVIEW_SETS_DEFAULT };
+export { P_DOKU, P_ANAMNESE, P_VERL, P_VERL_FOLGE, P_AKUT, P_ENTL, P_ISM, P_SNS, P_ENTL_THEMATISCH, P_BEFUND_VORLAGE, INTERVIEW_SETS_DEFAULT };

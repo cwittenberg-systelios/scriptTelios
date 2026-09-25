@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -161,6 +161,12 @@ class IsmItem(BaseModel):
     frage: str = Field(min_length=5)
     pol_min: str = Field(min_length=1)   # Label am linken Pol (Wert 0)
     pol_max: str = Field(min_length=1)   # Label am rechten Pol (Wert 100)
+    # v19.41 (D9=A): Richtung eines Faktor-III-Items. "belastung" = hohes
+    # Rating = hohe Belastung (Default), "ressource" = auf die Ressourcenseite
+    # gedreht -> im SNS-XML changePoles='true' (Kopiervorlage: "bitte umpolen"),
+    # damit Faktorwerte in SNS und in der Verlaufsauswertung konsistent sind.
+    # Nur im ISM-JSON sichtbar; fuer andere Faktoren ohne Wirkung.
+    richtung: Literal["belastung", "ressource"] = "belastung"
 
 
 class IsmFragebogen(BaseModel):
@@ -595,9 +601,10 @@ def render_sns_xml(fragebogen: IsmFragebogen, name: str) -> str:
     # Items (A4/A5: feste Attribute, nur Texte variieren)
     parts.append("<questions>")
     for item in sorted(fragebogen.items, key=lambda it: it.faktor_id):
+        change_poles = "true" if (item.faktor_id == 2 and item.richtung == "ressource") else "false"
         parts.append(
             "<question type='SLIDER' allowComments='false' "
-            "positionLocked='false' weights='1.0' changePoles='false' "
+            f"positionLocked='false' weights='1.0' changePoles='{change_poles}' "
             f"factors='{item.faktor_id}'>"
             f"<title><label lang='de'>{_cdata(item.frage)}</label></title>"
             f"<min value='0'><label lang='de'>{_cdata(item.pol_min)}</label></min>"

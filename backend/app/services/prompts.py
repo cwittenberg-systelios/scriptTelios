@@ -1320,6 +1320,36 @@ WORKFLOW_INSTRUCTIONS_DEFAULT: dict[str, str] = {
         "Verabschiedung (1-2 Sätze) für den täglichen Fragebogen - warm, "
         "einladend, gerne mit einem Motiv aus dem Gespräch des Klienten."
     ),
+
+    # v19.41: SNS-Verlaufsauswertung (Stage B) - editierbare inhaltliche
+    # Anweisungen. Der Pflichtkern (Abschnitte, Zahlen-/Zitatregel,
+    # Interpretationsregeln) liegt in BASE_PROMPTS["sns_verlauf"].
+    "sns_verlauf": (
+        "Schreibe die Verlaufsauswertung des SNS-Prozessmonitorings als "
+        "klinischen Bericht für das Behandlungsteam und die Nachsorge.\n\n"
+        "LESART: Veränderung als Selbstorganisation - Ankommen, "
+        "Destabilisierung, Übergang, Stabilisierung. Kritische Fluktuationen "
+        "(DK-Gipfel, Resonanz) sind Vorboten eines Ordnungsübergangs; sinkende "
+        "Komplexität danach zeigt Stabilisierung. Verknüpfe den Übergang "
+        "inhaltlich mit den Tagebuch-Ereignissen im Fenster von ±2 Tagen, "
+        "vorrangig Autonomie-Erfahrungen und therapeutische Interventionen.\n\n"
+        "INDIVIDUELLER BOGEN ALS SYSTEMMODELL: Kernanliegen (I) wird von "
+        "Ressourcen (II) gebahnt und von Hindernissen (III) gehemmt; Hilfreiche "
+        "(IV) und Herausfordernde Auswirkungen (V) sind Gewinn und Preis; "
+        "Utilisierung (VI) wandelt Hindernisse in Ressourcen. Aussagen zu "
+        "Faktoren nur aus den ISM-Kennwerten: tragende Faktoren (Sprung), Anker "
+        "(Krisenminimum), langsamster Faktor (Endniveau), unbesetzte Faktoren "
+        "als Anregung für die Fortsetzung des Bogens.\n\n"
+        "EINBRÜCHE nach Auslösekategorien gruppieren; ein Muster nur benennen, "
+        "wenn es sich in Zitaten UND in den Items zeigt. Belastbarkeit über "
+        "Einbruchsdauer vorher/nachher und Recurrence beschreiben (Rückfall in "
+        "den Anfangsblock ja/nein).\n\n"
+        "NACHSORGE (Abschnitt 9): Kontrollparameter = Auslösekategorien; "
+        "Frühwarnzeichen = Einbruch länger als 2 Tage oder erneuter DK-Anstieg; "
+        "SNS-Monitoring ambulant fortsetzen; Vorschläge zur Weiterentwicklung "
+        "des individuellen Bogens (unbesetzte Faktoren, langsamster Faktor, "
+        "ereignisbezogene Items umformulieren)."
+    ),
 }
 
 # v19.28 (S3): Editierbare Anweisung fuer die THEMATISCHE Struktur des
@@ -1865,6 +1895,47 @@ BASE_PROMPTS: dict[str, str] = {
         "Gespräch); im Zweifel neutrale Anrede ohne Namen. Keine Namen "
         "dritter Personen - stattdessen Rollenbezeichnungen (z.B. 'mein "
         "Sohn', 'meine Kollegin')."
+    ),
+
+    # v19.41: SNS-Verlaufsauswertung - Pflichtkern (NICHT editierbar).
+    # Konsumiert von sns_llm.build_stage_b_system_prompt(); build_system_prompt
+    # kann den Workflow ebenfalls bauen (Registry-Konsistenz/Tests).
+    "sns_verlauf": (
+        "STRUKTUR (verbindlich, genau diese neun nummerierten Überschriften, "
+        "jeweils als eigene Zeile):\n"
+        "1. Zusammenfassung\n"
+        "2. Fragebögen und Faktorstruktur\n"
+        "3. Verlauf der Kernfaktoren\n"
+        "4. Individueller Fragebogen: Zielerleben und ISM-Faktoren\n"
+        "5. Dynamische Komplexität und kritische Instabilität\n"
+        "6. Rekurrenzmuster\n"
+        "7. Phasen\n"
+        "8. Anfang und Ende\n"
+        "9. Einordnung und Hinweise für Entlassung und Nachsorge\n\n"
+        "ABSCHNITTSREGELN: Abschnitt 2 nur 2-3 Sätze zum Systemmodell der "
+        "Klientin/des Klienten (die Tabellen werden deterministisch ergänzt). "
+        "Abschnitt 4 entfällt inhaltlich, wenn kein individueller Bogen vorliegt "
+        "(dann ein Satz). Abschnitt 7: je Phase EIN Satz mit einem prägnanten "
+        "Phasennamen in der Form 'P1 – Name: Satz.' (die Phasengrenzen sind "
+        "vorgegeben, du vergibst nur Namen). Abschnitt 8: nur die Kernaussage "
+        "in 2-3 Sätzen (die Tabelle wird deterministisch ergänzt).\n\n"
+        "ZAHLENREGEL: JEDE Zahl und JEDES Datum im Text stammt wörtlich aus "
+        "dem Faktenblock (gleiche Rundung). Keine eigenen Berechnungen, keine "
+        "Prozentangaben, die nicht im Faktenblock stehen. ZITATREGEL: Zitate "
+        "nur aus den Stage-A-Ereignissen, wörtlich, in Anführungszeichen. "
+        "FLAGS im Faktenblock zwingend aufgreifen; Medikation im "
+        "Übergangsfenster: zeitliche Nähe benennen und eine pharmakologische "
+        "Kurzfristwirkung relativieren; neue Somatik: Hinweis auf Abklärung "
+        "bzw. Entlassbrief; Suizidalität/Selbstverletzung im Tagebuch: in "
+        "Abschnitt 9 als Hinweis an die Behandler:innen benennen, ohne "
+        "Einschätzung aus Fragebogendaten.\n\n"
+        "STIL: systemische Prosa in ganzen Absätzen, KEINE Aufzählungen, keine "
+        "Tabellen, kein Markdown außer den nummerierten Überschriften. "
+        "Klientin/Klient mit Kürzel bei der ersten Nennung, danach ohne. Keine "
+        "neuen Diagnosen, keine Bewertung der Person, Entwicklungsrichtung statt "
+        "Defizit. Das Wort 'hypnosystemisch' kommt nicht vor.\n\n"
+        "DATENSCHUTZ: Keine Klarnamen (auch nicht aus Zitaten übernehmen). "
+        "Rollenbezeichnungen (Partner, Tochter, Mitklient:in) bleiben."
     ),
 }
 

@@ -147,6 +147,16 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         expected_tokens=900,
         color_hex="#0A4B71",       # SNS-Faktorblau (BeispielOutput.xml)
     ),
+    WorkflowSpec(
+        key="sns_verlauf",
+        label="SNS-Verlaufsauswertung",
+        short_label="SNS-Verlauf",
+        is_structural=False,
+        word_limit=(1000, 1800),   # v19.41: Stage-B-Bericht, 9 Abschnitte
+        max_tokens=6000,
+        expected_tokens=2200,
+        color_hex="#1a5c8b",
+    ),
 )
 
 
@@ -176,6 +186,7 @@ except TypeError:
         "akutantrag",
         "entlassbericht",
         "ism_fragebogen",
+        "sns_verlauf",
     ]
 
 

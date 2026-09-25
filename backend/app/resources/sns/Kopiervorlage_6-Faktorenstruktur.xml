@@ -1,0 +1,23 @@
+<questionnaire type='PROCESS' allowComments='true' randomize='true' defaultLanguage='de' languages='de' securityType='PUBLIC'><name><![CDATA[Kopiervorlage 6-Faktorenstruktur für individuelle Fragebögen (Stand November 2024)]]></name><welcomeText><label lang='de'><![CDATA[<p>DIESER Fragebogen ist NUR eine KopierVORLAGE, bitte NICHTS direkt hier reinschreiben, sondern diesen Fragebogen kopieren (zu finden unter "Aktionen"), und erst dann bearbeiten / Kl. zuweisen.</p>
+
+<p>Vielen Dank :-)</p>
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+]]></label></welcomeText><goodbyeText><label lang='de'><![CDATA[<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+<p>Ihre Antworten wurden erfolgreich gespeichert. Vielen Dank.</p>
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+]]></label></goodbyeText><instruction><label lang='de'><![CDATA[Bitte hier zumindest stichwortartig Tagebuchnotizen hinterlassen, mit dem Ziel, dass Sie selbst ihren Tag wieder erkennen...]]></label></instruction><description><label lang='de'><![CDATA[Kopiervorlage Faktorenstruktur - mit *Aktionen* kopieren und individualisieren ]]></label></description><factors><factor id='0' color='#0A4B71' operation='SUM'><name><label lang='de'><![CDATA[I Zielerleben]]></label></name><description><label lang='de'><![CDATA[Zielerleben - Wofür - Kernanliegen; Integrationsidee]]></label></description></factor><factor id='1' color='#0A4B71' operation='SUM'><name><label lang='de'><![CDATA[II Ressourcen]]></label></name><description><label lang='de'><![CDATA[Ressourcen - bezogen auf die Kernanliegen - was trägt am stärksten dazu bei, was bahnt es am deutlichsten]]></label></description></factor><factor id='2' color='#0A4B71' operation='SUM'><name><label lang='de'><![CDATA[III Hindernisse]]></label></name><description><label lang='de'><![CDATA[Hindernisse: bezogen auf die Kernanliegen, was scheint mich daran immer wieder zu hindern, was fühlt sich als Widerstand, Symptom / Belastungserleben an.
+- in diesem Fall bedeutet hohes Rating hohe Belastung - alle Fragen, die auf die Ressourcenseite umgedreht wurden bitte umpolen (zb heute konnte ich mit Kopfweh gut umgehen)]]></label></description></factor><factor id='3' color='#0A4B71' operation='SUM'><name><label lang='de'><![CDATA[IV Hilfreiche Auswirkungen]]></label></name><description><label lang='de'><![CDATA[Hilfreiche Auswirkungen vom Zielerleben: wie verändert sich dann mein Emotionserleben, meine Einstellungen zu mir selbst, meine Selbstfürsorge
+]]></label></description></factor><factor id='4' color='#0A4B71' operation='SUM'><name><label lang='de'><![CDATA[V Herausfordernde Auswirkungen]]></label></name><description><label lang='de'><![CDATA[Herausfordernde Auswirkungen vom Zielerleben: Preise, die ich zahle, WEIL ich mein Ziel erreiche, Muster von denen ich mich verabschiede weil meine Selbstfürsorge wächst
+]]></label></description></factor><factor id='5' color='#0A4B71' operation='SUM'><name><label lang='de'><![CDATA[VI Utilisierung]]></label></name><description><label lang='de'><![CDATA[Nützlichkeit von Symptomen - Utilisierung: wofür kann ich  Hindernisse nutzen - um mich an welche Ressoucen zu erinnern. Wie kann ich aus Metaperspektive den Umgang mit dem was mich bisher hindert so verändern, dass es mich in Kontakt mit Ressourcen bringt.
+]]></label></description></factor></factors><questions><question type='SLIDER' allowComments='false' positionLocked='false' weights='1.0' changePoles='false' factors='0'><title><label lang='de'><![CDATA[Leerfrage]]></label></title><min value='0'><label lang='de'><![CDATA[gar nicht]]></label></min><max value='100'><label lang='de'><![CDATA[sehr viel]]></label></max></question></questions><categories></categories></questionnaire>

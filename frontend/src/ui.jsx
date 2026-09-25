@@ -423,6 +423,7 @@ const JOB_MODEL_RECOMMENDATION = {
   verlaengerung:      "mistral",
   folgeverlaengerung: "mistral",
   ism_fragebogen:     "gemma",
+  sns_verlauf:        "gemma",
 };
 
 function modelFamily(name) {

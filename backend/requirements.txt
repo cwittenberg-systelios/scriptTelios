@@ -32,6 +32,10 @@ pdf2image==1.17.0                # PDF zu Bild fuer OCR-Fallback
 # laeuft ueber httpx gegen lokalen Ollama-Dienst.
 # Modell einmalig laden: ollama pull llava  (~4.5 GB)
 
+# ── SNS-Verlaufsauswertung (v19.41) ───────────────────────────────
+numpy>=1.26                      # bisher nur transitiv (faster-whisper) - jetzt explizit
+matplotlib==3.10.9               # Grafiken als PNG (Agg, headless) fuer Vorschau + DOCX
+
 # ── Tests ──────────────────────────────────────────────────────────
 pytest==8.3.4
 pytest-asyncio==0.24.0

@@ -38,6 +38,7 @@ WORKFLOW_CONSTANTS: list[tuple[str, str]] = [
     ("P_AKUT",       "akutantrag"),
     ("P_ENTL",       "entlassbericht"),
     ("P_ISM",        "ism_fragebogen"),
+    ("P_SNS",        "sns_verlauf"),
 ]
 
 HEADER = """\
