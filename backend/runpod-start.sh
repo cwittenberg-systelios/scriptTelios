@@ -1042,6 +1042,9 @@ OLLAMA_MODEL=$(grep "^OLLAMA_MODEL=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -
 # v19.33: bei fester Kontextgroesse (LLM_FIXED_CTX=true) mit demselben num_ctx
 # vorwaermen wie die Jobs - sonst laedt der erste Job das Modell gleich neu.
 _env_val() { local v; v=$(eval "echo \${$1:-}"); [ -z "$v" ] && v=$(grep "^$1=" "$BACKEND_DIR/.env" 2>/dev/null | cut -d= -f2 | tr -d '"'); echo "$v"; }
+# v19.44: WARMUP_MODEL (z.B. gemma4:31b) waehlt das vorgewaermte Modell,
+# sonst OLLAMA_MODEL. Aus /workspace/.env (Umgebung) oder backend/.env.
+WARM_MODEL=$(_env_val WARMUP_MODEL); WARM_MODEL=${WARM_MODEL:-$OLLAMA_MODEL}
 WARM_OPTS='"num_predict": 1'
 if [ "$(_env_val LLM_FIXED_CTX | tr '[:upper:]' '[:lower:]')" = "true" ]; then
     WARM_CTX=$(_env_val LLM_NUM_CTX_CAP); WARM_CTX=${WARM_CTX:-16384}
@@ -1051,15 +1054,15 @@ fi
 (
     WARMUP_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
         -H "Content-Type: application/json" \
-        -d "{\"model\": \"${OLLAMA_MODEL}\", \"prompt\": \"/no_think\", \"keep_alive\": -1, \"stream\": false, \"options\": {${WARM_OPTS}}}" \
+        -d "{\"model\": \"${WARM_MODEL}\", \"prompt\": \"/no_think\", \"keep_alive\": -1, \"stream\": false, \"options\": {${WARM_OPTS}}}" \
         --max-time 180 2>/dev/null) || true
     if echo "$WARMUP_RESPONSE" | grep -q '"done":true'; then
-        echo "[OK]    ${OLLAMA_MODEL} im VRAM geladen (Hintergrund-Warmup abgeschlossen)"
+        echo "[OK]    ${WARM_MODEL} im VRAM geladen (Hintergrund-Warmup abgeschlossen)"
     else
         echo "[WARN]  Warmup fehlgeschlagen – erster Request laedt Modell"
     fi
 ) &
-echo "${OK}${OLLAMA_MODEL} Warmup gestartet (Hintergrund, ~60-90s)"
+echo "${OK}${WARM_MODEL} Warmup gestartet (Hintergrund, ~60-90s)"
 
 # 9. Cloudflare Named Tunnel starten (feste URL: https://scriptelios.win)
 echo ""
