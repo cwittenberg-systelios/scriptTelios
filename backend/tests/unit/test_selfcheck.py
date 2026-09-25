@@ -196,3 +196,113 @@ def test_run_includes_uptime(monkeypatch):
     _patch(monkeypatch)
     res = asyncio.run(selfcheck._run_selfcheck())
     assert isinstance(res["uptime_sec"], int) and res["uptime_sec"] >= 0
+
+
+# ── v19.40.2: Vorlese-Dienst ───────────────────────────────────────
+
+import json as _json
+import threading as _threading
+from http.server import BaseHTTPRequestHandler as _BH, ThreadingHTTPServer as _TS
+
+from app.core.config import settings as _settings
+
+
+def _tts_server(health, engines):
+    class H(_BH):
+        def log_message(self, *a):
+            return
+
+        def do_GET(self):
+            body = _json.dumps(health if self.path == "/health" else {"engines": engines}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    srv = _TS(("127.0.0.1", 0), H)
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+VOICES = [{"key": "chatterbox:gunther", "available": True}, {"key": "chatterbox:carsten", "available": True},
+          {"key": "chatterbox:alt", "available": False}, {"key": "piper", "available": True}]
+
+
+@pytest.fixture()
+def tts(monkeypatch):
+    srvs = []
+
+    def run(health, engines=VOICES, default="chatterbox:gunther"):
+        srv = _tts_server(health, engines)
+        srvs.append(srv)
+        monkeypatch.setattr(_settings, "TTS_ENABLED", True)
+        monkeypatch.setattr(_settings, "TTS_DEFAULT_VOICE", default)
+        monkeypatch.setattr(_settings, "TTS_SERVICE_URL", f"http://127.0.0.1:{srv.server_address[1]}")
+        return asyncio.run(selfcheck._check_tts())
+    yield run
+    for s in srvs:
+        s.shutdown()
+        s.server_close()
+
+
+def test_tts_aus_ist_ok(monkeypatch):
+    monkeypatch.setattr(_settings, "TTS_ENABLED", False)
+    r = asyncio.run(selfcheck._check_tts())
+    assert r["ok"] and "aus" in r["detail"]
+
+
+def test_tts_gpu_ok(tts):
+    r = tts({"ok": True, "chatterbox_device": "cuda", "chatterbox_geladen": True})
+    assert r["ok"] and r["voices"] == ["carsten", "gunther"] and r["device"] == "cuda"
+    assert r["detail"] == "cuda · 2 Stimmen · Standard: gunther"
+
+
+def test_tts_laedt_noch_ist_ok(tts):
+    r = tts({"ok": True, "chatterbox_device": "cpu", "chatterbox_geladen": False})
+    assert r["ok"] and "lädt" in r["detail"] and r["device"] is None
+
+
+def test_tts_cpu_rueckfall_meldet(tts):
+    r = tts({"ok": True, "chatterbox_device": "cpu", "chatterbox_geladen": True})
+    assert not r["ok"] and "CPU" in r["detail"]
+
+
+def test_tts_standardstimme_fehlt(tts):
+    r = tts({"ok": True, "chatterbox_device": "cuda", "chatterbox_geladen": True}, default="chatterbox:charlotte")
+    assert not r["ok"] and "charlotte fehlt" in r["detail"]
+
+
+def test_tts_keine_stimmen(tts):
+    r = tts({"ok": True, "chatterbox_device": "cuda", "chatterbox_geladen": True}, engines=[{"key": "piper", "available": True}])
+    assert not r["ok"] and "keine Stimmen" in r["detail"]
+
+
+def test_tts_nicht_erreichbar(monkeypatch):
+    monkeypatch.setattr(_settings, "TTS_ENABLED", True)
+    monkeypatch.setattr(_settings, "TTS_SERVICE_URL", "http://127.0.0.1:9")
+    r = asyncio.run(selfcheck._check_tts())
+    assert not r["ok"] and "nicht erreichbar" in r["detail"]
+
+
+def test_aggregate_tts_nur_degraded():
+    c = _checks()
+    c["tts"] = {"ok": False}
+    assert selfcheck._aggregate(c) == "degraded"
+    c["db"] = {"ok": False}
+    assert selfcheck._aggregate(c) == "down"
+
+
+def test_run_enthaelt_tts(monkeypatch):
+    _patch(monkeypatch)
+
+    async def fake_tts():
+        return {"ok": False, "detail": "Vorlese-Dienst nicht erreichbar"}
+    monkeypatch.setattr(selfcheck, "_check_tts", fake_tts)
+    res = asyncio.run(selfcheck._run_selfcheck())
+    assert res["status"] == "degraded" and res["checks"]["tts"]["detail"] == "Vorlese-Dienst nicht erreichbar"
+
+
+def test_makro_zeigt_vorlesen():
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[3] / "misc" / "confluence-pod-macro.html").read_text()
+    assert 'tts: "Vorlesen"' in html

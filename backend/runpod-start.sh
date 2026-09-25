@@ -883,44 +883,14 @@ else
     echo "${OK}Node.js $(node --version) vorhanden"
 fi
 
-# Pruefen ob Bundle aktueller als Quellcode ist
-NEEDS_BUILD=false
-if [ ! -f "$BUNDLE" ]; then
-    NEEDS_BUILD=true
-    echo "${GO}Bundle nicht vorhanden – wird gebaut..."
-elif NEWER=$(find "$FRONTEND_DIR/klinische-dokumentation.jsx" "$FRONTEND_DIR/src" \
-                  "$FRONTEND_DIR/package.json" "$FRONTEND_DIR"/vite.config.* \
-                  "$BACKEND_DIR/app/services/prompts.py" "$BACKEND_DIR/app/core/interview_sets.py" \
-                  "$BACKEND_DIR/scripts/export_prompt_defaults.py" \
-                  -type f -newer "$BUNDLE" 2>/dev/null | head -1) && [ -n "$NEWER" ]; then
-    # v19.36.1: vorher wurde nur klinische-dokumentation.jsx geprueft -
-    # Aenderungen in src/*.jsx (fast der ganze Code) loesten keinen Build aus.
-    # prompts.py/interview_sets.py zaehlen mit, weil der prebuild daraus
-    # src/prompt-defaults.jsx erzeugt.
-    NEEDS_BUILD=true
-    echo "${GO}Quellcode neuer als Bundle (${NEWER#$FRONTEND_DIR/}) – wird neu gebaut..."
-else
-    echo "${OK}Bundle aktuell – kein Rebuild noetig"
-fi
-
-if [ "$NEEDS_BUILD" = "true" ]; then
-    mkdir -p "$STATIC_DIR"
-    cd "$FRONTEND_DIR"
-    # node_modules nur bei Bedarf installieren
-    if [ ! -d "node_modules" ] || [ "package.json" -nt "node_modules/.package-lock.json" ]; then
-        echo "${GO}npm install..."
-        npm install --silent
-    fi
-    echo "${GO}npm run build..."
-    npm run build
-    if [ -f "$BUNDLE" ]; then
-        BUNDLE_KB=$(du -k "$BUNDLE" | cut -f1)
-        echo "${OK}Bundle erstellt: systelios.js (${BUNDLE_KB} KB)"
-    else
-        echo "${WARN}Bundle wurde nicht erstellt – Frontend evtl. nicht verfuegbar"
-    fi
-    cd "$BACKEND_DIR"
-fi
+# v19.43: Bauen nur bei geaenderten Quellen (Pruefsumme statt Zeitstempel,
+# die loesten den Build bei jedem Start aus), danach Auslieferung zum
+# Cloudflare Worker, wenn sich das Bundle geaendert hat (nie fatal).
+OK="$OK" GO="$GO" WARN="$WARN" FRONTEND_DIR="$FRONTEND_DIR" BACKEND_DIR="$BACKEND_DIR" \
+    bash "$BACKEND_DIR/scripts/pod_bundle.sh" build || true
+OK="$OK" GO="$GO" WARN="$WARN" FRONTEND_DIR="$FRONTEND_DIR" BACKEND_DIR="$BACKEND_DIR" \
+    bash "$BACKEND_DIR/scripts/pod_bundle.sh" deploy || true
+cd "$BACKEND_DIR"
 
 # 5b. HF-Cache-Status (check-only, KEIN Auto-Download — Disk-full-Risiko)
 echo ""

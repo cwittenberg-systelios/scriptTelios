@@ -1,8 +1,8 @@
 """
 GET /api/selfcheck – Subsystem-Selbstprüfung des Pods.
 
-Prüft Ollama, Pflicht-Modelle, PostgreSQL, freien Plattenplatz und GPU und
-aggregiert zu einem Gesamtstatus (ok | degraded | down). Reine Introspektion:
+Prüft Ollama, Pflicht-Modelle, PostgreSQL, freien Plattenplatz, GPU und
+(v19.40.2) den Vorlese-Dienst und aggregiert zu einem Gesamtstatus (ok | degraded | down). Reine Introspektion:
 kein Scheduling, keine Benachrichtigung – das übernimmt der Cloudflare-Worker
 (Cron + Telegram + KV), damit Secrets/Logik nicht dupliziert werden.
 
@@ -241,24 +241,64 @@ def _check_gpu() -> dict:
         return {"ok": False, "detail": type(e).__name__}
 
 
+async def _check_tts() -> dict:
+    """v19.40.2: Vorlese-Dienst (tts_service, 127.0.0.1:8011).
+
+    aus (TTS_ENABLED=false) -> ok, nur Hinweis. Sonst Fehler (-> "degraded",
+    nie "down" - Dokumentation laeuft ohne Vorlesen weiter), wenn der Dienst
+    nicht antwortet, keine Stimme da ist, die Standardstimme fehlt oder
+    Chatterbox auf der CPU gelandet ist (Rueckfall nach Speichermangel ->
+    Pausen beim Vorlesen, Browser-Stimme wird vorgeschlagen). Waehrend des
+    Ladens nach dem Start: ok mit "laedt"."""
+    if not settings.TTS_ENABLED:
+        return {"ok": True, "detail": "aus (TTS_ENABLED=false)"}
+    base = (settings.TTS_SERVICE_URL or "").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=2.0, trust_env=False) as c:
+            h, e = await asyncio.gather(c.get(f"{base}/health"), c.get(f"{base}/engines"))
+        h.raise_for_status()
+        e.raise_for_status()
+        health, eng = h.json(), e.json()
+    except Exception:
+        return {"ok": False, "detail": "Vorlese-Dienst nicht erreichbar"}
+    voices = sorted(str(x.get("key", "")).split(":", 1)[1] for x in (eng.get("engines") or [])
+                    if isinstance(x, dict) and str(x.get("key", "")).startswith("chatterbox:") and x.get("available"))
+    device = health.get("chatterbox_device")
+    loaded = bool(health.get("chatterbox_geladen"))
+    default = (settings.TTS_DEFAULT_VOICE or "").strip()
+    out = {"voices": voices, "device": device if loaded else None, "default": default}
+    n = f"{len(voices)} Stimme{'' if len(voices) == 1 else 'n'}"
+    if not voices:
+        return {**out, "ok": False, "detail": "keine Stimmen in /workspace/tts/voices"}
+    if default.startswith("chatterbox:") and default.split(":", 1)[1] not in voices:
+        return {**out, "ok": False, "detail": f"Standardstimme {default.split(':', 1)[1]} fehlt ({n})"}
+    if not loaded:
+        return {**out, "ok": True, "detail": f"Chatterbox lädt … ({n})"}
+    if device == "cpu":
+        return {**out, "ok": False, "detail": f"Chatterbox auf CPU – Vorlesen mit Pausen ({n})"}
+    return {**out, "ok": True, "detail": f"{device} · {n} · Standard: {default.split(':', 1)[-1] or '-'}"}
+
+
 # ── Aggregation ────────────────────────────────────────────────────
 
 def _aggregate(checks: dict) -> str:
     if not (checks["ollama"]["ok"] and checks["db"]["ok"] and checks["gpu"]["ok"]):
         return "down"
-    if not (checks["models"]["ok"] and checks["disk"]["ok"]):
+    if not (checks["models"]["ok"] and checks["disk"]["ok"]
+            and checks.get("tts", {"ok": True})["ok"]):    # v19.40.2: Vorlesen nur "degraded"
         return "degraded"
     return "ok"
 
 
 async def _run_selfcheck() -> dict:
     # Alle Probes parallel → Gesamtdauer = langsamste Probe (statt Summe).
-    (reachable, installed), db, disk, gpu, activity = await asyncio.gather(
+    (reachable, installed), db, disk, gpu, activity, tts = await asyncio.gather(
         _tags(),
         _check_db(),
         _disk_cached(),                    # blockiert nie (Hintergrund-Cache)
         asyncio.to_thread(_check_gpu),
         _check_activity(),
+        _check_tts(),
     )
     ollama = {"ok": reachable, "detail": "OK" if reachable else "unerreichbar"}
 
@@ -271,7 +311,8 @@ async def _run_selfcheck() -> dict:
 
     whisper = {"ok": True, "detail": f"{settings.WHISPER_MODEL} / {settings.WHISPER_DEVICE}"}
 
-    checks = {"ollama": ollama, "models": models, "db": db, "disk": disk, "gpu": gpu, "whisper": whisper}
+    checks = {"ollama": ollama, "models": models, "db": db, "disk": disk, "gpu": gpu, "whisper": whisper,
+              "tts": tts}
     return {
         "status": _aggregate(checks),
         "ts": datetime.now(timezone.utc).isoformat(),
