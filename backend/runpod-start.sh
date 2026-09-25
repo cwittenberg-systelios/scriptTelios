@@ -830,6 +830,18 @@ if ! python -c "import pypdf" 2>/dev/null; then
     echo "${OK}pypdf installiert"
 fi
 
+# v19.41 ISM-Auswertung (P7): numpy/matplotlib (Grafiken) und openpyxl
+# (SNS-Userexport .xlsx). Gleicher Guard wie pypdf - auf dem persistenten
+# /workspace-venv wuerde requirements.txt sonst nie nachinstalliert.
+if ! python -c "import numpy, matplotlib, openpyxl" 2>/dev/null; then
+    echo "${GO}ISM-Auswertung: numpy/matplotlib/openpyxl installieren..."
+    if python -m pip install --quiet "numpy>=1.26" "matplotlib==3.10.9" "openpyxl==3.1.5"; then
+        echo "${OK}numpy/matplotlib/openpyxl installiert"
+    else
+        echo "${ERR}numpy/matplotlib/openpyxl konnten nicht installiert werden - P7 (ISM-Auswertung) nicht nutzbar"
+    fi
+fi
+
 # pytest-timeout: benötigt für Tests mit @pytest.mark.timeout (z.B. OCR-Tests).
 # Prüfen ob installiert, ggf. nachrüsten.
 if ! python -c "import pytest_timeout" 2>/dev/null; then

@@ -232,7 +232,8 @@ def _parse_sns_userexport(data: bytes) -> list[SnsSeries]:
     try:
         import openpyxl
     except ImportError as exc:  # pragma: no cover - Abhaengigkeit in requirements.txt
-        raise ValueError("openpyxl fehlt - Userexport kann nicht gelesen werden") from exc
+        raise ValueError("openpyxl fehlt auf dem Server - im venv nachinstallieren: "
+                         "pip install openpyxl==3.1.5 (runpod-start.sh erledigt das beim naechsten Start)") from exc
     try:
         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except Exception as exc:  # noqa: BLE001 - jede Lesestoerung ist ein Formatfehler

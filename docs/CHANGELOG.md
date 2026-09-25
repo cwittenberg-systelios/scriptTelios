@@ -55,8 +55,9 @@ SNS-XML zugeordnet (am Pilot verifiziert).
   Fragebögen › Fragebogen Editor › Export im XML-Format.
 - Suizidalität: kein Standardsatz (keine klinische Aussage aus
   Fragebogendaten), stattdessen Warnung + Pflicht für Abschnitt 9.
-- Abhängigkeiten: `numpy` explizit, `matplotlib` und `openpyxl` neu (`runpod-start.sh`
-  installiert requirements beim Start).
+- Abhängigkeiten: `numpy` explizit, `matplotlib` und `openpyxl` neu. Eigener
+  Guard in `runpod-start.sh` (wie pypdf), weil `requirements.txt` auf dem
+  persistenten venv nicht erneut installiert wird.
 - Kalibrierung der DK gegen SNS (D6=B) am 25.09.2026 mit dem SNS-Druck des
   Komplexitäts-Resonanz-Diagramms (WJ28718IND, HSF 608 Werte + individueller
   Bogen 120 Werte): **exakt reproduziert** (max. rel. Abweichung 0,07 % =
