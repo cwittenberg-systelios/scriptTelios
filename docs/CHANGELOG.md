@@ -7,29 +7,37 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
-## [v19.41] — SNS-Verlaufsauswertung (P7): idiographische Systemmodellierung (2026-09-25)
+## [v19.41] — ISM-Auswertung (P7): SNS-Verlaufsauswertung, idiographische Systemmodellierung (2026-09-25)
 
 Basis: `c919e4d`. Backend + Frontend (neues Bundle). Spezifikation:
 `uebergabe_sns_verlaufsauswertung.md` v2, Sprintplan `sprintplan_v19_41_sns_verlauf.md`.
 
-Neuer Workflow `sns_verlauf` (Panel P7 „SNS-Verlauf“): Aus den SNS-Exporten
-(HSF-Basisbogen-CSV, individueller Fragebogen-CSV, Fragebogen-XML, optional
-Faktorexport .doc) entsteht ein Verlaufsbericht mit 9 Abschnitten, 6 Grafiken
-und 5 Tabellen, als Vorschau im Panel und als DOCX.
+Neuer Workflow `sns_verlauf` (Panel P7 „ISM-Auswertung“): Aus **zwei Dateien** –
+dem SNS-Userexport (.xlsx: HSF-Basisbogen und individueller Bogen mit
+Rohwerten, Tagebuch und Kommentaren zum Kernanliegen) und dem SNS-XML des
+individuellen Bogens (Itemtexte, Faktorzuordnung; beide Pflicht) – entsteht ein
+Verlaufsbericht mit 9 Abschnitten, 6 Grafiken und 5 Tabellen, als Vorschau im
+Panel und als DOCX. Die Faktorstrukturen sind Konstanten (HSF-XML im Repo,
+`ISM_FAKTOREN`); die Spalten des Userexports werden per Position den Fragen im
+SNS-XML zugeordnet (am Pilot verifiziert).
 
-- `services/sns_verlauf.py`: deterministischer Kern (Parser SNS-CSV/XML/.doc,
+- `services/sns_verlauf.py`: deterministischer Kern (Parser SNS-Userexport
+  .xlsx / Zeitreihen-CSV / Fragebogen-XML, Blattwahl, Itemzahl-Prüfung,
   Dynamische Komplexität W=7 mit Kritikalität über dem 95-%-CI der Vorwerte,
   Resonanz, Ordnungsübergänge/Niveauverschiebungen mit DK-Vorläufer, Phasen
   inkl. Krisenphase, Einbrüche, Recurrence, Kendall τ, ISM-Kennwerte
   Sprung/Anker/Endniveau, Flags). HSF-Faktoren aus `resources/sns/HSF_kurz_Basis.xml`
-  (D11=B, 9 Faktoren I–IX; III = Belastung, IX ohne Wertung). SNS-Faktorwerte
-  (`sns_factor_z`) exakt reproduziert.
+  (D11=B, 9 Faktoren I–IX; III = Belastung, IX ohne Wertung).
+- Polungsprüfung (E3=A): Individuelle Items, deren Verlauf klar gegen die
+  Polung im XML läuft (r mit dem HSF-Komposit < −0,5), werden automatisch
+  umgepolt (`POLUNG_KORRIGIERT`, Hinweis im Faktenblock, QC
+  `SNS_POLUNG_KORREKTUR_FEHLT`); −0,5 … −0,3 nur Warnung. Pilot: Item III
+  ressourcenseitig formuliert, im XML ohne `changePoles` → korrigiert.
 - `services/sns_plots.py`: 6 Grafiken (matplotlib Agg, 200 dpi, 17 cm), als
   base64-PNG im Job-Ergebnis (F1=B, keine Dateiablage).
 - `services/sns_llm.py`: Pseudonymisierung (Vorname → Kürzel, Angehörige →
   Rolle, Kontextnamen → Mitklient:in), Stage A (Tagebuch → Ereignisse, strict
-  JSON, Zitat-Substring-Check), Faktorzuordnung ohne XML durch das Modell
-  (D10=B, als „erschlossen“ markiert), Flags, Faktenblock, Stage B
+  JSON, Zitat-Substring-Check), Flags, Faktenblock, Stage B
   (Bericht; Phasennamen werden aus Abschnitt 7 übernommen, D5=A).
 - `services/sns_qc.py`: 16 Regeln (Zahlen/Daten nur aus dem Faktenblock,
   Zitate nur aus der Quelle, Klarnamen, Übergangsdatum, Faktorzuschreibung,
@@ -39,11 +47,15 @@ und 5 Tabellen, als Vorschau im Panel und als DOCX.
   `POST /api/sns/check` (Live-QC).
 - `IsmItem.richtung` (D9=A): Faktor-III-Items „ressource“ → `changePoles='true'`
   im SNS-XML.
-- Upload-Felder `sns_hsf_csv` (Pflicht), `sns_ind_csv`, `sns_ind_xml`,
-  `sns_faktor_doc`, Formfeld `sns_vorname`; Klient-Controls wie P1.
+- Upload-Felder `sns_export_xlsx` + `sns_ind_xml` (beide Pflicht, sonst 422),
+  Formfeld `sns_vorname`; Klient-Controls wie P1. In beiden Upload-Karten eine
+  Export-Anleitung für SNS: Kurzform als Textzeile, aufklappbar je drei
+  schematisierte SNS-Bildschirme (inline SVG, `src/sns-anleitung.jsx`) mit
+  nummerierten Klickstellen – Nutzer › Klienten › Export ▾ › Export XLS bzw.
+  Fragebögen › Fragebogen Editor › Export im XML-Format.
 - Suizidalität: kein Standardsatz (keine klinische Aussage aus
   Fragebogendaten), stattdessen Warnung + Pflicht für Abschnitt 9.
-- Abhängigkeiten: `numpy` explizit, `matplotlib` neu (`runpod-start.sh`
+- Abhängigkeiten: `numpy` explizit, `matplotlib` und `openpyxl` neu (`runpod-start.sh`
   installiert requirements beim Start).
 - Kalibrierung der DK gegen SNS (D6=B) am 25.09.2026 mit dem SNS-Druck des
   Komplexitäts-Resonanz-Diagramms (WJ28718IND, HSF 608 Werte + individueller
@@ -54,12 +66,14 @@ und 5 Tabellen, als Vorschau im Panel und als DOCX.
   Normierung und Gleichverteilung auf die Itemskala (HSF-Items 7–19: 1–100).
   SNS datiert den Wert auf den ersten Fenstertag, scriptTelios auf den
   letzten (`dynamic_complexity(label=...)`). `scripts/sns_kalibrierung.py`
-  liest den SNS-Druck (PDF/pdftotext); Pilot-Test `test_pilot_kalibrierung_gegen_sns`
+  liest den SNS-Druck (PDF/pdftotext) und den Userexport (`--bogen hsf|ind`);
+  Pilot-Test `test_pilot_kalibrierung_gegen_sns`
   läuft lokal mit `SNS_PILOT_DIR`.
 - Tests: `test_sns_verlauf.py`, `test_sns_plots.py`, `test_sns_llm.py`,
   `test_sns_qc.py`, `test_sns_docx.py`, `test_sns_pipeline.py` (+76);
-  synthetische Fixture `tests/fixtures/sns_verlauf/` mit eingefrorenen
-  Sollwerten; Pilot-Sollwerte lokal über `SNS_PILOT_DIR`.
+  synthetische Fixture `tests/fixtures/sns_verlauf/` (u. a. `userexport.xlsx`)
+  mit eingefrorenen Sollwerten; Pilot-Sollwerte lokal über `SNS_PILOT_DIR`
+  (`userexport.xlsx`, `individuell.xml`, optional CSVs + KRD-PDFs).
 
 ---
 

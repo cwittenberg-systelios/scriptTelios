@@ -53,10 +53,8 @@ UPLOAD_FIELDS: tuple[tuple[str, str], ...] = (
     ("style_file",       "style"),
     ("transcript_file",  "transcript_file"),
     # v19.41: SNS-Verlaufsauswertung (P7) - Exporte aus dem SNS
-    ("sns_hsf_csv",      "sns_hsf"),
-    ("sns_ind_csv",      "sns_ind"),
+    ("sns_export_xlsx",  "sns_export"),
     ("sns_ind_xml",      "sns_xml"),
-    ("sns_faktor_doc",   "sns_doc"),
 )
 
 
@@ -83,14 +81,10 @@ class UploadBundle:
     style_name:             Optional[str]   = None
     transcript_file_bytes:  Optional[bytes] = None
     transcript_file_name:   Optional[str]   = None
-    sns_hsf_bytes:          Optional[bytes] = None
-    sns_hsf_name:           Optional[str]   = None
-    sns_ind_bytes:          Optional[bytes] = None
-    sns_ind_name:           Optional[str]   = None
+    sns_export_bytes:       Optional[bytes] = None
+    sns_export_name:        Optional[str]   = None
     sns_xml_bytes:          Optional[bytes] = None
     sns_xml_name:           Optional[str]   = None
-    sns_doc_bytes:          Optional[bytes] = None
-    sns_doc_name:           Optional[str]   = None
 
     @classmethod
     async def read(cls, **uploads: Optional[UploadFile]) -> "UploadBundle":
@@ -174,7 +168,7 @@ class PipelineInput:
             "eb_struktur":          self.eb_struktur if self.workflow == "entlassbericht" else None,
             "has_fallformel_override": bool(self.fallformel_override and self.fallformel_override.strip()),
             "has_interview":        self.interview_protokoll is not None or self.interview_gespraech is not None,
-            "has_sns":              bool(u.sns_hsf_bytes),
+            "has_sns":              bool(u.sns_export_bytes),
             "interview_set":        getattr(self.interview_protokoll, "set", None) or getattr(self.interview_gespraech, "set", None),
             "interview_modus":      "gespraech" if self.interview_gespraech is not None else ("fragen" if self.interview_protokoll is not None else None),
             "diagnosen":            self.dx_list,
@@ -581,7 +575,7 @@ async def run_generation(ctx: PipelineInput, job) -> dict:
         job.interview_set = getattr(ctx.interview_gespraech, "set", None)
 
     # ── v19.41: SNS-Verlaufsauswertung - eigener Pfad ohne Transkript ──
-    # Quellen sind ausschliesslich die SNS-Exporte (Uploads); Stil-, Namens-
+    # Quellen sind ausschliesslich SNS-Userexport + Fragebogen-XML; Stil-, Namens-
     # und Budget-Maschinerie greifen nicht (Kernanalyse deterministisch,
     # LLM nur fuer Tagebuch-Extraktion und Interpretation).
     if ctx.workflow == "sns_verlauf":

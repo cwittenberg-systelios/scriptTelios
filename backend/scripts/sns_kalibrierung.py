@@ -23,8 +23,9 @@ speichern. Das PDF enthaelt je Item die Werte pro Datum; das Skript liest es
 mit pdftotext (poppler) oder direkt eine damit erzeugte .txt.
 
 Aufruf (im Pod: source /workspace/venv/bin/activate, aus backend/):
-  python scripts/sns_kalibrierung.py --raw hsf.csv --sns KomplexBasisHSF.pdf [--xml Fragebogen.xml]
-        [--window 7] [--freeze report.json]
+  python scripts/sns_kalibrierung.py --raw userexport.xlsx --sns KomplexBasisHSF.pdf
+  python scripts/sns_kalibrierung.py --raw userexport.xlsx --bogen ind --xml Fragebogen.xml --sns KomplexIndiv.pdf
+  (--raw akzeptiert auch die SNS-Zeitreihen-CSV) [--window 7] [--freeze report.json]
 Ohne --xml wird fuer "HSF kurz Basis" das Repo-XML genommen, sonst Skala 0-100.
 """
 from __future__ import annotations
@@ -68,11 +69,23 @@ def read_sns_export(path: Path) -> dict[str, dict[dt.date, float]]:
     return {k: v for k, v in items.items() if v}
 
 
+def _load_raw(raw_path: Path, bogen: str, xml_path: Path | None) -> sv.SnsSeries:
+    if raw_path.suffix.lower() != ".xlsx":
+        return sv.parse_sns_csv(raw_path.read_text(encoding="utf-8-sig", errors="replace"))
+    ind_fb = sv.parse_sns_questionnaire_xml(xml_path.read_text(encoding="utf-8")) if xml_path else None
+    hsf, ind = sv.select_sheets(sv.parse_sns_userexport(raw_path.read_bytes()), ind_fb.name if ind_fb else None)
+    if bogen == "hsf":
+        return sv.apply_titles(hsf, sv.load_hsf_basis(), "HSF-Basisbogen")
+    if ind is None or ind_fb is None:
+        raise SystemExit("--bogen ind braucht --xml und ein zweites Blatt im Userexport")
+    return sv.apply_titles(ind, ind_fb, "Individueller Fragebogen")
+
+
 def kalibriere(raw_path: Path, sns_path: Path, window: int = 7, z: float = 1.645,
-               horizon: int | None = None, xml_path: Path | None = None) -> dict:
-    s = sv.parse_sns_csv(raw_path.read_text(encoding="utf-8-sig", errors="replace"))
+               horizon: int | None = None, xml_path: Path | None = None, bogen: str = "hsf") -> dict:
+    s = _load_raw(raw_path, bogen, xml_path)
     fb = None
-    if xml_path:
+    if xml_path and bogen != "hsf":
         fb = sv.parse_sns_questionnaire_xml(xml_path.read_text(encoding="utf-8"))
     elif sv.HSF_QUESTIONNAIRE_NAME.lower() in (s.questionnaire or "").lower():
         fb = sv.load_hsf_basis()
@@ -134,7 +147,8 @@ def kalibriere(raw_path: Path, sns_path: Path, window: int = 7, z: float = 1.645
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--raw", required=True, type=Path, help="SNS-Zeitreihen-CSV (Rohwerte)")
+    ap.add_argument("--raw", required=True, type=Path, help="SNS-Userexport (.xlsx) oder Zeitreihen-CSV")
+    ap.add_argument("--bogen", choices=("hsf", "ind"), default="hsf", help="bei .xlsx: welches Blatt")
     ap.add_argument("--sns", required=True, type=Path, help="SNS-Druck des KRD (PDF oder pdftotext -layout Text)")
     ap.add_argument("--xml", type=Path, default=None, help="Fragebogen-XML (Itemskalen); Default: HSF aus dem Repo")
     ap.add_argument("--window", type=int, default=7)
@@ -142,7 +156,7 @@ def main() -> int:
     ap.add_argument("--horizon", type=int, default=None)
     ap.add_argument("--freeze", type=Path, default=None, help="Report als JSON speichern")
     args = ap.parse_args()
-    rep = kalibriere(args.raw, args.sns, args.window, args.z, args.horizon, args.xml)
+    rep = kalibriere(args.raw, args.sns, args.window, args.z, args.horizon, args.xml, args.bogen)
     print(f"Fenster {rep['window']}, z {rep['z']}, Gedächtnis {rep['horizon'] or 'alle'}, Quelle {rep['quelle']}")
     for it in rep["items"]:
         if it.get("n", 0) == 0:

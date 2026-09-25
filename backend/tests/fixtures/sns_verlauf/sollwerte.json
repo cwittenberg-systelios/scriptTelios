@@ -159,11 +159,6 @@
   ],
   "ism_anker": "II",
   "ism_langsam": "V",
-  "ism_faktorexport": {
-    "faktor": "I Zielerleben",
-    "tage": 31,
-    "max_abweichung": 0.0
-  },
   "ism_sprung": {
     "I": 41.4,
     "II": 33.8,
@@ -181,27 +176,37 @@
     {
       "item": "I · Heute bin ich einen Schritt näher…",
       "r": 0.94,
-      "fraglich": false
+      "fraglich": false,
+      "korrigiert": false,
+      "r_vor_korrektur": null
     },
     {
       "item": "II · Heute konnte ich meine Ruhe in de…",
       "r": 0.95,
-      "fraglich": false
+      "fraglich": false,
+      "korrigiert": false,
+      "r_vor_korrektur": null
     },
     {
       "item": "III · Heute haben Ängste und Selbstzwei…",
       "r": 0.92,
-      "fraglich": false
+      "fraglich": false,
+      "korrigiert": false,
+      "r_vor_korrektur": null
     },
     {
       "item": "IV · Heute habe ich mich in meinem Kör…",
       "r": 0.95,
-      "fraglich": false
+      "fraglich": false,
+      "korrigiert": false,
+      "r_vor_korrektur": null
     },
     {
       "item": "V · Heute konnte ich mich davon verab…",
       "r": 0.84,
-      "fraglich": false
+      "fraglich": false,
+      "korrigiert": false,
+      "r_vor_korrektur": null
     }
   ],
   "komposit": {

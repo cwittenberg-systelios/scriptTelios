@@ -42,7 +42,7 @@ const NAVS = [
   { id: "p3b", n: "3b", title: "Folgeverlängerung",      sub: "Anschluss-Verlängerung" },
   { id: "p4",  n: "4",  title: "Entlassbericht",         sub: "Abschlussbericht" },
   { id: "p6",  n: "6",  title: "ISM-Fragebogen",         sub: "SNS-Prozessmonitoring" },
-  { id: "p7",  n: "7",  title: "SNS-Verlauf",            sub: "Verlaufsauswertung" },
+  { id: "p7",  n: "7",  title: "ISM-Auswertung",         sub: "SNS-Verlaufsauswertung" },
   { id: "p5",  n: "✦",  title: "Stilprofil-Bibliothek",  sub: "Beispiele verwalten" },
 ];
 

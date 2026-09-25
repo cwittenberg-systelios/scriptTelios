@@ -149,8 +149,8 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
     ),
     WorkflowSpec(
         key="sns_verlauf",
-        label="SNS-Verlaufsauswertung",
-        short_label="SNS-Verlauf",
+        label="ISM-Auswertung",
+        short_label="ISM-Auswertung",
         is_structural=False,
         word_limit=(1000, 1800),   # v19.41: Stage-B-Bericht, 9 Abschnitte
         max_tokens=6000,

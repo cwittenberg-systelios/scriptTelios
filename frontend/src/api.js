@@ -140,12 +140,10 @@ function buildJobFormData(workflow, prompt, userContent, files = {}) {
   // "modalitaet" (Status quo).
   if (files.ebStruktur)       fd.append("eb_struktur",      files.ebStruktur);
   if (files.fallformel)       fd.append("fallformel",       files.fallformel);
-  // v19.41 (P7): SNS-Exporte fuer die Verlaufsauswertung + Vorname fuer die
-  // Pseudonymisierung der Tagebuchtexte.
-  if (files.snsHsf)           fd.append("sns_hsf_csv",      files.snsHsf);
-  if (files.snsInd)           fd.append("sns_ind_csv",      files.snsInd);
+  // v19.41 (P7): SNS-Userexport (.xlsx) + Fragebogen-XML des individuellen
+  // Bogens, Vorname fuer die Pseudonymisierung der Tagebuchtexte.
+  if (files.snsExport)        fd.append("sns_export_xlsx",  files.snsExport);
   if (files.snsXml)           fd.append("sns_ind_xml",      files.snsXml);
-  if (files.snsDoc)           fd.append("sns_faktor_doc",   files.snsDoc);
   if (files.snsVorname)       fd.append("sns_vorname",      files.snsVorname);
   return fd;
 }

@@ -41,7 +41,7 @@ const FAKTEN = {
   ism: { quelle: "xml", faktoren: [{ name: "I Zielerleben", besetzt: true, items: ["I · x"], sprung_uebergang: 41.4, krisen_minimum: 12.0, endniveau: 88.0 }] },
   hsf: { faktoren: [{ name: "III", kurz: "Symptome", anfang: 56.3, ende: 19.0, delta: -37.3, tau: -0.53 }] },
   einbrueche: [{ datum: "2026-03-14", tiefe: 13.4, dauer: 1 }],
-  polung_check: [{ item: "III · x", r: -0.6, fraglich: true }],
+  polung_check: [{ item: "III · x", r: -0.4, fraglich: true, korrigiert: false }, { item: "II · y", r: 0.8, fraglich: false, korrigiert: true, r_vor_korrektur: -0.8 }],
 };
 const RESULT = {
   version: 1, kuerzel: "Frau K.", anrede: "Klientin",
@@ -60,22 +60,35 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+test("P7: Export-Anleitungen – Kurzform sichtbar, Schemagrafiken aufklappbar", () => {
+  const { container } = render(<P7 toast={() => {}} />);
+  expect(screen.getAllByText(/Nutzer › Klienten/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/Fragebögen › Fragebogen Editor/).length).toBeGreaterThan(0);
+  const details = container.querySelectorAll("details");
+  expect(details.length).toBe(2);
+  details.forEach((d) => expect(d.open).toBe(false));
+  // je 3 schematische Screens (SVG) mit Bildunterschrift
+  details.forEach((d) => expect(d.querySelectorAll("svg[role=img]").length).toBe(3));
+  expect(details[0].textContent).toMatch(/Export XLS/);
+  expect(details[0].textContent).toMatch(/nicht dieser/);
+  expect(details[1].textContent).toMatch(/EXPORT IM XML-FORMAT/);
+  expect(details[1].textContent).toMatch(/nicht die Datei aus Workflow 6/);
+});
+
 test("buildJobFormData: SNS-Felder werden gemappt", () => {
   const fd = buildJobFormData("sns_verlauf", "P", "", {
-    snsHsf: file("hsf.csv"), snsInd: file("ind.csv"), snsXml: file("i.xml", "text/xml"), snsDoc: file("f.doc"),
+    snsExport: file("export.xlsx"), snsXml: file("i.xml", "text/xml"),
     snsVorname: "Anna", patientName: "Frau K.", geschlecht: "w",
   });
   expect(fd.get("workflow")).toBe("sns_verlauf");
-  expect(fd.get("sns_hsf_csv").name).toBe("hsf.csv");
-  expect(fd.get("sns_ind_csv").name).toBe("ind.csv");
+  expect(fd.get("sns_export_xlsx").name).toBe("export.xlsx");
   expect(fd.get("sns_ind_xml").name).toBe("i.xml");
-  expect(fd.get("sns_faktor_doc").name).toBe("f.doc");
   expect(fd.get("sns_vorname")).toBe("Anna");
   expect(fd.get("patientenname")).toBe("Frau K.");
   expect(fd.get("geschlecht")).toBe("w");
 });
 
-test("P7: Start erst mit HSF + Kürzel; startJob bekommt die Dateien", async () => {
+test("P7: Start erst mit Userexport + XML + Kürzel; startJob bekommt die Dateien", async () => {
   startJob.mockResolvedValue("j7");
   pollJob.mockResolvedValue(JOB);
   const { container } = render(<P7 toast={() => {}} />);
@@ -83,7 +96,10 @@ test("P7: Start erst mit HSF + Kürzel; startJob bekommt die Dateien", async () 
   expect(runBtn.disabled).toBe(true);
 
   const inputs = container.querySelectorAll("input[type=file]");
-  await act(async () => { fireEvent.change(inputs[0], { target: { files: [file("hsf.csv")] } }); });
+  expect(inputs.length).toBe(2);
+  await act(async () => { fireEvent.change(inputs[0], { target: { files: [file("export.xlsx")] } }); });
+  expect(runBtn.disabled).toBe(true);
+  await act(async () => { fireEvent.change(inputs[1], { target: { files: [file("i.xml", "text/xml")] } }); });
   expect(runBtn.disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: /weiblich/ }));
   fireEvent.change(screen.getByPlaceholderText("K."), { target: { value: "K" } });
@@ -93,9 +109,9 @@ test("P7: Start erst mit HSF + Kürzel; startJob bekommt die Dateien", async () 
   expect(startJob).toHaveBeenCalledTimes(1);
   const [wf, , , files] = startJob.mock.calls[0];
   expect(wf).toBe("sns_verlauf");
-  expect(files.snsHsf.name).toBe("hsf.csv");
+  expect(files.snsExport.name).toBe("export.xlsx");
+  expect(files.snsXml.name).toBe("i.xml");
   expect(files.patientName).toBe("Frau K.");
-  expect(files.snsInd).toBeNull();
 
   await waitFor(() => expect(screen.getByText(/Verlaufsauswertung – Frau K\./)).toBeTruthy());
   expect(screen.getByText(/Suizidalität\/Selbstverletzung im Tagebuch/)).toBeTruthy();
@@ -116,7 +132,8 @@ test("P7: Tabs Grafiken/Kennwerte, DOCX-Export mit editiertem Text, Live-QC bei 
   const toast = jest.fn();
   const { container } = render(<P7 toast={toast} />);
   const inputs = container.querySelectorAll("input[type=file]");
-  await act(async () => { fireEvent.change(inputs[0], { target: { files: [file("hsf.csv")] } }); });
+  await act(async () => { fireEvent.change(inputs[0], { target: { files: [file("export.xlsx")] } }); });
+  await act(async () => { fireEvent.change(inputs[1], { target: { files: [file("i.xml", "text/xml")] } }); });
   fireEvent.click(screen.getByRole("button", { name: /männlich/ }));
   fireEvent.change(screen.getByPlaceholderText("K."), { target: { value: "M." } });
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Verlaufsauswertung erstellen/ })); });
@@ -147,4 +164,5 @@ test("P7: Tabs Grafiken/Kennwerte, DOCX-Export mit editiertem Text, Live-QC bei 
   expect(screen.getByText(/Ordnungsübergang/)).toBeTruthy();
   expect(screen.getAllByText(/19\.03\.2026/).length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText(/Polung fraglich/)).toBeTruthy();
+  expect(screen.getByText(/Automatisch umgepolt: II · y/)).toBeTruthy();
 });

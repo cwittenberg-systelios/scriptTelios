@@ -586,12 +586,10 @@ async def create_generate_job(
     # es stillschweigend. P1/P2 mit Transkript-Datei liefen dadurch ohne
     # Quelle (Konfabulationspfad, siehe Job 58db7006 vom 2026-08-04).
     transcript_file:  Optional[UploadFile] = File(None, description="Transkript-Datei (.txt/.docx) als Gespraechsquelle fuer P1/P2"),
-    # v19.41 (P7): SNS-Exporte fuer die Verlaufsauswertung. Nur fuer
-    # workflow=sns_verlauf relevant; HSF-CSV ist dort Pflicht.
-    sns_hsf_csv:      Optional[UploadFile] = File(None, description="P7: SNS-Zeitreihen-CSV des HSF-Basisbogens (Pflicht)"),
-    sns_ind_csv:      Optional[UploadFile] = File(None, description="P7: SNS-Zeitreihen-CSV des individuellen Fragebogens (optional)"),
-    sns_ind_xml:      Optional[UploadFile] = File(None, description="P7: Fragebogen-XML des individuellen Bogens (6-Faktoren-Struktur, optional)"),
-    sns_faktor_doc:   Optional[UploadFile] = File(None, description="P7: SNS-Faktorexport 'I Zielerleben' (.doc/MHTML, optional)"),
+    # v19.41 (P7): SNS-Userexport + Fragebogen-XML (beide Pflicht fuer
+    # workflow=sns_verlauf; andere Workflows ignorieren die Felder).
+    sns_export_xlsx:  Optional[UploadFile] = File(None, description="P7: SNS-Userexport (.xlsx, HSF + individueller Bogen inkl. Tagebuch)"),
+    sns_ind_xml:      Optional[UploadFile] = File(None, description="P7: SNS-XML des individuellen Fragebogens (Itemtexte, Faktorzuordnung)"),
     sns_vorname:      Annotated[Optional[str], Form(description="P7: Vorname der Klient:in fuer die Pseudonymisierung der Tagebuchtexte (optional).")] = None,
     # v19.18 (PX): gewuenschte Itemanzahl fuer den ISM-Fragebogen (4-12,
     # Default 6). Nur fuer workflow=ism_fragebogen relevant; andere
@@ -694,11 +692,13 @@ async def create_generate_job(
         audio=audio, selbstauskunft=selbstauskunft, vorbefunde=vorbefunde,
         verlaufsdoku=verlaufsdoku, antragsvorlage=antragsvorlage, vorantrag=vorantrag,
         prozessreflexion=prozessreflexion, style_file=style_file, transcript_file=transcript_file,
-        sns_hsf_csv=sns_hsf_csv, sns_ind_csv=sns_ind_csv, sns_ind_xml=sns_ind_xml,
-        sns_faktor_doc=sns_faktor_doc,
+        sns_export_xlsx=sns_export_xlsx, sns_ind_xml=sns_ind_xml,
     )
-    if workflow == "sns_verlauf" and not uploads.sns_hsf_bytes:
-        raise _HTTPException(status_code=422, detail="SNS-Verlaufsauswertung: die HSF-CSV (Zeitreihen-Export) fehlt.")
+    if workflow == "sns_verlauf":
+        if not uploads.sns_export_bytes:
+            raise _HTTPException(status_code=422, detail="ISM-Auswertung: der SNS-Userexport (.xlsx) fehlt.")
+        if not uploads.sns_xml_bytes:
+            raise _HTTPException(status_code=422, detail="ISM-Auswertung: das Fragebogen-XML des individuellen Bogens fehlt.")
     ctx = PipelineInput(
         workflow=workflow,
         instructions=instructions,
@@ -726,7 +726,7 @@ async def create_generate_job(
         workflow=workflow,
         description=f"Workflow: {workflow}"
                     + (f" | Audio: {uploads.audio_name}" if uploads.audio_name else "")
-                    + (f" | SNS: {uploads.sns_hsf_name}" if uploads.sns_hsf_name else "")
+                    + (f" | SNS: {uploads.sns_export_name}" if uploads.sns_export_name else "")
                     + (f" | Interview: {interview.set_label or interview.set}" if interview else "")
                     + (f" | Gespräch: {gespraech.set_label or gespraech.set}" if gespraech else ""),
         therapeut_id=therapeut_id,

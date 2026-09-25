@@ -15,8 +15,8 @@ FIX = Path(__file__).resolve().parents[1] / "fixtures" / "sns_verlauf"
 @pytest.fixture(scope="module")
 def analyse():
     t = {n: (FIX / f).read_text(encoding="utf-8") for n, f in
-         (("hsf", "hsf.csv"), ("ind", "individuell.csv"), ("xml", "individuell.xml"), ("doc", "faktor_I.doc"))}
-    return sv.analyse(t["hsf"], t["ind"], t["xml"], t["doc"])
+         (("hsf", "hsf.csv"), ("ind", "individuell.csv"), ("xml", "individuell.xml"))}
+    return sv.analyse_userexport((FIX / "userexport.xlsx").read_bytes(), t["xml"])
 
 
 class TestPseudonymisierung:
@@ -88,27 +88,6 @@ class TestStageA:
         s = sl.build_stage_a_system_prompt(analyse.fakten["ism"]["items"])
         assert "Faktor 2 (III)" in s and "ism_faktor" in s
         assert "immer null" in sl.build_stage_a_system_prompt(None)
-
-
-class TestZuordnung:
-    def test_parse_fallback(self):
-        z = sl.parse_zuordnung({"zuordnung": [{"index": 1, "faktor_id": 2, "richtung": "ressource"},
-                                              {"index": 9, "faktor_id": 0, "richtung": "belastung"}]}, 3)
-        assert [x["index"] for x in z] == [0, 1, 2]
-        assert z[1]["faktor_id"] == 2 and z[1]["richtung"] == "ressource"
-        assert z[0]["faktor_id"] == 0 and "Fallback" in z[0]["begruendung"]
-
-    async def test_run_zuordnung_und_analyse(self):
-        async def fake_generate(system, user, **kw):
-            assert "faktor_id 5" in system
-            return {"structured_data": {"zuordnung": [{"index": i, "faktor_id": 0, "richtung": "belastung"} for i in range(5)]}}
-        ind = sv.parse_sns_csv((FIX / "individuell.csv").read_text(encoding="utf-8"))
-        z = await sl.run_zuordnung(ind.items, generate=fake_generate, model=None)
-        fb = sv.build_erschlossenen_fragebogen(ind.items, z)
-        a = sv.analyse((FIX / "hsf.csv").read_text(encoding="utf-8"), (FIX / "individuell.csv").read_text(encoding="utf-8"),
-                       ind_fb=fb)
-        assert a.fakten["ism"]["quelle"] == "erschlossen"
-        assert len(a.fakten["ism"]["faktoren"][0]["items"]) == 5
 
 
 class TestFlagsUndFaktenblock:

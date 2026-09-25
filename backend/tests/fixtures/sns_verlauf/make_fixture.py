@@ -6,7 +6,10 @@ Erzeugt deterministisch (Seed 20260925):
                    ein FILLING DATE am Folgetag (Tag 5)
   individuell.csv  5 Items ab Tag 8, Itemtexte mit '...' gekuerzt, gleiche x-Zeile
   individuell.xml  Fragebogen im Format der Kopiervorlage (Faktoren 0-4 besetzt, VI leer)
-  faktor_I.doc     MHTML-Faktorexport 'I Zielerleben' (z aus sns_factor_z inkl. x-Zeile)
+  userexport.xlsx  SNS-Userexport wie im Produktivbetrieb: Blatt HSF + Blatt individueller
+                   Bogen (nur Itemnummern), Tagebuch bzw. Kommentare zum Kernanliegen,
+                   nicht ausgefuellte Tage mit Filling Date ' - ' (Tag 20 und ein
+                   uebertragener Tag nach dem letzten Messtag)
   sollwerte.json   eingefrorene Kennwerte (siehe test_sns_verlauf.py)
 
 Dynamik des Ressourcenniveaus (Tag 0-39):
@@ -215,19 +218,48 @@ def _xml(items, faktor_iii_ressource: bool = False) -> str:
     return "".join(parts)
 
 
-def _doc(z: dict[int, float], comments: dict[int, str]) -> str:
-    """MHTML-aehnlicher Faktorexport wie der SNS-Druck ('Tag n | d.m.yyyy | Value: z')."""
-    body = ["<html><body><h2>Faktoren: I Zielerleben</h2><p>Werte:</p>"]
-    for n, t in enumerate(sorted(z), start=1):
+def _sheet(wb, title: str, user: str, qname: str, M: np.ndarray, comments: dict[int, str],
+           start_day: int, x_days: set[int], late_days: set[int]) -> None:
+    """Blatt im Layout des SNS-Userexports ('SNS Datasheet')."""
+    ws = wb.create_sheet(title[:31])
+    n_items = M.shape[1]
+    ws.append([])
+    ws.append([None, None, "SNS Datasheet"])
+    ws.append([None, None, "User", user])
+    ws.append([None, None, "Questionnaire", qname])
+    ws.append([])
+    ws.append([None, "Trigger Date", "Filling Date"] + [None] * n_items + ["Final Comment"])
+    ws.append([None, None, None] + [float(k + 1) for k in range(n_items)] + [None])
+    prev = None
+    for t in range(start_day, N_DAYS + 1):          # + ein uebertragener Tag am Ende
         d = START + dt.timedelta(t)
-        body.append(f"<div>Tag {n}<br>{d.day}.{d.month}.{d.year}<br>Value: {z[t]:.5f}</div>")
-        if t in comments:
-            body.append(f"<div>Kommentar:<br>\"{comments[t]}\"</div>")
+        carry = t in x_days or t == N_DAYS
+        row = prev if carry else M[t]
+        if carry:
+            fill, com = " - ", None
         else:
-            body.append("<div>Kommentar:<br>Keine Kommentare vorhanden</div>")
-        body.append("<div>SNS - Synergetisches Navigationssystem</div>")
-    body.append("</body></html>")
-    return ("MIME-Version: 1.0\nContent-Type: text/html; charset=utf-8\n\n" + "\n".join(body))
+            fd = d + dt.timedelta(1) if t in late_days else d
+            fill = fd.strftime("%m/%d/%Y") + (" 07:45" if t in late_days else " 20:31")
+            com = comments.get(t) or None
+        ws.append([None, d.strftime("%m/%d/%Y") + " 15:00", fill] + [float(v) for v in row] + [com])
+        prev = row
+
+
+def _userexport(H: np.ndarray, Iv: np.ndarray, tb: dict[int, str]) -> bytes:
+    import io
+
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    fixed = dt.datetime(2026, 9, 25, 12, 0, 0)
+    wb.properties.created = fixed
+    wb.properties.modified = fixed
+    _sheet(wb, "FX12345IND-HSF kurz Basis", "FX12345IND", "HSF kurz Basis", H, tb, 0, {X_DAY}, {LATE_DAY})
+    _sheet(wb, "FX12345IND-Fixture individueller", "FX12345IND", "Fixture individueller Fragebogen",
+           Iv, KOMMENTARE_I, IND_START, {X_DAY}, set())
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def write_all(freeze: bool = False) -> dict:
@@ -241,26 +273,19 @@ def write_all(freeze: bool = False) -> dict:
     xml = _xml(IND_ITEMS_FULL)
     xml_res = _xml(IND_ITEMS_FULL, faktor_iii_ressource=True)
 
-    # Faktorexport: z von Item 1 ueber alle Zeilen inkl. x-Zeile (Vortageswert)
-    rows = []
-    for t in range(IND_START, N_DAYS):
-        rows.append(Iv[t - 1, 0] if t == X_DAY else Iv[t, 0])
-    s = np.array(rows, float)
-    zz = (s - s.mean()) / s.std(ddof=1)
-    z = {t: float(zz[i]) for i, t in enumerate(range(IND_START, N_DAYS))}
-    doc = _doc(z, KOMMENTARE_I)
+    xlsx = _userexport(H, Iv, tb)
 
     (HERE / "hsf.csv").write_text(hsf_csv, encoding="utf-8")
     (HERE / "individuell.csv").write_text(ind_csv, encoding="utf-8")
     (HERE / "individuell.xml").write_text(xml, encoding="utf-8")
     (HERE / "individuell_iii_ressource.xml").write_text(xml_res, encoding="utf-8")
-    (HERE / "faktor_I.doc").write_text(doc, encoding="utf-8")
+    (HERE / "userexport.xlsx").write_bytes(xlsx)
 
-    out = {"hsf_csv": hsf_csv, "ind_csv": ind_csv, "xml": xml, "doc": doc}
+    out = {"hsf_csv": hsf_csv, "ind_csv": ind_csv, "xml": xml, "xlsx": xlsx}
     if freeze:
         sys.path.insert(0, str(HERE.parents[2]))
-        from app.services.sns_verlauf import analyse
-        a = analyse(hsf_csv, ind_csv, xml, doc)
+        from app.services.sns_verlauf import analyse_userexport
+        a = analyse_userexport(xlsx, xml)
         f = a.fakten
         soll = {
             "zeitraum": f["zeitraum"],
@@ -279,7 +304,6 @@ def write_all(freeze: bool = False) -> dict:
             "ism_tragend": f["ism"]["tragende_faktoren"],
             "ism_anker": f["ism"]["anker_faktor"],
             "ism_langsam": f["ism"]["langsamster_faktor"],
-            "ism_faktorexport": f["ism"]["faktorexport"],
             "ism_sprung": {x["roemisch"]: x["sprung_uebergang"] for x in f["ism"]["faktoren"]},
             "recurrence": {k: f["recurrence"][k] for k in ("block_anfang", "block_ende", "anfang_ende")},
             "polung_check": f["polung_check"],

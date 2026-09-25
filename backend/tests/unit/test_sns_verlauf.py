@@ -28,14 +28,15 @@ def fx():
         "ind": (FIX / "individuell.csv").read_text(encoding="utf-8"),
         "xml": (FIX / "individuell.xml").read_text(encoding="utf-8"),
         "xml_res": (FIX / "individuell_iii_ressource.xml").read_text(encoding="utf-8"),
-        "doc": (FIX / "faktor_I.doc").read_text(encoding="utf-8"),
+        "xlsx": (FIX / "userexport.xlsx").read_bytes(),
         "soll": json.loads((FIX / "sollwerte.json").read_text(encoding="utf-8")),
     }
 
 
 @pytest.fixture(scope="module")
 def analyse(fx):
-    return sv.analyse(fx["hsf"], fx["ind"], fx["xml"], fx["doc"])
+    """Produktivpfad: Userexport + Fragebogen-XML."""
+    return sv.analyse_userexport(fx["xlsx"], fx["xml"])
 
 
 # ── Parser ───────────────────────────────────────────────────────────────────
@@ -102,17 +103,58 @@ class TestParser:
         assert kurz[4] == "Symptombelastung" and kurz[18] == "Fokus"
         assert len(set(kurz)) == 19
 
-    def test_factor_doc(self, fx):
-        d = sv.parse_sns_factor_doc(fx["doc"])
-        assert d["faktor"] == "I Zielerleben"
-        assert len(d["z"]) == 32
-        assert dt.date(2026, 3, 10) in d["comments"]
-        assert "Podest" in d["comments"][dt.date(2026, 3, 10)]
+    def test_sns_factor_z(self):
+        v = np.array([[10.0, 50], [20, 60], [30, 70], [40, 80]])
+        z = sv.sns_factor_z(v, np.array([1.0, 0.5]))
+        assert abs(z.mean()) < 1e-12 and abs(z.std(ddof=1) - 1) < 1e-12
+        assert (sv.sns_factor_z(np.ones((3, 2)), np.ones(2)) == 0).all()
 
-    def test_sns_factor_z_reproduces_export(self, fx, analyse):
-        chk = analyse.fakten["ism"]["faktorexport"]
-        assert chk["tage"] >= 30
-        assert chk["max_abweichung"] < 1e-4
+
+class TestUserexport:
+    def test_parse_blaetter(self, fx):
+        sheets = sv.parse_sns_userexport(fx["xlsx"])
+        assert [s.questionnaire for s in sheets] == ["HSF kurz Basis", "Fixture individueller Fragebogen"]
+        hsf, ind = sheets
+        assert hsf.username == "FX12345IND" and len(hsf.items) == 19 and hsf.items[0] == "Item 1"
+        # x-Tag + uebertragener Tag nach dem letzten Messtag
+        assert hsf.imputed == [dt.date(2026, 3, 22), dt.date(2026, 4, 11)]
+        assert np.isnan(hsf.values[hsf.dates.index(dt.date(2026, 3, 22))]).all()
+        assert len(hsf.imputed_values[dt.date(2026, 3, 22)]) == 19
+        assert "Jonas" in hsf.comments[dt.date(2026, 3, 6)]
+        assert "Podest" in ind.comments[dt.date(2026, 3, 10)] and len(ind.comments) == 5
+
+    def test_gleich_wie_csv(self, fx, analyse):
+        b = sv.analyse(fx["hsf"], fx["ind"], fx["xml"])
+        assert b.fakten["dk"] == analyse.fakten["dk"]
+        assert b.fakten["uebergaenge"] == analyse.fakten["uebergaenge"]
+        strip = lambda fs: [{k: v for k, v in f.items() if k not in ("items", "item_titel")} for f in fs]  # noqa: E731
+        assert strip(b.fakten["ism"]["faktoren"]) == strip(analyse.fakten["ism"]["faktoren"])
+
+    def test_titel_per_position(self, analyse):
+        assert analyse.items[0].titel.startswith("In der Klinik fühle ich mich sicher")
+        ind = [it for it in analyse.items if it.bogen == "ind"]
+        assert ind[2].titel.startswith("Heute haben Ängste") and ind[2].faktor_ids == [2]
+
+    def test_itemzahl_passt_nicht(self, fx):
+        xml4 = fx["xml"].replace(fx["xml"][fx["xml"].rindex("<question "):fx["xml"].rindex("</questions>")], "")
+        with pytest.raises(ValueError, match="5 Items.*4"):
+            sv.analyse_userexport(fx["xlsx"], xml4)
+
+    def test_blattwahl(self, fx):
+        sheets = sv.parse_sns_userexport(fx["xlsx"])
+        hsf, ind = sv.select_sheets(sheets, "Fixture individueller Fragebogen")
+        assert hsf.questionnaire == "HSF kurz Basis" and ind is sheets[1]
+        hsf, ind = sv.select_sheets(sheets, "anderer Name")        # einziges weiteres Blatt
+        assert ind is sheets[1]
+        with pytest.raises(ValueError, match="HSF"):
+            sv.select_sheets(sheets[1:], None)
+        drei = sheets + [sv.SnsSeries("u", "Dritter Bogen", ["Item 1"], sheets[1].dates, sheets[1].values[:, :1])]
+        with pytest.raises(ValueError, match="mehrere"):
+            sv.select_sheets(drei, "gibt es nicht")
+
+    def test_kein_xlsx(self):
+        with pytest.raises(ValueError, match="xlsx"):
+            sv.parse_sns_userexport(b"kein excel")
 
 
 # ── DK & Statistik ───────────────────────────────────────────────────────────
@@ -241,6 +283,7 @@ class TestSollwerte:
         ism = analyse.fakten["ism"]
         s = fx["soll"]
         assert ism["quelle"] == "xml"
+        assert "faktorexport" not in ism
         assert ism["unbesetzt"] == ["VI"] == s["ism_unbesetzt"]
         assert ism["tragende_faktoren"] == s["ism_tragend"]
         assert ism["tragende_faktoren"][0] == "IV"
@@ -256,7 +299,7 @@ class TestSollwerte:
 
     def test_polung_check(self, analyse, fx):
         pc = analyse.fakten["polung_check"]
-        assert len(pc) == 5 and all(not c["fraglich"] for c in pc)
+        assert len(pc) == 5 and all(not c["fraglich"] and not c["korrigiert"] for c in pc)
         assert all(c["r"] > 0.5 for c in pc)
 
     def test_recurrence(self, analyse, fx):
@@ -299,27 +342,27 @@ class TestVarianten:
         assert "ISM_OHNE_ZUORDNUNG" in a.fakten["flags"]
         assert len(a.fakten["ind_items"]) == 5
 
-    def test_faktor_iii_ressourcenseitig_umgepolt(self, fx):
-        # gleiche Daten, aber changePoles=true -> Item III wird NICHT invertiert und
-        # korreliert deshalb negativ mit dem Komposit -> POLUNG_FRAGLICH
+    def test_polung_automatisch_korrigiert(self, fx):
+        # XML sagt changePoles=true (ressourcenseitig), die Daten sind aber belastungsseitig
+        # -> r mit dem Komposit klar negativ -> automatisch umgepolt (E3=A)
         a = sv.analyse(fx["hsf"], fx["ind"], fx["xml_res"])
         pc = next(c for c in a.fakten["polung_check"] if c["item"].startswith("III"))
-        assert pc["fraglich"] is True
-        assert "POLUNG_FRAGLICH" in a.fakten["flags"]
+        assert pc["korrigiert"] is True and pc["r_vor_korrektur"] < -0.5 and pc["r"] > 0.5
+        assert "POLUNG_KORRIGIERT" in a.fakten["flags"] and "POLUNG_FRAGLICH" not in a.fakten["flags"]
+        assert any("automatisch umgepolt" in h for h in a.fakten["hinweise"])
+        it = next(i for i in a.fakten["ism"]["items"] if i["faktor"] == "III")
+        assert it["polung_korrigiert"] and "korrigiert" in it["polung"]
+        # Ergebnis identisch mit der korrekt gepolten Variante
+        b = sv.analyse(fx["hsf"], fx["ind"], fx["xml"])
+        assert a.fakten["ism"]["faktoren"] == b.fakten["ism"]["faktoren"]
 
-    def test_erschlossener_fragebogen(self, fx):
-        s = sv.parse_sns_csv(fx["ind"])
-        fb = sv.build_erschlossenen_fragebogen(
-            s.items, [{"index": i, "faktor_id": 0, "richtung": "belastung"} for i in range(5)])
-        assert fb.quelle == "erschlossen" and all(q.faktoren == [0] for q in fb.fragen)
-        a = sv.analyse(fx["hsf"], fx["ind"], ind_fb=fb)
-        assert a.fakten["ism"]["quelle"] == "erschlossen"
-        assert "ISM_ZUORDNUNG_ERSCHLOSSEN" in a.fakten["flags"]
-        assert a.fakten["ism"]["unbesetzt"] == ["II", "III", "IV", "V", "VI"]
+    def test_polung_nur_warnung(self, fx):
+        p = sv.AnalyseParams(polung_korrektur_grenze=-0.99)
+        a = sv.analyse(fx["hsf"], fx["ind"], fx["xml_res"], params=p)
+        assert "POLUNG_FRAGLICH" in a.fakten["flags"] and "POLUNG_KORRIGIERT" not in a.fakten["flags"]
 
-    def test_diary_entries(self, fx):
-        a = sv.analyse(fx["hsf"], fx["ind"], fx["xml"], fx["doc"])
-        e = sv.diary_entries(a)
+    def test_diary_entries(self, analyse):
+        e = sv.diary_entries(analyse)
         assert len(e) == 39
         d = next(x for x in e if x["datum"] == "2026-03-10")
         assert d["tagebuch"] and "Podest" in d["kommentar"]
@@ -332,17 +375,15 @@ PILOT = os.environ.get("SNS_PILOT_DIR")
 
 def _pilot_files():
     d = Path(PILOT) if PILOT else None
-    return d if d and (d / "hsf.csv").exists() else None
+    return d if d and (d / "userexport.xlsx").exists() and (d / "individuell.xml").exists() else None
 
 
 @pytest.mark.skipif(not _pilot_files(), reason="SNS_PILOT_DIR nicht gesetzt (echte Pilotdaten nur lokal)")
 def test_pilot_sollwerte():
+    """Pilot WJ28718IND: Userexport + SNS-XML (Produktivpfad)."""
     d = _pilot_files()
-    a = sv.analyse((d / "hsf.csv").read_text(encoding="utf-8-sig"),
-                   (d / "individuell.csv").read_text(encoding="utf-8-sig") if (d / "individuell.csv").exists() else None,
-                   (d / "individuell.xml").read_text(encoding="utf-8") if (d / "individuell.xml").exists() else None,
-                   (d / "faktor_I.doc").read_text(encoding="utf-8", errors="replace")
-                   if (d / "faktor_I.doc").exists() else None)
+    a = sv.analyse_userexport((d / "userexport.xlsx").read_bytes(),
+                              (d / "individuell.xml").read_text(encoding="utf-8"))
     f = a.fakten
     assert f["zeitraum"]["messtage_hsf"] == 38 and f["zeitraum"]["tage"] == 39
     assert f["luecken"]["hsf_x"] == ["2026-09-12"]
@@ -359,9 +400,20 @@ def test_pilot_sollwerte():
     assert abs(r["block_anfang"] - 5.9) < 0.3 and abs(r["anfang_ende"] - 8.5) < 0.3
     sym = next(x for x in f["hsf"]["faktoren"] if x["id"] == 2)
     assert abs(sym["tau"] + 0.53) < 0.02
+    # individueller Bogen: Item III ressourcenseitig formuliert, im XML nicht umgepolt -> korrigiert
+    ism = f["ism"]
+    assert "POLUNG_KORRIGIERT" in f["flags"]
+    assert [c["korrigiert"] for c in f["polung_check"]] == [False, True, False, False, False]
+    assert ism["unbesetzt"] == ["VI"] and ism["anker_faktor"] == "II" and ism["langsamster_faktor"] == "V"
+    assert ism["tragende_faktoren"][0] == "IV"
+    assert abs(next(x for x in ism["faktoren"] if x["roemisch"] == "IV")["sprung_uebergang"] - 50.8) < 0.5
+    assert ism["faktor_I_negative_serie"] == {"start": "2026-08-28", "ende": "2026-09-02", "tage": 6}
+    e = sv.diary_entries(a)
+    assert len(e) == 38 and sum(1 for x in e if x["kommentar"]) == 30
 
 
-@pytest.mark.skipif(not (_pilot_files() and (_pilot_files() / "KomplexBasisHSF.pdf").exists()),
+@pytest.mark.skipif(not (_pilot_files() and (_pilot_files() / "KomplexBasisHSF.pdf").exists()
+                         and (_pilot_files() / "hsf.csv").exists()),
                     reason="SNS-Komplexitaetsexport (PDF) nicht vorhanden")
 def test_pilot_kalibrierung_gegen_sns():
     """DK exakt wie der SNS-Export (Fenster 7, Itemskala, Messfolge ohne x-Tage)."""

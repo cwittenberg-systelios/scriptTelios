@@ -11,6 +11,7 @@ from app.core import workflows as W
 from app.services import sns_llm as sl
 from app.services.generation_pipeline import PipelineInput, UploadBundle
 from app.services.quality_check import run_quality_check, serialize_issues
+from app.services import sns_verlauf as sv_mod
 from app.services.sns_pipeline import kuerzel_und_anrede, run_sns_generation
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "sns_verlauf"
@@ -24,24 +25,18 @@ def _job():
     return job
 
 
-def _bundle(ind=True, xml=True, doc=True):
-    b = UploadBundle(sns_hsf_bytes=(FIX / "hsf.csv").read_bytes(), sns_hsf_name="hsf.csv")
-    if ind:
-        b.sns_ind_bytes, b.sns_ind_name = (FIX / "individuell.csv").read_bytes(), "individuell.csv"
+def _bundle(xlsx=True, xml="individuell.xml"):
+    b = UploadBundle()
+    if xlsx:
+        b.sns_export_bytes, b.sns_export_name = (FIX / "userexport.xlsx").read_bytes(), "userexport.xlsx"
     if xml:
-        b.sns_xml_bytes, b.sns_xml_name = (FIX / "individuell.xml").read_bytes(), "individuell.xml"
-    if doc:
-        b.sns_doc_bytes, b.sns_doc_name = (FIX / "faktor_I.doc").read_bytes(), "faktor_I.doc"
+        b.sns_xml_bytes, b.sns_xml_name = (FIX / xml).read_bytes(), xml
     return b
 
 
 def _fake_generate(calls):
     async def fake(system, user, **kw):
         calls.append({"system": system, "user": user, **kw})
-        if kw.get("response_format") and "zuordnung" in kw["response_format"]["required"]:
-            n = len([ln for ln in user.splitlines() if ln[:1].isdigit()])
-            return {"structured_data": {"zuordnung": [{"index": i, "faktor_id": i % 6, "richtung": "belastung"}
-                                                     for i in range(n)]}}
         if kw.get("response_format"):
             dates = [ln[4:] for ln in user.splitlines() if ln.startswith("### ")]
             tage = []
@@ -71,7 +66,7 @@ def _fake_generate(calls):
 class TestRegistry:
     def test_workflow_registriert(self):
         spec = W.get("sns_verlauf")
-        assert spec and spec.label == "SNS-Verlaufsauswertung" and not spec.is_structural
+        assert spec and spec.label == "ISM-Auswertung" and not spec.is_structural
         assert "sns_verlauf" in W.WORKFLOW_KEYS
         assert W.word_limit_for("sns_verlauf") == (1000, 1800)
         from app.core.config import settings
@@ -111,7 +106,7 @@ class TestPipeline:
         assert out == {"text": "{}"} and called["ctx"] is ctx
         assert ctx.input_meta()["has_sns"] is True
 
-    async def test_ende_zu_ende_mit_xml(self):
+    async def test_ende_zu_ende(self):
         calls = []
         ctx = PipelineInput(workflow="sns_verlauf", instructions="", model="m", uploads=_bundle(),
                             patientenname="Frau K.", geschlecht_norm="w", sns_vorname="Anna")
@@ -124,7 +119,8 @@ class TestPipeline:
         assert "MEDIKATION_IM_UEBERGANGSFENSTER" in res["flags"]
         assert "hypnosystemisch" not in res["text"] and "systemisch gesehen" in res["text"]
         assert "Jonas" in res["namen"] and not any("Jonas" in e["tagebuch"] for e in res["quelle"])
-        assert res["zuordnung"] is None
+        assert "zuordnung" not in res and len(res["quelle"]) == 39
+        assert sum(1 for e in res["quelle"] if e["kommentar"]) == 5      # Kommentare zum individuellen Bogen
         # 7 Stage-A-Batches + 1 Stage B, keine Zuordnung
         assert len(calls) == 8 and calls[-1].get("response_format") is None
         assert calls[-1]["max_tokens"] == 6000 and "FAKTENBLOCK" in calls[-1]["user"]
@@ -138,28 +134,34 @@ class TestPipeline:
         pcts = [c.args[0] for c in job.set_progress.call_args_list]
         assert pcts == sorted(pcts) and pcts[-1] == 97
 
-    async def test_ende_zu_ende_ohne_xml_zuordnung_erschlossen(self):
+    async def test_polung_korrektur_im_ergebnis(self):
         calls = []
-        ctx = PipelineInput(workflow="sns_verlauf", instructions="", model="m", uploads=_bundle(xml=False, doc=False))
+        ctx = PipelineInput(workflow="sns_verlauf", instructions="", model="m",
+                            uploads=_bundle(xml="individuell_iii_ressource.xml"))
         out = await run_sns_generation(job=_job(), ctx=ctx, generate=_fake_generate(calls))
         res = json.loads(out["text"])
-        assert res["fakten"]["ism"]["quelle"] == "erschlossen" and len(res["zuordnung"]) == 5
-        assert "ISM_ZUORDNUNG_ERSCHLOSSEN" in res["flags"]
-        assert len(calls) == 9
-        assert "SNS_ZUORDNUNG_ERSCHLOSSEN" in [i.code for i in run_quality_check(out["text"], "sns_verlauf")]
+        assert "POLUNG_KORRIGIERT" in res["flags"]
+        assert "POLUNG AUTOMATISCH KORRIGIERT" in calls[-1]["user"]
+        assert out["generation_telemetry"]["sns_polung_korrigiert"] == 1
+        codes = [i.code for i in run_quality_check(out["text"], "sns_verlauf")]
+        assert "SNS_POLUNG_KORREKTUR_FEHLT" in codes          # Fake-Text erwaehnt die Korrektur nicht
 
-    async def test_nur_hsf(self):
-        calls = []
-        ctx = PipelineInput(workflow="sns_verlauf", instructions="", model="m", uploads=_bundle(False, False, False))
-        out = await run_sns_generation(job=_job(), ctx=ctx, generate=_fake_generate(calls))
-        res = json.loads(out["text"])
-        assert res["fakten"]["ism"] is None and "KEIN_INDIVIDUELLER_BOGEN" in res["flags"]
-        assert len(res["grafiken"]) == 5
+    async def test_fehlende_dateien(self):
+        with pytest.raises(RuntimeError, match="Userexport"):
+            await run_sns_generation(job=_job(), ctx=PipelineInput(workflow="sns_verlauf", instructions="", model="m",
+                                                                  uploads=_bundle(xlsx=False)),
+                                     generate=_fake_generate([]))
+        with pytest.raises(RuntimeError, match="XML"):
+            await run_sns_generation(job=_job(), ctx=PipelineInput(workflow="sns_verlauf", instructions="", model="m",
+                                                                  uploads=_bundle(xml=None)),
+                                     generate=_fake_generate([]))
 
-    async def test_fehlende_hsf(self):
-        ctx = PipelineInput(workflow="sns_verlauf", instructions="", model="m")
-        with pytest.raises(RuntimeError, match="HSF"):
-            await run_sns_generation(job=_job(), ctx=ctx, generate=_fake_generate([]))
+    async def test_xml_passt_nicht(self):
+        b = _bundle()
+        b.sns_xml_bytes = (sv_mod.HSF_XML_PATH).read_bytes()          # 19 Items statt 5
+        with pytest.raises(RuntimeError, match="nicht auswertbar"):
+            await run_sns_generation(job=_job(), ctx=PipelineInput(workflow="sns_verlauf", instructions="", model="m",
+                                                                  uploads=b), generate=_fake_generate([]))
 
     async def test_abbruch(self):
         job = _job()
@@ -197,10 +199,15 @@ class TestEndpoint:
         monkeypatch.setattr(jobs_api.job_queue, "run_job", lambda *a, **k: None)
         r = client.post("/api/jobs/generate", data={"workflow": "sns_verlauf", "workflow_instructions": "X",
                                                     "patientenname": "Frau K."})
-        assert r.status_code == 422 and "HSF" in r.text
+        assert r.status_code == 422 and "Userexport" in r.text
+        r = client.post("/api/jobs/generate", data={"workflow": "sns_verlauf", "workflow_instructions": "X"},
+                        files={"sns_export_xlsx": ("e.xlsx", (FIX / "userexport.xlsx").read_bytes(), "application/octet-stream")})
+        assert r.status_code == 422 and "XML" in r.text
         r = client.post("/api/jobs/generate", data={"workflow": "sns_verlauf", "workflow_instructions": "X",
                                                     "patientenname": "Frau K.", "sns_vorname": "Anna"},
-                        files={"sns_hsf_csv": ("hsf.csv", (FIX / "hsf.csv").read_bytes(), "text/csv")})
+                        files={"sns_export_xlsx": ("userexport.xlsx", (FIX / "userexport.xlsx").read_bytes(),
+                                                   "application/octet-stream"),
+                               "sns_ind_xml": ("i.xml", (FIX / "individuell.xml").read_bytes(), "text/xml")})
         assert r.status_code == 200, r.text
         assert created["workflow"] == "sns_verlauf" and created["patient_kuerzel"] == "Frau K."
-        assert "SNS: hsf.csv" in created["description"]
+        assert "SNS: userexport.xlsx" in created["description"]

@@ -2,7 +2,7 @@
 Generierungspfad workflow="sns_verlauf" (v19.41).
 
 Aufruf aus generation_pipeline.run_generation() (frueher Return wie ISM).
-Schritte: Parsen -> (Zuordnung ohne XML, D10=B) -> deterministische Analyse
+Schritte: Userexport + XML parsen -> deterministische Analyse
 -> Grafiken -> Pseudonymisierung -> Stage A -> Flags -> Faktenblock -> Stage B
 -> Phasennamen -> Ergebnis-JSON (result["text"]).
 
@@ -49,13 +49,11 @@ def kuerzel_und_anrede(patientenname: Optional[str], geschlecht_norm: Optional[s
 
 
 async def run_sns_generation(*, job, ctx, generate=generate_text) -> dict:
-    hsf_text = _decode(ctx.sns_hsf_bytes)
-    if not hsf_text or not hsf_text.strip():
-        raise RuntimeError("Kein HSF-Export hochgeladen - die SNS-Verlaufsauswertung braucht "
-                           "mindestens die Zeitreihen-CSV des HSF-Basisbogens.")
-    ind_text = _decode(ctx.sns_ind_bytes)
+    if not ctx.sns_export_bytes:
+        raise RuntimeError("Kein SNS-Userexport hochgeladen (.xlsx).")
     xml_text = _decode(ctx.sns_xml_bytes)
-    doc_text = _decode(ctx.sns_doc_bytes)
+    if not xml_text or not xml_text.strip():
+        raise RuntimeError("Kein Fragebogen-XML des individuellen Bogens hochgeladen.")
     kuerzel, anrede = kuerzel_und_anrede(ctx.patientenname, ctx.geschlecht_norm)
     model = ctx.model
 
@@ -63,37 +61,13 @@ async def run_sns_generation(*, job, ctx, generate=generate_text) -> dict:
         if getattr(job, "_cancel_requested", False):
             raise RuntimeError("__CANCELLED__")
 
-    # ── 1. Parsen + Zuordnung ──────────────────────────────────────────────
-    job.set_progress(5, "SNS-Daten", "Exporte lesen")
+    # ── 1. Parsen + 2. Analyse ─────────────────────────────────────────────
+    job.set_progress(5, "SNS-Daten", "Userexport und Fragebogen-XML lesen")
     try:
-        hsf = sns_verlauf.parse_sns_csv(hsf_text)
-        ind = sns_verlauf.parse_sns_csv(ind_text) if ind_text and ind_text.strip() else None
+        a = sns_verlauf.analyse_userexport(ctx.sns_export_bytes, xml_text)
     except ValueError as e:
-        raise RuntimeError(f"SNS-Export nicht lesbar: {e}") from e
-    if hsf.questionnaire and sns_verlauf.HSF_QUESTIONNAIRE_NAME.lower() not in hsf.questionnaire.lower():
-        logger.warning("sns_verlauf [%s]: HSF-CSV heisst '%s' (erwartet '%s')",
-                       job.job_id, hsf.questionnaire, sns_verlauf.HSF_QUESTIONNAIRE_NAME)
-
-    ind_fb = None
-    zuordnung = None
-    if ind is not None:
-        if xml_text and xml_text.strip():
-            try:
-                ind_fb = sns_verlauf.parse_sns_questionnaire_xml(xml_text)
-            except ValueError as e:
-                raise RuntimeError(f"Fragebogen-XML nicht lesbar: {e}") from e
-        else:
-            _cancel()
-            job.set_progress(8, "SNS-Daten", "Faktorzuordnung erschließen (kein XML)")
-            sysp, userp = sns_llm.build_zuordnung_prompt(ind.items)
-            _log_prompt(job.job_id, WORKFLOW, "sns_zuordnung", sysp, userp)
-            zuordnung = await sns_llm.run_zuordnung(ind.items, generate=generate, model=model)
-            _log_output(job.job_id, WORKFLOW, "sns_zuordnung", json.dumps(zuordnung, ensure_ascii=False), None)
-            ind_fb = sns_verlauf.build_erschlossenen_fragebogen(ind.items, zuordnung)
-
-    # ── 2. Analyse + Grafiken ──────────────────────────────────────────────
+        raise RuntimeError(f"SNS-Daten nicht auswertbar: {e}") from e
     job.set_progress(12, "Analyse", "Faktoren, Komplexität, Übergänge")
-    a = sns_verlauf.analyse(hsf_text, ind_text, None, doc_text, ind_fb=ind_fb)
     entries_raw = sns_verlauf.diary_entries(a)
     entries, namen = sns_llm.pseudonymisiere(entries_raw, vorname=ctx.sns_vorname, kuerzel=kuerzel)
 
@@ -155,7 +129,6 @@ async def run_sns_generation(*, job, ctx, generate=generate_text) -> dict:
         "grafiken": grafiken,
         "namen": namen,
         "quelle": entries,
-        "zuordnung": zuordnung,
         "hinweise": a.hinweise,
     }
     result_json = json.dumps(result, ensure_ascii=False)
@@ -178,8 +151,7 @@ async def run_sns_generation(*, job, ctx, generate=generate_text) -> dict:
             "sns_messtage": a.fakten["zeitraum"]["messtage_hsf"],
             "sns_stage_a_batches": n_batches,
             "sns_stage_a_events": len(events),
-            "sns_ind_bogen": ind is not None,
-            "sns_zuordnung_quelle": (a.fakten.get("ism") or {}).get("quelle") if ind is not None else None,
+            "sns_polung_korrigiert": sum(1 for c in a.fakten["polung_check"] if c.get("korrigiert")),
             "sns_grafiken": len(grafiken),
             "sns_result_bytes": len(result_json),
         },

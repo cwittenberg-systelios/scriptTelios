@@ -35,6 +35,7 @@ pdf2image==1.17.0                # PDF zu Bild fuer OCR-Fallback
 # ── SNS-Verlaufsauswertung (v19.41) ───────────────────────────────
 numpy>=1.26                      # bisher nur transitiv (faster-whisper) - jetzt explizit
 matplotlib==3.10.9               # Grafiken als PNG (Agg, headless) fuer Vorschau + DOCX
+openpyxl==3.1.5                  # SNS-Userexport (.xlsx) lesen
 
 # ── Tests ──────────────────────────────────────────────────────────
 pytest==8.3.4

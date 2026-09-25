@@ -9,8 +9,13 @@ berechneten Zahlen.
 
 Nur numpy + Standardbibliothek (kein pandas/scipy).
 
+Eingabe (v19.41, E1/E2): SNS-Userexport (.xlsx, beide Boegen mit Rohwerten,
+Tagebuch und Kommentaren) + SNS-XML des individuellen Bogens (Itemtexte und
+Faktorzuordnung, Spalten des Userexports = Fragenreihenfolge im XML). Die
+Faktorstrukturen sind Konstanten (HSF-XML im Repo, ISM_FAKTOREN).
+
 Aufbau:
-  1. Parser         - SNS-CSV, Fragebogen-XML, Faktorexport (.doc/MHTML)
+  1. Parser         - SNS-Userexport (.xlsx), SNS-CSV, Fragebogen-XML
   2. HSF-Konfig     - aus resources/sns/HSF_kurz_Basis.xml (D11=B)
   3. Dynamische Komplexitaet (Schiepek & Strunk 2010) + SNS-Kritikalitaet
   4. Musterdetektion - Uebergaenge, Vorlaeufer, Phasen, Einbrueche, Recurrence
@@ -21,7 +26,6 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import functools
-import html
 import io
 import logging
 import math
@@ -97,7 +101,8 @@ class AnalyseParams:
     konstant_sd: float = 1.0
     decken_schwelle: float = 95.0
     decken_anteil: float = 0.30
-    polung_r_grenze: float = -0.3
+    polung_r_grenze: float = -0.3          # darunter: Warnung "Polung fraglich"
+    polung_korrektur_grenze: float = -0.5  # darunter: automatisch umpolen (E3=A)
     anfang_ende_tage: int = 3
 
 
@@ -190,36 +195,110 @@ def _to_float(x: str) -> float:
         return math.nan
 
 
-def parse_sns_factor_doc(text: str) -> dict:
-    """SNS-Druckexport eines Faktors (.doc = MHTML/HTML).
-
-    Liefert {'faktor': str, 'z': {date: float}, 'comments': {date: str}}.
-    Tagesblock: 'Tag <n> | <d.m.yyyy> | Value: <z>' gefolgt von 'Kommentar:' und
-    Kommentar in Anfuehrungszeichen oder 'Keine Kommentare vorhanden'.
-    """
-    t = re.sub(r"=\r?\n", "", text)               # MHTML quoted-printable Zeilenumbrueche
-    t = re.sub(r"<br\s*/?>", "\n", t, flags=re.I)
-    t = html.unescape(re.sub(r"<[^>]+>", " | ", t))
-    m = re.search(r"Faktoren:\s*(?:\|\s*)*(.+?)\s*\|?\s*Werte:", t, re.S)
-    faktor = re.sub(r"[\s|]+", " ", m.group(1)).strip() if m else ""
-    parts = re.split(
-        r"Tag \d+\s*\|?\s*(\d{1,2})\.(\d{1,2})\.(\d{4})\s*\|?\s*Value:\s*(-?[\d.,]+)", t,
-    )
-    z: dict[dt.date, float] = {}
-    com: dict[dt.date, str] = {}
-    for i in range(1, len(parts) - 4, 5):
-        d_, m_, y_, v_, body = parts[i:i + 5]
+def _parse_export_date(v) -> dt.date | None:
+    if isinstance(v, dt.datetime):
+        return v.date()
+    if isinstance(v, dt.date):
+        return v
+    t = str(v or "").strip()
+    for fmt in ("%m/%d/%Y %H:%M", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d.%m.%Y %H:%M", "%d.%m.%Y"):
         try:
-            d = dt.date(int(y_), int(m_), int(d_))
+            return dt.datetime.strptime(t, fmt).date()
         except ValueError:
             continue
-        z[d] = _to_float(v_)
-        cm = re.search(r'["„“](.*?)["“”]', body.split("SNS -")[0], re.S)
-        if cm and cm.group(1).strip():
-            com[d] = re.sub(r"[ \t|]+", " ", cm.group(1)).strip()
-        # Hinweis: 'Keine Kommentare vorhanden' heisst NICHT automatisch x-Tag;
-        # uebertragene Tage kommen aus der CSV (imputed), nicht aus dem Export.
-    return {"faktor": faktor, "z": z, "comments": com}
+    return None
+
+
+def parse_sns_userexport(data: bytes) -> list[SnsSeries]:
+    """Siehe _parse_sns_userexport; unterdrueckt die openpyxl-Warnung zu den
+    unbekannten Excel-Extensions des SNS-Exports (tritt beim Lesen der Zeilen auf)."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return _parse_sns_userexport(data)
+
+
+def _parse_sns_userexport(data: bytes) -> list[SnsSeries]:
+    """SNS-Userexport (.xlsx, 'SNS Datasheet'): ein Blatt je Fragebogen.
+
+    Blattaufbau: 'User' / 'Questionnaire' in Spalte C/D, Kopfzeile mit
+    'Trigger Date' | 'Filling Date' | ... | 'Final Comment', darunter eine
+    Zeile mit den Itemnummern 1..n, dann die Tageszeilen. Filling Date ' - '
+    = nicht ausgefuellt, SNS hat die Vortageswerte eingetragen -> fehlend
+    (Werte bleiben in imputed_values). Itemtexte fehlen im Export: `items`
+    enthaelt Platzhalter 'Item k' und wird per apply_titles() aus dem XML
+    gesetzt (Spaltenreihenfolge = Fragenreihenfolge im SNS-XML).
+    """
+    try:
+        import openpyxl
+    except ImportError as exc:  # pragma: no cover - Abhaengigkeit in requirements.txt
+        raise ValueError("openpyxl fehlt - Userexport kann nicht gelesen werden") from exc
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception as exc:  # noqa: BLE001 - jede Lesestoerung ist ein Formatfehler
+        raise ValueError(f"Userexport nicht lesbar (.xlsx erwartet): {exc}") from exc
+    out: list[SnsSeries] = []
+    for ws in wb.worksheets:
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        user = quest = ""
+        head_i = None
+        for i, r in enumerate(rows[:20]):
+            cells = [str(c).strip() if c is not None else "" for c in r]
+            for j, c in enumerate(cells[:-1]):
+                if c == "User":
+                    user = cells[j + 1]
+                elif c == "Questionnaire":
+                    quest = cells[j + 1]
+            if "Trigger Date" in cells:
+                head_i = i
+                break
+        if head_i is None:
+            continue
+        head = [str(c).strip() if c is not None else "" for c in rows[head_i]]
+        c_date = head.index("Trigger Date")
+        c_fill = head.index("Filling Date") if "Filling Date" in head else c_date + 1
+        c_com = head.index("Final Comment") if "Final Comment" in head else None
+        nums = rows[head_i + 1] if head_i + 1 < len(rows) else []
+        item_cols = [j for j, c in enumerate(nums) if c is not None and str(c).strip() not in ("",)
+                     and j not in (c_date, c_fill, c_com) and _to_float(str(c)) == _to_float(str(c))]
+        if not item_cols:
+            continue
+        dates: list[dt.date] = []
+        vals: list[list[float]] = []
+        comments: dict[dt.date, str] = {}
+        imputed: list[dt.date] = []
+        imputed_values: dict[dt.date, list[float]] = {}
+        for r in rows[head_i + 2:]:
+            if not r or c_date >= len(r):
+                continue
+            d = _parse_export_date(r[c_date])
+            if d is None:
+                continue
+            v = [_to_float(str(r[j])) if j < len(r) and r[j] is not None else math.nan for j in item_cols]
+            fill = str(r[c_fill]).strip() if c_fill < len(r) and r[c_fill] is not None else ""
+            is_x = fill in ("", "-")
+            if is_x:
+                imputed.append(d)
+                imputed_values[d] = v
+                v = [math.nan] * len(item_cols)
+            elif c_com is not None and c_com < len(r) and r[c_com] and str(r[c_com]).strip():
+                comments[d] = str(r[c_com]).strip()
+            if d in dates:
+                vals[dates.index(d)] = v
+            else:
+                dates.append(d)
+                vals.append(v)
+        if not dates:
+            continue
+        order = np.argsort([d.toordinal() for d in dates], kind="stable")
+        out.append(SnsSeries(
+            user, quest, [f"Item {k + 1}" for k in range(len(item_cols))],
+            [dates[i] for i in order], np.array([vals[i] for i in order], float),
+            comments, sorted(imputed), imputed_values,
+        ))
+    if not out:
+        raise ValueError("Userexport enthält keine Fragebogen-Blätter (Kopfzeile 'Trigger Date' fehlt)")
+    return out
 
 
 @dataclass
@@ -238,7 +317,7 @@ class SnsQuestionnaire:
     name: str
     faktoren: dict[int, dict]          # id -> {'name','beschreibung','operation'}
     fragen: list[SnsQuestion]
-    quelle: str = "xml"                # 'xml' | 'erschlossen' | 'hsf'
+    quelle: str = "xml"                # 'xml' | 'hsf'
 
 
 def parse_sns_questionnaire_xml(text: str) -> SnsQuestionnaire:
@@ -293,6 +372,36 @@ def load_hsf_basis() -> SnsQuestionnaire:
     fb = parse_sns_questionnaire_xml(HSF_XML_PATH.read_text(encoding="utf-8"))
     fb.quelle = "hsf"
     return fb
+
+
+def apply_titles(series: SnsSeries, fb: SnsQuestionnaire, label: str) -> SnsSeries:
+    """Itemtexte per Position aus dem XML setzen (Userexport hat nur Nummern)."""
+    if len(series.items) != len(fb.fragen):
+        raise ValueError(
+            f"{label}: Userexport hat {len(series.items)} Items, das Fragebogen-XML "
+            f"{len(fb.fragen)} - passt das XML zu diesem Bogen?")
+    series.items = [q.titel for q in fb.fragen]
+    return series
+
+
+def select_sheets(sheets: list[SnsSeries], ind_name: str | None) -> tuple[SnsSeries, SnsSeries | None]:
+    """HSF-Blatt ueber den Fragebogennamen, individuelles Blatt ueber den Namen
+    im XML (sonst das einzige verbleibende Blatt)."""
+    hsf = [s for s in sheets if HSF_QUESTIONNAIRE_NAME.lower() in (s.questionnaire or "").lower()]
+    if not hsf:
+        raise ValueError(f"Userexport enthält kein Blatt „{HSF_QUESTIONNAIRE_NAME}“")
+    rest = [s for s in sheets if s is not hsf[0]]
+    if not rest:
+        return hsf[0], None
+    if ind_name:
+        hit = [s for s in rest if _norm(s.questionnaire) == _norm(ind_name)]
+        if len(hit) == 1:
+            return hsf[0], hit[0]
+    if len(rest) == 1:
+        return hsf[0], rest[0]
+    raise ValueError("Userexport enthält mehrere weitere Fragebögen ("
+                     + ", ".join(s.questionnaire for s in rest)
+                     + ") und keiner heißt wie das Fragebogen-XML")
 
 
 def _norm(s: str) -> str:
@@ -621,6 +730,8 @@ class ItemInfo:
     pol_min: str = ""
     pol_max: str = ""
     skala: tuple[float, float] = (0.0, 100.0)   # Itemskala aus dem XML (HSF: min 1 ab Item 7)
+    polung_korrigiert: bool = False              # E3=A: gegen das XML automatisch umgepolt
+    polung_r: float | None = None                # r mit dem Komposit VOR einer Korrektur
 
 
 @dataclass
@@ -648,7 +759,6 @@ class SnsAnalyse:
     phasen: list[dict]
     einbrueche: list[dict]
     R: np.ndarray
-    faktor_export: dict | None
     flags: list[str]
     hinweise: list[str]
     fakten: dict
@@ -718,56 +828,54 @@ def _iso(d: dt.date | None) -> str | None:
     return d.isoformat() if d else None
 
 
-def build_erschlossenen_fragebogen(item_titles: list[str], zuordnung: list[dict]) -> SnsQuestionnaire:
-    """D10=B: aus der LLM-Zuordnung {index, faktor_id, richtung} einen
-    Fragebogen in der 6-Faktoren-Struktur bauen (quelle='erschlossen')."""
-    from app.services.ism import ISM_FAKTOREN
-    faktoren = {f["id"]: {"name": f["name"], "beschreibung": f["beschreibung_xml"],
-                          "operation": "SUM"} for f in ISM_FAKTOREN}
-    by_idx = {int(z["index"]): z for z in zuordnung if "index" in z}
-    fragen = []
-    for i, t in enumerate(item_titles):
-        z = by_idx.get(i)
-        fid = int(z["faktor_id"]) if z and z.get("faktor_id") is not None else 0
-        fid = fid if fid in faktoren else 0
-        richtung = (z or {}).get("richtung") or "belastung"
-        fragen.append(SnsQuestion(
-            t, [fid], [1.0], "", "",
-            change_poles=(fid == ISM_BELASTUNG_FAKTOR_ID and richtung == "ressource"),
-        ))
-    return SnsQuestionnaire("individueller Fragebogen (Zuordnung erschlossen)",
-                            faktoren, fragen, quelle="erschlossen")
+def analyse_userexport(xlsx: bytes, ind_xml_text: str,
+                       params: AnalyseParams | None = None) -> SnsAnalyse:
+    """Produktiver Einstieg (E1/E2): SNS-Userexport + SNS-XML des individuellen Bogens."""
+    ind_fb = parse_sns_questionnaire_xml(ind_xml_text)
+    hsf, ind = select_sheets(parse_sns_userexport(xlsx), ind_fb.name)
+    apply_titles(hsf, load_hsf_basis(), "HSF-Basisbogen")
+    if ind is None:
+        raise ValueError("Userexport enthält kein Blatt des individuellen Fragebogens")
+    apply_titles(ind, ind_fb, "Individueller Fragebogen")
+    return analyse_series(hsf, ind, ind_fb, params)
 
 
 def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None = None,
-            faktor_doc_text: str | None = None, ind_fb: SnsQuestionnaire | None = None,
-            params: AnalyseParams | None = None) -> SnsAnalyse:
-    """Vollstaendige deterministische Auswertung.
-
-    ind_fb: bereits geparster/erschlossener Fragebogen (hat Vorrang vor ind_xml_text).
-    """
-    p = params or AnalyseParams()
+            ind_fb: SnsQuestionnaire | None = None, params: AnalyseParams | None = None) -> SnsAnalyse:
+    """Einstieg ueber die SNS-Zeitreihen-CSVs (Tests, Kalibrierung). Itemtexte
+    stehen in der CSV-Kopfzeile und werden per Text dem XML zugeordnet."""
     hsf = parse_sns_csv(hsf_text)
-    hsf_fb = load_hsf_basis()
     ind = parse_sns_csv(ind_text) if ind_text and ind_text.strip() else None
-    ind_raw = parse_sns_csv(ind_text, keep_imputed=True) if ind else None
     if ind_fb is None and ind_xml_text and ind_xml_text.strip():
         ind_fb = parse_sns_questionnaire_xml(ind_xml_text)
-    faktor_export = None
-    if faktor_doc_text and faktor_doc_text.strip():
-        try:
-            faktor_export = parse_sns_factor_doc(faktor_doc_text)
-            if not faktor_export["z"]:
-                faktor_export = None
-        except Exception as exc:  # noqa: BLE001 - Export ist optional
-            logger.warning("sns_verlauf: Faktorexport nicht lesbar: %s", exc)
-            faktor_export = None
+    return analyse_series(hsf, ind, ind_fb, params)
+
+
+def _with_imputed(s: SnsSeries) -> SnsSeries:
+    """Kopie mit den von SNS uebertragenen Werten an den x-Tagen."""
+    v = s.values.copy()
+    for i, d in enumerate(s.dates):
+        if d in s.imputed_values:
+            v[i] = s.imputed_values[d]
+    return SnsSeries(s.username, s.questionnaire, list(s.items), list(s.dates), v,
+                     dict(s.comments), list(s.imputed), dict(s.imputed_values))
+
+
+def analyse_series(hsf: SnsSeries, ind: SnsSeries | None = None, ind_fb: SnsQuestionnaire | None = None,
+                   params: AnalyseParams | None = None) -> SnsAnalyse:
+    """Vollstaendige deterministische Auswertung auf geparsten Reihen."""
+    p = params or AnalyseParams()
+    hsf_fb = load_hsf_basis()
+    ind_raw = _with_imputed(ind) if ind is not None else None
 
     hinweise: list[str] = []
     flags: list[str] = []
 
-    # ── Kalender ────────────────────────────────────────────────────────────
-    all_dates = list(hsf.dates) + (list(ind.dates) if ind else [])
+    # ── Kalender (erster bis letzter AUSGEFUELLTER Tag) ─────────────────────
+    all_dates = [d for d in hsf.dates if d not in hsf.imputed] + \
+                ([d for d in ind.dates if d not in ind.imputed] if ind else [])
+    if not all_dates:
+        raise ValueError("keine ausgefüllten Messtage")
     days = _kalender(min(all_dates), max(all_dates))
     n = len(days)
     H = _to_calendar(hsf, days)
@@ -833,6 +941,27 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
         comp = np.array([np.nanmean(r) if (~np.isnan(r)).any() else np.nan
                          for r in Xp[:, comp_cols]])
 
+    # ── Polungspruefung individueller Items (E3=A) ─────────────────────────
+    # Die Polung kommt aus dem XML (Faktor III ohne changePoles = Belastung).
+    # In der Praxis wird changePoles beim Umformulieren oft nicht gesetzt;
+    # widerspricht der Verlauf der Annahme klar (r mit dem HSF-Komposit
+    # < polung_korrektur_grenze), wird das Item automatisch umgepolt.
+    for it in items:
+        if it.bogen != "ind" or it.polung == 0:
+            continue
+        r0 = nancorr(Xp[:, it.col], comp)
+        it.polung_r = r0 if np.isfinite(r0) else None
+        if np.isfinite(r0) and r0 < p.polung_korrektur_grenze:
+            it.polung = -it.polung
+            it.polung_korrigiert = True
+            Xp[:, it.col] = _polarize(X[:, it.col], it.polung, it.skala)
+            r_txt = f"{r0:.2f}".replace(".", ",")
+            hinweise.append(
+                f"Item „{it.kurz}“ automatisch umgepolt (Verlauf korreliert mit r = "
+                f"{r_txt} gegen die im XML angenommene Richtung)")
+    if any(it.polung_korrigiert for it in items):
+        flags.append("POLUNG_KORRIGIERT")
+
     # ── HSF-Faktoren ───────────────────────────────────────────────────────
     hsf_faktoren: list[dict] = []
     for fid, f in sorted(hsf_fb.faktoren.items()):
@@ -889,7 +1018,9 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
             with np.errstate(all="ignore"):
                 w = np.array([np.nanmean(r) if (~np.isnan(r)).any() else np.nan
                               for r in Xp[:, cols]])
-            # SNS-z: Rohwerte inkl. x-Zeilen, gewichtete Summe, changePoles -> umpolen
+            # z wie im SNS (gewichtete Summe, z ueber alle Zeilen inkl. x-Tage),
+            # aber auf den gepolten Werten (hoch = Ressource) - bei Items ohne
+            # Umpolung identisch mit dem SNS-Faktorwert.
             raw_cols = [c - len(hsf.items) for c in cols]
             V = ind_raw.values[:, raw_cols].astype(float).copy()
             wts = []
@@ -897,8 +1028,7 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
                 it = items[c]
                 j = it.faktor_ids.index(fid)
                 wts.append(it.gewichte[j] if j < len(it.gewichte) else 1.0)
-                if it.change_poles:
-                    V[:, cols.index(c)] = 100.0 - V[:, cols.index(c)]
+                V[:, cols.index(c)] = _polarize(V[:, cols.index(c)], it.polung, it.skala)
             ok = ~np.isnan(V).any(1)
             zraw = np.full(len(ind_raw.dates), np.nan)
             if ok.sum() > 1:
@@ -911,8 +1041,6 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
                                  "z": z_cal, "besetzt": True})
         if any(not f["besetzt"] for f in ism_faktoren):
             flags.append("ISM_FAKTOR_UNBESETZT")
-        if ind_fb.quelle == "erschlossen":
-            flags.append("ISM_ZUORDNUNG_ERSCHLOSSEN")
     elif ind is not None:
         flags.append("ISM_OHNE_ZUORDNUNG")
 
@@ -1049,13 +1177,6 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
             if run and run[1] - run[0] >= 2:
                 neg_serie = {"start": _iso(days[run[0]]), "ende": _iso(days[run[1] - 1]),
                              "tage": run[1] - run[0]}
-        # Faktorexport-Abgleich (Selbsttest des Parsers)
-        export_check = None
-        if faktor_export and fI is not None and fI["z"] is not None:
-            diffs = [abs(fI["z"][days.index(d)] - z) for d, z in faktor_export["z"].items()
-                     if d in days and np.isfinite(fI["z"][days.index(d)]) and np.isfinite(z)]
-            export_check = {"faktor": faktor_export["faktor"], "tage": len(diffs),
-                            "max_abweichung": _rnd(max(diffs), 4) if diffs else None}
         ism_out = {
             "quelle": ind_fb.quelle, "fragebogen_name": ind_fb.name,
             "faktoren": fak_list,
@@ -1064,11 +1185,12 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
             "anker_faktor": anker["roemisch"] if anker else None,
             "langsamster_faktor": langsam["roemisch"] if langsam else None,
             "faktor_I_negative_serie": neg_serie,
-            "faktorexport": export_check,
             "items": [{
                 "kurz": it.kurz, "titel": it.titel, "faktor": ISM_ROEMISCH.get(it.faktor_ids[0], "?")
                 if it.faktor_ids else None, "faktor_ids": it.faktor_ids,
-                "polung": "hoch = Belastung (umgepolt)" if it.polung < 0 else "hoch = Ressource",
+                "polung": ("hoch = Belastung (umgepolt)" if it.polung < 0 else "hoch = Ressource")
+                + (" – automatisch korrigiert" if it.polung_korrigiert else ""),
+                "polung_korrigiert": it.polung_korrigiert,
                 "pol_min": it.pol_min, "pol_max": it.pol_max,
                 "ereignisbezogen": bool(re.search(r"\b(heute|einen schritt|gewagt|geschafft)\b",
                                                   it.titel, re.I)),
@@ -1078,7 +1200,6 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
         ism_out = {"quelle": None, "fragebogen_name": ind.questionnaire, "faktoren": [],
                    "unbesetzt": [], "tragende_faktoren": [], "anker_faktor": None,
                    "langsamster_faktor": None, "faktor_I_negative_serie": None,
-                   "faktorexport": None,
                    "items": [{"kurz": it.kurz, "titel": it.titel, "faktor": None,
                               "faktor_ids": [], "polung": "hoch = Ressource (angenommen)",
                               "pol_min": "", "pol_max": "", "ereignisbezogen": False}
@@ -1092,7 +1213,9 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
         r = nancorr(Xp[:, it.col], comp) if it.col not in comp_cols else math.nan
         fraglich = bool(np.isfinite(r) and r < p.polung_r_grenze)
         if it.bogen == "ind" or fraglich:
-            polung_check.append({"item": it.kurz, "r": _rnd(r, 2), "fraglich": fraglich})
+            polung_check.append({"item": it.kurz, "r": _rnd(r, 2), "fraglich": fraglich,
+                                 "korrigiert": it.polung_korrigiert,
+                                 "r_vor_korrektur": _rnd(it.polung_r, 2) if it.polung_korrigiert else None})
     if any(c["fraglich"] for c in polung_check):
         flags.append("POLUNG_FRAGLICH")
 
@@ -1156,7 +1279,8 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
     # ── Luecken ────────────────────────────────────────────────────────────
     hsf_set = set(hsf.dates) - set(hsf.imputed)
     hsf_fehlend = [d for d in days if d not in hsf_set]
-    ind_fehlend = [d for d in days if ind and d >= min(ind.dates) and d not in (set(ind.dates) - set(ind.imputed))]
+    ind_real = (set(ind.dates) - set(ind.imputed)) if ind else set()
+    ind_fehlend = [d for d in days if ind_real and d >= min(ind_real) and d not in ind_real]
     if hsf.imputed or hsf_fehlend or (ind and (ind.imputed or ind_fehlend)):
         flags.append("LUECKEN")
 
@@ -1189,8 +1313,10 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
                      "tagebucheintraege": len(hsf.comments)},
         "sns": {"username": hsf.username, "hsf_fragebogen": hsf.questionnaire,
                 "ind_fragebogen": ind.questionnaire if ind else None},
-        "luecken": {"hsf_fehlend": [_iso(d) for d in hsf_fehlend], "hsf_x": [_iso(d) for d in hsf.imputed],
-                    "ind_fehlend": [_iso(d) for d in ind_fehlend], "ind_x": [_iso(d) for d in ind.imputed] if ind else []},
+        "luecken": {"hsf_fehlend": [_iso(d) for d in hsf_fehlend],
+                    "hsf_x": [_iso(d) for d in hsf.imputed if days[0] <= d <= days[-1]],
+                    "ind_fehlend": [_iso(d) for d in ind_fehlend],
+                    "ind_x": [_iso(d) for d in ind.imputed if days[0] <= d <= days[-1]] if ind else []},
         "hsf": {"faktoren": hsf_rows, "items": [r for r in item_rows if r["bogen"] == "hsf"],
                 "komposit": {"items": [items[c].kurz for c in comp_cols], "anfang": _rnd(ca), "ende": _rnd(ce),
                              "delta": _rnd(ce - ca) if ca is not None and ce is not None else None,
@@ -1230,7 +1356,7 @@ def analyse(hsf_text: str, ind_text: str | None = None, ind_xml_text: str | None
         X=X, Xp=Xp, comp=comp, hsf_faktoren=hsf_faktoren, ism_faktoren=ism_faktoren,
         var_cols=var_cols, DK=DK, dk_mean=dk_mean, kritisch=kritisch, resonanz=resonanz,
         uebergaenge=uebergaenge, phasen=phasen, einbrueche=einbrueche, R=R,
-        faktor_export=faktor_export, flags=sorted(set(flags)), hinweise=hinweise, fakten=fakten,
+        flags=sorted(set(flags)), hinweise=hinweise, fakten=fakten,
     )
 
 
@@ -1254,9 +1380,9 @@ def _einbrueche_vor_nach(einbrueche: list[dict], haupt: dict | None) -> dict:
 # ── Tagebuch-Quelle fuer Stage A / Pseudonymisierung ─────────────────────────
 
 def diary_entries(a: SnsAnalyse) -> list[dict]:
-    """Je Tag: HSF-Tagebuch + Kernanliegen-Kommentar (Faktorexport)."""
+    """Je Tag: HSF-Tagebuch + Kommentar zum individuellen Bogen (Kernanliegen)."""
     out = []
-    kom = a.faktor_export["comments"] if a.faktor_export else {}
+    kom = a.ind.comments if a.ind is not None else {}
     for d in a.days:
         t = a.hsf.comments.get(d, "")
         k = kom.get(d, "")

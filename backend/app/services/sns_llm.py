@@ -2,7 +2,6 @@
 SNS-Verlaufsauswertung (v19.41) - LLM-Teil.
 
   Pseudonymisierung  deterministisch vor Stage A (Spec 5.3)
-  Zuordnung (D10=B)  ohne Fragebogen-XML: LLM schlaegt ISM-Faktor je Item vor
   Stage A            Tagebuch-Extraktion, strict JSON, Batches
   Flags nach Stage A PLATEAU_ALS_EINBRUCH, MEDIKATION_IM_UEBERGANGSFENSTER,
                      SOMATIK_NEU, SUIZIDALITAET_IN_QUELLE
@@ -146,76 +145,6 @@ def pseudonymisiere(entries: list[dict], vorname: str | None = None, kuerzel: st
         out.append({**e, "tagebuch": t, "kommentar": k})
     out = [{**e, "tagebuch": _rest(e["tagebuch"]), "kommentar": _rest(e["kommentar"])} for e in out]
     return out, sorted(namen)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Zuordnung ohne XML (D10=B)
-# ═════════════════════════════════════════════════════════════════════════════
-
-def build_zuordnung_schema() -> dict:
-    return {
-        "type": "object", "required": ["zuordnung"],
-        "properties": {"zuordnung": {"type": "array", "items": {
-            "type": "object", "required": ["index", "faktor_id", "richtung"],
-            "properties": {
-                "index": {"type": "integer"},
-                "faktor_id": {"type": "integer", "minimum": 0, "maximum": 5},
-                "richtung": {"enum": ["belastung", "ressource"]},
-                "begruendung": {"type": "string"},
-            }}}},
-    }
-
-
-def build_zuordnung_prompt(item_titles: list[str]) -> tuple[str, str]:
-    from app.services.ism import ISM_FAKTOREN
-    fak = "\n".join(f"- faktor_id {f['id']} = {f['name']}: {f['beschreibung_prompt']}"
-                    for f in ISM_FAKTOREN)
-    system = (
-        "Du ordnest Items eines individuellen SNS-Fragebogens der 6-Faktoren-Struktur "
-        "der idiographischen Systemmodellierung zu. Antworte AUSSCHLIESSLICH mit JSON "
-        "{\"zuordnung\": [{\"index\": 0, \"faktor_id\": 0, \"richtung\": \"belastung\"}, ...]}.\n\n"
-        "FAKTOREN:\n" + fak + "\n\n"
-        "REGELN:\n- Jedes Item genau einem Faktor zuordnen (index = Position in der Liste).\n"
-        "- richtung nur für Faktor 2 relevant: 'belastung' (hohes Rating = hohe Belastung) oder "
-        "'ressource' (Item ist auf die Ressourcenseite gedreht, hohes Rating = gelungener Umgang). "
-        "Für alle anderen Faktoren 'ressource'.\n"
-        "- Im Zweifel: Zielformulierungen ('einen Schritt näher', 'mein Ziel') -> 0; Kraftquellen "
-        "-> 1; Symptome/Ängste/alte Muster -> 2; Gewinn im Erleben -> 3; Preis/Abschied von "
-        "Mustern -> 4; Umdeutung von Hindernissen -> 5."
-    )
-    user = "ITEMS:\n" + "\n".join(f"{i}: {t}" for i, t in enumerate(item_titles))
-    return system, user
-
-
-def parse_zuordnung(data: Any, n_items: int) -> list[dict]:
-    out = []
-    seen = set()
-    for z in (data or {}).get("zuordnung", []) if isinstance(data, dict) else []:
-        try:
-            i = int(z.get("index"))
-            fid = int(z.get("faktor_id"))
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if not (0 <= i < n_items) or i in seen or not (0 <= fid <= 5):
-            continue
-        seen.add(i)
-        out.append({"index": i, "faktor_id": fid,
-                    "richtung": "ressource" if z.get("richtung") == "ressource" else "belastung",
-                    "begruendung": str(z.get("begruendung") or "")[:200]})
-    for i in range(n_items):
-        if i not in seen:
-            out.append({"index": i, "faktor_id": 0, "richtung": "belastung",
-                        "begruendung": "nicht zugeordnet (Fallback Faktor I)"})
-    return sorted(out, key=lambda z: z["index"])
-
-
-async def run_zuordnung(item_titles: list[str], *, generate: GeneratorFn, model: str | None,
-                        max_tokens: int = 1200) -> list[dict]:
-    system, user = build_zuordnung_prompt(item_titles)
-    res = await generate(system, user, max_tokens=max_tokens, model=model, workflow=WORKFLOW,
-                         response_format=build_zuordnung_schema(),
-                         temperature_override=STAGE_A_TEMPERATURE)
-    return parse_zuordnung(res.get("structured_data"), len(item_titles))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -448,8 +377,7 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
 
     ism = f.get("ism")
     if ism:
-        q = {"xml": "aus dem Fragebogen-XML", "erschlossen": "vom Modell aus den Itemtexten ERSCHLOSSEN (nicht bestätigt)",
-             None: "nicht möglich (kein XML)"}[ism["quelle"]]
+        q = {"xml": "aus dem Fragebogen-XML", None: "nicht möglich (kein XML)"}.get(ism["quelle"], "aus dem Fragebogen-XML")
         L.append(f"\nINDIVIDUELLER FRAGEBOGEN: {len(ism['items'])} Items, Faktorzuordnung {q}.")
         for it in ism["items"]:
             L.append(f"- Item ({it['faktor'] or 'ohne Faktor'}): \"{it['titel']}\" [{it['polung']}]"
@@ -525,6 +453,13 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
     if f["kopplung"]:
         L.append("KOPPLUNGEN (Pearson r, stärkste): " + "; ".join(
             f"{k['a']} × {k['b']} r {_fmt(k['r'], 2)}" for k in f["kopplung"][:5]))
+    kor = [c for c in f["polung_check"] if c.get("korrigiert")]
+    if kor:
+        L.append("POLUNG AUTOMATISCH KORRIGIERT (Item ressourcenseitig formuliert, im XML als Belastung "
+                 "angelegt; die Werte oben sind bereits korrigiert): " + "; ".join(
+                     f"{c['item']} (r vorher {_fmt(c['r_vor_korrektur'], 2)})" for c in kor)
+                 + " – im Abschnitt 2 in einem Satz benennen und für die Fortsetzung des Bogens anregen, "
+                   "die Polung im SNS anzupassen.")
     pc = [c for c in f["polung_check"] if c["fraglich"]]
     if pc:
         L.append("POLUNG FRAGLICH (r mit Komposit entgegen der Annahme): " + "; ".join(f"{c['item']} r {_fmt(c['r'], 2)}" for c in pc))

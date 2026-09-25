@@ -21,8 +21,8 @@ FIX = Path(__file__).resolve().parents[1] / "fixtures" / "sns_verlauf"
 @pytest.fixture(scope="module")
 def result():
     t = {n: (FIX / f).read_text(encoding="utf-8") for n, f in
-         (("hsf", "hsf.csv"), ("ind", "individuell.csv"), ("xml", "individuell.xml"), ("doc", "faktor_I.doc"))}
-    a = sv.analyse(t["hsf"], t["ind"], t["xml"], t["doc"])
+         (("hsf", "hsf.csv"), ("ind", "individuell.csv"), ("xml", "individuell.xml"))}
+    a = sv.analyse_userexport((FIX / "userexport.xlsx").read_bytes(), t["xml"])
     text = "\n\n".join(f"{h}\nAbsatz eins zu {h.split('. ', 1)[1]}.\n\nAbsatz zwei." for h in sl.ABSCHNITTE)
     text = text.replace("7. Phasen\n", "7. Phasen\nP1 – Ankommen: erste Tage.\n")
     phasen = sl.phasen_namen_anwenden(text, a.fakten["phasen"])

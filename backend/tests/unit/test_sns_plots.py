@@ -16,7 +16,7 @@ FIX = Path(__file__).resolve().parents[1] / "fixtures" / "sns_verlauf"
 def texte():
     return {n: (FIX / f).read_text(encoding="utf-8") for n, f in
             (("hsf", "hsf.csv"), ("ind", "individuell.csv"), ("xml", "individuell.xml"),
-             ("doc", "faktor_I.doc"))}
+             )}
 
 
 def _is_png(b64: str) -> bool:
@@ -24,7 +24,7 @@ def _is_png(b64: str) -> bool:
 
 
 def test_render_all_vollstaendig(texte):
-    a = sv.analyse(texte["hsf"], texte["ind"], texte["xml"], texte["doc"])
+    a = sv.analyse_userexport((FIX / "userexport.xlsx").read_bytes(), texte["xml"])
     g = sp.render_all(a, [{"datum": "2026-03-15", "kurz": "Rollenspiel"}])
     assert list(g) == ["hsf_faktoren", "ism_faktoren", "dk_resonanz", "krd", "recurrence", "hantel"]
     assert [v["nr"] for v in g.values()] == [1, 2, 3, 4, 5, 6]

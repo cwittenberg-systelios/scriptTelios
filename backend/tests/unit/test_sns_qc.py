@@ -17,8 +17,8 @@ FIX = Path(__file__).resolve().parents[1] / "fixtures" / "sns_verlauf"
 @pytest.fixture(scope="module")
 def basis():
     t = {n: (FIX / f).read_text(encoding="utf-8") for n, f in
-         (("hsf", "hsf.csv"), ("ind", "individuell.csv"), ("xml", "individuell.xml"), ("doc", "faktor_I.doc"))}
-    a = sv.analyse(t["hsf"], t["ind"], t["xml"], t["doc"])
+         (("hsf", "hsf.csv"), ("ind", "individuell.csv"), ("xml", "individuell.xml"))}
+    a = sv.analyse_userexport((FIX / "userexport.xlsx").read_bytes(), t["xml"])
     entries, namen = sl.pseudonymisiere(sv.diary_entries(a))
     stage_a = [{"datum": "2026-03-15", "tenor": "gemischt", "verworfen": 0, "ereignisse": [
         {"datum": "2026-03-15", "kategorie": "autonomie_erfahrung", "ism_faktor": 0, "kurz": "Nein gesagt",
@@ -101,12 +101,14 @@ def test_abschnitt_aufzaehlung_hypno(basis):
     assert "SNS_ABSCHNITT_FEHLT" in c and "SNS_AUFZAEHLUNG" in c and "HYPNOSYSTEMISCH" in c
 
 
-def test_polung_und_erschlossen(basis):
+def test_polung_fraglich_und_korrektur(basis):
     fakten = json.loads(json.dumps(basis["fakten"]))
     fakten["polung_check"][0]["fraglich"] = True
-    fakten["ism"]["quelle"] = "erschlossen"
-    c = _codes({**basis, "fakten": fakten})
-    assert "SNS_POLUNG_FRAGLICH" in c and "SNS_ZUORDNUNG_ERSCHLOSSEN" in c
+    c = _codes({**basis, "fakten": fakten, "flags": basis["flags"] + ["POLUNG_KORRIGIERT"]})
+    assert "SNS_POLUNG_FRAGLICH" in c and "SNS_POLUNG_KORREKTUR_FEHLT" in c
+    res = {**basis, "flags": basis["flags"] + ["POLUNG_KORRIGIERT"],
+           "text": basis["text"] + " Ein Item wurde automatisch umgepolt."}
+    assert "SNS_POLUNG_KORREKTUR_FEHLT" not in _codes(res)
 
 
 def test_stage_a_regeln(basis):

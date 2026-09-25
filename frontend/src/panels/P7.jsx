@@ -3,8 +3,9 @@
 // Systemmodellierung nach Schiepek).
 //
 // Inputs:
-//   A (req)  HSF-Basisbogen: SNS-Zeitreihen-CSV
-//   B (opt)  Individueller Fragebogen: CSV + Fragebogen-XML (+ Faktorexport .doc)
+//   A (req)  SNS-Userexport (.xlsx): beide Boegen, Rohwerte, Tagebuch, Kommentare
+//   B (req)  SNS-XML des individuellen Bogens (Itemtexte + Faktorzuordnung;
+//            Spaltenreihenfolge im Userexport = Fragenreihenfolge im XML)
 //   C (opt)  Prompt/Modell (Default P_SNS), Vorname fuer die Pseudonymisierung
 //   Action-Bar: Klient (Geschlecht + Kuerzel, Pflicht wie P1)
 //
@@ -21,6 +22,7 @@ import { QualityCheckPanel } from "../qa.jsx";
 import { buildPatientName, friendlyError } from "../shared.js";
 import { Card, Dropzone, FeedbackButton, JobModelPicker, JobProgressBar, PromptEditor } from "../ui.jsx";
 import { KlientControls, useWorkflowRun, WorkflowActionBar } from "../workflow-run.jsx";
+import { ANLEITUNG_USEREXPORT, ANLEITUNG_XML, ExportAnleitung } from "../sns-anleitung.jsx";
 
 const P7_DRAFT_DEFAULT = { prompt: P_SNS, kuerzel: "", geschlecht: "", vorname: "" };
 
@@ -32,12 +34,12 @@ const FLAG_LABELS = {
   ISM_FAKTOR_UNBESETZT: "ISM-Faktor unbesetzt",
   ISM_LANGSAMSTER_FAKTOR: "langsamster Faktor",
   ISM_ANKER_FAKTOR: "Anker-Faktor",
-  ISM_ZUORDNUNG_ERSCHLOSSEN: "Faktorzuordnung erschlossen (kein XML)",
   ISM_OHNE_ZUORDNUNG: "ohne Faktorzuordnung",
   PLATEAU_ALS_EINBRUCH: "Plateau als Einbruch",
   MEDIKATION_IM_UEBERGANGSFENSTER: "Medikation im Übergangsfenster",
   SOMATIK_NEU: "neue Somatik",
   POLUNG_FRAGLICH: "Polung fraglich",
+  POLUNG_KORRIGIERT: "Polung automatisch korrigiert",
   SUIZIDALITAET_IN_QUELLE: "Suizidalität/Selbstverletzung im Tagebuch",
 };
 
@@ -73,10 +75,8 @@ function KennwertTabelle({ title, head, rows }) {
 
 function P7({ toast, resumeJob, onResumed }) {
   const [jobModel, setJobModel] = useState("");
-  const [hsf, setHsf] = useState(null);
-  const [ind, setInd] = useState(null);
+  const [xlsx, setXlsx] = useState(null);
   const [xml, setXml] = useState(null);
-  const [doc, setDoc] = useState(null);
 
   const [draft, updateDraft, clearDraft] = useDraftCache("st_draft_p7", P7_DRAFT_DEFAULT);
   const { prompt, kuerzel, geschlecht, vorname } = draft;
@@ -115,12 +115,12 @@ function P7({ toast, resumeJob, onResumed }) {
   const { busy, currentJobId, lastJobId } = wr;
 
   const patientName = buildPatientName(kuerzel, geschlecht);
-  const canGenerate = !!hsf && !!patientName;
+  const canGenerate = !!xlsx && !!xml && !!patientName;
 
   function run() {
     setRes(null); setText(""); setResError(null); setQc(null);
     wr.start(prompt, "", {
-      snsHsf: hsf, snsInd: ind || null, snsXml: xml || null, snsDoc: doc || null,
+      snsExport: xlsx, snsXml: xml,
       snsVorname: vorname.trim() || null,
       patientName, geschlecht,
       model: jobModel || null,
@@ -191,30 +191,23 @@ function P7({ toast, resumeJob, onResumed }) {
     <div>
       <div className="page-header">
         <div className="page-eyebrow">Workflow 7</div>
-        <h2>SNS-Verlaufsauswertung</h2>
+        <h2>ISM-Auswertung</h2>
         <p>Idiographische Systemmodellierung aus dem SNS-Prozessmonitoring – Übergänge, Komplexität, ISM-Faktoren, Bericht als DOCX</p>
       </div>
       <div className="page-body">
         <div className="workflow">
-          <Card num="A" title="HSF-Basisbogen (SNS-Export)" badge="req">
-            <Dropzone label="HSF-Zeitreihen-CSV hochladen" hint=".csv — SNS: Fragebogen „HSF kurz Basis“ → Export Zeitreihen (mit Tagebuchspalte)"
-              accept=".csv,.txt" icon="&#128202;" file={hsf} onFile={setHsf} />
-            <div className="info-note" style={{ marginTop: 8 }}>
-              Pflicht. Die Faktorstruktur des Basisbogens ist im System hinterlegt (I–IX). Zeilen mit „x“ (nicht ausgefüllt) gelten als fehlend.
-            </div>
+          <Card num="A" title="SNS-Userexport" badge="req">
+            <Dropzone label="Userexport hochladen" hint=".xlsx — enthält HSF-Basisbogen und individuellen Bogen mit Tagebuch"
+              accept=".xlsx" icon="&#128202;" file={xlsx} onFile={setXlsx} />
+            <ExportAnleitung {...ANLEITUNG_USEREXPORT} />
           </Card>
 
-          <Card num="B" title="Individueller Fragebogen" badge="opt" open={true} hasContent={!!(ind || xml || doc)}>
-            <Dropzone label="Zeitreihen-CSV des individuellen Bogens" hint=".csv — SNS-Export des individualisierten Fragebogens"
-              accept=".csv,.txt" icon="&#128202;" file={ind} onFile={setInd} />
-            <div style={{ height: 8 }} />
-            <Dropzone label="Fragebogen-XML (6-Faktoren-Struktur)" hint=".xml — SNS: Aktionen → Export, oder aus Workflow 6"
+          <Card num="B" title="Fragebogen-XML des individuellen Bogens" badge="req">
+            <Dropzone label="Fragebogen-XML hochladen" hint=".xml — Itemtexte und Faktorzuordnung des individuellen Bogens"
               accept=".xml" icon="&#128196;" file={xml} onFile={setXml} />
-            <div style={{ height: 8 }} />
-            <Dropzone label="Faktorexport „I Zielerleben“ (optional)" hint=".doc — SNS-Druckexport des Faktors mit Kommentaren zum Kernanliegen"
-              accept=".doc,.mht,.mhtml,.html" icon="&#128203;" file={doc} onFile={setDoc} />
-            <div className="info-note" style={{ marginTop: 8 }}>
-              Ohne XML schlägt das Modell die Faktorzuordnung aus den Itemtexten vor – im Bericht als „erschlossen“ markiert und weniger belastbar.
+            <ExportAnleitung {...ANLEITUNG_XML} />
+            <div className="field-note" style={{ marginTop: 6 }}>
+              Widerspricht ein Verlauf der Polung im XML deutlich, wird das Item automatisch umgepolt und im Bericht vermerkt.
             </div>
           </Card>
 
@@ -232,7 +225,7 @@ function P7({ toast, resumeJob, onResumed }) {
             busy={wr.busy} onRun={run} onCancel={wr.cancel}
             runLabel="Verlaufsauswertung erstellen"
             disabled={!canGenerate}
-            title={!hsf ? "HSF-Zeitreihen-CSV erforderlich" : !patientName ? "Kürzel erforderlich" : ""}
+            title={!xlsx ? "SNS-Userexport (.xlsx) erforderlich" : !xml ? "Fragebogen-XML erforderlich" : !patientName ? "Kürzel erforderlich" : ""}
           >
             <KlientControls geschlecht={geschlecht} onGeschlecht={(v) => updateDraft({ geschlecht: v })}
               kuerzel={kuerzel} onKuerzel={(v) => updateDraft({ kuerzel: v })} />
@@ -314,6 +307,11 @@ function P7({ toast, resumeJob, onResumed }) {
                     rows={f.hsf.faktoren.map((x) => [`${x.name} ${x.kurz}`, fmtNum(x.anfang), fmtNum(x.ende), fmtNum(x.delta), fmtNum(x.tau, 2)])} />
                   <KennwertTabelle title="Einbrüche" head={["Datum", "Tiefe", "Dauer (Tage)"]}
                     rows={f.einbrueche.map((e) => [fmtDate(e.datum), fmtNum(e.tiefe), e.dauer ?? "offen"])} />
+                  {f.polung_check && f.polung_check.some((c) => c.korrigiert) && (
+                    <div className="upload-warn" style={{ marginTop: 8 }}>
+                      Automatisch umgepolt: {f.polung_check.filter((c) => c.korrigiert).map((c) => `${c.item} (r vorher ${fmtNum(c.r_vor_korrektur, 2)})`).join(", ")} – Polung im SNS-Fragebogen anpassen.
+                    </div>
+                  )}
                   {f.polung_check && f.polung_check.some((c) => c.fraglich) && (
                     <div className="upload-warn" style={{ marginTop: 8 }}>
                       Polung fraglich: {f.polung_check.filter((c) => c.fraglich).map((c) => `${c.item} (r ${fmtNum(c.r, 2)})`).join(", ")} – bitte im Fragebogen prüfen.
@@ -326,10 +324,10 @@ function P7({ toast, resumeJob, onResumed }) {
 
           <FeedbackButton jobId={lastJobId} workflow="sns_verlauf" toast={toast} />
 
-          {(res || resError || draftDirty || hsf || ind || xml || doc) && !busy && (
+          {(res || resError || draftDirty || xlsx || xml) && !busy && (
             <div style={{ marginTop: 12, textAlign: "right" }}>
               <button className="btn-secondary" onClick={() => {
-                setHsf(null); setInd(null); setXml(null); setDoc(null);
+                setXlsx(null); setXml(null);
                 clearDraft();
                 setRes(null); setText(""); setResError(null); setQc(null);
                 wr.reset();

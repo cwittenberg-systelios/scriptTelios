@@ -208,7 +208,7 @@ def build_docx(result: dict, kuerzel: str, anrede: str = "Klientin") -> bytes:
                    [1.2, 4.0, 6.2, 1.2, 1.4, 1.4, 1.2], "Tabelle 1: HSF-Basisbogen – Dimensionen und Faktoren")
             ism = fakten.get("ism")
             if ism:
-                q = {"xml": "Fragebogen-XML", "erschlossen": "vom Modell erschlossen", None: "ohne Zuordnung"}
+                q = {"xml": "Fragebogen-XML", None: "ohne Zuordnung"}
                 _table(doc, ["Faktor", "Item", "Polung"],
                        [[it.get("faktor") or "–", it["titel"], it["polung"]] for it in ism.get("items", [])],
                        [1.6, 11.4, 4.0],

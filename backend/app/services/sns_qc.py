@@ -163,6 +163,8 @@ _rule_somatik = _flag_rule("SOMATIK_NEU", "SNS_SOMATIK_FEHLT",
 _rule_decke = _flag_rule("DECKENEFFEKT_ENDE", "SNS_DECKENEFFEKT_FEHLT",
                          r"decken|obergrenze|skalenende|maximum der skala|am oberen",
                          "Deckeneffekt am Ende wird nicht aufgegriffen.")
+_rule_polung_korr = _flag_rule("POLUNG_KORRIGIERT", "SNS_POLUNG_KORREKTUR_FEHLT",
+                               r"umgepolt|polung|umpol", "Automatische Polungskorrektur wird im Text nicht erwähnt.")
 _rule_suizid = _flag_rule("SUIZIDALITAET_IN_QUELLE", "SNS_SUIZIDALITAET_FEHLT",
                           r"suizid|selbstverletz|lebensmüd", "Tagebuch erwähnt Suizidalität/Selbstverletzung - im Text nicht benannt.")
 
@@ -200,15 +202,6 @@ def _rule_hypnosystemisch(res: dict) -> list:
                 "Begriff entfernen.", {})]
 
 
-def _rule_erschlossen(res: dict) -> list:
-    ism = (res.get("fakten") or {}).get("ism") or {}
-    if ism.get("quelle") != "erschlossen":
-        return []
-    return [_qi("SNS_ZUORDNUNG_ERSCHLOSSEN", "info",
-                "Faktorzuordnung des individuellen Bogens wurde vom Modell erschlossen (kein XML).",
-                "Fragebogen-XML hochladen für eine belastbare Zuordnung.", {})]
-
-
 def _rule_stage_a(res: dict) -> list:
     sa = res.get("stage_a") or []
     verworfen = sum(int(t.get("verworfen") or 0) for t in sa)
@@ -229,7 +222,7 @@ SNS_CHECKS = (
     ("medikation", _rule_medikation), ("somatik", _rule_somatik), ("decke", _rule_decke),
     ("suizid", _rule_suizid), ("polung", _rule_polung), ("abschnitte", _rule_abschnitte),
     ("aufzaehlung", _rule_aufzaehlung), ("hypnosystemisch", _rule_hypnosystemisch),
-    ("erschlossen", _rule_erschlossen), ("stage_a", _rule_stage_a),
+    ("polung_korrigiert", _rule_polung_korr), ("stage_a", _rule_stage_a),
 )
 SNS_CHECKS_RUN = len(SNS_CHECKS)
 
