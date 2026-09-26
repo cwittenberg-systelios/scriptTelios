@@ -108,6 +108,14 @@ def _figure(doc, g: dict, nr: int):
     r.font.color.rgb = GREY
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_after = Pt(8)
+    if g.get("legende"):
+        p.paragraph_format.space_after = Pt(2)
+        lp = doc.add_paragraph()
+        lr = lp.add_run("Schlüsselereignisse: " + "; ".join(g["legende"]))
+        lr.font.size = Pt(8)
+        lr.font.color.rgb = GREY
+        lp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        lp.paragraph_format.space_after = Pt(8)
 
 
 def split_sections(text: str) -> dict[int, str]:
@@ -141,8 +149,34 @@ def _body(doc, text: str):
         if not para:
             continue
         p = doc.add_paragraph()
-        p.add_run(re.sub(r"\s*\n\s*", " ", para))
+        para = re.sub(r"\s*\n\s*", " ", para)
+        # **fett** (Einstiege in Abschnitt 9) als eigene Runs
+        for i, teil in enumerate(re.split(r"\*\*(.+?)\*\*", para)):
+            if teil:
+                p.add_run(teil).bold = bool(i % 2)
         p.paragraph_format.space_after = Pt(6)
+
+
+def datenbasis(fakten: dict) -> str:
+    """Zeile unter dem Titel: Datenbasis und Luecken (v19.41.3)."""
+    z = fakten.get("zeitraum") or {}
+    ism = fakten.get("ism") or {}
+    teile = [f"HSF-Basisbogen ({z.get('messtage_hsf', '–')} Messtage)"]
+    if z.get("messtage_ind"):
+        ab = f" ab {_d(z['ind_start'])[:6]}" if z.get("ind_start") and z["ind_start"] != z.get("start") else ""
+        name = f" „{ism['fragebogen_name']}“" if ism.get("fragebogen_name") else ""
+        teile.append(f"individueller Fragebogen{name} ({len(ism.get('items') or [])} Items, "
+                     f"{z['messtage_ind']} Messtage{ab})")
+    teile.append(f"{z.get('tagebucheintraege', '–')} Tagebucheinträge")
+    s = "Datenbasis: " + ", ".join(teile) + "."
+    lk = fakten.get("luecken") or {}
+    x = sorted(set(lk.get("hsf_x", [])))
+    fehl = sorted(set(lk.get("hsf_fehlend", [])) - set(x))
+    if x:
+        s += f" Von SNS übertragen und als fehlend behandelt: {', '.join(_d(d) for d in x)}."
+    if fehl:
+        s += f" Ohne Messung: {', '.join(_d(d) for d in fehl)}."
+    return s
 
 
 def build_docx(result: dict, kuerzel: str, anrede: str = "Klientin") -> bytes:
@@ -180,7 +214,7 @@ def build_docx(result: dict, kuerzel: str, anrede: str = "Klientin") -> bytes:
     r4.font.size = Pt(8)
     _field(r4, "NUMPAGES")
 
-    t = doc.add_heading(f"Verlaufsauswertung – {kuerzel}", level=0)
+    t = doc.add_heading(f"ISM-Auswertung – {kuerzel}", level=0)
     for r in t.runs:
         r.font.color.rgb = BRAND
         r.font.size = Pt(18)
@@ -193,6 +227,12 @@ def build_docx(result: dict, kuerzel: str, anrede: str = "Klientin") -> bytes:
     )
     sr.font.size = Pt(9)
     sr.font.color.rgb = GREY
+    sub.paragraph_format.space_after = Pt(2)
+    db = doc.add_paragraph()
+    dr = db.add_run(datenbasis(fakten))
+    dr.font.size = Pt(8.5)
+    dr.font.color.rgb = GREY
+    db.paragraph_format.space_after = Pt(10)
 
     fig_nr = {k: v["nr"] for k, v in grafiken.items()}
 
@@ -241,11 +281,17 @@ def build_docx(result: dict, kuerzel: str, anrede: str = "Klientin") -> bytes:
                 _figure(doc, grafiken["recurrence"], fig_nr["recurrence"])
         elif nr == 7:
             _body(doc, body)
-            _table(doc, ["Phase", "Zeitraum", "Tage", "Name", "Komposit", "DK", "max. Resonanz"],
-                   [[ph["label"], f"{_d(ph['start'])} – {_d(ph['ende'])}", ph["tage"], ph.get("name") or "–",
+            gruppen = {g["key"]: g for g in (fakten.get("hsf") or {}).get("gruppen", [])}
+            zfak = next((f for f in (fakten.get("ism") or {}).get("faktoren", []) if f["id"] == 0 and f["besetzt"]), None)
+            extra = [("Symptome", gruppen.get("III")), ("Selbstwirks.", gruppen.get("VIII")), ("Zielerleben", zfak)]
+            extra = [(n, g) for n, g in extra if g]
+            _table(doc, ["Phase", "Zeitraum", "Name", *[n for n, _ in extra], "Komposit", "DK", "Res."],
+                   [[ph["label"], f"{_d(ph['start'])[:6]}–{_d(ph['ende'])[:6]} ({ph['tage']} T.)", ph.get("name") or "–",
+                     *[_f(g["phasenmittel"].get(ph["label"])) for _, g in extra],
                      _f(ph.get("komposit_mittel")), _f(ph.get("dk_mittel"), 3), ph.get("resonanz_max", "–")]
-                    for ph in phasen], [1.2, 3.6, 1.0, 5.4, 1.6, 1.4, 2.0],
-                   "Tabelle 4: Phasen (Grenzen deterministisch, Namen aus der Interpretation)")
+                    for ph in phasen], [1.1, 3.0, 4.2, *[1.6] * len(extra), 1.6, 1.3, 1.0],
+                   "Tabelle 4: Phasen – Mittelwerte 0–100 (Symptome: niedriger = besser; Zielerleben = "
+                   "ISM-Faktor I; DK = mittlere dynamische Komplexität; Res. = max. Anzahl kritischer Items)")
         elif nr == 8:
             _body(doc, body)
             rows = [[r["kurz"], r["polung"], _f(r["anfang"]), _f(r["ende"]), _f(r["delta"]), _f(r["tau"], 2)]
@@ -272,7 +318,10 @@ def build_docx(result: dict, kuerzel: str, anrede: str = "Klientin") -> bytes:
         "95-%-Konfidenzintervall der Vorwerte); "
         f"Übergänge als Niveausprung im Ressourcen-Komposit (≥ {_f(par.get('major_shift', 20.0))} Punkte, "
         f"Niveauverschiebung ab {_f(par.get('min_shift', 10.0))}); Einbrüche ab {_f(par.get('einbruch_drop', 10.0))} "
-        "Punkten unter dem Median der Vortage. Die Interpretation wurde KI-gestützt aus den berechneten "
+        "Punkten unter dem Median der Vortage. Die Zeitreihen sind kurz "
+        f"(n = {z.get('messtage_hsf', '–')} bzw. {z.get('messtage_ind', '–')}); Trends (Kendall τ) und "
+        "Korrelationen sind deshalb deskriptiv zu lesen. Namen in Tagebuchzitaten sind durch Rollen ersetzt. "
+        "Die Interpretation wurde KI-gestützt aus den berechneten "
         "Kennwerten formuliert und ist ärztlich-therapeutisch zu prüfen."
     )
     r.font.size = Pt(8)

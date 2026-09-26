@@ -78,6 +78,16 @@ HSF_KOMPOSIT_KURZNAMEN: frozenset[str] = frozenset({
     "Selbstfürsorge", "Zugang Stärken", "Selbstwirksamkeit", "Zuversicht", "Energie",
 })
 
+# Gruppen der HSF-Faktoren fuer Abbildung 1 und die Phasentabelle (v19.41.3, O1=A):
+# (Schluessel, Name, Faktor-Ids aus dem XML, Polung). Die neun Faktoren bleiben
+# in Tabelle 1; I/II (Rahmen) und IX (neutral) laufen nicht in die Gruppen.
+HSF_GRUPPEN: tuple[tuple[str, str, tuple[int, ...], int], ...] = (
+    ("III", "Symptombelastung", (2,), -1),
+    ("IV+V", "Emotionserleben/Metaperspektive", (3, 4), 1),
+    ("VI+VII", "Selbstwahrnehmung/Selbstfürsorge", (5, 6), 1),
+    ("VIII", "Selbstwirksamkeit/Zielerreichung", (7,), 1),
+)
+
 # Individueller Bogen: Faktor III (id 2) = Hindernisse, hoch = Belastung, ausser umgepolt.
 ISM_BELASTUNG_FAKTOR_ID = 2
 ISM_ROEMISCH = {0: "I", 1: "II", 2: "III", 3: "IV", 4: "V", 5: "VI"}
@@ -763,6 +773,7 @@ class SnsAnalyse:
     flags: list[str]
     hinweise: list[str]
     fakten: dict
+    hsf_gruppen: list[dict] = field(default_factory=list)   # key, name, cols, werte, polung
 
     def to_fakten(self) -> dict:
         return self.fakten
@@ -977,6 +988,16 @@ def analyse_series(hsf: SnsSeries, ind: SnsSeries | None = None, ind_fb: SnsQues
             "polung": -1 if fid in HSF_BELASTUNG_FAKTOR_IDS else (0 if fid in HSF_NEUTRAL_FAKTOR_IDS else 1),
         })
 
+    hsf_gruppen: list[dict] = []
+    for key, name, fids, pol in HSF_GRUPPEN:
+        cols = [it.col for it in items if it.bogen == "hsf" and set(fids) & set(it.faktor_ids)]
+        if not cols:
+            continue
+        with np.errstate(all="ignore"):
+            w = np.array([np.nanmean(r) if (~np.isnan(r)).any() else np.nan for r in X[:, cols]])
+        hsf_gruppen.append({"key": key, "name": name, "faktor_ids": list(fids), "cols": cols,
+                            "werte": w, "polung": pol})
+
     # ── Variierende Items, DK, Kritikalitaet ───────────────────────────────
     with np.errstate(all="ignore"):
         sds = np.array([np.nanstd(X[:, k]) if (~np.isnan(X[:, k])).sum() > 1 else 0.0
@@ -1108,6 +1129,12 @@ def analyse_series(hsf: SnsSeries, ind: SnsSeries | None = None, ind_fb: SnsQues
         "phasen_distanz": [[_rnd(block_distance(R, range(a["start_index"], a["ende_index"]),
                                                 range(b["start_index"], b["ende_index"])))
                             for b in phasen] for a in phasen],
+        "phasen_zu_anfang_ende": [
+            {"label": ph["label"],
+             "zu_anfang": _rnd(float(np.mean(R[ph["start_index"]:ph["ende_index"], 0:blk]))),
+             "zu_ende": _rnd(float(np.mean(R[ph["start_index"]:ph["ende_index"], n - blk:n])))}
+            for ph in phasen
+        ] if var_cols else [],
         "einbruch_distanz": [
             {"datum": _iso(e["datum"]),
              "zu_anfang": _rnd(float(np.mean(R[e["start"], 0:blk]))),
@@ -1244,6 +1271,7 @@ def analyse_series(hsf: SnsSeries, ind: SnsSeries | None = None, ind_fb: SnsQues
             "anfang": _rnd(a), "ende": _rnd(e),
             "delta": _rnd(e - a) if a is not None and e is not None else None,
             "tau": _rnd(tau, 2), "p": _rnd(pv, 3),
+            "sprung_uebergang": _rnd(_sprung(col)),
             "decke": _decke(col[-7:], p),
         })
     if any(r["decke"] and r["polung"] == "+" and not r["konstant"] for r in item_rows):
@@ -1260,8 +1288,23 @@ def analyse_series(hsf: SnsSeries, ind: SnsSeries | None = None, ind_fb: SnsQues
             "anfang": _rnd(a), "ende": _rnd(e),
             "delta": _rnd(e - a) if a is not None and e is not None else None,
             "tau": _rnd(tau, 2), "p": _rnd(pv, 3),
+            "sprung_uebergang": _rnd(_sprung(f["werte"])),
             "phasenmittel": {ph["label"]: _rnd(_mean_in(f["werte"], ph)) for ph in phasen},
         })
+    gruppen_rows = []
+    for g in hsf_gruppen:
+        a, e = _ae(g["werte"])
+        tau, pv = kendall_tau_trend(g["werte"])
+        gruppen_rows.append({
+            "key": g["key"], "name": g["name"], "polung": {1: "+", -1: "−"}[g["polung"]],
+            "items": [items[c].kurz for c in g["cols"]],
+            "anfang": _rnd(a), "ende": _rnd(e), "delta": _rnd(e - a) if a is not None and e is not None else None,
+            "tau": _rnd(tau, 2), "p": _rnd(pv, 3), "sprung_uebergang": _rnd(_sprung(g["werte"])),
+            "phasenmittel": {ph["label"]: _rnd(_mean_in(g["werte"], ph)) for ph in phasen},
+        })
+    symptom = next((g for g in hsf_gruppen if g["polung"] < 0), None)
+    symptom_gipfel = [{"datum": _iso(days[t]), "wert": _rnd(v)}
+                      for t, v in lokale_gipfel(symptom["werte"], min_abstand=2, ueber_vortage=15.0)] if symptom else []
     ca, ce = _ae(comp)
     ctau, cp = kendall_tau_trend(comp)
 
@@ -1301,16 +1344,28 @@ def analyse_series(hsf: SnsSeries, ind: SnsSeries | None = None, ind_fb: SnsQues
                 for t in range(n) if resonanz[t] >= 2
             ],
             "phasen_dk_mittel": {ph["label"]: _rnd(ph["dk_mittel"], 3) for ph in phasen},
+            "gipfel": [{"datum": _iso(days[t]), "wert": _rnd(v, 3)}
+                       for t, v in lokale_gipfel(dk_mean, min_abstand=3)],
         })
+        fin = np.where(np.isfinite(dk_mean))[0]
+        imin = int(fin[np.argmin(dk_mean[fin])])
+        iend = int(fin[-1])
+        dk_out["minimum"] = {"datum": _iso(days[imin]), "wert": _rnd(dk_mean[imin], 3)}
+        dk_out["ende"] = {"datum": _iso(days[iend]), "wert": _rnd(dk_mean[iend], 3),
+                          "ist_minimum": bool(iend == imin or dk_mean[iend] <= dk_mean[imin] + 1e-9)}
+        letzte_krit = [t for t in range(n) if resonanz[t] >= 1]
+        dk_out["letzter_kritischer_tag"] = _iso(days[letzte_krit[-1]]) if letzte_krit else None
     else:
         dk_out.update({"dk_mittel_max": None, "resonanz_max": None, "p75": None,
-                       "kritische_tage": [], "phasen_dk_mittel": {}})
+                       "kritische_tage": [], "phasen_dk_mittel": {}, "gipfel": [],
+                       "minimum": None, "ende": None, "letzter_kritischer_tag": None})
         hinweise.append("Zu wenig Messtage für die Dynamische Komplexität (Fenster 7)")
 
     fakten = {
         "version": 1,
         "zeitraum": {"start": _iso(days[0]), "ende": _iso(days[-1]), "tage": n,
                      "messtage_hsf": len(hsf_set), "messtage_ind": len(set(ind.dates) - set(ind.imputed)) if ind else 0,
+                     "ind_start": _iso(min(ind_real)) if ind_real else None,
                      "tagebucheintraege": len(hsf.comments)},
         "sns": {"username": hsf.username, "hsf_fragebogen": hsf.questionnaire,
                 "ind_fragebogen": ind.questionnaire if ind else None},
@@ -1323,7 +1378,8 @@ def analyse_series(hsf: SnsSeries, ind: SnsSeries | None = None, ind_fb: SnsQues
                              "delta": _rnd(ce - ca) if ca is not None and ce is not None else None,
                              "tau": _rnd(ctau, 2), "p": _rnd(cp, 3),
                              "phasenmittel": {ph["label"]: _rnd(ph["komposit_mittel"]) for ph in phasen}},
-                "konstante_items": konstante},
+                "konstante_items": konstante, "gruppen": gruppen_rows,
+                "symptom_gipfel": symptom_gipfel},
         "ism": ism_out,
         "ind_items": [r for r in item_rows if r["bogen"] == "ind"],
         "dk": dk_out,
@@ -1357,8 +1413,39 @@ def analyse_series(hsf: SnsSeries, ind: SnsSeries | None = None, ind_fb: SnsQues
         X=X, Xp=Xp, comp=comp, hsf_faktoren=hsf_faktoren, ism_faktoren=ism_faktoren,
         var_cols=var_cols, DK=DK, dk_mean=dk_mean, kritisch=kritisch, resonanz=resonanz,
         uebergaenge=uebergaenge, phasen=phasen, einbrueche=einbrueche, R=R,
-        flags=sorted(set(flags)), hinweise=hinweise, fakten=fakten,
+        flags=sorted(set(flags)), hinweise=hinweise, fakten=fakten, hsf_gruppen=hsf_gruppen,
     )
+
+
+def lokale_gipfel(w: np.ndarray, min_abstand: int = 3, quantil: float = 75.0,
+                  ueber_vortage: float | None = None) -> list[tuple[int, float]]:
+    """Lokale Maxima ueber dem Quantil der Reihe - oder (ueber_vortage gesetzt)
+    mindestens so weit ueber dem Median der 5 vorigen Messwerte (Gipfel spaet im
+    Verlauf auf niedrigerem Niveau). Gipfel naeher als min_abstand Tage werden
+    zusammengefasst (der hoehere bleibt). NaN wird uebersprungen."""
+    fin = np.isfinite(w)
+    if fin.sum() < 3:
+        return []
+    thr = float(np.nanpercentile(w[fin], quantil))
+    idx = np.where(fin)[0]
+    cand = []
+    for k, t in enumerate(idx):
+        v = float(w[t])
+        links = float(w[idx[k - 1]]) if k > 0 else -np.inf
+        rechts = float(w[idx[k + 1]]) if k + 1 < len(idx) else -np.inf
+        rel = False
+        if ueber_vortage is not None and k >= 3:
+            rel = v >= float(np.median(w[idx[max(0, k - 5):k]])) + ueber_vortage
+        if (v > thr or rel) and v >= links and v >= rechts:
+            cand.append((int(t), v))
+    out: list[tuple[int, float]] = []
+    for t, v in cand:
+        if out and t - out[-1][0] < min_abstand:
+            if v > out[-1][1]:
+                out[-1] = (t, v)
+            continue
+        out.append((t, v))
+    return out
 
 
 def _decke(tail: np.ndarray, p: AnalyseParams) -> bool:

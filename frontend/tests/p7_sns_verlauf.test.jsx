@@ -48,7 +48,7 @@ const RESULT = {
   text: "1. Zusammenfassung\nAlles gut.\n\n2. Fragebögen und Faktorstruktur\nText.",
   fakten: FAKTEN, phasen: [{ ...FAKTEN.phasen[0], name: "Ankommen" }],
   flags: ["SUIZIDALITAET_IN_QUELLE", "KONSTANTE_ITEMS"], hinweise: [],
-  grafiken: { hsf_faktoren: { png_b64: "iVBORw0KGgo=", titel: "HSF", nr: 1 }, krd: { png_b64: "iVBORw0KGgo=", titel: "KRD", nr: 2 } },
+  grafiken: { hsf_faktoren: { png_b64: "iVBORw0KGgo=", titel: "HSF", nr: 1, legende: ["1 · 19.03. Nein gesagt"] }, krd: { png_b64: "iVBORw0KGgo=", titel: "KRD", nr: 2 } },
 };
 const JOB = { job_id: "j7", status: "done", result_text: JSON.stringify(RESULT),
               quality_check: { version: 1, workflow: "sns_verlauf", issues: [], summary: { critical: 0, warning: 0, info: 0, total: 0, checks_run: 16 } } };
@@ -92,7 +92,7 @@ test("P7: Start erst mit Userexport + XML + Kürzel; startJob bekommt die Dateie
   startJob.mockResolvedValue("j7");
   pollJob.mockResolvedValue(JOB);
   const { container } = render(<P7 toast={() => {}} />);
-  const runBtn = screen.getByRole("button", { name: /Verlaufsauswertung erstellen/ });
+  const runBtn = screen.getByRole("button", { name: /ISM-Auswertung erstellen/ });
   expect(runBtn.disabled).toBe(true);
 
   const inputs = container.querySelectorAll("input[type=file]");
@@ -103,9 +103,9 @@ test("P7: Start erst mit Userexport + XML + Kürzel; startJob bekommt die Dateie
   expect(runBtn.disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: /weiblich/ }));
   fireEvent.change(screen.getByPlaceholderText("K."), { target: { value: "K" } });
-  expect(screen.getByRole("button", { name: /Verlaufsauswertung erstellen/ }).disabled).toBe(false);
+  expect(screen.getByRole("button", { name: /ISM-Auswertung erstellen/ }).disabled).toBe(false);
 
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Verlaufsauswertung erstellen/ })); });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: /ISM-Auswertung erstellen/ })); });
   expect(startJob).toHaveBeenCalledTimes(1);
   const [wf, , , files] = startJob.mock.calls[0];
   expect(wf).toBe("sns_verlauf");
@@ -113,7 +113,7 @@ test("P7: Start erst mit Userexport + XML + Kürzel; startJob bekommt die Dateie
   expect(files.snsXml.name).toBe("i.xml");
   expect(files.patientName).toBe("Frau K.");
 
-  await waitFor(() => expect(screen.getByText(/Verlaufsauswertung – Frau K\./)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/ISM-Auswertung – Frau K\./)).toBeTruthy());
   expect(screen.getByText(/Suizidalität\/Selbstverletzung im Tagebuch/)).toBeTruthy();
   expect(container.querySelector("textarea").value).toMatch(/1\. Zusammenfassung/);
   expect(screen.getByText(/alle 16 Checks bestanden/)).toBeTruthy();
@@ -124,7 +124,7 @@ test("P7: Tabs Grafiken/Kennwerte, DOCX-Export mit editiertem Text, Live-QC bei 
   pollJob.mockResolvedValue(JOB);
   apiFetch.mockImplementation((url) => {
     if (url.endsWith("/sns/check")) return Promise.resolve({ ok: true, json: async () => ({ ...JOB.quality_check, issues: [{ code: "SNS_ABSCHNITT_FEHLT", severity: "critical", message: "fehlt", code_detail: {} }], summary: { critical: 1, warning: 0, info: 0, total: 1, checks_run: 16 } }) });
-    if (url.endsWith("/sns/docx")) return Promise.resolve({ ok: true, headers: { get: () => 'attachment; filename="Verlaufsauswertung_FrauK.docx"' }, blob: async () => new Blob(["x"]) });
+    if (url.endsWith("/sns/docx")) return Promise.resolve({ ok: true, headers: { get: () => 'attachment; filename="ISM-Auswertung_FrauK.docx"' }, blob: async () => new Blob(["x"]) });
     return Promise.resolve({ ok: true, json: async () => ({}) });
   });
   global.URL.createObjectURL = jest.fn(() => "blob:x");
@@ -136,7 +136,7 @@ test("P7: Tabs Grafiken/Kennwerte, DOCX-Export mit editiertem Text, Live-QC bei 
   await act(async () => { fireEvent.change(inputs[1], { target: { files: [file("i.xml", "text/xml")] } }); });
   fireEvent.click(screen.getByRole("button", { name: /männlich/ }));
   fireEvent.change(screen.getByPlaceholderText("K."), { target: { value: "M." } });
-  await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Verlaufsauswertung erstellen/ })); });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: /ISM-Auswertung erstellen/ })); });
   await waitFor(() => expect(container.querySelector("textarea")).toBeTruthy());
 
   // Text editieren + Blur -> /sns/check
@@ -160,6 +160,7 @@ test("P7: Tabs Grafiken/Kennwerte, DOCX-Export mit editiertem Text, Live-QC bei 
   // Tabs
   fireEvent.click(screen.getByText("Grafiken"));
   expect(container.querySelectorAll("img").length).toBe(2);
+  expect(screen.getByText("1 · 19.03. Nein gesagt")).toBeTruthy();
   fireEvent.click(screen.getByText("Kennwerte"));
   expect(screen.getByText(/Ordnungsübergang/)).toBeTruthy();
   expect(screen.getAllByText(/19\.03\.2026/).length).toBeGreaterThanOrEqual(2);

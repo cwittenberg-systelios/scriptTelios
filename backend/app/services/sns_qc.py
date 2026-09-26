@@ -169,6 +169,30 @@ _rule_suizid = _flag_rule("SUIZIDALITAET_IN_QUELLE", "SNS_SUIZIDALITAET_FEHLT",
                           r"suizid|selbstverletz|lebensmüd", "Tagebuch erwähnt Suizidalität/Selbstverletzung - im Text nicht benannt.")
 
 
+def _rule_suizid_ohne_quelle(res: dict) -> list:
+    """v19.41.3: Suizidalitaet nur erwaehnen, wenn das Tagebuch sie enthaelt."""
+    if "SUIZIDALITAET_IN_QUELLE" in (res.get("flags") or []):
+        return []
+    if not re.search(r"suizid|selbstverletz|lebensmüd", res.get("text") or "", re.I):
+        return []
+    return [_qi("SNS_SUIZID_OHNE_QUELLE", "warning",
+                "Text erwähnt Suizidalität/Selbstverletzung, das Tagebuch aber nicht.",
+                "Satz streichen - keine Negativaussagen zu Suizidalität aus Fragebogendaten.", {})]
+
+
+def _rule_signifikant(res: dict) -> list:
+    """'signifikant' nur mit p-Wert im selben Satz (kurze Reihen, deskriptiv)."""
+    saetze = re.split(r"(?<=[.!?])\s+", res.get("text") or "")
+    treffer = [x.strip()[:90] for x in saetze
+               if re.search(r"signifikant", x, re.I) and not re.search(r"\bp\s*[<=≤]", x)]
+    if not treffer:
+        return []
+    return [_qi("SNS_SIGNIFIKANT_OHNE_P", "warning",
+                f"„signifikant“ ohne p-Wert: „{treffer[0]}…“",
+                "p-Wert aus dem Faktenblock ergänzen oder deskriptiv formulieren (deutlich, stetig).",
+                {"saetze": treffer[:3]})]
+
+
 def _rule_polung(res: dict) -> list:
     pc = [c for c in (res.get("fakten") or {}).get("polung_check") or [] if c.get("fraglich")]
     if not pc:
@@ -223,6 +247,7 @@ SNS_CHECKS = (
     ("suizid", _rule_suizid), ("polung", _rule_polung), ("abschnitte", _rule_abschnitte),
     ("aufzaehlung", _rule_aufzaehlung), ("hypnosystemisch", _rule_hypnosystemisch),
     ("polung_korrigiert", _rule_polung_korr), ("stage_a", _rule_stage_a),
+    ("suizid_ohne_quelle", _rule_suizid_ohne_quelle), ("signifikant", _rule_signifikant),
 )
 SNS_CHECKS_RUN = len(SNS_CHECKS)
 

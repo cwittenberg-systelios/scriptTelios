@@ -124,11 +124,18 @@ const P_SNS = `Schreibe die Verlaufsauswertung des SNS-Prozessmonitorings als kl
 
 LESART: Veränderung als Selbstorganisation - Ankommen, Destabilisierung, Übergang, Stabilisierung. Kritische Fluktuationen (DK-Gipfel, Resonanz) sind Vorboten eines Ordnungsübergangs; sinkende Komplexität danach zeigt Stabilisierung. Verknüpfe den Übergang inhaltlich mit den Tagebuch-Ereignissen im Fenster von ±2 Tagen, vorrangig Autonomie-Erfahrungen und therapeutische Interventionen.
 
-INDIVIDUELLER BOGEN ALS SYSTEMMODELL: Kernanliegen (I) wird von Ressourcen (II) gebahnt und von Hindernissen (III) gehemmt; Hilfreiche (IV) und Herausfordernde Auswirkungen (V) sind Gewinn und Preis; Utilisierung (VI) wandelt Hindernisse in Ressourcen. Aussagen zu Faktoren nur aus den ISM-Kennwerten: tragende Faktoren (Sprung), Anker (Krisenminimum), langsamster Faktor (Endniveau), unbesetzte Faktoren als Anregung für die Fortsetzung des Bogens.
+INHALT JE ABSCHNITT (Pflicht):
+1. Zusammenfassung: 3 Absätze - Verlaufsgestalt mit Datum des Ordnungsübergangs und des DK-Maximums; was inhaltlich am Übergang geschah (mit Zitat); Bilanz Anfang → Ende der Gruppen (Symptome, Selbstwirksamkeit, Zielerleben) und die tragenden ISM-Faktoren.
+2. Fragebögen und Faktorstruktur: HSF-Basisbogen in 2 Sätzen; das Systemmodell des individuellen Bogens in den WORTEN DER KLIENTIN/DES KLIENTEN (Itemtexte sinngemäß: Kernanliegen, Ressource, Hindernis, Gewinn, Preis); unbesetzte Faktoren; automatische Polungskorrektur.
+3. Verlauf der Kernfaktoren: Kopplung der Faktoren; REIHENFOLGE des Wandels (welche Gruppe/Items früh, welche erst am Übergang springen - aus 'Größte Sprünge'); Symptomgipfel mit ihren Auslösern (Auslöser-Kategorien, je Muster ein Zitat).
+4. Individueller Fragebogen: tragender Faktor (größter Sprung), Anker in der Krise, langsamster Faktor als Fokus der Weiterbehandlung; Entwicklung in den Kommentaren mit Zitaten; Plateau-Tage, falls geflaggt.
+5. Dynamische Komplexität: Anstieg, Maximum und Resonanz vor dem Übergang; ZWEITER DK-Gipfel mit seinen Ereignissen, falls vorhanden; DK am Ende und letzter Tag mit kritischem Item; Deckeneffekt.
+6. Rekurrenzmuster: Heterogenität Anfangsblock vs. Endblock, Anfang↔Ende als ATTRAKTORWECHSEL, Lage der Übergangsphase zu Anfang/Ende, Einbruchstage im alten oder neuen Zustandsraum.
+7. Phasen: je Phase ein Satz 'P1 – Name: …'.
+8. Anfang und Ende: Kernaussage in 2-3 Sätzen.
+9. Einordnung: Unterabschnitte als eigene Absätze, jeweils mit fett gesetztem Einstieg: **Therapeutische Beziehung und Rahmen.** **Medikation als Kontextfaktor.** (nur wenn Medikation im Faktenblock) **Deckeneffekte am Ende.** (nur bei Flag) **Frühwarnzeichen für die Zeit nach der Entlassung.** (Kontrollparameter = Auslösekategorien, nummeriert im Satz; Frühwarnzeichen = Einbruch länger als 2 Tage oder erneuter DK-Anstieg; SNS-Monitoring ambulant fortsetzen) **Individueller Fragebogen nach der Entlassung.** (für jeden unbesetzten Faktor EIN konkreter Itemvorschlag in Anführungszeichen, ein zweites Item für den langsamsten Faktor, ereignisbezogene Items umformulieren) **Offene Themen.** (inkl. neuer Somatik)
 
-EINBRÜCHE nach Auslösekategorien gruppieren; ein Muster nur benennen, wenn es sich in Zitaten UND in den Items zeigt. Belastbarkeit über Einbruchsdauer vorher/nachher und Recurrence beschreiben (Rückfall in den Anfangsblock ja/nein).
-
-NACHSORGE (Abschnitt 9): Kontrollparameter = Auslösekategorien; Frühwarnzeichen = Einbruch länger als 2 Tage oder erneuter DK-Anstieg; SNS-Monitoring ambulant fortsetzen; Vorschläge zur Weiterentwicklung des individuellen Bogens (unbesetzte Faktoren, langsamster Faktor, ereignisbezogene Items umformulieren).`;
+EINBRÜCHE nach Auslösekategorien gruppieren; ein Muster nur benennen, wenn es sich in Zitaten UND in den Items zeigt.`;
 
 // entlassbericht (Struktur: thematisch, v19.28)
 const P_ENTL_THEMATISCH = `Schreibe den psychotherapeutischen Verlaufsteil eines Entlassberichts als zusammenhängenden Fließtext ohne Überschriften, ohne Aufzählungen, ohne Einleitung und ohne Abschluss.

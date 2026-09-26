@@ -32,6 +32,7 @@ GRID = "#e6e6e3"
 INK = "#0b0b0b"
 INK2 = "#52514e"
 PHASE_BAND = ["#f4f4f2", "#ffffff"]
+GRUPPEN_FARBEN = [SERIES[1], SERIES[0], SERIES[2], SERIES[6]]   # III, IV+V, VI+VII, VIII
 
 plt.rcParams.update({
     "font.size": 7.5, "axes.titlesize": 8.5, "axes.labelsize": 7.5,
@@ -68,46 +69,90 @@ def _phase_bands(ax, a: SnsAnalyse, label: bool = True):
             ax.axvline(u["datum"], color=ACCENT, lw=0.8, ls="--", zorder=3)
 
 
-def _event_markers(ax, a: SnsAnalyse, events: list[dict] | None, y: float):
+def _line(ax, days, w, **kw):
+    """Linie ueber fehlende Tage hinweg verbinden (Luecken ueberbruecken, v19.41.3)."""
+    w = np.asarray(w, dtype=float)
+    fin = np.isfinite(w)
+    return ax.plot([d for d, f in zip(days, fin, strict=True) if f], w[fin], **kw)
+
+
+MAX_SCHLUESSELEREIGNISSE = 6
+_KAT_GEWICHT = {"autonomie_erfahrung": 2, "belastungserprobung": 2, "medikation": 2, "beziehung_partner": 1,
+                "familie_kinder": 1, "leistung_bewertung": 1, "somatik": 1, "therapie_intervention": 1}
+
+
+def schluesselereignisse(a: SnsAnalyse, events: list[dict] | None,
+                         n: int = MAX_SCHLUESSELEREIGNISSE) -> list[dict]:
+    """Bis zu n Tagebuch-Ereignisse fuer Abbildung 1: bevorzugt am Ordnungsuebergang
+    (±2 Tage), an Einbruechen, Symptom- und DK-Gipfeln (±1 Tag); je Datum eines;
+    Rueckgabe chronologisch mit laufender Nummer."""
     if not events:
-        return
+        return []
+    import datetime as _dt
+    f = a.fakten
+
+    def _dd(iso):
+        return _dt.date.fromisoformat(iso)
+    ou = [_dd(f["ordnungsuebergang"])] if f.get("ordnungsuebergang") else []
+    marken = [_dd(e["datum"]) for e in f.get("einbrueche", [])] + \
+             [_dd(g["datum"]) for g in f["hsf"].get("symptom_gipfel", [])] + \
+             [_dd(g["datum"]) for g in f["dk"].get("gipfel", []) or []]
+    best: dict[str, tuple[float, dict]] = {}
+    for ev in events:
+        d = _dd(ev["datum"])
+        sc = _KAT_GEWICHT.get(ev.get("kategorie"), 0)
+        sc += 4 if any(abs((d - u).days) <= 2 for u in ou) else 0
+        sc += 2 if any(abs((d - m).days) <= 1 for m in marken) else 0
+        if sc <= 0:
+            continue
+        if ev["datum"] not in best or sc > best[ev["datum"]][0]:
+            best[ev["datum"]] = (sc, ev)
+    top = sorted(best.values(), key=lambda x: (-x[0], x[1]["datum"]))[:n]
+    wahl = sorted((ev for _, ev in top), key=lambda ev: ev["datum"])
+    return [{"nr": k + 1, "datum": ev["datum"], "kategorie": ev.get("kategorie"), "kurz": ev.get("kurz", "")}
+            for k, ev in enumerate(wahl)]
+
+
+def legende_text(sel: list[dict]) -> list[str]:
+    out = []
+    for e in sel:
+        y, m, d = e["datum"].split("-")
+        out.append(f"{e['nr']} · {d}.{m}. {e['kurz']}")
+    return out
+
+
+def _event_markers(ax, a: SnsAnalyse, sel: list[dict], y: float):
     idx = {d.isoformat(): d for d in a.days}
-    for n, ev in enumerate(events, start=1):
-        d = idx.get(ev.get("datum"))
+    for e in sel:
+        d = idx.get(e["datum"])
         if d is None:
             continue
-        ax.annotate(str(n), (d, y), xytext=(0, 3), textcoords="offset points", ha="center",
-                    fontsize=6, color=INK, bbox={"boxstyle": "circle,pad=0.15", "fc": "white",
-                                                  "ec": INK2, "lw": 0.5})
+        ax.axvline(d, color=INK2, lw=0.5, ls=":", zorder=2)
+        ax.annotate(str(e["nr"]), (d, y), xytext=(0, 0), textcoords="offset points", ha="center", va="center",
+                    fontsize=6, color=INK, zorder=6,
+                    bbox={"boxstyle": "circle,pad=0.2", "fc": "white", "ec": INK2, "lw": 0.6})
 
 
 # ── 1 HSF-Faktorverlauf ──────────────────────────────────────────────────────
 
-def plot_hsf_faktoren(a: SnsAnalyse, events: list[dict] | None = None) -> str:
-    fak = [f for f in a.hsf_faktoren if f["polung"] != 0]
-    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(WIDTH, 10.5 * CM), sharex=True,
-                                  gridspec_kw={"height_ratios": [3, 2], "hspace": 0.08})
-    ax.plot(a.days, a.comp, color=INK, lw=2.0, label="Ressourcen-Komposit", zorder=4)
-    ax.set_ylim(0, 105)
+def plot_hsf_faktoren(a: SnsAnalyse, sel: list[dict] | None = None) -> str:
+    """O1=A (v19.41.3): vier Gruppen der HSF-Faktoren statt neun Linien; die
+    neun Faktoren stehen in Tabelle 1. Schluesselereignisse nummeriert."""
+    gruppen = a.hsf_gruppen or []
+    fig, ax = plt.subplots(figsize=(WIDTH, 8.5 * CM))
+    ax.set_ylim(0, 108)
     _phase_bands(ax, a)
-    _event_markers(ax, a, events, 100)
-    for i, f in enumerate(fak):
-        w = f["werte"]
-        if f["polung"] < 0:
-            w = 100 - w
-            lab = f"{f['name']} {f['kurz']} (umgepolt)"
-        else:
-            lab = f"{f['name']} {f['kurz']}"
-        ax2.plot(a.days, w, color=SERIES[i % len(SERIES)], lw=1.2, label=lab, alpha=0.95)
-    ax2.set_ylim(0, 105)
-    _phase_bands(ax2, a, label=False)
-    ax.set_ylabel("Komposit (0–100)")
-    ax2.set_ylabel("HSF-Faktoren (0–100)")
-    ax.legend(loc="lower right", ncol=1)
-    ax2.legend(loc="lower center", ncol=3, bbox_to_anchor=(0.5, -0.55))
-    _xaxis(ax2, a)
-    ax.set_title("HSF-Basisbogen: Ressourcen-Komposit und Faktoren, Phasen (P), "
-                 "Ordnungsübergang (rot)", loc="left")
+    for i, g in enumerate(gruppen):
+        belastung = g["polung"] < 0
+        _line(ax, a.days, g["werte"], color=GRUPPEN_FARBEN[i % len(GRUPPEN_FARBEN)],
+              lw=1.5, ls="--" if belastung else "-", zorder=4,
+              label=f"{g['key']} {g['name']}" + (" (hoch = Belastung)" if belastung else ""))
+    _event_markers(ax, a, sel or [], 103)
+    ax.set_ylabel("Itemmittel (0–100)")
+    ax.legend(loc="upper center", ncol=2, bbox_to_anchor=(0.5, -0.1))
+    _xaxis(ax, a)
+    ax.set_title("HSF-Basisbogen: Faktorgruppen, Phasen (P), Ordnungsübergang (rot), "
+                 "Schlüsselereignisse (Nummern)", loc="left")
     return _png(fig)
 
 
@@ -138,7 +183,7 @@ def plot_ism_faktoren(a: SnsAnalyse) -> str | None:
     _xaxis(ax, a)
     for k, f in enumerate(besetzt):
         axk = fig.add_subplot(gs[1 + k // cols, k % cols])
-        axk.plot(a.days, f["werte"], color=SERIES[k % len(SERIES)], lw=1.3)
+        _line(axk, a.days, f["werte"], color=SERIES[k % len(SERIES)], lw=1.3)
         axk.set_ylim(0, 105)
         _phase_bands(axk, a, label=False)
         axk.set_title(f["name"], loc="left", fontsize=7.5)
@@ -154,7 +199,7 @@ def plot_ism_faktoren(a: SnsAnalyse) -> str | None:
 def plot_dk_resonanz(a: SnsAnalyse) -> str:
     fig, (ax, ax2) = plt.subplots(2, 1, figsize=(WIDTH, 9 * CM), sharex=True,
                                   gridspec_kw={"height_ratios": [2, 1], "hspace": 0.1})
-    ax.plot(a.days, a.dk_mean, color=SERIES[6], lw=1.6, label="DK (Mittel über variierende Items)")
+    _line(ax, a.days, a.dk_mean, color=SERIES[6], lw=1.6, label="DK (Mittel über variierende Items)")
     fin = np.isfinite(a.dk_mean)
     if fin.any():
         imax = int(np.nanargmax(a.dk_mean))
@@ -221,7 +266,13 @@ def plot_recurrence(a: SnsAnalyse) -> str:
     fig, ax = plt.subplots(figsize=(WIDTH * 0.7, WIDTH * 0.7))
     ax.grid(False)
     n = len(a.days)
-    im = ax.imshow(a.R, cmap="Blues_r", origin="lower", interpolation="nearest")
+    cmap = plt.get_cmap("Blues_r").copy()
+    cmap.set_bad("#cfcfcb")                       # Tage ohne Messung grau (v19.41.3)
+    leer = ~np.isfinite(a.X[:, a.var_cols]).any(1) if a.var_cols else np.zeros(n, bool)
+    R = np.array(a.R, dtype=float)
+    R[leer, :] = np.nan
+    R[:, leer] = np.nan
+    im = ax.imshow(np.ma.masked_invalid(R), cmap=cmap, origin="lower", interpolation="nearest")
     for ph in a.phasen[1:]:
         ax.axhline(ph["start_index"] - 0.5, color=ACCENT, lw=0.8)
         ax.axvline(ph["start_index"] - 0.5, color=ACCENT, lw=0.8)
@@ -234,7 +285,7 @@ def plot_recurrence(a: SnsAnalyse) -> str:
     ax.set_ylim(-0.5, n - 0.5)
     cb = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
     cb.set_label("Distanz (dunkel = ähnlich)", fontsize=7)
-    ax.set_title("Recurrence Plot der Tagesprofile, Phasengrenzen rot", loc="left")
+    ax.set_title("Recurrence Plot der Tagesprofile, Phasengrenzen rot, fehlende Tage grau", loc="left")
     return _png(fig)
 
 
@@ -266,7 +317,7 @@ def plot_hantel(a: SnsAnalyse) -> str:
 
 
 TITEL = {
-    "hsf_faktoren": "HSF-Basisbogen: Komposit und Faktoren",
+    "hsf_faktoren": "HSF-Basisbogen: Faktorgruppen und Schlüsselereignisse",
     "ism_faktoren": "Individueller Fragebogen: Zielerleben und ISM-Faktoren",
     "dk_resonanz": "Dynamische Komplexität und Resonanz",
     "krd": "Komplexitäts-Resonanz-Diagramm",
@@ -278,8 +329,9 @@ TITEL = {
 def render_all(a: SnsAnalyse, events: list[dict] | None = None) -> dict[str, dict]:
     """Alle Grafiken; Schluessel in Berichtsreihenfolge. Fehlende (kein ISM) fallen weg."""
     out: dict[str, dict] = {}
+    sel = schluesselereignisse(a, events)
     plan = [
-        ("hsf_faktoren", lambda: plot_hsf_faktoren(a, events)),
+        ("hsf_faktoren", lambda: plot_hsf_faktoren(a, sel)),
         ("ism_faktoren", lambda: plot_ism_faktoren(a)),
         ("dk_resonanz", lambda: plot_dk_resonanz(a)),
         ("krd", lambda: plot_krd(a)),
@@ -296,5 +348,7 @@ def render_all(a: SnsAnalyse, events: list[dict] | None = None) -> dict[str, dic
         if png:
             nr += 1
             out[key] = {"png_b64": png, "titel": TITEL[key], "nr": nr}
+            if key == "hsf_faktoren" and sel:
+                out[key]["legende"] = legende_text(sel)
     return out
 

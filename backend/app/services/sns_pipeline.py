@@ -84,8 +84,12 @@ async def run_sns_generation(*, job, ctx, generate=generate_text) -> dict:
         _cancel()
         job.set_progress(18 + int(42 * k / n), "Tagebuch", f"Stage A: Paket {k}/{n}")
 
+    personen: dict[str, str] = {}
     stage_a = await sns_llm.run_stage_a(entries, ism_items, besetzt, generate=generate, model=model,
-                                        on_batch=_on_batch) if entries else []
+                                        on_batch=_on_batch, personen=personen) if entries else []
+    # Namen ohne Anrede (Mitklient:innen, Angehoerige) aus Stage A -> Rolle, in Quelle und Ereignissen
+    entries, stage_a = sns_llm.namen_ersetzen(entries, stage_a, personen)
+    namen = sorted(set(namen) | set(personen))
     _log_output(job.job_id, WORKFLOW, "sns_stage_a", json.dumps(stage_a, ensure_ascii=False)[:20000], None)
     events = sns_llm.stage_a_events(stage_a)
 
@@ -95,8 +99,8 @@ async def run_sns_generation(*, job, ctx, generate=generate_text) -> dict:
     # ── 4. Flags + Faktenblock + Stage B ───────────────────────────────────
     flags = sns_llm.flags_nach_stage_a(a, stage_a, entries)
     faktenblock = sns_llm.build_faktenblock(a.fakten, stage_a, flags, anrede, kuerzel)
-    limits = word_limit_for(WORKFLOW, fallback=(1000, 1800))
-    max_tok = max_tokens_for(WORKFLOW, fallback=6000)
+    limits = word_limit_for(WORKFLOW, fallback=(1600, 2600))
+    max_tok = max_tokens_for(WORKFLOW, fallback=9000)
     system = sns_llm.build_stage_b_system_prompt(ctx.instructions, limits)
     user = sns_llm.build_stage_b_user(faktenblock)
 
@@ -113,6 +117,7 @@ async def run_sns_generation(*, job, ctx, generate=generate_text) -> dict:
     if not text:
         raise RuntimeError("Stage B lieferte keinen Text.")
     text = re.sub(r"\bhypnosystemisch(e[nrs]?)?\b", "systemisch\\1", text, flags=re.I)  # v19.30-Regel
+    text = re.sub(r"\bklient(in)?\b", lambda m: "Klient" + (m.group(1) or ""), text)  # Anrede gross
     phasen = sns_llm.phasen_namen_anwenden(text, a.fakten["phasen"])
 
     result = {

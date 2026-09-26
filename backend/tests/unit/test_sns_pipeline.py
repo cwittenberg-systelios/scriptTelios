@@ -49,7 +49,8 @@ def _fake_generate(calls):
                     ev = [{"kategorie": "medikation", "ism_faktor": None, "kurz": "Dosis erhöht",
                            "zitat": "Dosis erhöht"}]
                 tage.append({"datum": d, "tenor": "gut", "ereignisse": ev})
-            return {"structured_data": {"tage": tage}}
+            personen = [{"name": "Jonas", "rolle": "Partner:in"}] if "Jonas" in user else []
+            return {"structured_data": {"tage": tage, "personen": personen}}
         # Stage B
         if kw.get("on_progress"):
             kw["on_progress"](500)
@@ -68,7 +69,7 @@ class TestRegistry:
         spec = W.get("sns_verlauf")
         assert spec and spec.label == "ISM-Auswertung" and not spec.is_structural
         assert "sns_verlauf" in W.WORKFLOW_KEYS
-        assert W.word_limit_for("sns_verlauf") == (1000, 1800)
+        assert W.word_limit_for("sns_verlauf") == (1600, 2600)
         from app.core.config import settings
         assert settings.WORKFLOW_MODEL["sns_verlauf"] == "gemma4:31b"
         from app.services.prompts import BASE_PROMPTS, WORKFLOW_INSTRUCTIONS_DEFAULT, build_system_prompt
@@ -118,19 +119,20 @@ class TestPipeline:
         assert res["phasen"][0]["name"] == "Ankommen" and res["phasen"][2]["name"] == "Aufbruch"
         assert "MEDIKATION_IM_UEBERGANGSFENSTER" in res["flags"]
         assert "hypnosystemisch" not in res["text"] and "systemisch gesehen" in res["text"]
-        assert "Jonas" in res["namen"] and not any("Jonas" in e["tagebuch"] for e in res["quelle"])
+        assert "Jonas" in res["namen"] and not any("Jonas" in e["tagebuch"] for e in res["quelle"])  # Stage A
+        assert "Berger" in res["namen"] and any("Therapeutin sagt" in e["tagebuch"] for e in res["quelle"])
         assert "zuordnung" not in res and len(res["quelle"]) == 39
         assert sum(1 for e in res["quelle"] if e["kommentar"]) == 5      # Kommentare zum individuellen Bogen
         # 7 Stage-A-Batches + 1 Stage B, keine Zuordnung
         assert len(calls) == 8 and calls[-1].get("response_format") is None
-        assert calls[-1]["max_tokens"] == 6000 and "FAKTENBLOCK" in calls[-1]["user"]
+        assert calls[-1]["max_tokens"] == 9000 and "FAKTENBLOCK" in calls[-1]["user"]
         assert out["generation_telemetry"]["sns_stage_a_events"] == 2
         # QC ueber den Dispatch
         issues = run_quality_check(out["text"], "sns_verlauf")
         codes = [i.code for i in issues]
         assert "SNS_ABSCHNITT_FEHLT" not in codes and "SNS_UEBERGANG_FEHLT" not in codes
         assert "SNS_NAME_LEAK" not in codes and "HYPNOSYSTEMISCH" not in codes
-        assert serialize_issues(issues, workflow="sns_verlauf")["summary"]["checks_run"] == 16
+        assert serialize_issues(issues, workflow="sns_verlauf")["summary"]["checks_run"] == 18
         pcts = [c.args[0] for c in job.set_progress.call_args_list]
         assert pcts == sorted(pcts) and pcts[-1] == 97
 

@@ -163,7 +163,7 @@ function P7({ toast, resumeJob, onResumed }) {
         try { detail = JSON.stringify((await r.json()).detail); } catch (_) {}
         throw new Error(detail);
       }
-      let filename = "Verlaufsauswertung.docx";
+      let filename = "ISM-Auswertung.docx";
       const cd = r.headers.get("content-disposition");
       if (cd) { const m = cd.match(/filename\*?=(?:UTF-8'')?["']?([^"';]+)["']?/i); if (m) filename = decodeURIComponent(m[1]); }
       const blob = await r.blob();
@@ -223,7 +223,7 @@ function P7({ toast, resumeJob, onResumed }) {
 
           <WorkflowActionBar
             busy={wr.busy} onRun={run} onCancel={wr.cancel}
-            runLabel="Verlaufsauswertung erstellen"
+            runLabel="ISM-Auswertung erstellen"
             disabled={!canGenerate}
             title={!xlsx ? "SNS-Userexport (.xlsx) erforderlich" : !xml ? "Fragebogen-XML erforderlich" : !patientName ? "Kürzel erforderlich" : ""}
           >
@@ -234,7 +234,7 @@ function P7({ toast, resumeJob, onResumed }) {
           {/* ── Ergebnis ──────────────────────────────────────────────── */}
           <div className="output-card">
             <div className="output-head">
-              <span className="output-title">Verlaufsauswertung{res ? ` – ${res.kuerzel}` : ""}</span>
+              <span className="output-title">ISM-Auswertung{res ? ` – ${res.kuerzel}` : ""}</span>
               <div className="output-btns">
                 {res && <button className="btn-out" onClick={copyText}>Bericht kopieren</button>}
                 {res && <button className="btn-out" onClick={downloadDocx} disabled={docxBusy}>{docxBusy ? "…" : "DOCX herunterladen"}</button>}
@@ -250,7 +250,7 @@ function P7({ toast, resumeJob, onResumed }) {
             <div className={"output-text" + (!res && !busy && !resError ? " empty" : "")} style={{ whiteSpace: "normal" }}>
               {busy && (currentJobId ? <JobProgressBar jobId={currentJobId} /> : "Wird generiert ...")}
               {!busy && resError && <span style={{ color: "var(--st-error,#b00)", fontWeight: 500 }}>{resError}</span>}
-              {!busy && !res && !resError && "Die Verlaufsauswertung erscheint hier."}
+              {!busy && !res && !resError && "Die ISM-Auswertung erscheint hier."}
 
               {!busy && res && tab === "bericht" && (
                 <div>
@@ -284,6 +284,11 @@ function P7({ toast, resumeJob, onResumed }) {
                     <div key={g.nr} style={{ marginBottom: 14 }}>
                       <img src={`data:image/png;base64,${g.png_b64}`} alt={g.titel} style={{ width: "100%", maxWidth: 900, display: "block" }} />
                       <div style={{ fontSize: 11, color: "var(--st-text-soft)", marginTop: 3 }}>Abbildung {g.nr}: {g.titel}</div>
+                      {g.legende?.length > 0 && (
+                        <ol className="p7-legende" style={{ fontSize: 11, color: "var(--st-text-soft)", margin: "4px 0 0", paddingLeft: 0, listStyle: "none", display: "flex", flexWrap: "wrap", gap: "2px 14px" }}>
+                          {g.legende.map((l) => <li key={l}>{l}</li>)}
+                        </ol>
+                      )}
                     </div>
                   ))}
                 </div>

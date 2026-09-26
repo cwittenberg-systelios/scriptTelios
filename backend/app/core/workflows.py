@@ -152,9 +152,9 @@ WORKFLOWS: tuple[WorkflowSpec, ...] = (
         label="ISM-Auswertung",
         short_label="ISM-Auswertung",
         is_structural=False,
-        word_limit=(1000, 1800),   # v19.41: Stage-B-Bericht, 9 Abschnitte
-        max_tokens=6000,
-        expected_tokens=2200,
+        word_limit=(1600, 2600),   # v19.41.3 (O3=A): Stage-B-Bericht, 9 Abschnitte
+        max_tokens=9000,
+        expected_tokens=3500,
         color_hex="#1a5c8b",
     ),
 )

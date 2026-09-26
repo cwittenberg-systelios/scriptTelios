@@ -55,7 +55,7 @@ async def sns_docx(req: SnsDocxRequest) -> Response:
         logger.exception("SNS-DOCX-Rendering fehlgeschlagen: %s", e)
         raise HTTPException(status_code=500, detail=f"DOCX-Rendering fehlgeschlagen: {e}") from e
     stem = re.sub(r"[^A-Za-z0-9_-]+", "", req.kuerzel.strip()) or "Klient"
-    filename = f"Verlaufsauswertung_{stem}.docx"
+    filename = f"ISM-Auswertung_{stem}.docx"
     return Response(
         content=data, media_type=DOCX_MIME,
         headers={"Content-Disposition": f"attachment; filename=\"{filename}\"; filename*=UTF-8''{quote(filename)}"},

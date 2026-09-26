@@ -94,6 +94,16 @@ def test_flag_regeln(basis):
                                     "SNS_DECKENEFFEKT_FEHLT", "SNS_SUIZIDALITAET_FEHLT"))
 
 
+def test_suizid_ohne_quelle_und_signifikant(basis):
+    res = {**basis, "text": basis["text"] + " Hinweise auf Suizidalität lagen nicht vor. Der Anstieg ist signifikant."}
+    c = _codes(res)
+    assert "SNS_SUIZID_OHNE_QUELLE" in c and "SNS_SIGNIFIKANT_OHNE_P" in c
+    res = {**basis, "flags": basis["flags"] + ["SUIZIDALITAET_IN_QUELLE"],
+           "text": basis["text"] + " Das Tagebuch erwähnt Suizidgedanken. Der Trend ist signifikant (p < 0,001)."}
+    c = _codes(res)
+    assert "SNS_SUIZID_OHNE_QUELLE" not in c and "SNS_SIGNIFIKANT_OHNE_P" not in c
+
+
 def test_abschnitt_aufzaehlung_hypno(basis):
     res = {**basis, "text": basis["text"].replace("6. Rekurrenzmuster\nText.", "") + "\n- ein Punkt\n- noch einer\n"
                                                                                        "Das war hypnosystemisch."}
@@ -120,7 +130,7 @@ def test_stage_a_regeln(basis):
 def test_dispatch_und_serialize(basis):
     issues = run_quality_check(json.dumps(basis, ensure_ascii=False), "sns_verlauf")
     ser = serialize_issues(issues, workflow="sns_verlauf")
-    assert ser["summary"]["checks_run"] == sq.SNS_CHECKS_RUN == 16
+    assert ser["summary"]["checks_run"] == sq.SNS_CHECKS_RUN == 18
     assert ser["summary"]["critical"] == 0
     bad = run_quality_check("kein json", "sns_verlauf")
     assert bad[0].code == "SNS_ERGEBNIS_UNLESBAR"

@@ -50,3 +50,25 @@ def test_render_kurze_reihe_ohne_dk():
     a = sv.analyse("\n".join(lines))
     g = sp.render_all(a)
     assert len(g) >= 4
+
+
+def test_schluesselereignisse_und_legende(texte):
+    a = sv.analyse_userexport((FIX / "userexport.xlsx").read_bytes(), texte["xml"])
+    u = a.fakten["ordnungsuebergang"]
+    ev = [{"datum": d.isoformat(), "kategorie": "sonstiges", "kurz": f"Tag {d:%d}"} for d in a.days] + \
+         [{"datum": u, "kategorie": "autonomie_erfahrung", "kurz": "Nein gesagt"}]
+    sel = sp.schluesselereignisse(a, ev)
+    assert 1 <= len(sel) <= sp.MAX_SCHLUESSELEREIGNISSE
+    assert [e["datum"] for e in sel] == sorted(e["datum"] for e in sel)
+    assert any(e["datum"] == u and e["kurz"] == "Nein gesagt" for e in sel)
+    assert len({e["datum"] for e in sel}) == len(sel)
+    g = sp.render_all(a, ev)
+    assert g["hsf_faktoren"]["legende"][0].startswith("1 · ")
+    assert "legende" not in sp.render_all(a, [])["hsf_faktoren"]
+
+
+def test_lokale_gipfel():
+    import numpy as np
+    w = np.array([10, 50, 10, 12, 11, np.nan, 13, 40, 12, 12, 12, 12, 30, 12], float)
+    assert [t for t, _ in sv.lokale_gipfel(w, min_abstand=2, quantil=90)] == [1, 7]
+    assert [t for t, _ in sv.lokale_gipfel(w, min_abstand=2, quantil=90, ueber_vortage=15)] == [1, 7, 12]

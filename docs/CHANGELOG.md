@@ -7,6 +7,69 @@ das Projekt nutzt Sprint-Versionen (v18, v19, v19.1, …) statt SemVer-Patch-Cou
 
 ---
 
+## [v19.41.3] — ISM-Auswertung: Berichtsqualität nach Pilotvergleich, Pseudonymisierung (2026-09-25)
+
+Basis: `e37d109`. Backend + Frontend (neues Bundle). Anlass: Vergleich der
+scriptTelios-Ausgabe (Pilot, 1.221 Wörter) mit einer manuell erstellten
+Referenzauswertung (2.351 Wörter).
+
+**Fehler behoben**
+- Pseudonymisierung (`sns_llm.pseudonymisiere`): Der Rollen-Regex war komplett
+  case-insensitiv („meine Mama mich …“ machte „mich“ zum Namen und ersetzte es
+  überall). Die Heuristik „großgeschriebenes Wort nach mit/bei/und = Name“ traf
+  jedes deutsche Substantiv („und Energie“ → „und Mitklient:in“). Stage A bekam
+  dadurch teils unlesbaren Text. Beides entfernt bzw. korrigiert.
+- Behandlernamen (O2=B): „Frau/Herr/Dr. X“ aus dem Tagebuch blieben bisher
+  stehen und gelangten über Stage A in den Bericht („Frau S.“). Jetzt Ersetzung
+  vor Stage A, kasusgerecht („bei der Therapeutin“, „mit dem Therapeuten“,
+  „die Behandler:in“ bei Dr./Prof.); die Namen gehen in die Leck-QC.
+- Namen ohne Anrede (Mitklient:innen, Angehörige) meldet Stage A im neuen
+  Feld `personen` (Name + Rolle). Geprüft wird: großgeschrieben, wörtlich in der
+  Quelle, kein Substantiv. Danach `namen_ersetzen()` in Quelle und Ereignissen,
+  Zitate werden neu gegen die Quelle geprüft.
+- Medikation deterministisch per Stichwort (Wirkstoffe, mg, Dosis, Medikament,
+  Tablette) zusätzlich zu Stage A. „ab morgen“ → wirksam ab Folgetag. Treffer
+  ±2 Tage um einen Übergang (Nennungs- ODER Wirksamkeitstag). Faktenblock mit
+  wörtlichem Zitat, auch für Nennungen außerhalb des Fensters.
+- PLATEAU_ALS_EINBRUCH nur nach dem Ordnungsübergang (vorher ist negativ = Krise).
+- Anrede: „die Klientin (Kürzel)“ / „der Klient“ statt kleingeschriebenem
+  „klientin“; Nachbearbeitung schreibt Klient/Klientin groß.
+- Suizidalität nur bei Flag; neue QC-Warnung `SNS_SUIZID_OHNE_QUELLE`.
+  Neue QC-Warnung `SNS_SIGNIFIKANT_OHNE_P`. Damit 18 SNS-Checks.
+
+**Faktenblock / Kennwerte** (`sns_verlauf`, `sns_llm.build_faktenblock`)
+- HSF-Gruppen III · IV+V · VI+VII · VIII (`HSF_GRUPPEN`, `a.hsf_gruppen`,
+  `fakten.hsf.gruppen`), Sprung am Übergang je HSF-Faktor, Gruppe und Item,
+  „größte/kleinste Sprünge“ (Reihenfolge des Wandels), p-Werte zu τ.
+- Symptomgipfel (`fakten.hsf.symptom_gipfel`: lokale Maxima > P75 oder ≥ 15 über dem
+  Median der 5 Vorwerte) und DK-Gipfel > P75 (`dk.gipfel`), jeweils mit
+  Stage-A-Ereignissen ±1 Tag. Zusätzlich DK am Ende/Minimum und letzter
+  kritischer Tag.
+- Einbrüche mit Ereignissen ±1 Tag, Häufigkeit der Auslöser-Kategorien.
+- Recurrence je Phase zu Anfangs-/Endblock (`recurrence.phasen_zu_anfang_ende`).
+- `zeitraum.ind_start`.
+
+**Prompt / Länge** (O3=A)
+- Pflichtinhalte je Abschnitt: Systemmodell in den Worten der Klientin,
+  Reihenfolge des Wandels, Auslösermuster mit Zitaten, zweiter DK-Gipfel,
+  Attraktorwechsel. Abschnitt 9 mit fett gesetzten Einstiegen und konkreten
+  Itemvorschlägen für unbesetzte/langsame Faktoren. „signifikant“ nur mit
+  p-Wert. Kurzes erfundenes Stilbeispiel (keine Patientendaten).
+- `word_limit` (1600, 2600), `max_tokens` 9000, `expected_tokens` 3500.
+
+**DOCX / Grafiken** (O1=A)
+- Abbildung 1: vier Faktorgruppen statt neun Linien; die neun Faktoren bleiben
+  in Tabelle 1. Dazu bis zu 6 nummerierte Schlüsselereignisse mit Legende unter
+  der Abbildung (DOCX und P7 „Grafiken“).
+- Lücken in den Linien überbrückt (Abb. 1–3); Recurrence-Plot: fehlende Tage grau.
+- DOCX: `**fett**` im Text, Zeile „Datenbasis“ mit Lücken unter dem Titel,
+  Phasentabelle mit Symptome/Selbstwirksamkeit/Zielerleben, Methodikhinweis
+  „kurze Reihen, deskriptiv lesen“.
+- Benennung: DOCX-Titel „ISM-Auswertung – Kürzel“, Datei `ISM-Auswertung_<Kürzel>.docx`,
+  in P7 Ausgabetitel und Startknopf „ISM-Auswertung“.
+
+---
+
 ## [v19.41] — ISM-Auswertung (P7): SNS-Verlaufsauswertung, idiographische Systemmodellierung (2026-09-25)
 
 Basis: `c919e4d`. Backend + Frontend (neues Bundle). Spezifikation:

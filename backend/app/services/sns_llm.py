@@ -31,6 +31,11 @@ KATEGORIEN = (
     "belastungserprobung", "biografie", "beruf", "sonstiges",
 )
 TENOR = ("belastet", "gemischt", "neutral/plateau", "gut")
+# Stage A meldet Personennamen ohne Anrede mit Rolle (v19.41.3); ersetzt wird deterministisch.
+PERSONEN_ROLLEN = ("Mitklient:in", "Therapeut:in", "Partner:in", "Kind", "Tochter", "Sohn",
+                   "Mutter", "Vater", "Geschwister", "Angehörige:r", "Freund:in", "Kolleg:in",
+                   "andere Person")
+_SUBSTANTIV_ENDUNG = re.compile(r"(ung|heit|keit|schaft|ion|tät|nis|ismus|ment|ling|tum|ungen|heiten|keiten)$")
 
 ABSCHNITTE = (
     "1. Zusammenfassung",
@@ -61,14 +66,27 @@ _ROLLEN = {
     "mitbewohner": "Mitbewohner", "mitbewohnerin": "Mitbewohnerin",
     "zimmernachbarin": "Zimmernachbarin", "zimmernachbar": "Zimmernachbar",
 }
+# v19.41.3: nur "mein*" + Rolle ist case-insensitiv, der Name MUSS gross beginnen
+# (vorher re.I auf alles -> "meine Mama mich ..." machte "mich" zum Namen).
 _ROLLE_RE = re.compile(
-    r"\b(mein(?:e|em|en|er|es)?)\s+(" + "|".join(sorted(_ROLLEN, key=len, reverse=True)) + r")\s+"
-    r"([A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)?)\b", re.I,
+    r"\b((?i:mein(?:e|em|en|er|es)?))\s+((?i:" + "|".join(sorted(_ROLLEN, key=len, reverse=True)) + r"))\s+"
+    r"([A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)?)\b",
 )
-_KONTEXT_RE = re.compile(
-    r"\b(mit|bei|von|an|für|und|ohne|neben|über)\s+([A-ZÄÖÜ][a-zäöüß]{2,}(?:-[A-ZÄÖÜ][a-zäöüß]+)?)\b",
+# O2=B (v19.41.3): Namen mit Anrede/Titel sind im Klinikalltag Behandler:innen und
+# werden durch die Rolle ersetzt ("bei Frau S." -> "bei der Therapeutin").
+_BEHANDLER_RE = re.compile(
+    r"\b(?:((?i:mit|bei|von|vom|zu|zur|zum|nach|aus|seit|gegenüber|für|durch|gegen|ohne|um|an|auf|in))\s+)?"
+    r"(Frau|Herrn|Herr|Dr\.|Dr|Prof\.|Prof)\s+(?:(?:Dr|Prof)\.?\s+)?"
+    r"([A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)?)\b"
 )
-_TITEL_RE = re.compile(r"\b(Frau|Herr|Herrn|Dr\.|Dr|Prof\.|Prof|Therapeut|Therapeutin)\s+$")
+_DATIV = {"mit", "bei", "von", "vom", "zu", "zur", "zum", "nach", "aus", "seit", "gegenüber"}
+_AKKUSATIV = {"für", "durch", "gegen", "ohne", "um"}
+_BEHANDLER_FORM = {
+    # Anrede: (Nominativ, Dativ, Akkusativ, Rolle ohne Artikel)
+    "w": ("die Therapeutin", "der Therapeutin", "die Therapeutin", "Therapeutin"),
+    "m": ("der Therapeut", "dem Therapeuten", "den Therapeuten", "Therapeut"),
+    "?": ("die Behandler:in", "der Behandler:in", "die Behandler:in", "Behandler:in"),
+}
 _NICHT_NAMEN = {
     "Klinik", "Gruppe", "Therapie", "Wald", "Sonne", "Tee", "Kopf", "Zeit", "Tag", "Abend",
     "Morgen", "Hause", "Haus", "Woche", "Wochenende", "Nachsorge", "Musik", "Sport", "Ruhe",
@@ -89,8 +107,12 @@ def pseudonymisiere(entries: list[dict], vorname: str | None = None, kuerzel: st
 
     (a) Vorname der Klient:in -> Kuerzel
     (b) Angehoerige ueber Rollenkontext ('mein Partner X') -> Rolle
-    (c) uebrige grossgeschriebene Namen im Kontext 'mit/bei/von X' -> 'Mitklient:in'
-        (Behandler:innen mit Titel bleiben)
+    (t) Namen mit Anrede/Titel ('Frau S.', 'Herrn X', 'Dr. Y') -> Rolle
+        ('die Therapeutin' / 'der Therapeut' / 'die Behandler:in', kasusgerecht
+        nach Praeposition) - O2=B, v19.41.3
+    Namen ohne Anrede/Rollenkontext (Mitklient:innen) erkennt Stage A (Feld
+    'personen'); ersetzt werden sie danach mit namen_ersetzen(). Die fruehere
+    Heuristik 'Grosswort nach mit/bei/und' traf im Deutschen jedes Substantiv.
     Rueckgabe: (neue Eintraege, gefundene Namen fuer QC SNS_NAME_LEAK)
     """
     namen: set[str] = set()
@@ -114,26 +136,31 @@ def pseudonymisiere(entries: list[dict], vorname: str | None = None, kuerzel: st
             return f"{m.group(1)} {rolle}"
         return _ROLLE_RE.sub(rep, text)
 
-    def _c(text: str) -> str:
+    def _t(text: str) -> str:
         def rep(m):
-            name = m.group(2)
+            praep, titel, name = m.group(1), m.group(2), m.group(3)
             if name in _NICHT_NAMEN or name.lower() in _ROLLEN:
                 return m.group(0)
-            vor = text[:m.start()]
-            if _TITEL_RE.search(vor[-14:] + " "):
-                return m.group(0)
+            g = "w" if titel == "Frau" else ("m" if titel.startswith("Herr") else "?")
+            nom, dat, akk, rolle = _BEHANDLER_FORM[g]
             namen.add(name)
-            ersatz = rollen_namen.get(name, "Mitklient:in")
-            return f"{m.group(1)} {ersatz}"
-        return _KONTEXT_RE.sub(rep, text)
+            rollen_namen[name] = rolle
+            if not praep:
+                satzanfang = re.search(r"(^|[.!?:]\s*|\n\s*)$", m.string[:m.start()])
+                return nom[0].upper() + nom[1:] if satzanfang else nom
+            p = praep.lower()
+            if p in ("vom", "zum", "zur"):          # Kontraktion aufloesen: "zur Frau S." -> "zu der Therapeutin"
+                praep, p = praep[:2] + {"vom": "n", "zum": "", "zur": ""}[p], "dativ"
+            form = dat if (p in _DATIV or p == "dativ") else (akk if p in _AKKUSATIV else nom)
+            return f"{praep} {form}"
+        return _BEHANDLER_RE.sub(rep, text)
 
     def _rest(text: str) -> str:
         # Bereits erkannte Namen auch ausserhalb der Kontexte ersetzen
         for name in sorted(namen, key=len, reverse=True):
             if name == vn:
                 continue
-            ersatz = rollen_namen.get(name, "Mitklient:in")
-            text = re.sub(rf"(?<!Frau )(?<!Herr )(?<!Dr\. )\b{re.escape(name)}\b", ersatz, text)
+            text = re.sub(rf"\b{re.escape(name)}\b", rollen_namen.get(name, "Mitklient:in"), text)
         return text
 
     out = []
@@ -141,7 +168,7 @@ def pseudonymisiere(entries: list[dict], vorname: str | None = None, kuerzel: st
         t, k = e.get("tagebuch", "") or "", e.get("kommentar", "") or ""
         t, k = _a(t), _a(k)
         t, k = _b(t), _b(k)
-        t, k = _c(t), _c(k)
+        t, k = _t(t), _t(k)
         out.append({**e, "tagebuch": t, "kommentar": k})
     out = [{**e, "tagebuch": _rest(e["tagebuch"]), "kommentar": _rest(e["kommentar"])} for e in out]
     return out, sorted(namen)
@@ -153,8 +180,12 @@ def pseudonymisiere(entries: list[dict], vorname: str | None = None, kuerzel: st
 
 def build_stage_a_schema() -> dict:
     return {
-        "type": "object", "required": ["tage"],
-        "properties": {"tage": {"type": "array", "items": {
+        "type": "object", "required": ["tage", "personen"],
+        "properties": {
+            "personen": {"type": "array", "items": {
+                "type": "object", "required": ["name", "rolle"],
+                "properties": {"name": {"type": "string"}, "rolle": {"enum": list(PERSONEN_ROLLEN)}}}},
+            "tage": {"type": "array", "items": {
             "type": "object", "required": ["datum", "tenor", "ereignisse"],
             "properties": {
                 "datum": {"type": "string"},
@@ -175,14 +206,20 @@ def build_stage_a_system_prompt(ism_items: list[dict] | None) -> str:
     parts = [
         "Du extrahierst aus Tagebuchnotizen einer stationären Psychotherapie (SNS-Prozess-"
         "monitoring) je Tag den Tenor und konkrete Ereignisse. Antworte AUSSCHLIESSLICH mit "
-        "JSON {\"tage\": [{\"datum\": \"YYYY-MM-DD\", \"tenor\": ..., \"ereignisse\": "
-        "[{\"kategorie\": ..., \"ism_faktor\": <0-5 oder null>, \"kurz\": ..., \"zitat\": ...}]}]}.",
+        "JSON {\"personen\": [{\"name\": ..., \"rolle\": ...}], \"tage\": [{\"datum\": \"YYYY-MM-DD\", "
+        "\"tenor\": ..., \"ereignisse\": [{\"kategorie\": ..., \"ism_faktor\": <0-5 oder null>, "
+        "\"kurz\": ..., \"zitat\": ...}]}]}.",
+        f"\nPERSONEN: Liste JEDEN Vor- oder Nachnamen einer Person, der im Text vorkommt (Mitklient:innen, "
+        f"Angehörige, Behandler:innen, Freund:innen), genau so geschrieben wie im Text, mit Rolle aus: "
+        f"{', '.join(PERSONEN_ROLLEN)}. Keine Substantive, Orte, Therapieformen oder Rollenwörter "
+        "(\"Partner\", \"Therapeutin\") - nur Eigennamen. Wenn keine: [].",
         f"\nTENOR: einer von {', '.join(TENOR)}.",
         f"KATEGORIEN: {kat}.",
         "REGELN:\n- Für JEDEN gelieferten Tag genau einen Eintrag mit demselben Datum.\n"
         "- 'zitat' ist ein WÖRTLICHER Ausschnitt (max. 200 Zeichen) aus dem Text des Tages - "
         "nichts umformulieren, nichts ergänzen. 'kurz' fasst das Ereignis in max. 140 Zeichen.\n"
         "- Nur Ereignisse, die im Text stehen. Keine Deutung, keine Diagnosen.\n"
+        "- In 'kurz' keine Namen, sondern Rollen (Mitklientin, Partner, Therapeutin).\n"
         "- 'medikation' bei jeder Erwähnung von Medikamenten/Dosis; 'somatik' bei körperlichen "
         "Beschwerden; 'autonomie_erfahrung' bei Abgrenzung/Nein-Sagen/eigenen Entscheidungen; "
         "'therapie_intervention' bei Gruppen-/Einzelsitzungen, Rollenspielen, Übungen.\n"
@@ -250,10 +287,56 @@ def parse_stage_a(data: Any, batch: list[dict], besetzte_faktoren: set[int]) -> 
     return out
 
 
+def parse_personen(data: Any, batch: list[dict]) -> dict[str, str]:
+    """{name: rolle} aus Stage A - nur Namen, die gross geschrieben woertlich in der
+    Quelle stehen, kein bekanntes Substantiv/Rollenwort sind."""
+    quelle = " ".join((e.get("tagebuch") or "") + " " + (e.get("kommentar") or "") for e in batch)
+    out: dict[str, str] = {}
+    for pz in (data or {}).get("personen", []) if isinstance(data, dict) else []:
+        if not isinstance(pz, dict):
+            continue
+        for name in str(pz.get("name") or "").split():
+            name = name.strip(".,;:!?()\"„“'")
+            if (len(name) < 2 or not name[0].isupper() or name in _NICHT_NAMEN
+                    or name.lower() in _ROLLEN or _SUBSTANTIV_ENDUNG.search(name.lower())
+                    or name in ("Mitklient:in", "Therapeut:in", "Klientin", "Klient", "Kürzel")
+                    or not re.search(rf"(?<![\wÄÖÜäöüß]){re.escape(name)}s?(?![\wÄÖÜäöüß])", quelle)
+                    or re.search(rf"\b(?i:der|die|das|den|dem|des|ein|eine|einen|einem|einer|keine|meine|viel|mehr)"
+                                 rf"\s+{re.escape(name)}\b", quelle)):
+                continue
+            rolle = pz.get("rolle") if pz.get("rolle") in PERSONEN_ROLLEN else "andere Person"
+            out[name] = rolle
+    return out
+
+
+def namen_ersetzen(entries: list[dict], stage_a: list[dict], personen: dict[str, str]
+                   ) -> tuple[list[dict], list[dict]]:
+    """Ersetzt die von Stage A gemeldeten Namen in Quelle UND Ereignissen gleich
+    (Zitate bleiben so Substring der Quelle). 'andere Person' -> 'Person'."""
+    if not personen:
+        return entries, stage_a
+    ersatz = {n: ("Person" if r == "andere Person" else r) for n, r in personen.items()}
+    pat = re.compile(r"(?<![\wÄÖÜäöüß])(" + "|".join(re.escape(n) for n in sorted(ersatz, key=len, reverse=True))
+                     + r")(?:s)?(?![\wÄÖÜäöüß])")
+
+    def sub(t: str) -> str:
+        return pat.sub(lambda m: ersatz[m.group(1)], t or "")
+
+    ent = [{**e, "tagebuch": sub(e.get("tagebuch", "")), "kommentar": sub(e.get("kommentar", ""))} for e in entries]
+    quelle = {e["datum"]: _norm_ws(e["tagebuch"] + " " + e["kommentar"]) for e in ent}
+    sa = []
+    for t in stage_a:
+        evs = [{**ev, "kurz": sub(ev["kurz"]), "zitat": sub(ev["zitat"])} for ev in t["ereignisse"]]
+        ok = [ev for ev in evs if _norm_ws(ev["zitat"]) in quelle.get(t["datum"], "")]
+        sa.append({**t, "ereignisse": ok, "verworfen": int(t.get("verworfen") or 0) + len(evs) - len(ok)})
+    return ent, sa
+
+
 async def run_stage_a(entries: list[dict], ism_items: list[dict] | None, besetzte_faktoren: set[int],
                       *, generate: GeneratorFn, model: str | None, batch_size: int = STAGE_A_BATCH,
                       max_tokens: int = 2500, on_batch: Callable[[int, int], None] | None = None,
-                      ) -> list[dict]:
+                      personen: dict[str, str] | None = None) -> list[dict]:
+    """Tage mit Ereignissen; gefundene Personennamen landen in `personen` (wenn uebergeben)."""
     system = build_stage_a_system_prompt(ism_items)
     schema = build_stage_a_schema()
     out: list[dict] = []
@@ -266,6 +349,8 @@ async def run_stage_a(entries: list[dict], ism_items: list[dict] | None, besetzt
         if data is None:
             logger.warning("sns_llm: Stage A Batch %d ohne valides JSON - Tage ohne Ereignisse", k)
         out.extend(parse_stage_a(data, batch, besetzte_faktoren))
+        if personen is not None:
+            personen.update(parse_personen(data, batch))
         if on_batch:
             on_batch(k + 1, len(batches))
     return out
@@ -279,6 +364,42 @@ def stage_a_events(stage_a: list[dict]) -> list[dict]:
 # Flags nach Stage A
 # ═════════════════════════════════════════════════════════════════════════════
 
+_MED_RE = re.compile(
+    r"\b(Medikament\w*|Medikation|Tablette\w*|Dosis|Dosierung|Psychopharm\w*|Antidepressiv\w*|"
+    r"\d+(?:[.,]\d+)?\s?mg\b|Sertralin|Escitalopram|Citalopram|Fluoxetin|Paroxetin|Venlafaxin|"
+    r"Duloxetin|Mirtazapin|Bupropion|Agomelatin|Quetiapin|Olanzapin|Aripiprazol|Risperidon|Lithium|"
+    r"Lamotrigin|Pregabalin|Opipramol|Amitriptylin|Trimipramin|Doxepin|Lorazepam|Tavor|Diazepam|"
+    r"Zopiclon|Zolpidem|Melperon|Pipamperon|Promethazin|Methylphenidat|Lisdexamfetamin)", re.I)
+_SATZGRENZE_RE = re.compile(r"[.!?;\n]|\s[-–]\s")   # Tagebuecher trennen oft mit " - "
+_AB_MORGEN_RE = re.compile(r"\bab morgen\b|\bab dem morgigen\b|\bmorgen (?:wird|werde|bekomme|soll|gibt)", re.I)
+
+
+def medikation_stichworte(entries: list[dict]) -> list[dict]:
+    """Deterministische Medikationserkennung (v19.41.3) - je Tag der erste Satz mit
+    Stichwort. 'ab morgen' -> wirksam ab Folgetag. Zitat = woertlicher Satz (max. 200)."""
+    out = []
+    for e in entries:
+        for fld in ("tagebuch", "kommentar"):
+            text = e.get(fld) or ""
+            m = _MED_RE.search(text)
+            if not m:
+                continue
+            grenzen = [(g.start(), g.end()) for g in _SATZGRENZE_RE.finditer(text)]
+            a = max([e_ for s_, e_ in grenzen if e_ <= m.start()], default=0)
+            b = min([s_ + (1 if text[s_] in ".!?" else 0) for s_, e_ in grenzen if s_ >= m.end()],
+                    default=len(text))
+            satz = text[a:b].strip()
+            if len(satz) > 200:
+                k = satz.find(m.group(0))
+                satz = satz[max(0, k - 80):max(0, k - 80) + 200].strip()
+            d = dt.date.fromisoformat(e["datum"])
+            ab = d + dt.timedelta(1) if _AB_MORGEN_RE.search(text[a:b]) else d
+            out.append({"datum": e["datum"], "wirksam_ab": ab.isoformat(), "zitat": satz,
+                        "stichwort": m.group(0)})
+            break
+    return out
+
+
 def flags_nach_stage_a(a: SnsAnalyse, stage_a: list[dict], quelle_entries: list[dict]) -> dict:
     """Ergaenzt die Flags aus der Analyse um die Stage-A-abhaengigen (Spec 4.10)
     und die Suizidalitaets-Warnung (F6). Rueckgabe {flags, details}."""
@@ -290,13 +411,27 @@ def flags_nach_stage_a(a: SnsAnalyse, stage_a: list[dict], quelle_entries: list[
     tenor = {t["datum"]: t["tenor"] for t in stage_a}
     f = a.fakten
 
-    # MEDIKATION_IM_UEBERGANGSFENSTER: Ereignis 'medikation' +-2 Tage um einen Uebergang
-    med_tage = [ev["datum"] for ev in events if ev["kategorie"] == "medikation"]
-    ueb = [dt.date.fromisoformat(u["datum"]) for u in f["uebergaenge"]]
-    treffer = [d for d in med_tage if any(abs((dt.date.fromisoformat(d) - u).days) <= 2 for u in ueb)]
+    # MEDIKATION_IM_UEBERGANGSFENSTER: Stichwort (deterministisch) oder Stage-A-Kategorie
+    # 'medikation', Tag der Nennung ODER Wirksamkeitstag ("ab morgen") +-2 Tage um einen Uebergang
+    med = {m["datum"]: m for m in medikation_stichworte(quelle_entries)}
+    for ev in events:
+        if ev["kategorie"] == "medikation" and ev["datum"] not in med:
+            med[ev["datum"]] = {"datum": ev["datum"], "wirksam_ab": ev["datum"], "zitat": ev["zitat"],
+                                "stichwort": "Stage A"}
+    ueb = [(dt.date.fromisoformat(u["datum"]), u) for u in f["uebergaenge"]]
+    alle = []
+    for m in sorted(med.values(), key=lambda x: x["datum"]):
+        tage = {dt.date.fromisoformat(m["datum"]), dt.date.fromisoformat(m["wirksam_ab"])}
+        nah = [(abs((t - ud).days), u) for t in tage for ud, u in ueb if abs((t - ud).days) <= 2]
+        naechster = min(nah, key=lambda x: x[0])[1] if nah else None
+        alle.append({**m, "uebergang": naechster["datum"] if naechster else None,
+                     "uebergang_typ": naechster["typ"] if naechster else None})
+    if alle:
+        details["medikation_alle"] = alle
+    treffer = [m for m in alle if m["uebergang"]]
     if treffer:
         flags.add("MEDIKATION_IM_UEBERGANGSFENSTER")
-        details["medikation"] = sorted(set(treffer))
+        details["medikation"] = treffer
 
     # SOMATIK_NEU: 'somatik' in den letzten 7 Tagen
     ende = a.days[-1]
@@ -306,13 +441,16 @@ def flags_nach_stage_a(a: SnsAnalyse, stage_a: list[dict], quelle_entries: list[
         flags.add("SOMATIK_NEU")
         details["somatik"] = sorted(set(som))
 
-    # PLATEAU_ALS_EINBRUCH: ereignisbezogenes Faktor-I-Item + negative z an 'neutral/plateau'-Tagen
+    # PLATEAU_ALS_EINBRUCH: ereignisbezogenes Faktor-I-Item + negative z an Tagen ohne
+    # belastenden Tenor - NUR nach dem Ordnungsuebergang (davor ist negativ = Krise).
+    ab = f.get("ordnungsuebergang") or (f["uebergaenge"][0]["datum"] if f["uebergaenge"] else None)
     ism = f.get("ism")
     if ism and any(it.get("ereignisbezogen") and it.get("faktor") == "I" for it in ism["items"]):
         fI = next((x for x in a.ism_faktoren if x["id"] == 0 and x["besetzt"]), None)
         if fI is not None and fI["z"] is not None:
             plateau = [d.isoformat() for d, z in zip(a.days, fI["z"], strict=True)
-                       if z == z and z < 0 and tenor.get(d.isoformat()) == "neutral/plateau"]
+                       if z == z and z < 0 and (ab is None or d.isoformat() > ab)
+                       and tenor.get(d.isoformat()) in ("neutral/plateau", "gut")]
             if len(plateau) >= 2:
                 flags.add("PLATEAU_ALS_EINBRUCH")
                 details["plateau"] = plateau
@@ -348,11 +486,47 @@ def _d(iso: str | None) -> str:
     return f"{d.day:02d}.{d.month:02d}.{d.year}"
 
 
+def _p(pv) -> str:
+    if pv is None:
+        return "p –"
+    return "p < 0,001" if pv < 0.001 else f"p = {_fmt(float(pv), 3)}"
+
+
+def _dauer(n) -> str:
+    return "bis Ende offen" if n is None else f"{n} Tag{'' if n == 1 else 'e'}"
+
+
+def artikel(anrede: str) -> str:
+    """'Klientin' -> 'die Klientin', 'Klient' -> 'der Klient'."""
+    return ("der " if anrede == "Klient" else "die ") + anrede
+
+
 def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: str, kuerzel: str) -> str:
     """Lesbarer Faktenblock fuer Stage B - JEDE Zahl im Bericht muss hier stehen."""
     f = fakten
     L: list[str] = []
-    L.append(f"KLIENT:IN: {anrede} ({kuerzel}). Erste Nennung im Text: \"{anrede.lower()} ({kuerzel})\", danach \"{anrede.lower()}\".")
+    art = artikel(anrede)
+    L.append(f"KLIENT:IN: Erste Nennung im Text \"{art} ({kuerzel})\", danach \"{art}\" "
+             f"(am Satzanfang \"{art[0].upper() + art[1:]}\"). {anrede} immer groß schreiben.")
+
+    # Ereignisnummern vorab, damit Einbrueche/Gipfel darauf verweisen koennen
+    nummer: dict[int, int] = {}
+    ev_by_date: dict[str, list[dict]] = {}
+    for t in stage_a:
+        for ev in t["ereignisse"]:
+            nummer[id(ev)] = len(nummer) + 1
+            ev_by_date.setdefault(ev["datum"], []).append(ev)
+
+    def _um(iso: str, tage: int = 1) -> list[dict]:
+        d0 = dt.date.fromisoformat(iso)
+        return [ev for k in range(-tage, tage + 1)
+                for ev in ev_by_date.get((d0 + dt.timedelta(k)).isoformat(), [])]
+
+    def _ev_kurz(evs: list[dict]) -> str:
+        if not evs:
+            return "kein Tagebuch-Ereignis ±1 Tag"
+        return "; ".join(f"E{nummer[id(ev)]} {ev['kategorie']}" for ev in evs)
+
     z = f["zeitraum"]
     L.append(f"ZEITRAUM: {_d(z['start'])} bis {_d(z['ende'])} ({z['tage']} Kalendertage, "
              f"{z['messtage_hsf']} HSF-Messtage, {z['messtage_ind']} Messtage individueller Bogen, "
@@ -365,7 +539,16 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
     for x in f["hsf"]["faktoren"]:
         pm = ", ".join(f"{k} {_fmt(v)}" for k, v in x["phasenmittel"].items())
         L.append(f"- {x['name']} {x['kurz']} [{x['polung']}]: Anfang {_fmt(x['anfang'])}, Ende {_fmt(x['ende'])}, "
-                 f"Δ {_fmt(x['delta'])}, τ {_fmt(x['tau'], 2)}; Phasenmittel {pm}; Items: {', '.join(x['items'])}")
+                 f"Δ {_fmt(x['delta'])}, τ {_fmt(x['tau'], 2)} ({_p(x.get('p'))}); Sprung am Übergang "
+                 f"{_fmt(x.get('sprung_uebergang'))}; Phasenmittel {pm}; Items: {', '.join(x['items'])}")
+    gr = f["hsf"].get("gruppen") or []
+    if gr:
+        L.append("GRUPPEN FÜR ABBILDUNG 1 UND DIE PHASENTABELLE (Itemmittel):")
+        for g in gr:
+            pm = ", ".join(f"{k} {_fmt(v)}" for k, v in g["phasenmittel"].items())
+            L.append(f"- {g['key']} {g['name']} [{g['polung']}]: Anfang {_fmt(g['anfang'])}, Ende {_fmt(g['ende'])}, "
+                     f"τ {_fmt(g['tau'], 2)} ({_p(g.get('p'))}); Sprung am Übergang {_fmt(g['sprung_uebergang'])}; "
+                     f"Phasenmittel {pm}")
     k = f["hsf"]["komposit"]
     L.append(f"RESSOURCEN-KOMPOSIT ({len(k['items'])} Items): Anfang {_fmt(k['anfang'])}, Ende {_fmt(k['ende'])}, "
              f"Δ {_fmt(k['delta'])}, τ {_fmt(k['tau'], 2)}; Phasenmittel "
@@ -374,6 +557,19 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
         L.append("KONSTANTE ITEMS (SD ≤ 1, ohne Verlaufsinformation): " + ", ".join(f["hsf"]["konstante_items"]))
     L.append("HSF-ITEMS Anfang → Ende: " + "; ".join(
         f"{r['kurz']} {_fmt(r['anfang'])}→{_fmt(r['ende'])} (τ {_fmt(r['tau'], 2)})" for r in f["hsf"]["items"]))
+    spr = sorted([r for r in f["hsf"]["items"] + f.get("ind_items", [])
+                  if r.get("sprung_uebergang") is not None and not r.get("konstant")],
+                 key=lambda r: -abs(r["sprung_uebergang"]))
+    if spr:
+        L.append("GRÖSSTE SPRÜNGE AM ÜBERGANG (Item, Mittel 4 Tage danach − 4 Tage davor; Reihenfolge des Wandels): "
+                 + "; ".join(f"{r['kurz']} {_fmt(r['sprung_uebergang'])}" for r in spr[:6])
+                 + " | kleinste: " + "; ".join(f"{r['kurz']} {_fmt(r['sprung_uebergang'])}"
+                                               for r in spr[-3:]))
+    sg = f["hsf"].get("symptom_gipfel") or []
+    if sg:
+        L.append("SYMPTOMGIPFEL (lokale Maxima der Symptombelastung) mit Tagebuch-Ereignissen ±1 Tag:")
+        for g in sg:
+            L.append(f"- {_d(g['datum'])} (Wert {_fmt(g['wert'])}): {_ev_kurz(_um(g['datum']))}")
 
     ism = f.get("ism")
     if ism:
@@ -399,7 +595,8 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
         if ns:
             L.append(f"Faktor I (z wie SNS): längste negative Serie {_d(ns['start'])}–{_d(ns['ende'])} ({ns['tage']} Tage).")
         L.append("Items individuell Anfang → Ende: " + "; ".join(
-            f"{r['kurz']} {_fmt(r['anfang'])}→{_fmt(r['ende'])}" for r in f["ind_items"]))
+            f"{r['kurz']} {_fmt(r['anfang'])}→{_fmt(r['ende'])} (τ {_fmt(r['tau'], 2)}, {_p(r.get('p'))})"
+            for r in f["ind_items"]))
     else:
         L.append("\nINDIVIDUELLER FRAGEBOGEN: nicht vorhanden (Abschnitt 4 entfällt; nur Satz dazu).")
 
@@ -413,6 +610,16 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
         if dk["kritische_tage"]:
             L.append("- Kritische Häufungen (≥ 2 Items über dem 95-%-Konfidenzintervall): "
                      + ", ".join(f"{_d(t['datum'])} ({t['anzahl']})" for t in dk["kritische_tage"]))
+        if dk.get("gipfel"):
+            L.append("- DK-Gipfel über P75 (mit Tagebuch-Ereignissen ±1 Tag): " + " | ".join(
+                f"{_d(g['datum'])} {_fmt(g['wert'], 3)}: {_ev_kurz(_um(g['datum']))}" for g in dk["gipfel"]))
+        if dk.get("ende"):
+            e = dk["ende"]
+            L.append(f"- DK am Ende {_d(e['datum'])} {_fmt(e['wert'], 3)}"
+                     + (" = niedrigster Wert des Aufenthalts" if e["ist_minimum"] else
+                        f"; Minimum {_d(dk['minimum']['datum'])} {_fmt(dk['minimum']['wert'], 3)}")
+                     + (f"; letzter Tag mit kritischem Item {_d(dk['letzter_kritischer_tag'])}"
+                        if dk.get("letzter_kritischer_tag") else ""))
     else:
         L.append("- nicht berechenbar (zu kurze Reihe)")
 
@@ -436,7 +643,8 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
     L.append("\nEINBRÜCHE (Komposit ≤ Median der 5 Vortage − 10; Dauer bis Erholung):")
     if f["einbrueche"]:
         for e in f["einbrueche"]:
-            L.append(f"- {_d(e['datum'])}: Tiefe {_fmt(e['tiefe'])}, Dauer {e['dauer'] if e['dauer'] is not None else 'bis Ende offen'} Tage")
+            L.append(f"- {_d(e['datum'])}: Tiefe {_fmt(e['tiefe'])}, Dauer {_dauer(e['dauer'])}; "
+                     f"{_ev_kurz(_um(e['datum']))}")
         vn = f["einbrueche_vor_nach"]
         if vn["vor"]:
             L.append(f"- vor dem Übergang: {vn['vor']['anzahl']} Einbrüche, mittlere Dauer {_fmt(vn['vor']['dauer_mittel'])}; "
@@ -450,6 +658,22 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
     if r["einbruch_distanz"]:
         L.append("- Einbruchstage: " + "; ".join(f"{_d(e['datum'])} zu Anfang {_fmt(e['zu_anfang'])} / zu Ende {_fmt(e['zu_ende'])}"
                                                  for e in r["einbruch_distanz"]))
+    pz = r.get("phasen_zu_anfang_ende") or []
+    if pz:
+        L.append("- Phasen zu Anfangsblock / Endblock (kleiner = ähnlicher): " + "; ".join(
+            f"{x['label']} {_fmt(x['zu_anfang'])} / {_fmt(x['zu_ende'])}" for x in pz))
+    # Ausloeser: Kategorien der Ereignisse +-1 Tag um Einbrueche und Symptomgipfel
+    tage = [e["datum"] for e in f["einbrueche"]] + [g["datum"] for g in f["hsf"].get("symptom_gipfel") or []]
+    gesehen: set[int] = set()
+    kat: dict[str, int] = {}
+    for iso in tage:
+        for ev in _um(iso):
+            if id(ev) not in gesehen and ev["kategorie"] not in ("therapie_intervention", "sonstiges"):
+                gesehen.add(id(ev))
+                kat[ev["kategorie"]] = kat.get(ev["kategorie"], 0) + 1
+    if kat:
+        L.append("AUSLÖSER-KATEGORIEN um Einbrüche und Symptomgipfel (Häufigkeit): " + ", ".join(
+            f"{k} {v}" for k, v in sorted(kat.items(), key=lambda x: -x[1])))
     if f["kopplung"]:
         L.append("KOPPLUNGEN (Pearson r, stärkste): " + "; ".join(
             f"{k['a']} × {k['b']} r {_fmt(k['r'], 2)}" for k in f["kopplung"][:5]))
@@ -466,8 +690,11 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
 
     L.append("\nFLAGS (zwingend aufgreifen): " + (", ".join(flags["flags"]) or "keine"))
     det = flags.get("details", {})
-    if "medikation" in det:
-        L.append("- Medikation im Übergangsfenster an: " + ", ".join(_d(x) for x in det["medikation"]))
+    for m in det.get("medikation_alle", []):
+        ab = f", wirksam ab {_d(m['wirksam_ab'])}" if m["wirksam_ab"] != m["datum"] else ""
+        fenster = (f" – IM FENSTER ±2 Tage um den Übergang {_d(m['uebergang'])} ({m['uebergang_typ']})"
+                   if m.get("uebergang") else "")
+        L.append(f"- Medikation im Tagebuch {_d(m['datum'])}{ab}{fenster}: Zitat \"{m['zitat']}\"")
     if "somatik" in det:
         L.append("- Neue Somatik in den letzten 7 Tagen an: " + ", ".join(_d(x) for x in det["somatik"]))
     if "plateau" in det:
@@ -477,6 +704,9 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
         L.append("- Tagebuch erwähnt Suizidalität/Selbstverletzung an: "
                  + ", ".join(_d(x) for x in sorted(set(s["suizidalitaet"] + s["nssv"])))
                  + " – in Abschnitt 9 benennen (Hinweis an Behandler:innen, keine Einschätzung aus Fragebogendaten).")
+    else:
+        L.append("- Suizidalität/Selbstverletzung: im Tagebuch nicht erwähnt – im Bericht NICHT thematisieren "
+                 "(auch keine Negativaussage).")
     if f.get("hinweise"):
         L.append("HINWEISE: " + " | ".join(f["hinweise"]))
 
@@ -484,7 +714,7 @@ def build_faktenblock(fakten: dict, stage_a: list[dict], flags: dict, anrede: st
     n = 0
     for t in stage_a:
         for ev in t["ereignisse"]:
-            n += 1
+            n = nummer[id(ev)]
             fak = f" [ISM-Faktor {ISM_ROEMISCH.get(ev['ism_faktor'], '')}]" if ev.get("ism_faktor") is not None else ""
             L.append(f"- E{n} {_d(ev['datum'])} ({ev['kategorie']}{fak}): {ev['kurz']} – Zitat: \"{ev['zitat']}\"")
     if n == 0:

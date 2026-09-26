@@ -1,6 +1,7 @@
 """Tests SNS-LLM-Teil (v19.41, S3): Pseudonymisierung, Stage A, Zuordnung, Flags, Stage-B-Prompt."""
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 
@@ -26,12 +27,30 @@ class TestPseudonymisierung:
               "kommentar": "Jonas war sachlich."}]
         out, namen = sl.pseudonymisiere(e, vorname="Anna", kuerzel="K.")
         t = out[0]["tagebuch"]
-        assert "Jonas" not in t and "Mira" not in t and "Lea" not in t
+        assert "Jonas" not in t and "Lea" not in t
         assert "meinem Partner" in t and "Meine Tochter" in t
-        assert "mit Mitklient:in geredet" in t
-        assert "Frau Dr. Berger" in t
+        assert "mit Mira geredet" in t              # ohne Kontext: erkennt Stage A (parse_personen)
+        assert "Berger" not in t and "Die Therapeutin sagt" in t    # O2=B
         assert "Jonas" not in out[0]["kommentar"] and "Partner" in out[0]["kommentar"]
-        assert namen == ["Anna", "Jonas", "Lea", "Mira"]
+        assert namen == ["Anna", "Berger", "Jonas", "Lea"]
+
+    def test_behandler_kasus(self):
+        e = [{"datum": "d", "tagebuch": "Einzel bei Frau Saur, dann Musik mit Herrn Beck. Gespräch zur Frau Rust. "
+                                        "Für Herrn Beck gemalt.", "kommentar": ""}]
+        out, namen = sl.pseudonymisiere(e)
+        assert out[0]["tagebuch"] == ("Einzel bei der Therapeutin, dann Musik mit dem Therapeuten. Gespräch zu der "
+                                      "Therapeutin. Für den Therapeuten gemalt.")
+        assert namen == ["Beck", "Rust", "Saur"]
+
+    def test_kleinwort_nach_rolle_ist_kein_name(self):
+        e = [{"datum": "d", "tagebuch": "Ich habe meine Mama mich trösten lassen, ich fühlte mich gut.", "kommentar": ""}]
+        out, namen = sl.pseudonymisiere(e)
+        assert out[0]["tagebuch"] == e[0]["tagebuch"] and namen == []
+
+    def test_substantive_nach_praeposition_bleiben(self):
+        t = "Mit Energie und Zuversicht in die Woche, bei Ablehnung ruhig bleiben, mit Clara gelacht."
+        out, namen = sl.pseudonymisiere([{"datum": "d", "tagebuch": t, "kommentar": ""}])
+        assert out[0]["tagebuch"] == t and namen == []
 
     def test_vorname_wird_kuerzel(self):
         out, namen = sl.pseudonymisiere([{"datum": "d", "tagebuch": "Anna hat heute Nein gesagt.", "kommentar": ""}],
@@ -81,8 +100,24 @@ class TestStageA:
                                    generate=fake_generate, model="m", batch_size=6)
         assert len(out) == len(entries) == 39
         assert len(calls) == 7
-        assert all(kw["response_format"]["required"] == ["tage"] for kw in calls)
+        assert all(kw["response_format"]["required"] == ["tage", "personen"] for kw in calls)
         assert calls[0]["temperature_override"] == sl.STAGE_A_TEMPERATURE
+
+    def test_personen_aus_stage_a(self):
+        batch = [{"datum": "2026-03-15", "tagebuch": "Mit Clara gelacht, Julians Zeugnis gesehen. Die Energie gut.",
+                  "kommentar": ""}]
+        data = {"personen": [{"name": "Clara", "rolle": "Mitklient:in"}, {"name": "Julian", "rolle": "Sohn"},
+                             {"name": "Energie", "rolle": "andere Person"}, {"name": "Erfahrung", "rolle": "Kind"},
+                             {"name": "Paul", "rolle": "Kind"}],
+                "tage": [{"datum": "2026-03-15", "tenor": "gut", "ereignisse": [
+                    {"kategorie": "gruppe", "kurz": "Lachen mit Clara", "zitat": "Mit Clara gelacht"}]}]}
+        pers = sl.parse_personen(data, batch)
+        assert pers == {"Clara": "Mitklient:in", "Julian": "Sohn"}   # Paul steht nicht im Text
+        sa = sl.parse_stage_a(data, batch, set())
+        ent, sa2 = sl.namen_ersetzen(batch, sa, pers)
+        assert ent[0]["tagebuch"] == "Mit Mitklient:in gelacht, Sohn Zeugnis gesehen. Die Energie gut."
+        assert sa2[0]["ereignisse"][0]["zitat"] == "Mit Mitklient:in gelacht"
+        assert sa2[0]["ereignisse"][0]["kurz"] == "Lachen mit Mitklient:in"
 
     def test_system_prompt_enthaelt_items(self, analyse):
         s = sl.build_stage_a_system_prompt(analyse.fakten["ism"]["items"])
@@ -110,6 +145,24 @@ class TestFlagsUndFaktenblock:
         assert "SUIZIDALITAET_IN_QUELLE" not in fl["flags"]
         assert "KONSTANTE_ITEMS" in fl["flags"]
 
+    def test_medikation_stichwort_ab_morgen(self, analyse):
+        u = dt.date.fromisoformat(analyse.fakten["ordnungsuebergang"])
+        vortag = (u - dt.timedelta(3)).isoformat()      # Nennung 3 Tage vorher, wirksam 2 Tage vorher
+        entries = [{"datum": vortag, "tagebuch": "Gut geschlafen - Dosis Sertralin wird ab morgen auf 75mg erhöht - "
+                                                 "danach Gruppe.", "kommentar": ""}]
+        m = sl.medikation_stichworte(entries)
+        assert m == [{"datum": vortag, "wirksam_ab": (u - dt.timedelta(2)).isoformat(),
+                      "zitat": "Dosis Sertralin wird ab morgen auf 75mg erhöht", "stichwort": "Dosis"}]
+        fl = sl.flags_nach_stage_a(analyse, [], entries)
+        assert "MEDIKATION_IM_UEBERGANGSFENSTER" in fl["flags"]
+        assert fl["details"]["medikation"][0]["uebergang"] == u.isoformat()
+
+    def test_plateau_nur_nach_uebergang(self, analyse):
+        u = analyse.fakten["ordnungsuebergang"]
+        sa = [{"datum": d.isoformat(), "tenor": "neutral/plateau", "ereignisse": []} for d in analyse.days]
+        fl = sl.flags_nach_stage_a(analyse, sa, [])
+        assert all(x > u for x in fl["details"].get("plateau", []))
+
     def test_suizid_warnung(self, analyse):
         entries = [{"datum": "2026-03-05", "tagebuch": "Heute Suizidgedanken gehabt, aber mit der Therapeutin gesprochen.",
                     "kommentar": ""}]
@@ -123,6 +176,9 @@ class TestFlagsUndFaktenblock:
         assert "ORDNUNGSÜBERGANG (Hauptdatum): 19.03.2026" in fb
         assert "UNBESETZT" in fb and "E1 19.03.2026 (medikation)" in fb
         assert "MEDIKATION_IM_UEBERGANGSFENSTER" in fb
+        assert '"die Klientin (K.)"' in fb and "klientin (" not in fb
+        assert "im Bericht NICHT thematisieren" in fb
+        assert "GRUPPEN FÜR ABBILDUNG 1" in fb and "DK am Ende" in fb and "Phasen zu Anfangsblock" in fb
         sysp = sl.build_stage_b_system_prompt(None, (1000, 1800))
         assert sysp.count("ZIELLÄNGE") == 1
         assert "9. Einordnung" in sysp and "hypnosystemisch" in sysp  # als Verbot

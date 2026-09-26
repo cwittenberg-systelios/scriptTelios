@@ -39,7 +39,7 @@ def test_build_docx_struktur(result):
     data = sd.build_docx(result, "FX12", "Klientin")
     doc = Document(io.BytesIO(data))
     heads = [p.text for p in doc.paragraphs if p.style.name.startswith(("Heading", "Title"))]
-    assert heads[0] == "Verlaufsauswertung – FX12"
+    assert heads[0] == "ISM-Auswertung – FX12"
     for h in sl.ABSCHNITTE:
         assert h in heads
     assert len(doc.tables) == 5
@@ -47,8 +47,26 @@ def test_build_docx_struktur(result):
     captions = [p.text for p in doc.paragraphs if p.text.startswith("Abbildung ")]
     assert captions[0].startswith("Abbildung 1:") and captions[-1].startswith("Abbildung 6:")
     assert "FX12" in doc.sections[0].header.paragraphs[0].text
-    assert doc.tables[3].rows[1].cells[3].text == "Ankommen"      # Phasenname aus Abschnitt 7
+    assert doc.tables[3].rows[1].cells[2].text == "Ankommen"      # Phasenname aus Abschnitt 7
     assert doc.sections[0].left_margin.cm == pytest.approx(2.0, abs=0.01)
+
+
+def test_docx_fett_datenbasis_phasenspalten_legende(result):
+    text = result["text"].replace("9. Einordnung und Hinweise für Entlassung und Nachsorge\n",
+                                  "9. Einordnung und Hinweise für Entlassung und Nachsorge\n"
+                                  "**Offene Themen.** Berufliche Perspektive.\n")
+    g = {k: dict(v) for k, v in result["grafiken"].items()}
+    g["hsf_faktoren"]["legende"] = ["1 · 15.03. Rollenspiel", "2 · 19.03. Nein gesagt"]
+    doc = Document(io.BytesIO(sd.build_docx({**result, "text": text, "grafiken": g}, "FX12", "Klientin")))
+    p = next(p for p in doc.paragraphs if p.text.startswith("Offene Themen."))
+    assert p.runs[0].bold and p.runs[0].text == "Offene Themen." and not p.runs[1].bold
+    assert "**" not in "\n".join(x.text for x in doc.paragraphs)
+    db = next(p.text for p in doc.paragraphs if p.text.startswith("Datenbasis:"))
+    assert "39 Messtage" in db and "31 Messtage ab 10.03." in db and "22.03.2026" in db
+    kopf = [c.text for c in doc.tables[3].rows[0].cells]
+    assert kopf[:6] == ["Phase", "Zeitraum", "Name", "Symptome", "Selbstwirks.", "Zielerleben"]
+    assert any(x.text.startswith("Schlüsselereignisse: 1 · 15.03. Rollenspiel") for x in doc.paragraphs)
+    assert any("deskriptiv zu lesen" in x.text for x in doc.paragraphs)
 
 
 def test_build_docx_ohne_ism_und_grafiken(result):
@@ -63,12 +81,12 @@ def test_endpoint_docx_und_check(result):
                                            "result": {k: v for k, v in result.items() if k != "text"}})
     assert r.status_code == 200, r.text
     assert r.headers["content-type"].startswith("application/vnd.openxmlformats")
-    assert 'filename="Verlaufsauswertung_FX123.docx"' in r.headers["content-disposition"]
+    assert 'filename="ISM-Auswertung_FX123.docx"' in r.headers["content-disposition"]
     assert Document(io.BytesIO(r.content)).tables
     c = client.post("/api/sns/check", json={"text": result["text"].replace("6. Rekurrenzmuster", "6. x"),
                                             "result": {k: v for k, v in result.items() if k != "text"}})
     assert c.status_code == 200
     assert "SNS_ABSCHNITT_FEHLT" in [i["code"] for i in c.json()["issues"]]
-    assert c.json()["summary"]["checks_run"] == 16
+    assert c.json()["summary"]["checks_run"] == 18
     assert client.post("/api/sns/docx", json={"kuerzel": "", "text": "x", "result": {}}).status_code == 422
     assert json.dumps(c.json())

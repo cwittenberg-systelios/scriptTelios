@@ -5,6 +5,7 @@
     "tage": 40,
     "messtage_hsf": 39,
     "messtage_ind": 31,
+    "ind_start": "2026-03-10",
     "tagebucheintraege": 39
   },
   "luecken": {
